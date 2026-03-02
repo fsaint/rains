@@ -1,0 +1,43 @@
+# Google Drive Policy Template
+# Read operations allowed, write operations require approval
+
+service: drive
+description: Google Drive file access policy
+
+tools:
+  # Read-only operations - always allowed
+  allow:
+    - drive_list_files
+    - drive_get_file
+    - drive_read_file
+    - drive_search
+    - drive_list_shared_drives
+
+  # Operations requiring human approval
+  require_approval:
+    - drive_create_file
+    - drive_update_file
+    - drive_share_file
+
+  # Blocked by default
+  block:
+    - drive_delete_file
+
+constraints:
+  # Limit list results
+  drive_list_files:
+    max_page_size: 100
+
+  drive_search:
+    max_page_size: 100
+
+  # Limit file read size (1MB)
+  drive_read_file:
+    max_size: 1048576
+
+# OAuth scopes required for this policy
+# READONLY for read operations, FILE for write operations
+scopes:
+  - https://www.googleapis.com/auth/drive.readonly
+  # Uncomment for write access:
+  # - https://www.googleapis.com/auth/drive.file

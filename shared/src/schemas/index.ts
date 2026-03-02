@@ -9,7 +9,7 @@ export const AgentStatusSchema = z.enum(['active', 'suspended', 'pending']);
 export const CreateAgentSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(500).optional(),
-  policyId: z.string().uuid(),
+  policyId: z.string().optional(), // Optional - permissions managed via permission matrix
 });
 
 export const UpdateAgentSchema = z.object({

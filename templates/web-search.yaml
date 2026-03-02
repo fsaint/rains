@@ -1,0 +1,39 @@
+# Web Search Policy Template
+# All search operations allowed (using Brave Search API)
+
+service: web-search
+description: Web search access policy (Brave Search API)
+
+tools:
+  # All search operations allowed
+  allow:
+    - web_search
+    - web_search_news
+    - web_search_images
+    - web_search_suggest
+
+constraints:
+  # Limit search results per query
+  web_search:
+    max_count: 20
+
+  web_search_news:
+    max_count: 20
+
+  web_search_images:
+    max_count: 20
+    # Force safe search for images
+    safesearch: strict
+
+  web_search_suggest:
+    max_count: 10
+
+# Rate limiting
+rate_limits:
+  # Brave API free tier: 1000 queries/month
+  queries_per_minute: 10
+  queries_per_hour: 100
+  queries_per_day: 500
+
+# No OAuth required - uses API key
+api_key_required: true

@@ -1,0 +1,41 @@
+# Google Calendar Policy Template
+# View operations allowed, create/modify requires approval
+
+service: calendar
+description: Google Calendar access policy
+
+tools:
+  # Read-only operations - always allowed
+  allow:
+    - calendar_list_events
+    - calendar_get_event
+    - calendar_search_events
+    - calendar_list_calendars
+    - calendar_get_free_busy
+
+  # Operations requiring human approval
+  require_approval:
+    - calendar_create_event
+    - calendar_update_event
+
+  # Blocked by default
+  block:
+    - calendar_delete_event
+
+constraints:
+  # Limit event list results
+  calendar_list_events:
+    max_results: 100
+
+  calendar_search_events:
+    max_results: 50
+
+  # Limit how far into the future events can be created
+  calendar_create_event:
+    max_days_ahead: 365
+
+# OAuth scopes required for this policy
+scopes:
+  - https://www.googleapis.com/auth/calendar.readonly
+  # Uncomment for write access:
+  # - https://www.googleapis.com/auth/calendar.events

@@ -7,6 +7,7 @@ import {
   CheckCircle,
   Activity,
   PlugZap,
+  Lock,
 } from 'lucide-react';
 import Dashboard from './pages/Dashboard';
 import Agents from './pages/Agents';
@@ -14,10 +15,12 @@ import Policies from './pages/Policies';
 import Credentials from './pages/Credentials';
 import Approvals from './pages/Approvals';
 import AuditLog from './pages/AuditLog';
+import Permissions from './pages/Permissions';
 
 const navItems = [
   { path: '/', label: 'Dashboard', icon: Activity },
   { path: '/agents', label: 'Agents', icon: Users },
+  { path: '/permissions', label: 'Permissions', icon: Lock },
   { path: '/policies', label: 'Policies', icon: FileText },
   { path: '/credentials', label: 'Credentials', icon: Key },
   { path: '/approvals', label: 'Approvals', icon: CheckCircle },
@@ -83,6 +86,7 @@ function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/agents" element={<Agents />} />
+          <Route path="/permissions" element={<Permissions />} />
           <Route path="/policies" element={<Policies />} />
           <Route path="/credentials" element={<Credentials />} />
           <Route path="/approvals" element={<Approvals />} />

@@ -1,0 +1,67 @@
+# Browser Automation Policy Template
+# Navigation and reading allowed, interactions require approval
+
+service: browser
+description: Headless browser automation policy (Playwright)
+
+tools:
+  # Read-only operations - always allowed
+  allow:
+    - browser_create_session
+    - browser_navigate
+    - browser_screenshot
+    - browser_get_content
+    - browser_scroll
+    - browser_wait_for_selector
+    - browser_list_sessions
+    - browser_close_session
+
+  # Operations requiring human approval
+  require_approval:
+    - browser_click
+    - browser_type
+    - browser_evaluate
+
+constraints:
+  # Domain restrictions for navigation
+  browser_navigate:
+    allowed_domains:
+      - "*.google.com"
+      - "*.github.com"
+      - "*.stackoverflow.com"
+      - "*.wikipedia.org"
+      - "*.docs.*.com"
+    blocked_domains:
+      - "*.bank.*"
+      - "*.gov"
+      - "mail.*"
+      - "*.password*"
+      - "*.login*"
+    timeout_ms: 30000
+
+  # Screenshot limits
+  browser_screenshot:
+    max_size_mb: 5
+
+  # Content extraction limits
+  browser_get_content:
+    max_length: 100000
+
+  # Script execution restrictions
+  browser_evaluate:
+    # Blocked patterns in scripts
+    blocked_patterns:
+      - "fetch"
+      - "XMLHttpRequest"
+      - "localStorage"
+      - "sessionStorage"
+      - "document.cookie"
+
+# Session limits
+session_limits:
+  max_concurrent: 3
+  idle_timeout_minutes: 5
+  max_session_duration_minutes: 30
+
+# No authentication required for browser automation
+authentication_required: false

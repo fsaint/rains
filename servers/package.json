@@ -1,0 +1,37 @@
+{
+  "name": "@reins/servers",
+  "version": "0.1.0",
+  "description": "Native MCP servers for Reins - Gmail, Drive, Calendar, Web Search, Browser",
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./gmail": "./dist/gmail/index.js",
+    "./drive": "./dist/drive/index.js",
+    "./calendar": "./dist/calendar/index.js",
+    "./web-search": "./dist/web-search/index.js",
+    "./browser": "./dist/browser/index.js"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsup src/index.ts --format esm --dts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@reins/shared": "*",
+    "googleapis": "^140.0.0",
+    "playwright": "^1.42.0",
+    "zod": "^3.22.4",
+    "pino": "^8.17.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsup": "^8.0.1",
+    "tsx": "^4.7.0",
+    "vitest": "^1.2.0"
+  }
+}

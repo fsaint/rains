@@ -1,0 +1,38 @@
+# Gmail Policy Template
+# Conservative defaults: read allowed, drafts require approval, send/delete blocked
+
+service: gmail
+description: Gmail email access policy
+
+tools:
+  # Read-only operations - always allowed
+  allow:
+    - gmail_list_messages
+    - gmail_get_message
+    - gmail_search
+    - gmail_list_labels
+
+  # Operations requiring human approval
+  require_approval:
+    - gmail_create_draft
+    - gmail_send_draft
+
+  # Blocked by default - uncomment to enable with approval
+  block:
+    - gmail_send_message
+    - gmail_delete_message
+
+constraints:
+  # Limit message list results
+  gmail_list_messages:
+    max_results: 50
+
+  gmail_search:
+    max_results: 100
+
+# OAuth scopes required for this policy
+# If only using read operations, use READONLY scope
+# For drafts, add COMPOSE scope
+scopes:
+  - https://www.googleapis.com/auth/gmail.readonly
+  - https://www.googleapis.com/auth/gmail.compose

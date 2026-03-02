@@ -40,15 +40,39 @@ async function request<T>(
   return data.data ?? data;
 }
 
+// Agent types
+export interface PendingRegistration {
+  id: string;
+  name: string;
+  description: string | null;
+  claimCode: string;
+  expiresAt: string;
+  createdAt: string;
+}
+
+export interface ClaimedAgent {
+  id: string;
+  name: string;
+  description: string | null;
+  status: string;
+  createdAt: string;
+}
+
 // Agents
 export const agents = {
   list: () => request<unknown[]>('/agents'),
   get: (id: string) => request<unknown>(`/agents/${id}`),
-  create: (data: { name: string; description?: string; policyId: string }) =>
+  create: (data: { name: string; description?: string; policyId?: string }) =>
     request<unknown>('/agents', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: string, data: { name?: string; description?: string; policyId?: string; status?: string }) =>
     request<unknown>(`/agents/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   delete: (id: string) => request<void>(`/agents/${id}`, { method: 'DELETE' }),
+
+  // Self-registration
+  claim: (code: string) =>
+    request<ClaimedAgent>('/agents/claim', { method: 'POST', body: JSON.stringify({ code }) }),
+  listPending: () => request<PendingRegistration[]>('/agents/pending'),
+  cancelPending: (id: string) => request<void>(`/agents/pending/${id}`, { method: 'DELETE' }),
 };
 
 // Policies
@@ -106,4 +130,101 @@ export const connections = {
 // Health
 export const health = {
   check: () => request<{ status: string; timestamp: string }>('/health'),
+};
+
+// Permission Matrix Types
+export type ServiceType = 'gmail' | 'drive' | 'calendar' | 'web-search' | 'browser';
+export type ToolPermission = 'allow' | 'block' | 'require_approval';
+
+export interface PermissionMatrixCell {
+  agentId: string;
+  serviceType: ServiceType;
+  enabled: boolean;
+  credentialStatus: 'connected' | 'missing' | 'expired' | 'not_linked';
+  toolCount: number;
+  blockedCount: number;
+  approvalRequiredCount: number;
+}
+
+export interface PermissionMatrix {
+  agents: Array<{ id: string; name: string; status: string }>;
+  services: Array<{ type: ServiceType; name: string }>;
+  cells: PermissionMatrixCell[];
+}
+
+export interface ToolPermissionEntry {
+  toolName: string;
+  description: string;
+  permission: ToolPermission;
+  isDefault: boolean;
+}
+
+export interface AgentServiceConfig {
+  agentId: string;
+  agentName: string;
+  serviceType: ServiceType;
+  serviceName: string;
+  enabled: boolean;
+  credentialId: string | null;
+  credentialStatus: 'connected' | 'missing' | 'expired' | 'not_linked';
+  tools: ToolPermissionEntry[];
+}
+
+export interface ServiceCredential {
+  id: string;
+  type: string;
+  status: string;
+  expiresAt: string | null;
+}
+
+// Permissions
+export const permissions = {
+  getMatrix: () => request<PermissionMatrix>('/permissions/matrix'),
+
+  getServiceConfig: (agentId: string, serviceType: ServiceType) =>
+    request<AgentServiceConfig>(`/permissions/${agentId}/${serviceType}`),
+
+  setServiceAccess: (agentId: string, serviceType: ServiceType, enabled: boolean) =>
+    request<AgentServiceConfig>(`/permissions/${agentId}/${serviceType}/access`, {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
+    }),
+
+  linkCredential: (agentId: string, serviceType: ServiceType, credentialId: string) =>
+    request<AgentServiceConfig>(`/permissions/${agentId}/${serviceType}/credential`, {
+      method: 'PUT',
+      body: JSON.stringify({ credentialId }),
+    }),
+
+  unlinkCredential: (agentId: string, serviceType: ServiceType) =>
+    request<void>(`/permissions/${agentId}/${serviceType}/credential`, { method: 'DELETE' }),
+
+  setToolPermission: (
+    agentId: string,
+    serviceType: ServiceType,
+    toolName: string,
+    permission: ToolPermission
+  ) =>
+    request<AgentServiceConfig>(`/permissions/${agentId}/${serviceType}/tools/${toolName}`, {
+      method: 'PUT',
+      body: JSON.stringify({ permission }),
+    }),
+
+  resetToolPermission: (agentId: string, serviceType: ServiceType, toolName: string) =>
+    request<AgentServiceConfig>(`/permissions/${agentId}/${serviceType}/tools/${toolName}`, {
+      method: 'DELETE',
+    }),
+
+  setServiceToolPermissions: (
+    agentId: string,
+    serviceType: ServiceType,
+    toolPermissions: Record<string, ToolPermission>
+  ) =>
+    request<AgentServiceConfig>(`/permissions/${agentId}/${serviceType}/tools`, {
+      method: 'PUT',
+      body: JSON.stringify({ permissions: toolPermissions }),
+    }),
+
+  getServiceCredentials: (serviceType: ServiceType) =>
+    request<ServiceCredential[]>(`/permissions/credentials/${serviceType}`),
 };

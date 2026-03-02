@@ -101,3 +101,35 @@ export const deviceTokens = sqliteTable('device_tokens', {
   createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: text('updated_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
+
+// Agent service access - controls which services each agent can access
+export const agentServiceAccess = sqliteTable('agent_service_access', {
+  id: text('id').primaryKey(),
+  agentId: text('agent_id').notNull(),
+  serviceType: text('service_type').notNull(), // 'gmail' | 'drive' | 'calendar' | 'web-search' | 'browser'
+  enabled: integer('enabled', { mode: 'boolean' }).default(false).notNull(),
+  credentialId: text('credential_id'), // Optional linked credential
+  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: text('updated_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+// Agent tool permissions - per-tool permission overrides
+export const agentToolPermissions = sqliteTable('agent_tool_permissions', {
+  id: text('id').primaryKey(),
+  agentId: text('agent_id').notNull(),
+  serviceType: text('service_type').notNull(),
+  toolName: text('tool_name').notNull(),
+  permission: text('permission').notNull(), // 'allow' | 'block' | 'require_approval'
+  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: text('updated_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+// Pending agent registrations - agents waiting to be claimed
+export const pendingAgentRegistrations = sqliteTable('pending_agent_registrations', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  description: text('description'),
+  claimCode: text('claim_code').notNull().unique(),
+  expiresAt: text('expires_at').notNull(),
+  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+});

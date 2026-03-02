@@ -1,0 +1,269 @@
+/**
+ * Gmail MCP Server Tool Definitions
+ */
+
+import type { ToolDefinition } from '../common/base-server.js';
+import {
+  handleListMessages,
+  handleGetMessage,
+  handleSearch,
+  handleCreateDraft,
+  handleSendDraft,
+  handleSendMessage,
+  handleDeleteMessage,
+  handleListLabels,
+} from './handlers.js';
+
+/**
+ * List messages in the mailbox
+ */
+export const listMessagesTool: ToolDefinition = {
+  name: 'gmail_list_messages',
+  description:
+    'List email messages in the mailbox. Returns message IDs and snippets. Use gmail_get_message to get full content.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      query: {
+        type: 'string',
+        description:
+          'Gmail search query (e.g., "from:example@gmail.com", "is:unread", "subject:meeting")',
+      },
+      maxResults: {
+        type: 'number',
+        description: 'Maximum number of messages to return (default: 10, max: 100)',
+      },
+      labelIds: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Filter by label IDs (e.g., ["INBOX", "UNREAD"])',
+      },
+      pageToken: {
+        type: 'string',
+        description: 'Token for pagination',
+      },
+    },
+  },
+  handler: handleListMessages,
+};
+
+/**
+ * Get full message content
+ */
+export const getMessageTool: ToolDefinition = {
+  name: 'gmail_get_message',
+  description:
+    'Get the full content of an email message including headers, body, and attachments metadata.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      messageId: {
+        type: 'string',
+        description: 'The ID of the message to retrieve',
+      },
+      format: {
+        type: 'string',
+        enum: ['minimal', 'full', 'raw', 'metadata'],
+        description: 'Format of the message (default: full)',
+      },
+    },
+    required: ['messageId'],
+  },
+  handler: handleGetMessage,
+};
+
+/**
+ * Search messages with advanced query
+ */
+export const searchTool: ToolDefinition = {
+  name: 'gmail_search',
+  description:
+    'Search emails using Gmail search operators. Returns matching messages with snippets.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      query: {
+        type: 'string',
+        description:
+          'Gmail search query. Supports operators like: from:, to:, subject:, has:attachment, is:unread, after:, before:, newer_than:, older_than:',
+      },
+      maxResults: {
+        type: 'number',
+        description: 'Maximum results (default: 20, max: 100)',
+      },
+      includeSpamTrash: {
+        type: 'boolean',
+        description: 'Include spam and trash in results',
+      },
+    },
+    required: ['query'],
+  },
+  handler: handleSearch,
+};
+
+/**
+ * Create a draft email
+ */
+export const createDraftTool: ToolDefinition = {
+  name: 'gmail_create_draft',
+  description:
+    'Create a draft email. The draft will be saved but not sent. Use gmail_send_draft to send it.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      to: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Recipient email addresses',
+      },
+      cc: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'CC email addresses',
+      },
+      bcc: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'BCC email addresses',
+      },
+      subject: {
+        type: 'string',
+        description: 'Email subject',
+      },
+      body: {
+        type: 'string',
+        description: 'Email body (plain text)',
+      },
+      htmlBody: {
+        type: 'string',
+        description: 'Email body (HTML)',
+      },
+      replyTo: {
+        type: 'string',
+        description: 'Message ID to reply to',
+      },
+      threadId: {
+        type: 'string',
+        description: 'Thread ID to add the message to',
+      },
+    },
+    required: ['to', 'subject'],
+  },
+  handler: handleCreateDraft,
+};
+
+/**
+ * Send a draft email
+ */
+export const sendDraftTool: ToolDefinition = {
+  name: 'gmail_send_draft',
+  description: 'Send a previously created draft email.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      draftId: {
+        type: 'string',
+        description: 'The ID of the draft to send',
+      },
+    },
+    required: ['draftId'],
+  },
+  handler: handleSendDraft,
+};
+
+/**
+ * Send an email directly
+ */
+export const sendMessageTool: ToolDefinition = {
+  name: 'gmail_send_message',
+  description:
+    'Send an email directly without creating a draft first. Use with caution.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      to: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Recipient email addresses',
+      },
+      cc: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'CC email addresses',
+      },
+      bcc: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'BCC email addresses',
+      },
+      subject: {
+        type: 'string',
+        description: 'Email subject',
+      },
+      body: {
+        type: 'string',
+        description: 'Email body (plain text)',
+      },
+      htmlBody: {
+        type: 'string',
+        description: 'Email body (HTML)',
+      },
+      replyTo: {
+        type: 'string',
+        description: 'Message ID to reply to',
+      },
+      threadId: {
+        type: 'string',
+        description: 'Thread ID to add the message to',
+      },
+    },
+    required: ['to', 'subject'],
+  },
+  handler: handleSendMessage,
+};
+
+/**
+ * Delete a message
+ */
+export const deleteMessageTool: ToolDefinition = {
+  name: 'gmail_delete_message',
+  description: 'Permanently delete an email message. This cannot be undone.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      messageId: {
+        type: 'string',
+        description: 'The ID of the message to delete',
+      },
+    },
+    required: ['messageId'],
+  },
+  handler: handleDeleteMessage,
+};
+
+/**
+ * List labels
+ */
+export const listLabelsTool: ToolDefinition = {
+  name: 'gmail_list_labels',
+  description: 'List all labels in the mailbox.',
+  inputSchema: {
+    type: 'object',
+    properties: {},
+  },
+  handler: handleListLabels,
+};
+
+/**
+ * All Gmail tools
+ */
+export const gmailTools: ToolDefinition[] = [
+  listMessagesTool,
+  getMessageTool,
+  searchTool,
+  createDraftTool,
+  sendDraftTool,
+  sendMessageTool,
+  deleteMessageTool,
+  listLabelsTool,
+];

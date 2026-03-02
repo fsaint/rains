@@ -5,6 +5,7 @@ import { config } from './config/index.js';
 import { initializeDatabase } from './db/index.js';
 import { apiRoutes } from './api/routes.js';
 import { approvalQueue } from './approvals/queue.js';
+import { initializeNativeServers, shutdownNativeServers } from './mcp/init-servers.js';
 
 // Create Fastify server
 const app = Fastify({
@@ -26,6 +27,11 @@ await app.register(websocket);
 app.log.info('Initializing database...');
 await initializeDatabase();
 app.log.info('Database initialized');
+
+// Initialize native MCP servers
+app.log.info('Initializing native MCP servers...');
+await initializeNativeServers();
+app.log.info('Native MCP servers initialized');
 
 // Register API routes
 await app.register(apiRoutes);
@@ -59,6 +65,7 @@ app.register(async (fastify) => {
 // Graceful shutdown
 const shutdown = async () => {
   app.log.info('Shutting down...');
+  await shutdownNativeServers();
   await app.close();
   process.exit(0);
 };

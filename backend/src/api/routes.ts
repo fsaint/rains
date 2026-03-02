@@ -12,6 +12,26 @@ import {
   discoverToolsForAgent,
   discoverServiceToolsForAgent,
 } from '../services/discovery.js';
+import {
+  getPermissionMatrix,
+  getAgentServiceConfig,
+  setServiceAccess,
+  linkCredential,
+  unlinkCredential,
+  setToolPermission,
+  resetToolPermission,
+  setServiceToolPermissions,
+  getCredentialsForService,
+  type ServiceType,
+  type ToolPermission,
+} from '../services/permissions.js';
+import {
+  registerAgent,
+  claimAgent,
+  getRegistrationStatus,
+  listPendingRegistrations,
+  cancelRegistration,
+} from '../services/registration.js';
 import { nanoid } from 'nanoid';
 import {
   CreateAgentSchema,
@@ -106,7 +126,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     await client.execute({
       sql: `INSERT INTO agents (id, name, description, policy_id, status, created_at, updated_at)
             VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
-      args: [id, parsed.data.name, parsed.data.description ?? null, parsed.data.policyId, now, now],
+      args: [id, parsed.data.name, parsed.data.description ?? null, parsed.data.policyId ?? null, now, now],
     });
 
     const result = await client.execute({
@@ -179,6 +199,108 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     return reply.code(204).send();
   });
+
+  // ========================================================================
+  // Agent Self-Registration
+  // ========================================================================
+
+  /**
+   * Register a new agent (called by agent)
+   * Returns a claim code that the user must enter to activate the agent
+   */
+  app.post<{ Body: { name: string; description?: string } }>(
+    '/api/agents/register',
+    async (request, reply) => {
+      const { name, description } = request.body;
+
+      if (!name || typeof name !== 'string' || name.length < 1) {
+        return reply.code(400).send({
+          error: { code: 'VALIDATION_ERROR', message: 'name is required' },
+        });
+      }
+
+      const result = await registerAgent(name, description);
+
+      return reply.code(201).send({
+        data: {
+          agentId: result.agentId,
+          claimCode: result.claimCode,
+          expiresAt: result.expiresAt,
+          expiresInSeconds: result.expiresInSeconds,
+          message: `Enter code ${result.claimCode} in the Reins dashboard to claim this agent`,
+        },
+      });
+    }
+  );
+
+  /**
+   * Check registration status (called by agent polling)
+   */
+  app.get<{ Params: { id: string } }>(
+    '/api/agents/:id/registration-status',
+    async (request, reply) => {
+      const { id } = request.params;
+      const status = await getRegistrationStatus(id);
+
+      if (status.status === 'not_found') {
+        return reply.code(404).send({
+          error: { code: 'NOT_FOUND', message: 'Registration not found' },
+        });
+      }
+
+      return { data: status };
+    }
+  );
+
+  /**
+   * Claim an agent by code (called by user in dashboard)
+   */
+  app.post<{ Body: { code: string } }>('/api/agents/claim', async (request, reply) => {
+    const { code } = request.body;
+
+    if (!code || typeof code !== 'string') {
+      return reply.code(400).send({
+        error: { code: 'VALIDATION_ERROR', message: 'code is required' },
+      });
+    }
+
+    const agent = await claimAgent(code);
+
+    if (!agent) {
+      return reply.code(404).send({
+        error: { code: 'INVALID_CODE', message: 'Invalid or expired claim code' },
+      });
+    }
+
+    return reply.code(201).send({ data: agent });
+  });
+
+  /**
+   * List pending registrations (admin view)
+   */
+  app.get('/api/agents/pending', async () => {
+    const pending = await listPendingRegistrations();
+    return { data: pending };
+  });
+
+  /**
+   * Cancel a pending registration
+   */
+  app.delete<{ Params: { id: string } }>(
+    '/api/agents/pending/:id',
+    async (request, reply) => {
+      const { id } = request.params;
+      const cancelled = await cancelRegistration(id);
+
+      if (!cancelled) {
+        return reply.code(404).send({
+          error: { code: 'NOT_FOUND', message: 'Pending registration not found' },
+        });
+      }
+
+      return reply.code(204).send();
+    }
+  );
 
   // ========================================================================
   // Agent Service Discovery
@@ -356,6 +478,226 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
       const health = await serverManager.checkServerHealth(serverType as NativeServerType);
       return { data: health };
+    }
+  );
+
+  // ========================================================================
+  // Permission Matrix
+  // ========================================================================
+
+  const validServiceTypes: ServiceType[] = ['gmail', 'drive', 'calendar', 'web-search', 'browser'];
+
+  /**
+   * Get full permission matrix: all agents x all services
+   */
+  app.get('/api/permissions/matrix', async () => {
+    const matrix = await getPermissionMatrix();
+    return { data: matrix };
+  });
+
+  /**
+   * Get service configuration for a specific agent and service
+   */
+  app.get<{ Params: { agentId: string; serviceType: string } }>(
+    '/api/permissions/:agentId/:serviceType',
+    async (request, reply) => {
+      const { agentId, serviceType } = request.params;
+
+      if (!validServiceTypes.includes(serviceType as ServiceType)) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
+        });
+      }
+
+      const config = await getAgentServiceConfig(agentId, serviceType as ServiceType);
+      if (!config) {
+        return reply.code(404).send({
+          error: { code: 'NOT_FOUND', message: 'Agent not found' },
+        });
+      }
+
+      return { data: config };
+    }
+  );
+
+  /**
+   * Enable or disable a service for an agent
+   */
+  app.put<{ Params: { agentId: string; serviceType: string }; Body: { enabled: boolean } }>(
+    '/api/permissions/:agentId/:serviceType/access',
+    async (request, reply) => {
+      const { agentId, serviceType } = request.params;
+      const { enabled } = request.body;
+
+      if (!validServiceTypes.includes(serviceType as ServiceType)) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
+        });
+      }
+
+      if (typeof enabled !== 'boolean') {
+        return reply.code(400).send({
+          error: { code: 'VALIDATION_ERROR', message: 'enabled must be a boolean' },
+        });
+      }
+
+      await setServiceAccess(agentId, serviceType as ServiceType, enabled);
+      const config = await getAgentServiceConfig(agentId, serviceType as ServiceType);
+
+      return { data: config };
+    }
+  );
+
+  /**
+   * Link a credential to an agent's service
+   */
+  app.put<{ Params: { agentId: string; serviceType: string }; Body: { credentialId: string } }>(
+    '/api/permissions/:agentId/:serviceType/credential',
+    async (request, reply) => {
+      const { agentId, serviceType } = request.params;
+      const { credentialId } = request.body;
+
+      if (!validServiceTypes.includes(serviceType as ServiceType)) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
+        });
+      }
+
+      if (!credentialId) {
+        return reply.code(400).send({
+          error: { code: 'VALIDATION_ERROR', message: 'credentialId is required' },
+        });
+      }
+
+      await linkCredential(agentId, serviceType as ServiceType, credentialId);
+      const config = await getAgentServiceConfig(agentId, serviceType as ServiceType);
+
+      return { data: config };
+    }
+  );
+
+  /**
+   * Unlink a credential from an agent's service
+   */
+  app.delete<{ Params: { agentId: string; serviceType: string } }>(
+    '/api/permissions/:agentId/:serviceType/credential',
+    async (request, reply) => {
+      const { agentId, serviceType } = request.params;
+
+      if (!validServiceTypes.includes(serviceType as ServiceType)) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
+        });
+      }
+
+      await unlinkCredential(agentId, serviceType as ServiceType);
+      return reply.code(204).send();
+    }
+  );
+
+  /**
+   * Set permission for a specific tool
+   */
+  app.put<{
+    Params: { agentId: string; serviceType: string; toolName: string };
+    Body: { permission: ToolPermission };
+  }>(
+    '/api/permissions/:agentId/:serviceType/tools/:toolName',
+    async (request, reply) => {
+      const { agentId, serviceType, toolName } = request.params;
+      const { permission } = request.body;
+
+      if (!validServiceTypes.includes(serviceType as ServiceType)) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
+        });
+      }
+
+      const validPermissions: ToolPermission[] = ['allow', 'block', 'require_approval'];
+      if (!validPermissions.includes(permission)) {
+        return reply.code(400).send({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: `permission must be one of: ${validPermissions.join(', ')}`,
+          },
+        });
+      }
+
+      await setToolPermission(agentId, serviceType as ServiceType, toolName, permission);
+      const config = await getAgentServiceConfig(agentId, serviceType as ServiceType);
+
+      return { data: config };
+    }
+  );
+
+  /**
+   * Reset a tool permission to default
+   */
+  app.delete<{ Params: { agentId: string; serviceType: string; toolName: string } }>(
+    '/api/permissions/:agentId/:serviceType/tools/:toolName',
+    async (request, reply) => {
+      const { agentId, serviceType, toolName } = request.params;
+
+      if (!validServiceTypes.includes(serviceType as ServiceType)) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
+        });
+      }
+
+      await resetToolPermission(agentId, serviceType as ServiceType, toolName);
+      const config = await getAgentServiceConfig(agentId, serviceType as ServiceType);
+
+      return { data: config };
+    }
+  );
+
+  /**
+   * Bulk set tool permissions for a service
+   */
+  app.put<{
+    Params: { agentId: string; serviceType: string };
+    Body: { permissions: Record<string, ToolPermission> };
+  }>(
+    '/api/permissions/:agentId/:serviceType/tools',
+    async (request, reply) => {
+      const { agentId, serviceType } = request.params;
+      const { permissions } = request.body;
+
+      if (!validServiceTypes.includes(serviceType as ServiceType)) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
+        });
+      }
+
+      if (!permissions || typeof permissions !== 'object') {
+        return reply.code(400).send({
+          error: { code: 'VALIDATION_ERROR', message: 'permissions object is required' },
+        });
+      }
+
+      await setServiceToolPermissions(agentId, serviceType as ServiceType, permissions);
+      const config = await getAgentServiceConfig(agentId, serviceType as ServiceType);
+
+      return { data: config };
+    }
+  );
+
+  /**
+   * Get available credentials for a service type
+   */
+  app.get<{ Params: { serviceType: string } }>(
+    '/api/permissions/credentials/:serviceType',
+    async (request, reply) => {
+      const { serviceType } = request.params;
+
+      if (!validServiceTypes.includes(serviceType as ServiceType)) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
+        });
+      }
+
+      const credentials = await getCredentialsForService(serviceType as ServiceType);
+      return { data: credentials };
     }
   );
 
