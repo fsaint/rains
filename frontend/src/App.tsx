@@ -16,6 +16,7 @@ import Credentials from './pages/Credentials';
 import Approvals from './pages/Approvals';
 import AuditLog from './pages/AuditLog';
 import Permissions from './pages/Permissions';
+import ClaimAgent from './pages/ClaimAgent';
 
 const navItems = [
   { path: '/', label: 'Dashboard', icon: Activity },
@@ -29,6 +30,15 @@ const navItems = [
 
 function App() {
   const location = useLocation();
+
+  // Render claim page without sidebar (it's a standalone page)
+  if (location.pathname.startsWith('/claim')) {
+    return (
+      <Routes>
+        <Route path="/claim/:code?" element={<ClaimAgent />} />
+      </Routes>
+    );
+  }
 
   return (
     <div className="min-h-screen flex">

@@ -206,7 +206,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
   /**
    * Register a new agent (called by agent)
-   * Returns a claim code that the user must enter to activate the agent
+   * Returns a claim code and URL that the user can click to activate the agent
    */
   app.post<{ Body: { name: string; description?: string } }>(
     '/api/agents/register',
@@ -221,13 +221,19 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
       const result = await registerAgent(name, description);
 
+      // Build claim URL - use request host or fallback to env
+      const dashboardUrl = process.env.REINS_DASHBOARD_URL ||
+        `${request.protocol}://${request.hostname}:5173`;
+      const claimUrl = `${dashboardUrl}/claim/${result.claimCode}`;
+
       return reply.code(201).send({
         data: {
           agentId: result.agentId,
           claimCode: result.claimCode,
+          claimUrl,
           expiresAt: result.expiresAt,
           expiresInSeconds: result.expiresInSeconds,
-          message: `Enter code ${result.claimCode} in the Reins dashboard to claim this agent`,
+          instructions: `Share this link with your user to complete registration: ${claimUrl} (expires in 10 minutes). Alternatively, they can enter code ${result.claimCode} in the Reins dashboard.`,
         },
       });
     }

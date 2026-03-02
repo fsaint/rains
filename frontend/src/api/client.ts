@@ -58,6 +58,15 @@ export interface ClaimedAgent {
   createdAt: string;
 }
 
+export interface RegistrationResponse {
+  agentId: string;
+  claimCode: string;
+  claimUrl: string;
+  expiresAt: string;
+  expiresInSeconds: number;
+  instructions: string;
+}
+
 // Agents
 export const agents = {
   list: () => request<unknown[]>('/agents'),
