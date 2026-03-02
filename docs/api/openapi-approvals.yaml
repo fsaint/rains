@@ -1,0 +1,426 @@
+openapi: 3.0.3
+info:
+  title: Reins Mobile Authorization API
+  description: API for mobile apps to authorize AI agent requests
+  version: 1.0.0
+  contact:
+    name: Reins Team
+
+servers:
+  - url: http://localhost:3001
+    description: Development
+  - url: https://api.reins.yourdomain.com
+    description: Production
+
+tags:
+  - name: Approvals
+    description: Authorization request management
+  - name: Auth
+    description: Mobile device authentication
+
+paths:
+  /api/approvals:
+    get:
+      tags: [Approvals]
+      summary: List pending approvals
+      description: Get all pending approval requests requiring authorization
+      operationId: listApprovals
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: agentId
+          in: query
+          description: Filter by agent ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of pending approvals
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Approval'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/approvals/{id}:
+    get:
+      tags: [Approvals]
+      summary: Get approval details
+      operationId: getApproval
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Approval details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Approval'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/approvals/{id}/approve:
+    post:
+      tags: [Approvals]
+      summary: Approve a request
+      operationId: approveRequest
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                comment:
+                  type: string
+                  description: Optional comment for the approval
+                  example: "Approved via mobile app"
+      responses:
+        '200':
+          description: Request approved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Approval'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/AlreadyResolved'
+        '410':
+          $ref: '#/components/responses/Expired'
+
+  /api/approvals/{id}/reject:
+    post:
+      tags: [Approvals]
+      summary: Reject a request
+      operationId: rejectRequest
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - reason
+              properties:
+                reason:
+                  type: string
+                  description: Reason for rejection
+                  example: "Content not appropriate"
+      responses:
+        '200':
+          description: Request rejected
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Approval'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/auth/device:
+    post:
+      tags: [Auth]
+      summary: Register device for authentication
+      operationId: registerDevice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "user@example.com"
+      responses:
+        '200':
+          description: Verification initiated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      verificationId:
+                        type: string
+                      expiresAt:
+                        type: string
+                        format: date-time
+
+  /api/auth/verify:
+    post:
+      tags: [Auth]
+      summary: Verify authentication code
+      operationId: verifyCode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - verificationId
+                - code
+              properties:
+                verificationId:
+                  type: string
+                code:
+                  type: string
+                  example: "123456"
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/AuthTokens'
+
+  /api/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh access token
+      operationId: refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - refreshToken
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        '200':
+          description: Token refreshed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      accessToken:
+                        type: string
+                      expiresIn:
+                        type: integer
+
+  /api/devices/register:
+    post:
+      tags: [Auth]
+      summary: Register for push notifications
+      operationId: registerPushNotifications
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - platform
+                - token
+              properties:
+                platform:
+                  type: string
+                  enum: [ios, android]
+                token:
+                  type: string
+                  description: Device push notification token
+      responses:
+        '200':
+          description: Device registered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      deviceId:
+                        type: string
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Approval:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "abc123"
+        agentId:
+          type: string
+          example: "agent-456"
+        tool:
+          type: string
+          example: "gmail_create_draft"
+        arguments:
+          type: object
+          additionalProperties: true
+          example:
+            to: "user@example.com"
+            subject: "Meeting Follow-up"
+        context:
+          type: string
+          example: "User asked to draft a follow-up email"
+        status:
+          type: string
+          enum: [pending, approved, rejected, expired]
+        requestedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        resolvedAt:
+          type: string
+          format: date-time
+        resolvedBy:
+          type: string
+        resolutionComment:
+          type: string
+
+    AuthTokens:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        expiresIn:
+          type: integer
+          description: Token lifetime in seconds
+        user:
+          type: object
+          properties:
+            id:
+              type: string
+            email:
+              type: string
+            name:
+              type: string
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: object
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: "NOT_FOUND"
+              message: "Approval not found"
+
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: "UNAUTHORIZED"
+              message: "Invalid or expired token"
+
+    ValidationError:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: "VALIDATION_ERROR"
+              message: "reason is required"
+
+    AlreadyResolved:
+      description: Approval already resolved
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: "ALREADY_RESOLVED"
+              message: "Approval has already been resolved"
+
+    Expired:
+      description: Approval expired
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: "EXPIRED"
+              message: "Approval request has expired"

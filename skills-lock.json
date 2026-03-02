@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "skills": {
+    "branding": {
+      "source": "omer-metin/skills-for-antigravity",
+      "sourceType": "github",
+      "computedHash": "7ed51f00b3422d549d18912748caa85278b17f7b78da43b242ea7ce7a0c8766c"
+    },
+    "frontend-design": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "computedHash": "063a0e6448123cd359ad0044cc46b0e490cc7964d45ef4bb9fd842bd2ffbca67"
+    },
+    "senior-architect": {
+      "source": "sickn33/antigravity-awesome-skills",
+      "sourceType": "github",
+      "computedHash": "e32e20c8b70e80aa3a2a9bec1fdbc483442a2c705ddef31c89baa4c7b369ef4b"
+    }
+  }
+}

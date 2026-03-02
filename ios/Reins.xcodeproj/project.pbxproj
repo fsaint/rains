@@ -1,0 +1,543 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		/* App Entry */
+		1000000000000001 /* ReinsApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000001; };
+
+		/* Config */
+		1000000000000010 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000010; };
+
+		/* Models */
+		1000000000000020 /* ApprovalRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000020; };
+		1000000000000021 /* Agent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000021; };
+		1000000000000022 /* AuditEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000022; };
+
+		/* Services */
+		1000000000000030 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000030; };
+		1000000000000031 /* WebSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000031; };
+		1000000000000032 /* PushNotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000032; };
+		1000000000000033 /* AuthenticationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000033; };
+
+		/* ViewModels */
+		1000000000000040 /* ApprovalsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000040; };
+		1000000000000041 /* ApprovalDetailViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000041; };
+		1000000000000042 /* ActivityViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000042; };
+
+		/* Views */
+		1000000000000050 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000050; };
+		1000000000000051 /* ApprovalsListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000051; };
+		1000000000000052 /* ApprovalRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000052; };
+		1000000000000053 /* ApprovalDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000053; };
+		1000000000000054 /* ActivityFeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000054; };
+		1000000000000055 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000055; };
+		1000000000000056 /* SetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000056; };
+
+		/* Components */
+		1000000000000060 /* StatusBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000060; };
+		1000000000000061 /* ActionButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000061; };
+
+		/* Extensions */
+		1000000000000070 /* Color+Brand.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000070; };
+		1000000000000071 /* Date+Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2000000000000071; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		/* Product */
+		3000000000000001 /* Reins.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Reins.app; sourceTree = BUILT_PRODUCTS_DIR; };
+
+		/* App Entry */
+		2000000000000001 /* ReinsApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReinsApp.swift; sourceTree = "<group>"; };
+		2000000000000002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+
+		/* Config */
+		2000000000000010 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
+
+		/* Models */
+		2000000000000020 /* ApprovalRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalRequest.swift; sourceTree = "<group>"; };
+		2000000000000021 /* Agent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent.swift; sourceTree = "<group>"; };
+		2000000000000022 /* AuditEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuditEntry.swift; sourceTree = "<group>"; };
+
+		/* Services */
+		2000000000000030 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
+		2000000000000031 /* WebSocketClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketClient.swift; sourceTree = "<group>"; };
+		2000000000000032 /* PushNotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushNotificationManager.swift; sourceTree = "<group>"; };
+		2000000000000033 /* AuthenticationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthenticationService.swift; sourceTree = "<group>"; };
+
+		/* ViewModels */
+		2000000000000040 /* ApprovalsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalsViewModel.swift; sourceTree = "<group>"; };
+		2000000000000041 /* ApprovalDetailViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalDetailViewModel.swift; sourceTree = "<group>"; };
+		2000000000000042 /* ActivityViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityViewModel.swift; sourceTree = "<group>"; };
+
+		/* Views */
+		2000000000000050 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		2000000000000051 /* ApprovalsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalsListView.swift; sourceTree = "<group>"; };
+		2000000000000052 /* ApprovalRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalRowView.swift; sourceTree = "<group>"; };
+		2000000000000053 /* ApprovalDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalDetailView.swift; sourceTree = "<group>"; };
+		2000000000000054 /* ActivityFeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityFeedView.swift; sourceTree = "<group>"; };
+		2000000000000055 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		2000000000000056 /* SetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupView.swift; sourceTree = "<group>"; };
+
+		/* Components */
+		2000000000000060 /* StatusBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusBadge.swift; sourceTree = "<group>"; };
+		2000000000000061 /* ActionButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionButton.swift; sourceTree = "<group>"; };
+
+		/* Extensions */
+		2000000000000070 /* Color+Brand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+Brand.swift"; sourceTree = "<group>"; };
+		2000000000000071 /* Date+Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Date+Extensions.swift"; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		4000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		5000000000000000 /* Root */ = {
+			isa = PBXGroup;
+			children = (
+				5000000000000001 /* Reins */,
+				5000000000000099 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		5000000000000001 /* Reins */ = {
+			isa = PBXGroup;
+			children = (
+				2000000000000001 /* ReinsApp.swift */,
+				2000000000000002 /* Info.plist */,
+				5000000000000010 /* Config */,
+				5000000000000020 /* Models */,
+				5000000000000030 /* Services */,
+				5000000000000040 /* ViewModels */,
+				5000000000000050 /* Views */,
+				5000000000000070 /* Extensions */,
+			);
+			path = Reins;
+			sourceTree = "<group>";
+		};
+		5000000000000010 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				2000000000000010 /* AppConfig.swift */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+		5000000000000020 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				2000000000000020 /* ApprovalRequest.swift */,
+				2000000000000021 /* Agent.swift */,
+				2000000000000022 /* AuditEntry.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		5000000000000030 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				2000000000000030 /* APIClient.swift */,
+				2000000000000031 /* WebSocketClient.swift */,
+				2000000000000032 /* PushNotificationManager.swift */,
+				2000000000000033 /* AuthenticationService.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		5000000000000040 /* ViewModels */ = {
+			isa = PBXGroup;
+			children = (
+				2000000000000040 /* ApprovalsViewModel.swift */,
+				2000000000000041 /* ApprovalDetailViewModel.swift */,
+				2000000000000042 /* ActivityViewModel.swift */,
+			);
+			path = ViewModels;
+			sourceTree = "<group>";
+		};
+		5000000000000050 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				2000000000000050 /* ContentView.swift */,
+				5000000000000051 /* Approvals */,
+				5000000000000052 /* Activity */,
+				5000000000000053 /* Settings */,
+				5000000000000060 /* Components */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		5000000000000051 /* Approvals */ = {
+			isa = PBXGroup;
+			children = (
+				2000000000000051 /* ApprovalsListView.swift */,
+				2000000000000052 /* ApprovalRowView.swift */,
+				2000000000000053 /* ApprovalDetailView.swift */,
+			);
+			path = Approvals;
+			sourceTree = "<group>";
+		};
+		5000000000000052 /* Activity */ = {
+			isa = PBXGroup;
+			children = (
+				2000000000000054 /* ActivityFeedView.swift */,
+			);
+			path = Activity;
+			sourceTree = "<group>";
+		};
+		5000000000000053 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				2000000000000055 /* SettingsView.swift */,
+				2000000000000056 /* SetupView.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		5000000000000060 /* Components */ = {
+			isa = PBXGroup;
+			children = (
+				2000000000000060 /* StatusBadge.swift */,
+				2000000000000061 /* ActionButton.swift */,
+			);
+			path = Components;
+			sourceTree = "<group>";
+		};
+		5000000000000070 /* Extensions */ = {
+			isa = PBXGroup;
+			children = (
+				2000000000000070 /* Color+Brand.swift */,
+				2000000000000071 /* Date+Extensions.swift */,
+			);
+			path = Extensions;
+			sourceTree = "<group>";
+		};
+		5000000000000099 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				3000000000000001 /* Reins.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		6000000000000001 /* Reins */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7000000000000001 /* Build configuration list for PBXNativeTarget "Reins" */;
+			buildPhases = (
+				6000000000000010 /* Sources */,
+				4000000000000001 /* Frameworks */,
+				6000000000000020 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Reins;
+			productName = Reins;
+			productReference = 3000000000000001 /* Reins.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		8000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					6000000000000001 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = 7000000000000002 /* Build configuration list for PBXProject "Reins" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 5000000000000000;
+			productRefGroup = 5000000000000099 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				6000000000000001 /* Reins */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		6000000000000020 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		6000000000000010 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1000000000000001 /* ReinsApp.swift in Sources */,
+				1000000000000010 /* AppConfig.swift in Sources */,
+				1000000000000020 /* ApprovalRequest.swift in Sources */,
+				1000000000000021 /* Agent.swift in Sources */,
+				1000000000000022 /* AuditEntry.swift in Sources */,
+				1000000000000030 /* APIClient.swift in Sources */,
+				1000000000000031 /* WebSocketClient.swift in Sources */,
+				1000000000000032 /* PushNotificationManager.swift in Sources */,
+				1000000000000033 /* AuthenticationService.swift in Sources */,
+				1000000000000040 /* ApprovalsViewModel.swift in Sources */,
+				1000000000000041 /* ApprovalDetailViewModel.swift in Sources */,
+				1000000000000042 /* ActivityViewModel.swift in Sources */,
+				1000000000000050 /* ContentView.swift in Sources */,
+				1000000000000051 /* ApprovalsListView.swift in Sources */,
+				1000000000000052 /* ApprovalRowView.swift in Sources */,
+				1000000000000053 /* ApprovalDetailView.swift in Sources */,
+				1000000000000054 /* ActivityFeedView.swift in Sources */,
+				1000000000000055 /* SettingsView.swift in Sources */,
+				1000000000000056 /* SetupView.swift in Sources */,
+				1000000000000060 /* StatusBadge.swift in Sources */,
+				1000000000000061 /* ActionButton.swift in Sources */,
+				1000000000000070 /* Color+Brand.swift in Sources */,
+				1000000000000071 /* Date+Extensions.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		9000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		9000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		9000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Reins/Reins.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Reins/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Reins;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.reins.mobile;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		9000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Reins/Reins.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Reins/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Reins;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.reins.mobile;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		7000000000000001 /* Build configuration list for PBXNativeTarget "Reins" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9000000000000003 /* Debug */,
+				9000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		7000000000000002 /* Build configuration list for PBXProject "Reins" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9000000000000001 /* Debug */,
+				9000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 8000000000000001 /* Project object */;
+}
