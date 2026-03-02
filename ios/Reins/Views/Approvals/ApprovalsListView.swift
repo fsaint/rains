@@ -28,11 +28,18 @@ struct ApprovalsListView: View {
     }
 
     private var emptyView: some View {
-        ContentUnavailableView {
-            Label("No Pending Approvals", systemImage: "checkmark.circle")
-        } description: {
+        VStack(spacing: 16) {
+            Image(systemName: "checkmark.circle")
+                .font(.system(size: 48))
+                .foregroundStyle(.secondary)
+            Text("No Pending Approvals")
+                .font(.headline)
             Text("When agents request access to sensitive tools, they'll appear here for your review.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
         }
+        .padding()
     }
 
     private var approvalsList: some View {

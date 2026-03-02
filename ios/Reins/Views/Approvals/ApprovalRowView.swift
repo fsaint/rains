@@ -26,7 +26,7 @@ struct ApprovalRowView: View {
                 if approval.isPending {
                     Text(approval.timeRemainingString)
                         .font(.caption)
-                        .foregroundStyle(approval.timeRemaining < 300 ? .alertRed : .secondary)
+                        .foregroundStyle(approval.timeRemaining < 300 ? Color.alertRed : Color.secondary)
                 } else {
                     Text(approval.requestedAt.shortRelativeString)
                         .font(.caption)

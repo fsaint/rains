@@ -5,6 +5,13 @@ import { credentialVault } from '../credentials/vault.js';
 import { approvalQueue } from '../approvals/queue.js';
 import { auditLogger } from '../audit/logger.js';
 import { mcpProxy } from '../mcp/proxy.js';
+import { serverManager, type NativeServerType } from '../mcp/server-manager.js';
+import { apnsService } from '../notifications/apns.js';
+import {
+  discoverServicesForAgent,
+  discoverToolsForAgent,
+  discoverServiceToolsForAgent,
+} from '../services/discovery.js';
 import { nanoid } from 'nanoid';
 import {
   CreateAgentSchema,
@@ -172,6 +179,185 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     return reply.code(204).send();
   });
+
+  // ========================================================================
+  // Agent Service Discovery
+  // ========================================================================
+
+  /**
+   * Discover services available to an agent
+   * Returns list of services with their availability and credential status
+   */
+  app.get<{ Params: { id: string } }>('/api/agents/:id/services', async (request, reply) => {
+    const { id } = request.params;
+
+    const services = await discoverServicesForAgent(id);
+    if (!services) {
+      return reply.code(404).send({
+        error: { code: 'NOT_FOUND', message: 'Agent not found or has no policy' },
+      });
+    }
+
+    return { data: services };
+  });
+
+  /**
+   * Discover all tools available to an agent across all services
+   */
+  app.get<{ Params: { id: string } }>('/api/agents/:id/tools', async (request, reply) => {
+    const { id } = request.params;
+
+    const tools = await discoverToolsForAgent(id);
+    if (!tools) {
+      return reply.code(404).send({
+        error: { code: 'NOT_FOUND', message: 'Agent not found or has no policy' },
+      });
+    }
+
+    return { data: tools };
+  });
+
+  /**
+   * Discover tools for a specific service for an agent
+   */
+  app.get<{ Params: { id: string; serviceType: string } }>(
+    '/api/agents/:id/services/:serviceType/tools',
+    async (request, reply) => {
+      const { id, serviceType } = request.params;
+
+      const validTypes: NativeServerType[] = ['gmail', 'drive', 'calendar', 'web-search', 'browser'];
+      if (!validTypes.includes(serviceType as NativeServerType)) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
+        });
+      }
+
+      const tools = await discoverServiceToolsForAgent(id, serviceType as NativeServerType);
+      if (!tools) {
+        return reply.code(404).send({
+          error: { code: 'NOT_FOUND', message: 'Agent not found or has no policy' },
+        });
+      }
+
+      return { data: tools };
+    }
+  );
+
+  /**
+   * Link a credential to an agent
+   */
+  app.post<{ Params: { id: string }; Body: { credentialId: string } }>(
+    '/api/agents/:id/credentials',
+    async (request, reply) => {
+      const { id } = request.params;
+      const { credentialId } = request.body;
+
+      // Verify agent exists
+      const agentResult = await client.execute({
+        sql: `SELECT id FROM agents WHERE id = ?`,
+        args: [id],
+      });
+      if (agentResult.rows.length === 0) {
+        return reply.code(404).send({
+          error: { code: 'NOT_FOUND', message: 'Agent not found' },
+        });
+      }
+
+      // Verify credential exists
+      const credential = await credentialVault.retrieve(credentialId);
+      if (!credential) {
+        return reply.code(404).send({
+          error: { code: 'NOT_FOUND', message: 'Credential not found' },
+        });
+      }
+
+      // Link credential to agent
+      await client.execute({
+        sql: `INSERT OR REPLACE INTO agent_credentials (agent_id, credential_id) VALUES (?, ?)`,
+        args: [id, credentialId],
+      });
+
+      return reply.code(201).send({
+        data: { agentId: id, credentialId, serviceId: credential.serviceId },
+      });
+    }
+  );
+
+  /**
+   * Unlink a credential from an agent
+   */
+  app.delete<{ Params: { id: string; credentialId: string } }>(
+    '/api/agents/:id/credentials/:credentialId',
+    async (request, reply) => {
+      const { id, credentialId } = request.params;
+
+      await client.execute({
+        sql: `DELETE FROM agent_credentials WHERE agent_id = ? AND credential_id = ?`,
+        args: [id, credentialId],
+      });
+
+      return reply.code(204).send();
+    }
+  );
+
+  // ========================================================================
+  // Native Servers
+  // ========================================================================
+
+  /**
+   * List all registered native servers
+   */
+  app.get('/api/servers', async () => {
+    const status = await serverManager.getStatus();
+    return { data: status };
+  });
+
+  /**
+   * Get tools for a specific server
+   */
+  app.get<{ Params: { serverType: string } }>(
+    '/api/servers/:serverType/tools',
+    async (request, reply) => {
+      const { serverType } = request.params;
+
+      const validTypes: NativeServerType[] = ['gmail', 'drive', 'calendar', 'web-search', 'browser'];
+      if (!validTypes.includes(serverType as NativeServerType)) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_SERVICE', message: `Invalid server type: ${serverType}` },
+        });
+      }
+
+      const server = serverManager.getServer(serverType as NativeServerType);
+      if (!server) {
+        return reply.code(404).send({
+          error: { code: 'NOT_FOUND', message: `Server not registered: ${serverType}` },
+        });
+      }
+
+      const tools = server.getToolDefinitions();
+      return { data: tools };
+    }
+  );
+
+  /**
+   * Check health of a specific server
+   */
+  app.get<{ Params: { serverType: string } }>(
+    '/api/servers/:serverType/health',
+    async (request, reply) => {
+      const { serverType } = request.params;
+
+      const validTypes: NativeServerType[] = ['gmail', 'drive', 'calendar', 'web-search', 'browser'];
+      if (!validTypes.includes(serverType as NativeServerType)) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_SERVICE', message: `Invalid server type: ${serverType}` },
+        });
+      }
+
+      const health = await serverManager.checkServerHealth(serverType as NativeServerType);
+      return { data: health };
+    }
+  );
 
   // ========================================================================
   // Policies
@@ -495,4 +681,54 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const connections = mcpProxy.listConnections();
     return { data: connections };
   });
+
+  // ========================================================================
+  // Device Registration (Push Notifications)
+  // ========================================================================
+
+  app.post('/api/devices/register', async (request, reply) => {
+    const body = request.body as {
+      token?: string;
+      deviceId?: string;
+      platform?: string;
+      userId?: string;
+    };
+
+    if (!body.token || !body.deviceId || !body.platform) {
+      return reply.code(400).send({
+        error: { code: 'VALIDATION_ERROR', message: 'token, deviceId, and platform are required' },
+      });
+    }
+
+    if (body.platform !== 'ios' && body.platform !== 'android') {
+      return reply.code(400).send({
+        error: { code: 'VALIDATION_ERROR', message: 'platform must be ios or android' },
+      });
+    }
+
+    const id = await apnsService.registerDevice(
+      body.deviceId,
+      body.token,
+      body.platform as 'ios' | 'android',
+      body.userId
+    );
+
+    return { data: { deviceId: id } };
+  });
+
+  app.delete<{ Params: { deviceId: string } }>(
+    '/api/devices/:deviceId',
+    async (request, reply) => {
+      const { deviceId } = request.params;
+
+      const deleted = await apnsService.unregisterDevice(deviceId);
+      if (!deleted) {
+        return reply.code(404).send({
+          error: { code: 'NOT_FOUND', message: 'Device not found' },
+        });
+      }
+
+      return reply.code(204).send();
+    }
+  );
 };

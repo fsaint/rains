@@ -18,7 +18,7 @@ enum ApprovalStatus: String, Codable, CaseIterable {
 }
 
 /// An approval request from an AI agent
-struct ApprovalRequest: Identifiable, Codable, Equatable {
+struct ApprovalRequest: Identifiable, Codable, Equatable, Hashable {
     let id: String
     let agentId: String
     let tool: String
@@ -67,7 +67,7 @@ struct ApprovalRequest: Identifiable, Codable, Equatable {
 }
 
 /// Type-erased codable wrapper for JSON values
-struct AnyCodable: Codable, Equatable {
+struct AnyCodable: Codable, Equatable, Hashable {
     let value: Any
 
     init(_ value: Any) {
@@ -133,6 +133,21 @@ struct AnyCodable: Codable, Equatable {
             return l == r
         default:
             return false
+        }
+    }
+
+    func hash(into hasher: inout Hasher) {
+        switch value {
+        case let bool as Bool:
+            hasher.combine(bool)
+        case let int as Int:
+            hasher.combine(int)
+        case let double as Double:
+            hasher.combine(double)
+        case let string as String:
+            hasher.combine(string)
+        default:
+            hasher.combine(0)
         }
     }
 

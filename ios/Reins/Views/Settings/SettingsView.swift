@@ -84,7 +84,7 @@ struct SettingsView: View {
                         ProgressView()
                     } else if let result = connectionTestResult {
                         Text(result)
-                            .foregroundStyle(result == "Connected" ? .safeGreen : .alertRed)
+                            .foregroundStyle(result == "Connected" ? Color.safeGreen : Color.alertRed)
                     }
                 }
             }
@@ -103,7 +103,7 @@ struct SettingsView: View {
                 Spacer()
                 if pushManager.isAuthorized {
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.safeGreen)
+                        .foregroundStyle(Color.safeGreen)
                 } else {
                     Button("Enable") {
                         Task {
@@ -136,7 +136,7 @@ struct SettingsView: View {
             Toggle(isOn: $showBadges) {
                 Label("Show Badge Count", systemImage: "app.badge")
             }
-            .onChange(of: showBadges) { _, newValue in
+            .onChange(of: showBadges) { newValue in
                 AppConfig.showBadges = newValue
             }
         }

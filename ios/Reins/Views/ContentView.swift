@@ -24,7 +24,7 @@ struct ContentView: View {
         .task {
             await authService.checkConnection()
         }
-        .onChange(of: pushManager.pendingApprovalId) { _, newId in
+        .onChange(of: pushManager.pendingApprovalId) { newId in
             if let id = newId {
                 selectedApprovalId = id
                 selectedTab = 0

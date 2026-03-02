@@ -28,11 +28,18 @@ struct ActivityFeedView: View {
     }
 
     private var emptyView: some View {
-        ContentUnavailableView {
-            Label("No Activity", systemImage: "list.bullet")
-        } description: {
+        VStack(spacing: 16) {
+            Image(systemName: "list.bullet")
+                .font(.system(size: 48))
+                .foregroundStyle(.secondary)
+            Text("No Activity")
+                .font(.headline)
             Text("Agent activity and audit events will appear here.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
         }
+        .padding()
     }
 
     private var activityList: some View {

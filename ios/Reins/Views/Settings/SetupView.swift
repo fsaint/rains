@@ -14,7 +14,7 @@ struct SetupView: View {
             VStack(spacing: 16) {
                 Image(systemName: "shield.checkered")
                     .font(.system(size: 80))
-                    .foregroundStyle(.trustBlue)
+                    .foregroundStyle(Color.trustBlue)
 
                 Text("Reins")
                     .font(.largeTitle)
@@ -44,10 +44,10 @@ struct SetupView: View {
                 if let error = authService.connectionError {
                     HStack {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.alertRed)
+                            .foregroundStyle(Color.alertRed)
                         Text(error)
                             .font(.caption)
-                            .foregroundStyle(.alertRed)
+                            .foregroundStyle(Color.alertRed)
                     }
                 }
 

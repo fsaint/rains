@@ -54,7 +54,7 @@ struct ApprovalDetailView: View {
         .task {
             await viewModel.loadDetails()
         }
-        .onChange(of: viewModel.actionCompleted) { _, completed in
+        .onChange(of: viewModel.actionCompleted) { completed in
             if completed {
                 dismiss()
             }
@@ -92,7 +92,7 @@ struct ApprovalDetailView: View {
                     Text("Expires in \(viewModel.approval.timeRemainingString)")
                 }
                 .font(.subheadline)
-                .foregroundStyle(viewModel.approval.timeRemaining < 300 ? .alertRed : .secondary)
+                .foregroundStyle(viewModel.approval.timeRemaining < 300 ? Color.alertRed : Color.secondary)
             }
 
             Text("Requested \(viewModel.approval.requestedAt.relativeString)")
