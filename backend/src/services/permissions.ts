@@ -474,7 +474,14 @@ export async function canAccessTool(
  */
 export async function getCredentialsForService(
   serviceType: ServiceType
-): Promise<Array<{ id: string; type: string; status: string; expiresAt: string | null }>> {
+): Promise<Array<{
+  id: string;
+  type: string;
+  status: string;
+  expiresAt: string | null;
+  accountEmail: string | null;
+  accountName: string | null;
+}>> {
   const creds = await db.select().from(credentials).where(eq(credentials.serviceId, serviceType));
 
   return creds.map((c) => {
@@ -487,6 +494,8 @@ export async function getCredentialsForService(
       type: c.type,
       status,
       expiresAt: c.expiresAt,
+      accountEmail: c.accountEmail,
+      accountName: c.accountName,
     };
   });
 }

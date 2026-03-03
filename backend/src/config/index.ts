@@ -17,6 +17,9 @@ const ConfigSchema = z.object({
   // Environment
   nodeEnv: z.enum(['development', 'production', 'test']).default('development'),
 
+  // Dashboard URL (for OAuth redirects)
+  dashboardUrl: z.string().default('http://localhost:5173'),
+
   // Google OAuth (for Gmail, Drive, Calendar)
   googleClientId: z.string().optional(),
   googleClientSecret: z.string().optional(),
@@ -40,6 +43,8 @@ function loadConfig(): Config {
     encryptionKey: process.env.REINS_ENCRYPTION_KEY,
     logLevel: process.env.REINS_LOG_LEVEL,
     nodeEnv: process.env.NODE_ENV,
+    // Dashboard
+    dashboardUrl: process.env.REINS_DASHBOARD_URL,
     // Google OAuth
     googleClientId: process.env.GOOGLE_CLIENT_ID,
     googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,

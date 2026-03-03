@@ -1,4 +1,5 @@
 import { FastifyInstance, FastifyPluginAsync } from 'fastify';
+import { config } from '../config/index.js';
 import { client } from '../db/index.js';
 import { policyEngine } from '../policy/engine.js';
 import { credentialVault } from '../credentials/vault.js';
@@ -32,6 +33,11 @@ import {
   listPendingRegistrations,
   cancelRegistration,
 } from '../services/registration.js';
+import {
+  storePendingOAuthFlow,
+  getPendingOAuthFlow,
+  deletePendingOAuthFlow,
+} from '../oauth/pending-flows.js';
 import { nanoid } from 'nanoid';
 import {
   CreateAgentSchema,
@@ -221,10 +227,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
       const result = await registerAgent(name, description);
 
-      // Build claim URL - use request host or fallback to env
-      const dashboardUrl = process.env.REINS_DASHBOARD_URL ||
-        `${request.protocol}://${request.hostname}:5173`;
-      const claimUrl = `${dashboardUrl}/claim/${result.claimCode}`;
+      // Build claim URL using config
+      const claimUrl = `${config.dashboardUrl}/claim/${result.claimCode}`;
 
       return reply.code(201).send({
         data: {
@@ -905,6 +909,171 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     return reply.code(204).send();
   });
+
+  // ========================================================================
+  // OAuth - Google
+  // ========================================================================
+
+  const GOOGLE_SCOPES: Record<string, string[]> = {
+    gmail: [
+      'https://www.googleapis.com/auth/gmail.readonly',
+      'https://www.googleapis.com/auth/gmail.compose',
+      'https://www.googleapis.com/auth/userinfo.email',
+      'https://www.googleapis.com/auth/userinfo.profile',
+    ],
+    drive: [
+      'https://www.googleapis.com/auth/drive.readonly',
+      'https://www.googleapis.com/auth/userinfo.email',
+      'https://www.googleapis.com/auth/userinfo.profile',
+    ],
+    calendar: [
+      'https://www.googleapis.com/auth/calendar.readonly',
+      'https://www.googleapis.com/auth/userinfo.email',
+      'https://www.googleapis.com/auth/userinfo.profile',
+    ],
+  };
+
+  /**
+   * Initiate Google OAuth flow
+   */
+  app.get<{ Querystring: { service: string } }>('/api/oauth/google', async (request, reply) => {
+    const { service } = request.query;
+
+    if (!service || !['gmail', 'drive', 'calendar'].includes(service)) {
+      return reply.code(400).send({
+        error: { code: 'INVALID_SERVICE', message: 'service must be gmail, drive, or calendar' },
+      });
+    }
+
+    if (!config.googleClientId || !config.googleRedirectUri) {
+      return reply.code(500).send({
+        error: {
+          code: 'CONFIG_ERROR',
+          message: 'Google OAuth is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_REDIRECT_URI in .env file.',
+        },
+      });
+    }
+
+    // Generate state token for CSRF protection
+    const state = nanoid(32);
+    storePendingOAuthFlow(state, { service: service as 'gmail' | 'drive' | 'calendar' });
+
+    // Build authorization URL
+    const scopes = GOOGLE_SCOPES[service];
+    const params = new URLSearchParams({
+      client_id: config.googleClientId,
+      redirect_uri: config.googleRedirectUri,
+      response_type: 'code',
+      scope: scopes.join(' '),
+      state,
+      access_type: 'offline',
+      prompt: 'consent',
+    });
+
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+
+    return { data: { authUrl, state } };
+  });
+
+  /**
+   * Google OAuth callback
+   */
+  app.get<{ Querystring: { code?: string; state?: string; error?: string } }>(
+    '/api/oauth/google/callback',
+    async (request, reply) => {
+      const { code, state, error } = request.query;
+
+      // Build dashboard URL for redirects
+      const dashboardUrl = config.dashboardUrl;
+
+      if (error) {
+        return reply.redirect(`${dashboardUrl}/credentials?oauth_error=${encodeURIComponent(error)}`);
+      }
+
+      if (!code || !state) {
+        return reply.redirect(`${dashboardUrl}/credentials?oauth_error=missing_params`);
+      }
+
+      // Validate state token
+      const pendingFlow = getPendingOAuthFlow(state);
+      if (!pendingFlow) {
+        return reply.redirect(`${dashboardUrl}/credentials?oauth_error=invalid_state`);
+      }
+
+      // Delete the pending flow to prevent replay attacks
+      deletePendingOAuthFlow(state);
+
+      if (!config.googleClientId || !config.googleClientSecret || !config.googleRedirectUri) {
+        return reply.redirect(`${dashboardUrl}/credentials?oauth_error=config_error`);
+      }
+
+      try {
+        // Exchange code for tokens
+        const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            client_id: config.googleClientId!,
+            client_secret: config.googleClientSecret!,
+            code,
+            grant_type: 'authorization_code',
+            redirect_uri: config.googleRedirectUri,
+          }),
+        });
+
+        if (!tokenResponse.ok) {
+          const errorData = await tokenResponse.json().catch(() => ({}));
+          console.error('Token exchange failed:', errorData);
+          return reply.redirect(`${dashboardUrl}/credentials?oauth_error=token_exchange_failed`);
+        }
+
+        const tokens = await tokenResponse.json() as {
+          access_token: string;
+          refresh_token?: string;
+          expires_in: number;
+          token_type: string;
+        };
+
+        // Fetch user info to get email and name
+        const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+          headers: { Authorization: `Bearer ${tokens.access_token}` },
+        });
+
+        if (!userInfoResponse.ok) {
+          return reply.redirect(`${dashboardUrl}/credentials?oauth_error=userinfo_failed`);
+        }
+
+        const userInfo = await userInfoResponse.json() as {
+          email: string;
+          name?: string;
+        };
+
+        // Calculate expiration date
+        const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);
+
+        // Store the credential with account info
+        await credentialVault.storeOAuth({
+          serviceId: pendingFlow.service,
+          accountEmail: userInfo.email,
+          accountName: userInfo.name,
+          data: {
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token,
+            expiresAt,
+            tokenType: tokens.token_type,
+          },
+        });
+
+        // Redirect back to credentials page with success
+        return reply.redirect(
+          `${dashboardUrl}/credentials?oauth_success=true&email=${encodeURIComponent(userInfo.email)}`
+        );
+      } catch (err) {
+        console.error('OAuth callback error:', err);
+        return reply.redirect(`${dashboardUrl}/credentials?oauth_error=internal_error`);
+      }
+    }
+  );
 
   // ========================================================================
   // Approvals

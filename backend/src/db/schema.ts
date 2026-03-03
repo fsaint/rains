@@ -37,6 +37,8 @@ export const credentials = sqliteTable('credentials', {
   iv: blob('iv', { mode: 'buffer' }).notNull(),
   authTag: blob('auth_tag', { mode: 'buffer' }).notNull(),
   expiresAt: text('expires_at'),
+  accountEmail: text('account_email'), // e.g., "user@gmail.com"
+  accountName: text('account_name'), // e.g., "John Doe"
   createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: text('updated_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
 });

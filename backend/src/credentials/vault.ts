@@ -103,9 +103,51 @@ export class CredentialVault {
   }
 
   /**
+   * Store an OAuth credential with account information
+   */
+  async storeOAuth(options: {
+    serviceId: string;
+    accountEmail: string;
+    accountName?: string;
+    data: CredentialData;
+  }): Promise<string> {
+    const id = nanoid();
+    const encrypted = this.encrypt(options.data);
+
+    // Calculate expiration for OAuth tokens
+    let expiresAt: string | undefined;
+    if ('expiresAt' in options.data && options.data.expiresAt) {
+      expiresAt = options.data.expiresAt.toISOString();
+    }
+
+    await client.execute({
+      sql: `INSERT INTO credentials (id, service_id, type, encrypted_data, iv, auth_tag, expires_at, account_email, account_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        id,
+        options.serviceId,
+        'oauth2',
+        encrypted.encryptedData,
+        encrypted.iv,
+        encrypted.authTag,
+        expiresAt ?? null,
+        options.accountEmail,
+        options.accountName ?? null,
+      ],
+    });
+
+    return id;
+  }
+
+  /**
    * Retrieve a credential
    */
-  async retrieve(credentialId: string): Promise<{ serviceId: string; type: CredentialType; data: CredentialData } | null> {
+  async retrieve(credentialId: string): Promise<{
+    serviceId: string;
+    type: CredentialType;
+    data: CredentialData;
+    accountEmail?: string;
+    accountName?: string;
+  } | null> {
     const result = await client.execute({
       sql: `SELECT * FROM credentials WHERE id = ?`,
       args: [credentialId],
@@ -126,6 +168,8 @@ export class CredentialVault {
       serviceId: row.service_id as string,
       type: row.type as CredentialType,
       data,
+      accountEmail: row.account_email as string | undefined,
+      accountName: row.account_name as string | undefined,
     };
   }
 
@@ -175,15 +219,19 @@ export class CredentialVault {
     id: string;
     serviceId: string;
     type: CredentialType;
+    accountEmail?: string;
+    accountName?: string;
     expiresAt?: Date;
     createdAt: Date;
   }>> {
-    const result = await client.execute(`SELECT id, service_id, type, expires_at, created_at FROM credentials`);
+    const result = await client.execute(`SELECT id, service_id, type, account_email, account_name, expires_at, created_at FROM credentials`);
 
     return result.rows.map((row) => ({
       id: row.id as string,
       serviceId: row.service_id as string,
       type: row.type as CredentialType,
+      accountEmail: row.account_email as string | undefined,
+      accountName: row.account_name as string | undefined,
       expiresAt: row.expires_at ? new Date(row.expires_at as string) : undefined,
       createdAt: new Date(row.created_at as string),
     }));

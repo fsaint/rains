@@ -302,6 +302,14 @@ function ServiceConfigModal({
     },
   });
 
+  const unlinkCredentialMutation = useMutation({
+    mutationFn: () => permissions.unlinkCredential(agentId, serviceType),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['permissions'] });
+      onUpdate();
+    },
+  });
+
   const setToolPermissionMutation = useMutation({
     mutationFn: ({ toolName, permission }: { toolName: string; permission: ToolPermission }) =>
       permissions.setToolPermission(agentId, serviceType, toolName, permission),
@@ -382,9 +390,21 @@ function ServiceConfigModal({
                       className={`w-4 h-4 ${credentialStatusColors[config.credentialStatus]}`}
                     />
                     <span className="text-sm">
-                      Credential linked ({config.credentialStatus})
+                      {(() => {
+                        const linkedCred = availableCredentials?.find((c) => c.id === config.credentialId);
+                        if (linkedCred?.accountEmail) {
+                          return `${linkedCred.accountEmail} (${config.credentialStatus})`;
+                        }
+                        return `Credential linked (${config.credentialStatus})`;
+                      })()}
                     </span>
                   </div>
+                  <button
+                    onClick={() => unlinkCredentialMutation.mutate()}
+                    className="text-xs text-gray-500 hover:text-alert-red"
+                  >
+                    Unlink
+                  </button>
                 </div>
               ) : (
                 <div className="mt-2">
@@ -401,8 +421,8 @@ function ServiceConfigModal({
                       <option value="">Select a credential...</option>
                       {availableCredentials.map((cred) => (
                         <option key={cred.id} value={cred.id}>
-                          {cred.type} - {cred.status}
-                          {cred.expiresAt && ` (expires: ${cred.expiresAt})`}
+                          {cred.accountEmail || cred.type} ({cred.status})
+                          {cred.expiresAt && ` - expires: ${new Date(cred.expiresAt).toLocaleDateString()}`}
                         </option>
                       ))}
                     </select>

@@ -1,0 +1,72 @@
+# Reins Development Environment
+# Usage: tmuxp load tmuxp.yaml
+#
+# Prerequisites:
+#   - tmux and tmuxp installed
+#   - Node.js 20+ and npm 10+
+#   - npm install completed
+#   - .env file configured (cp .env.example .env)
+
+session_name: reins
+
+# Start in the project root
+start_directory: ./
+
+windows:
+  - window_name: dev
+    layout: main-vertical
+    options:
+      main-pane-width: 50%
+    panes:
+      # Backend server (port 3000)
+      - shell_command:
+          - echo "Starting Reins Backend..."
+          - npm run dev:backend
+        focus: true
+
+      # Frontend dev server (port 5173)
+      - shell_command:
+          - echo "Starting Reins Frontend..."
+          - sleep 2  # Wait for backend to initialize
+          - npm run dev:frontend
+
+  - window_name: logs
+    layout: even-horizontal
+    panes:
+      # Watch backend logs / general terminal
+      - shell_command:
+          - echo "Backend logs and general commands"
+          - echo "Backend: http://localhost:3000"
+          - echo "Frontend: http://localhost:5173"
+          - echo ""
+          - echo "Useful commands:"
+          - echo "  npm test                    # Run all tests"
+          - echo "  npm run typecheck           # Type check all packages"
+          - echo "  npm run lint                # Lint code"
+          - echo ""
+
+      # Database / sqlite terminal
+      - shell_command:
+          - echo "Database terminal"
+          - echo "SQLite DB: ./data/reins.db"
+          - echo ""
+          - echo "To inspect DB:"
+          - echo "  sqlite3 ./data/reins.db"
+          - echo ""
+
+  - window_name: tests
+    layout: main-horizontal
+    panes:
+      # Test runner
+      - shell_command:
+          - echo "Test runner - run 'npm test' or 'npm run test:watch'"
+        focus: true
+
+      # Type checking
+      - shell_command:
+          - echo "Type checking - run 'npm run typecheck'"
+
+  - window_name: git
+    panes:
+      - shell_command:
+          - git status

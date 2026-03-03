@@ -100,13 +100,30 @@ export const policies = {
     ),
 };
 
+// Credential types
+export interface Credential {
+  id: string;
+  serviceId: string;
+  type: string;
+  accountEmail?: string;
+  accountName?: string;
+  expiresAt?: string;
+  createdAt: string;
+}
+
 // Credentials
 export const credentials = {
-  list: () => request<unknown[]>('/credentials'),
+  list: () => request<Credential[]>('/credentials'),
   create: (data: { serviceId: string; type: string; data: unknown }) =>
     request<unknown>('/credentials', { method: 'POST', body: JSON.stringify(data) }),
   checkHealth: (id: string) => request<unknown>(`/credentials/${id}/health`),
   delete: (id: string) => request<void>(`/credentials/${id}`, { method: 'DELETE' }),
+};
+
+// OAuth
+export const oauth = {
+  initiateGoogle: (service: GoogleService) =>
+    request<{ authUrl: string; state: string }>(`/oauth/google?service=${service}`),
 };
 
 // Approvals
@@ -184,7 +201,11 @@ export interface ServiceCredential {
   type: string;
   status: string;
   expiresAt: string | null;
+  accountEmail: string | null;
+  accountName: string | null;
 }
+
+export type GoogleService = 'gmail' | 'drive' | 'calendar';
 
 // Permissions
 export const permissions = {
