@@ -10,20 +10,20 @@ windows:
     options:
       main-pane-width: 50%
     panes:
-      - shell_command: npm run dev:backend
+      - shell_command: "npm run dev:backend"
         focus: true
-      - shell_command: sleep 2 && npm run dev:frontend
+      - shell_command: "sleep 2 && npm run dev:frontend"
 
   - window_name: shell
     layout: even-horizontal
     panes:
-      - shell_command: echo "Backend http://localhost:3000 | Frontend http://localhost:5173"
-      - shell_command: echo "DB terminal - sqlite3 ./data/reins.db"
+      - shell_command: "echo 'Backend http://localhost:3000 | Frontend http://localhost:5173'"
+      - shell_command: "echo 'DB terminal - sqlite3 ./data/reins.db'"
 
   - window_name: tests
     panes:
-      - shell_command: echo "Run: npm test"
+      - shell_command: "echo 'Run npm test'"
 
   - window_name: git
     panes:
-      - shell_command: git status
+      - shell_command: "git status"
