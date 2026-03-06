@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   permissions,
@@ -22,6 +23,7 @@ import {
   Shield,
   ChevronDown,
   ChevronRight,
+  Plus,
 } from 'lucide-react';
 
 const serviceIcons: Record<ServiceType, React.ReactNode> = {
@@ -161,6 +163,26 @@ export default function Permissions() {
           <span className="text-gray-600">Disabled</span>
         </div>
       </div>
+
+      {/* Credential Warning Banner */}
+      {matrix.cells.some(
+        (c) => c.enabled && (c.credentialStatus === 'missing' || c.credentialStatus === 'not_linked')
+      ) && (
+        <div className="mb-4 bg-caution-amber/5 border border-caution-amber/20 rounded-xl px-5 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 text-caution-amber shrink-0" />
+            <p className="text-sm text-gray-600">
+              Some enabled services are missing credentials. Agents won&apos;t be able to use them until authenticated.
+            </p>
+          </div>
+          <Link
+            to="/credentials"
+            className="shrink-0 text-sm font-medium text-trust-blue hover:text-blue-700"
+          >
+            Set up credentials
+          </Link>
+        </div>
+      )}
 
       {/* Permission Matrix */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
@@ -463,68 +485,91 @@ function ServiceConfigModal({
               </div>
             </div>
 
-            {/* Credential Section - only show when service is enabled */}
+            {/* Credential / Account Section - only show when service is enabled */}
             {currentLevel !== 'none' && (
               <div className="p-4 bg-gray-50 rounded-lg">
                 <div className="flex items-center gap-3 mb-3">
                   <Key className="w-5 h-5 text-gray-400" />
                   <div>
-                    <div className="font-medium text-reins-navy">Google Account</div>
+                    <div className="font-medium text-reins-navy">Account</div>
                     <div className="text-sm text-gray-500">
-                      Link a credential for authentication
+                      Which account should this agent use for {serviceName}?
                     </div>
                   </div>
                 </div>
 
-                {config.credentialId ? (
-                  <div className="flex items-center justify-between mt-2">
-                    <div className="flex items-center gap-2">
-                      <CheckCircle
-                        className={`w-4 h-4 ${credentialStatusColors[config.credentialStatus]}`}
-                      />
-                      <span className="text-sm">
-                        {(() => {
-                          const linkedCred = availableCredentials?.find((c) => c.id === config.credentialId);
-                          if (linkedCred?.accountEmail) {
-                            return `${linkedCred.accountEmail} (${config.credentialStatus})`;
-                          }
-                          return `Credential linked (${config.credentialStatus})`;
-                        })()}
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => unlinkCredentialMutation.mutate()}
-                      className="text-xs text-gray-500 hover:text-alert-red"
+                {/* Account selector - always show if there are credentials */}
+                {availableCredentials && availableCredentials.length > 0 ? (
+                  <div className="space-y-2 mt-2">
+                    {availableCredentials.map((cred) => {
+                      const isLinked = config.credentialId === cred.id;
+                      return (
+                        <button
+                          key={cred.id}
+                          onClick={() => {
+                            if (isLinked) {
+                              unlinkCredentialMutation.mutate();
+                            } else {
+                              linkCredentialMutation.mutate(cred.id);
+                            }
+                          }}
+                          disabled={linkCredentialMutation.isPending || unlinkCredentialMutation.isPending}
+                          className={`w-full flex items-center gap-3 p-3 rounded-lg border-2 text-left transition-all ${
+                            isLinked
+                              ? 'border-trust-blue bg-trust-blue/5'
+                              : 'border-gray-200 bg-white hover:border-gray-300'
+                          } ${(linkCredentialMutation.isPending || unlinkCredentialMutation.isPending) ? 'opacity-50 cursor-wait' : ''}`}
+                        >
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
+                            isLinked ? 'bg-trust-blue text-white' : 'bg-gray-100 text-gray-400'
+                          }`}>
+                            {(cred.accountEmail || cred.type).charAt(0).toUpperCase()}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium text-sm text-reins-navy truncate">
+                              {cred.accountEmail || cred.type}
+                            </div>
+                            {cred.accountName && (
+                              <div className="text-xs text-gray-400 truncate">{cred.accountName}</div>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className={`text-xs ${credentialStatusColors[cred.status]}`}>
+                              {cred.status}
+                            </span>
+                            {isLinked && <CheckCircle className="w-4 h-4 text-trust-blue" />}
+                          </div>
+                        </button>
+                      );
+                    })}
+                    <Link
+                      to={`/credentials?connect=${serviceType}`}
+                      className="flex items-center justify-center gap-1.5 text-xs font-medium text-gray-400 hover:text-trust-blue py-2 transition-colors"
                     >
-                      Unlink
-                    </button>
+                      <Plus className="w-3 h-3" />
+                      Connect another account
+                    </Link>
                   </div>
                 ) : (
-                  <div className="mt-2">
-                    {availableCredentials && availableCredentials.length > 0 ? (
-                      <select
-                        onChange={(e) => {
-                          if (e.target.value) {
-                            linkCredentialMutation.mutate(e.target.value);
-                          }
-                        }}
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-trust-blue focus:border-transparent"
-                        defaultValue=""
-                      >
-                        <option value="">Select a credential...</option>
-                        {availableCredentials.map((cred) => (
-                          <option key={cred.id} value={cred.id}>
-                            {cred.accountEmail || cred.type} ({cred.status})
-                            {cred.expiresAt && ` - expires: ${new Date(cred.expiresAt).toLocaleDateString()}`}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <p className="text-sm text-gray-500">
-                        No credentials available for {serviceName}. Create one in the
-                        Credentials page.
-                      </p>
-                    )}
+                  <div className="mt-2 bg-caution-amber/5 border border-caution-amber/20 rounded-lg p-3">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 text-caution-amber shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-sm font-medium text-caution-amber">
+                          No accounts connected for {serviceName}
+                        </p>
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          Connect a Google account first so this agent can authenticate.
+                        </p>
+                        <Link
+                          to={`/credentials?connect=${serviceType}`}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-trust-blue hover:text-blue-700 mt-2"
+                        >
+                          <Key className="w-3 h-3" />
+                          Connect Google Account
+                        </Link>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>

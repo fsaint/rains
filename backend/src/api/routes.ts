@@ -124,6 +124,65 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     };
   });
 
+  // Connection prompt for an agent
+  app.get<{ Params: { id: string } }>('/api/agents/:id/connect-prompt', async (request, reply) => {
+    const { id } = request.params;
+
+    const result = await client.execute({
+      sql: `SELECT * FROM agents WHERE id = ?`,
+      args: [id],
+    });
+
+    if (result.rows.length === 0) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Agent not found' } });
+    }
+
+    const agent = result.rows[0];
+
+    // Get enabled services for this agent
+    const servicesResult = await client.execute({
+      sql: `SELECT service_type, enabled FROM agent_service_access WHERE agent_id = ?`,
+      args: [id],
+    });
+    const enabledServices = servicesResult.rows
+      .filter((r) => r.enabled)
+      .map((r) => r.service_type as string);
+
+    // Build the MCP endpoint URL using the dashboard URL as the base
+    const mcpUrl = `${config.dashboardUrl}/mcp/${id}`;
+
+    // Build the prompt
+    const servicesList = enabledServices.length > 0
+      ? enabledServices.join(', ')
+      : 'none configured yet';
+
+    const prompt = [
+      `You have access to an MCP tool server managed by Reins.`,
+      ``,
+      `Endpoint: ${mcpUrl}`,
+      `Agent: ${agent.name}${agent.description ? ` - ${agent.description}` : ''}`,
+      `Enabled services: ${servicesList}`,
+      ``,
+      `To discover available tools, send a JSON-RPC 2.0 request:`,
+      ``,
+      `POST ${mcpUrl}`,
+      `Content-Type: application/json`,
+      ``,
+      `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`,
+      ``,
+      `To call a tool:`,
+      ``,
+      `POST ${mcpUrl}`,
+      `Content-Type: application/json`,
+      ``,
+      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"<tool_name>","arguments":{...}}}`,
+      ``,
+      `Some tools may require approval before execution. If so, the request will block until a human approves it in the Reins dashboard.`,
+    ].join('\n');
+
+    return { data: { prompt, mcpUrl, agentName: agent.name, enabledServices } };
+  });
+
   app.post('/api/agents', async (request, reply) => {
     const parsed = CreateAgentSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -974,37 +1033,22 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // OAuth - Google
   // ========================================================================
 
-  const GOOGLE_SCOPES: Record<string, string[]> = {
-    gmail: [
-      'https://www.googleapis.com/auth/gmail.readonly',
-      'https://www.googleapis.com/auth/gmail.compose',
-      'https://www.googleapis.com/auth/userinfo.email',
-      'https://www.googleapis.com/auth/userinfo.profile',
-    ],
-    drive: [
-      'https://www.googleapis.com/auth/drive.readonly',
-      'https://www.googleapis.com/auth/userinfo.email',
-      'https://www.googleapis.com/auth/userinfo.profile',
-    ],
-    calendar: [
-      'https://www.googleapis.com/auth/calendar.readonly',
-      'https://www.googleapis.com/auth/userinfo.email',
-      'https://www.googleapis.com/auth/userinfo.profile',
-    ],
-  };
+  // All Google scopes requested at once — one credential covers all Google services
+  const GOOGLE_SCOPES = [
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/gmail.compose',
+    'https://www.googleapis.com/auth/drive.readonly',
+    'https://www.googleapis.com/auth/calendar.readonly',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/userinfo.profile',
+  ];
 
   /**
    * Initiate Google OAuth flow
+   * Connects a Google account with access to all Google services (Gmail, Drive, Calendar).
+   * The credential is stored as serviceId='google' and can be linked to any agent.
    */
-  app.get<{ Querystring: { service: string } }>('/api/oauth/google', async (request, reply) => {
-    const { service } = request.query;
-
-    if (!service || !['gmail', 'drive', 'calendar'].includes(service)) {
-      return reply.code(400).send({
-        error: { code: 'INVALID_SERVICE', message: 'service must be gmail, drive, or calendar' },
-      });
-    }
-
+  app.get('/api/oauth/google', async (_request, reply) => {
     if (!config.googleClientId || !config.googleRedirectUri) {
       return reply.code(500).send({
         error: {
@@ -1016,15 +1060,14 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     // Generate state token for CSRF protection
     const state = nanoid(32);
-    storePendingOAuthFlow(state, { service: service as 'gmail' | 'drive' | 'calendar' });
+    storePendingOAuthFlow(state, { service: 'google' });
 
     // Build authorization URL
-    const scopes = GOOGLE_SCOPES[service];
     const params = new URLSearchParams({
       client_id: config.googleClientId,
       redirect_uri: config.googleRedirectUri,
       response_type: 'code',
-      scope: scopes.join(' '),
+      scope: GOOGLE_SCOPES.join(' '),
       state,
       access_type: 'offline',
       prompt: 'consent',
@@ -1113,7 +1156,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
         // Store the credential with account info
         await credentialVault.storeOAuth({
-          serviceId: pendingFlow.service,
+          serviceId: 'google',
           accountEmail: userInfo.email,
           accountName: userInfo.name,
           data: {

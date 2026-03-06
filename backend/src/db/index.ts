@@ -65,10 +65,22 @@ export async function initializeDatabase() {
       iv BLOB NOT NULL,
       auth_tag BLOB NOT NULL,
       expires_at TEXT,
+      account_email TEXT,
+      account_name TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
     );
   `);
+
+  // Migrate: add account columns if table predates them
+  const credCols = await client.execute(`PRAGMA table_info(credentials)`);
+  const credColNames = credCols.rows.map((r) => r.name as string);
+  if (!credColNames.includes('account_email')) {
+    await client.execute(`ALTER TABLE credentials ADD COLUMN account_email TEXT`);
+  }
+  if (!credColNames.includes('account_name')) {
+    await client.execute(`ALTER TABLE credentials ADD COLUMN account_name TEXT`);
+  }
 
   await client.execute(`
     -- Audit log table (append-only)

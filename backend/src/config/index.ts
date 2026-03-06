@@ -1,4 +1,12 @@
+import { config as dotenvConfig } from 'dotenv';
+import { resolve } from 'path';
 import { z } from 'zod';
+
+// Load .env before reading process.env
+const dotResult = dotenvConfig({ path: resolve(process.cwd(), '.env') });
+if (dotResult.error) {
+  dotenvConfig({ path: resolve(process.cwd(), '../.env') });
+}
 
 const ConfigSchema = z.object({
   // Server
@@ -18,15 +26,19 @@ const ConfigSchema = z.object({
   nodeEnv: z.enum(['development', 'production', 'test']).default('development'),
 
   // Dashboard URL (for OAuth redirects)
-  dashboardUrl: z.string().default('http://localhost:5173'),
+  dashboardUrl: z.string().default('https://reins.btv.pw'),
 
   // Google OAuth (for Gmail, Drive, Calendar)
   googleClientId: z.string().optional(),
   googleClientSecret: z.string().optional(),
-  googleRedirectUri: z.string().default('http://localhost:5001/api/oauth/google/callback'),
+  googleRedirectUri: z.string().default('https://reins.btv.pw/api/oauth/google/callback'),
 
   // Brave Search API
   braveApiKey: z.string().optional(),
+
+  // Auth
+  adminPassword: z.string().min(1, 'REINS_ADMIN_PASSWORD is required'),
+  sessionSecret: z.string().min(32).default('change-me-to-a-random-32-char-string!!'),
 
   // Browser server
   browserMaxInstances: z.coerce.number().default(5),
@@ -49,6 +61,9 @@ function loadConfig(): Config {
     googleClientId: process.env.GOOGLE_CLIENT_ID,
     googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
     googleRedirectUri: process.env.GOOGLE_REDIRECT_URI,
+    // Auth
+    adminPassword: process.env.REINS_ADMIN_PASSWORD,
+    sessionSecret: process.env.REINS_SESSION_SECRET,
     // Brave Search
     braveApiKey: process.env.BRAVE_API_KEY,
     // Browser

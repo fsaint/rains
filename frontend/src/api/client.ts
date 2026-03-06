@@ -15,12 +15,13 @@ async function request<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
+  const headers: Record<string, string> = { ...options.headers as Record<string, string> };
+  if (options.body) {
+    headers['Content-Type'] = 'application/json';
+  }
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
+    headers,
   });
 
   if (!response.ok) {
@@ -77,6 +78,10 @@ export const agents = {
     request<unknown>(`/agents/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   delete: (id: string) => request<void>(`/agents/${id}`, { method: 'DELETE' }),
 
+  // Connection prompt
+  getConnectPrompt: (id: string) =>
+    request<{ prompt: string; mcpUrl: string; agentName: string; enabledServices: string[] }>(`/agents/${id}/connect-prompt`),
+
   // Self-registration
   claim: (code: string) =>
     request<ClaimedAgent>('/agents/claim', { method: 'POST', body: JSON.stringify({ code }) }),
@@ -122,8 +127,8 @@ export const credentials = {
 
 // OAuth
 export const oauth = {
-  initiateGoogle: (service: GoogleService) =>
-    request<{ authUrl: string; state: string }>(`/oauth/google?service=${service}`),
+  initiateGoogle: () =>
+    request<{ authUrl: string; state: string }>('/oauth/google'),
 };
 
 // Approvals
@@ -151,6 +156,19 @@ export const audit = {
 // Connections
 export const connections = {
   list: () => request<unknown[]>('/connections'),
+};
+
+// Auth
+export const auth = {
+  login: (password: string) =>
+    request<{ authenticated: boolean }>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    }),
+  logout: () =>
+    request<{ authenticated: boolean }>('/auth/logout', { method: 'POST' }),
+  session: () =>
+    request<{ authenticated: boolean }>('/auth/session'),
 };
 
 // Health
@@ -208,7 +226,6 @@ export interface ServiceCredential {
   accountName: string | null;
 }
 
-export type GoogleService = 'gmail' | 'drive' | 'calendar';
 
 // Permissions
 export const permissions = {

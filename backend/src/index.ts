@@ -1,12 +1,11 @@
-// Load environment variables from .env file (development only)
-import 'dotenv/config';
-
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
 import { config } from './config/index.js';
 import { initializeDatabase } from './db/index.js';
 import { apiRoutes } from './api/routes.js';
+import { registerAuth } from './auth/index.js';
 import { approvalQueue } from './approvals/queue.js';
 import { initializeNativeServers, shutdownNativeServers } from './mcp/init-servers.js';
 
@@ -24,6 +23,7 @@ await app.register(cors, {
   credentials: true,
 });
 
+await app.register(cookie);
 await app.register(websocket);
 
 // Initialize database
@@ -35,6 +35,9 @@ app.log.info('Database initialized');
 app.log.info('Initializing native MCP servers...');
 await initializeNativeServers();
 app.log.info('Native MCP servers initialized');
+
+// Register auth (routes + guard)
+await registerAuth(app);
 
 // Register API routes
 await app.register(apiRoutes);

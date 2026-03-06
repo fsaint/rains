@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Trash2, Key, RefreshCw, CheckCircle, AlertCircle, Clock, Mail, HardDrive, Calendar } from 'lucide-react';
+import { Plus, Trash2, Key, RefreshCw, CheckCircle, AlertCircle, Clock, X } from 'lucide-react';
 import { credentials, oauth, type Credential } from '../api/client';
 
 interface CredentialHealth {
@@ -10,11 +10,20 @@ interface CredentialHealth {
   error?: string;
 }
 
+const GoogleIcon = ({ className = 'w-5 h-5' }: { className?: string }) => (
+  <svg className={className} viewBox="0 0 24 24">
+    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+  </svg>
+);
+
 export default function Credentials() {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showGoogleModal, setShowGoogleModal] = useState(false);
+  const [createType, setCreateType] = useState<'pick' | 'api_key'>('pick');
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [newCredential, setNewCredential] = useState({
     serviceId: '',
@@ -35,7 +44,6 @@ export default function Credentials() {
         message: `Google account ${email ? `(${email}) ` : ''}connected successfully!`,
       });
       queryClient.invalidateQueries({ queryKey: ['credentials'] });
-      // Clear the search params
       setSearchParams({});
     } else if (oauthError) {
       const errorMessages: Record<string, string> = {
@@ -53,7 +61,6 @@ export default function Credentials() {
       setSearchParams({});
     }
 
-    // Clear notification after 5 seconds
     if (oauthSuccess || oauthError) {
       const timer = setTimeout(() => setNotification(null), 5000);
       return () => clearTimeout(timer);
@@ -72,6 +79,7 @@ export default function Credentials() {
       queryClient.invalidateQueries({ queryKey: ['credentials'] });
       setShowCreateModal(false);
       setNewCredential({ serviceId: '', type: 'api_key', data: { apiKey: '' } });
+      setCreateType('pick');
     },
   });
 
@@ -83,9 +91,8 @@ export default function Credentials() {
   });
 
   const initiateGoogleOAuthMutation = useMutation({
-    mutationFn: oauth.initiateGoogle,
+    mutationFn: () => oauth.initiateGoogle(),
     onSuccess: (data) => {
-      // Redirect to Google OAuth
       window.location.href = data.authUrl;
     },
     onError: (error) => {
@@ -93,6 +100,7 @@ export default function Credentials() {
         type: 'error',
         message: error instanceof Error ? error.message : 'Failed to initiate OAuth flow',
       });
+      setShowCreateModal(false);
     },
   });
 
@@ -113,10 +121,10 @@ export default function Credentials() {
     return <AlertCircle className="w-4 h-4 text-alert-red" />;
   };
 
-  const typeLabels: Record<string, string> = {
-    api_key: 'API Key',
-    oauth2: 'OAuth 2.0',
-    basic: 'Basic Auth',
+  const openCreateModal = () => {
+    setCreateType('pick');
+    setNewCredential({ serviceId: '', type: 'api_key', data: { apiKey: '' } });
+    setShowCreateModal(true);
   };
 
   return (
@@ -144,27 +152,13 @@ export default function Credentials() {
           <h1 className="text-2xl font-semibold text-reins-navy">Credentials</h1>
           <p className="text-gray-500 mt-1">Manage encrypted service credentials</p>
         </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setShowGoogleModal(true)}
-            className="flex items-center gap-2 bg-white text-gray-700 px-4 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 transition-colors"
-          >
-            <svg className="w-5 h-5" viewBox="0 0 24 24">
-              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-            </svg>
-            Connect Google Account
-          </button>
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-2 bg-trust-blue text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            <Plus className="w-5 h-5" />
-            Add Credential
-          </button>
-        </div>
+        <button
+          onClick={openCreateModal}
+          className="flex items-center gap-2 bg-trust-blue text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+        >
+          <Plus className="w-5 h-5" />
+          Add Credential
+        </button>
       </div>
 
       {isLoading ? (
@@ -176,7 +170,7 @@ export default function Credentials() {
           <Key className="w-12 h-12 text-gray-300 mx-auto mb-4" />
           <p className="text-gray-500">No credentials stored yet</p>
           <button
-            onClick={() => setShowCreateModal(true)}
+            onClick={openCreateModal}
             className="mt-4 text-trust-blue hover:underline"
           >
             Add your first credential
@@ -187,9 +181,8 @@ export default function Credentials() {
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-100">
               <tr>
-                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Service</th>
-                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Account</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Account</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Expires</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
@@ -201,13 +194,14 @@ export default function Credentials() {
                 <tr key={cred.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2">
-                      {cred.serviceId === 'gmail' && <Mail className="w-4 h-4 text-red-500" />}
-                      {cred.serviceId === 'drive' && <HardDrive className="w-4 h-4 text-yellow-500" />}
-                      {cred.serviceId === 'calendar' && <Calendar className="w-4 h-4 text-blue-500" />}
-                      {!['gmail', 'drive', 'calendar'].includes(cred.serviceId) && (
+                      {cred.serviceId === 'google' ? (
+                        <GoogleIcon className="w-4 h-4" />
+                      ) : (
                         <Key className="w-4 h-4 text-gray-400" />
                       )}
-                      <span className="font-medium capitalize">{cred.serviceId}</span>
+                      <span className="font-medium capitalize">
+                        {cred.serviceId === 'google' ? 'Google' : cred.serviceId}
+                      </span>
                     </div>
                   </td>
                   <td className="px-6 py-4 text-sm">
@@ -222,7 +216,6 @@ export default function Credentials() {
                       <span className="text-gray-400">-</span>
                     )}
                   </td>
-                  <td className="px-6 py-4 text-sm">{typeLabels[cred.type] || cred.type}</td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2">
                       {getHealthIcon(cred.id)}
@@ -266,39 +259,88 @@ export default function Credentials() {
         </div>
       )}
 
-      {/* Create Modal */}
+      {/* Add Credential Modal */}
       {showCreateModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-xl">
-            <h2 className="text-lg font-semibold mb-4">Add Credential</h2>
-            <form onSubmit={handleCreate}>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Service ID</label>
-                  <input
-                    type="text"
-                    value={newCredential.serviceId}
-                    onChange={(e) => setNewCredential({ ...newCredential, serviceId: e.target.value })}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-trust-blue focus:border-transparent"
-                    placeholder="e.g., gmail, github"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
-                  <select
-                    value={newCredential.type}
-                    onChange={(e) => setNewCredential({ ...newCredential, type: e.target.value as 'api_key' })}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-trust-blue focus:border-transparent"
-                  >
-                    <option value="api_key">API Key</option>
-                    <option value="oauth2">OAuth 2.0</option>
-                    <option value="basic">Basic Auth</option>
-                  </select>
-                </div>
-                {newCredential.type === 'api_key' && (
+        <div className="fixed inset-0 bg-reins-navy/60 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl shadow-reins-navy/10 border border-gray-100">
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="text-lg font-semibold text-reins-navy">
+                {createType === 'pick' ? 'Add Credential' : 'Add API Key'}
+              </h2>
+              <button
+                onClick={() => { setShowCreateModal(false); setCreateType('pick'); }}
+                className="text-gray-300 hover:text-gray-500 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {createType === 'pick' ? (
+              /* Type Picker */
+              <div className="space-y-3">
+                <p className="text-sm text-gray-500 mb-4">
+                  Choose a credential type to add.
+                </p>
+
+                {/* Google */}
+                <button
+                  onClick={() => initiateGoogleOAuthMutation.mutate()}
+                  disabled={initiateGoogleOAuthMutation.isPending}
+                  className="w-full flex items-center gap-4 p-4 rounded-xl border-2 border-gray-200 hover:border-trust-blue hover:bg-trust-blue/5 transition-all text-left disabled:opacity-50"
+                >
+                  <div className="w-10 h-10 bg-gray-50 rounded-lg flex items-center justify-center shrink-0">
+                    <GoogleIcon />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-reins-navy">Google Account</div>
+                    <div className="text-sm text-gray-500">
+                      Gmail, Drive, Calendar access via OAuth
+                    </div>
+                  </div>
+                  {initiateGoogleOAuthMutation.isPending && (
+                    <div className="animate-spin rounded-full h-5 w-5 border-2 border-gray-300 border-t-trust-blue shrink-0" />
+                  )}
+                </button>
+
+                {/* API Key */}
+                <button
+                  onClick={() => setCreateType('api_key')}
+                  className="w-full flex items-center gap-4 p-4 rounded-xl border-2 border-gray-200 hover:border-trust-blue hover:bg-trust-blue/5 transition-all text-left"
+                >
+                  <div className="w-10 h-10 bg-gray-50 rounded-lg flex items-center justify-center shrink-0">
+                    <Key className="w-5 h-5 text-gray-500" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-reins-navy">API Key</div>
+                    <div className="text-sm text-gray-500">
+                      Web Search (Brave), or other API key services
+                    </div>
+                  </div>
+                </button>
+              </div>
+            ) : (
+              /* API Key Form */
+              <form onSubmit={handleCreate}>
+                <div className="space-y-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
+                      Service
+                    </label>
+                    <select
+                      value={newCredential.serviceId}
+                      onChange={(e) => setNewCredential({ ...newCredential, serviceId: e.target.value })}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none bg-white"
+                      required
+                    >
+                      <option value="">Select a service...</option>
+                      <option value="web-search">Web Search (Brave)</option>
+                      <option value="browser">Browser</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
+                      API Key
+                    </label>
                     <input
                       type="password"
                       value={(newCredential.data as { apiKey: string }).apiKey}
@@ -306,91 +348,29 @@ export default function Credentials() {
                         ...newCredential,
                         data: { apiKey: e.target.value },
                       })}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 font-mono focus:ring-2 focus:ring-trust-blue focus:border-transparent"
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-mono focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
                       required
                     />
                   </div>
-                )}
-              </div>
-              <div className="flex justify-end gap-3 mt-6">
-                <button
-                  type="button"
-                  onClick={() => setShowCreateModal(false)}
-                  className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={createMutation.isPending}
-                  className="px-4 py-2 bg-trust-blue text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-                >
-                  {createMutation.isPending ? 'Adding...' : 'Add Credential'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Google OAuth Modal */}
-      {showGoogleModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-xl">
-            <h2 className="text-lg font-semibold mb-2">Connect Google Account</h2>
-            <p className="text-sm text-gray-500 mb-6">
-              Choose a Google service to connect. You'll be redirected to Google to authorize access.
-            </p>
-            <div className="space-y-3">
-              <button
-                onClick={() => initiateGoogleOAuthMutation.mutate('gmail')}
-                disabled={initiateGoogleOAuthMutation.isPending}
-                className="w-full flex items-center gap-3 p-4 rounded-lg border-2 border-gray-200 hover:border-trust-blue hover:bg-blue-50 transition-colors"
-              >
-                <div className="w-10 h-10 bg-red-100 rounded-lg flex items-center justify-center">
-                  <Mail className="w-5 h-5 text-red-600" />
                 </div>
-                <div className="text-left flex-1">
-                  <div className="font-medium text-gray-900">Gmail</div>
-                  <div className="text-sm text-gray-500">Read emails and create drafts</div>
+                <div className="flex justify-end gap-2 mt-6">
+                  <button
+                    type="button"
+                    onClick={() => setCreateType('pick')}
+                    className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={createMutation.isPending}
+                    className="px-4 py-2 text-sm bg-trust-blue text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 transition-all shadow-sm shadow-trust-blue/20"
+                  >
+                    {createMutation.isPending ? 'Adding...' : 'Add'}
+                  </button>
                 </div>
-              </button>
-              <button
-                onClick={() => initiateGoogleOAuthMutation.mutate('drive')}
-                disabled={initiateGoogleOAuthMutation.isPending}
-                className="w-full flex items-center gap-3 p-4 rounded-lg border-2 border-gray-200 hover:border-trust-blue hover:bg-blue-50 transition-colors"
-              >
-                <div className="w-10 h-10 bg-yellow-100 rounded-lg flex items-center justify-center">
-                  <HardDrive className="w-5 h-5 text-yellow-600" />
-                </div>
-                <div className="text-left flex-1">
-                  <div className="font-medium text-gray-900">Google Drive</div>
-                  <div className="text-sm text-gray-500">Read and search files</div>
-                </div>
-              </button>
-              <button
-                onClick={() => initiateGoogleOAuthMutation.mutate('calendar')}
-                disabled={initiateGoogleOAuthMutation.isPending}
-                className="w-full flex items-center gap-3 p-4 rounded-lg border-2 border-gray-200 hover:border-trust-blue hover:bg-blue-50 transition-colors"
-              >
-                <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
-                  <Calendar className="w-5 h-5 text-blue-600" />
-                </div>
-                <div className="text-left flex-1">
-                  <div className="font-medium text-gray-900">Google Calendar</div>
-                  <div className="text-sm text-gray-500">View calendar events</div>
-                </div>
-              </button>
-            </div>
-            <div className="flex justify-end mt-6">
-              <button
-                type="button"
-                onClick={() => setShowGoogleModal(false)}
-                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
-              >
-                Cancel
-              </button>
-            </div>
+              </form>
+            )}
           </div>
         </div>
       )}

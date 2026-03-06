@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import {
   Shield,
@@ -8,6 +9,7 @@ import {
   Activity,
   PlugZap,
   Lock,
+  LogOut,
 } from 'lucide-react';
 import Dashboard from './pages/Dashboard';
 import Agents from './pages/Agents';
@@ -17,6 +19,8 @@ import Approvals from './pages/Approvals';
 import AuditLog from './pages/AuditLog';
 import Permissions from './pages/Permissions';
 import ClaimAgent from './pages/ClaimAgent';
+import Login from './pages/Login';
+import { auth } from './api/client';
 
 const navItems = [
   { path: '/', label: 'Dashboard', icon: Activity },
@@ -30,8 +34,13 @@ const navItems = [
 
 function App() {
   const location = useLocation();
+  const [authenticated, setAuthenticated] = useState<boolean | null>(null);
 
-  // Render claim page without sidebar (it's a standalone page)
+  useEffect(() => {
+    auth.session().then((r) => setAuthenticated(r.authenticated)).catch(() => setAuthenticated(false));
+  }, []);
+
+  // Render claim page without sidebar (it's a standalone page, no auth required)
   if (location.pathname.startsWith('/claim')) {
     return (
       <Routes>
@@ -39,6 +48,25 @@ function App() {
       </Routes>
     );
   }
+
+  // Loading session check
+  if (authenticated === null) {
+    return (
+      <div className="min-h-screen bg-reins-navy flex items-center justify-center">
+        <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-600 border-t-trust-blue" />
+      </div>
+    );
+  }
+
+  // Not authenticated
+  if (!authenticated) {
+    return <Login onSuccess={() => setAuthenticated(true)} />;
+  }
+
+  const handleLogout = async () => {
+    await auth.logout();
+    setAuthenticated(false);
+  };
 
   return (
     <div className="min-h-screen flex">
@@ -78,8 +106,8 @@ function App() {
           </ul>
         </nav>
 
-        {/* Connection Status */}
-        <div className="p-4 border-t border-white/10">
+        {/* Footer */}
+        <div className="p-4 border-t border-white/10 space-y-3">
           <div className="flex items-center gap-2 text-sm text-gray-400">
             <PlugZap className="w-4 h-4" />
             <span>System Status</span>
@@ -88,6 +116,13 @@ function App() {
               <span className="text-safe-green">Online</span>
             </span>
           </div>
+          <button
+            onClick={handleLogout}
+            className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-300 transition-colors w-full"
+          >
+            <LogOut className="w-4 h-4" />
+            Sign out
+          </button>
         </div>
       </aside>
 

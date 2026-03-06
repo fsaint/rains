@@ -6,7 +6,7 @@
 
 import { db } from '../db/index.js';
 import { agentServiceAccess, agentToolPermissions, agents, credentials } from '../db/schema.js';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { serverManager } from '../mcp/server-manager.js';
 
@@ -571,7 +571,12 @@ export async function getCredentialsForService(
   accountEmail: string | null;
   accountName: string | null;
 }>> {
-  const creds = await db.select().from(credentials).where(eq(credentials.serviceId, serviceType));
+  // For Google services (gmail, drive, calendar), also match credentials with serviceId='google'
+  const googleServices = ['gmail', 'drive', 'calendar'];
+  const serviceIds = googleServices.includes(serviceType)
+    ? [serviceType, 'google']
+    : [serviceType];
+  const creds = await db.select().from(credentials).where(inArray(credentials.serviceId, serviceIds));
 
   return creds.map((c) => {
     let status = 'valid';

@@ -6,7 +6,7 @@
  */
 
 interface PendingOAuthFlow {
-  service: 'gmail' | 'drive' | 'calendar';
+  service: string;
   initiatedAt: Date;
 }
 
@@ -19,7 +19,7 @@ const pendingFlows = new Map<string, PendingOAuthFlow>();
  */
 export function storePendingOAuthFlow(
   state: string,
-  flow: { service: 'gmail' | 'drive' | 'calendar' }
+  flow: { service: string }
 ): void {
   pendingFlows.set(state, {
     service: flow.service,
