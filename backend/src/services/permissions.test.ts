@@ -43,6 +43,9 @@ import {
   getEffectivePermissions,
   canAccessTool,
   getCredentialsForService,
+  setPermissionLevel,
+  getPermissionLevel,
+  PERMISSION_PRESETS,
 } from './permissions.js';
 
 // Helper to create mock query chain
@@ -457,6 +460,197 @@ describe('Permission Service', () => {
       expect(result).toHaveLength(2);
       expect(result[0].status).toBe('valid');
       expect(result[1].status).toBe('expired');
+    });
+  });
+
+  describe('PERMISSION_PRESETS', () => {
+    it('should have presets for all services', () => {
+      expect(PERMISSION_PRESETS.gmail).toBeDefined();
+      expect(PERMISSION_PRESETS.drive).toBeDefined();
+      expect(PERMISSION_PRESETS.calendar).toBeDefined();
+      expect(PERMISSION_PRESETS['web-search']).toBeDefined();
+      expect(PERMISSION_PRESETS.browser).toBeDefined();
+    });
+
+    it('should categorize gmail tools correctly', () => {
+      const gmail = PERMISSION_PRESETS.gmail;
+      expect(gmail.read).toContain('gmail_list_messages');
+      expect(gmail.read).toContain('gmail_get_message');
+      expect(gmail.write).toContain('gmail_create_draft');
+      expect(gmail.blocked).toContain('gmail_send_message');
+      expect(gmail.blocked).toContain('gmail_delete_message');
+    });
+  });
+
+  describe('setPermissionLevel', () => {
+    it('should throw error for custom level', async () => {
+      await expect(setPermissionLevel('agent-1', 'gmail', 'custom'))
+        .rejects.toThrow("Cannot set permission level to 'custom'");
+    });
+
+    it('should disable service for none level', async () => {
+      vi.mocked(db.select).mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([{ id: 'access-1' }]),
+        }),
+      } as never);
+
+      vi.mocked(db.update).mockReturnValueOnce({
+        set: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue(undefined),
+        }),
+      } as never);
+
+      await setPermissionLevel('agent-1', 'gmail', 'none');
+
+      expect(db.update).toHaveBeenCalled();
+    });
+
+    it('should enable service and set read-only permissions', async () => {
+      // Mock setServiceAccess
+      vi.mocked(db.select).mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([]),
+        }),
+      } as never);
+      vi.mocked(db.insert).mockReturnValueOnce({
+        values: vi.fn().mockResolvedValue(undefined),
+      } as never);
+
+      // Mock setToolPermission calls - need multiple mocks for each tool
+      const gmailTools = [...PERMISSION_PRESETS.gmail.read, ...PERMISSION_PRESETS.gmail.write, ...PERMISSION_PRESETS.gmail.blocked];
+      for (let i = 0; i < gmailTools.length; i++) {
+        vi.mocked(db.select).mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([]),
+          }),
+        } as never);
+        vi.mocked(db.insert).mockReturnValueOnce({
+          values: vi.fn().mockResolvedValue(undefined),
+        } as never);
+      }
+
+      await setPermissionLevel('agent-1', 'gmail', 'read');
+
+      // Check that insert was called for enabling service and for tool permissions
+      expect(db.insert).toHaveBeenCalled();
+    });
+  });
+
+  describe('getPermissionLevel', () => {
+    it('should return none if service disabled', async () => {
+      vi.mocked(db.select).mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([{ enabled: false }]),
+        }),
+      } as never);
+
+      const result = await getPermissionLevel('agent-1', 'gmail');
+
+      expect(result).toBe('none');
+    });
+
+    it('should return read if write tools are blocked', async () => {
+      const readTools = PERMISSION_PRESETS.gmail.read.reduce((acc, tool) => {
+        acc[tool] = 'allow';
+        return acc;
+      }, {} as Record<string, string>);
+
+      const writeTools = PERMISSION_PRESETS.gmail.write.reduce((acc, tool) => {
+        acc[tool] = 'block';
+        return acc;
+      }, {} as Record<string, string>);
+
+      const blockedTools = PERMISSION_PRESETS.gmail.blocked.reduce((acc, tool) => {
+        acc[tool] = 'block';
+        return acc;
+      }, {} as Record<string, string>);
+
+      const allPerms = { ...readTools, ...writeTools, ...blockedTools };
+      const overrides = Object.entries(allPerms).map(([toolName, permission]) => ({
+        toolName,
+        permission,
+      }));
+
+      vi.mocked(db.select)
+        .mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{ enabled: true }]),
+          }),
+        } as never)
+        .mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue(overrides),
+          }),
+        } as never);
+
+      const result = await getPermissionLevel('agent-1', 'gmail');
+
+      expect(result).toBe('read');
+    });
+
+    it('should return full if write tools require approval', async () => {
+      const readTools = PERMISSION_PRESETS.gmail.read.reduce((acc, tool) => {
+        acc[tool] = 'allow';
+        return acc;
+      }, {} as Record<string, string>);
+
+      const writeTools = PERMISSION_PRESETS.gmail.write.reduce((acc, tool) => {
+        acc[tool] = 'require_approval';
+        return acc;
+      }, {} as Record<string, string>);
+
+      const blockedTools = PERMISSION_PRESETS.gmail.blocked.reduce((acc, tool) => {
+        acc[tool] = 'block';
+        return acc;
+      }, {} as Record<string, string>);
+
+      const allPerms = { ...readTools, ...writeTools, ...blockedTools };
+      const overrides = Object.entries(allPerms).map(([toolName, permission]) => ({
+        toolName,
+        permission,
+      }));
+
+      vi.mocked(db.select)
+        .mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{ enabled: true }]),
+          }),
+        } as never)
+        .mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue(overrides),
+          }),
+        } as never);
+
+      const result = await getPermissionLevel('agent-1', 'gmail');
+
+      expect(result).toBe('full');
+    });
+
+    it('should return custom for mixed permissions', async () => {
+      // Some write tools blocked, some require approval
+      const mixedOverrides = [
+        { toolName: 'gmail_list_messages', permission: 'allow' },
+        { toolName: 'gmail_create_draft', permission: 'block' },
+        { toolName: 'gmail_send_draft', permission: 'require_approval' },
+      ];
+
+      vi.mocked(db.select)
+        .mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{ enabled: true }]),
+          }),
+        } as never)
+        .mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue(mixedOverrides),
+          }),
+        } as never);
+
+      const result = await getPermissionLevel('agent-1', 'gmail');
+
+      expect(result).toBe('custom');
     });
   });
 });

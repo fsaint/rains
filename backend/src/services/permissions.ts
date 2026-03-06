@@ -12,6 +12,45 @@ import { serverManager } from '../mcp/server-manager.js';
 
 export type ServiceType = 'gmail' | 'drive' | 'calendar' | 'web-search' | 'browser';
 export type ToolPermission = 'allow' | 'block' | 'require_approval';
+export type PermissionLevel = 'none' | 'read' | 'full' | 'custom';
+
+/**
+ * Permission presets define tool categorization for each service.
+ * - read: Tools allowed in read-only mode
+ * - write: Tools requiring approval in full mode
+ * - blocked: Always blocked (destructive actions)
+ */
+export const PERMISSION_PRESETS: Record<ServiceType, {
+  read: string[];
+  write: string[];
+  blocked: string[];
+}> = {
+  gmail: {
+    read: ['gmail_list_messages', 'gmail_get_message', 'gmail_search', 'gmail_list_labels'],
+    write: ['gmail_create_draft', 'gmail_send_draft'],
+    blocked: ['gmail_send_message', 'gmail_delete_message'],
+  },
+  drive: {
+    read: ['drive_list_files', 'drive_get_file', 'drive_read_file', 'drive_search'],
+    write: ['drive_create_file', 'drive_update_file'],
+    blocked: ['drive_share_file', 'drive_delete_file'],
+  },
+  calendar: {
+    read: ['calendar_list_events', 'calendar_get_event', 'calendar_search_events', 'calendar_list_calendars'],
+    write: ['calendar_create_event', 'calendar_update_event'],
+    blocked: ['calendar_delete_event'],
+  },
+  'web-search': {
+    read: ['web_search', 'web_search_news', 'web_search_images'],
+    write: [],
+    blocked: [],
+  },
+  browser: {
+    read: ['browser_navigate', 'browser_screenshot', 'browser_get_content', 'browser_close'],
+    write: ['browser_click', 'browser_type'],
+    blocked: ['browser_evaluate'],
+  },
+};
 
 export interface ServiceAccess {
   serviceType: ServiceType;
@@ -46,6 +85,7 @@ export interface PermissionMatrixCell {
   toolCount: number;
   blockedCount: number;
   approvalRequiredCount: number;
+  permissionLevel: PermissionLevel;
 }
 
 export interface PermissionMatrix {
@@ -116,6 +156,44 @@ const SERVICE_METADATA: Record<ServiceType, { name: string; defaultPermissions: 
 };
 
 /**
+ * Calculate permission level from tool permissions (synchronous helper)
+ */
+function calculatePermissionLevelFromTools(
+  serviceType: ServiceType,
+  tools: Record<string, ToolPermission>
+): PermissionLevel {
+  const preset = PERMISSION_PRESETS[serviceType];
+
+  // Check if all read tools are allowed
+  const readToolsAllowed = preset.read.every((tool) => tools[tool] === 'allow');
+
+  // Check if all blocked tools are blocked
+  const blockedToolsBlocked = preset.blocked.every((tool) => tools[tool] === 'block');
+
+  // Check write tools
+  const writeToolsBlocked = preset.write.length === 0 || preset.write.every((tool) => tools[tool] === 'block');
+  const writeToolsApproval = preset.write.length === 0 || preset.write.every((tool) => tools[tool] === 'require_approval');
+
+  if (!blockedToolsBlocked) {
+    return 'custom';
+  }
+
+  if (!readToolsAllowed) {
+    return 'custom';
+  }
+
+  if (writeToolsBlocked) {
+    return 'read';
+  }
+
+  if (writeToolsApproval) {
+    return 'full';
+  }
+
+  return 'custom';
+}
+
+/**
  * Get the full permission matrix for all agents and services
  */
 export async function getPermissionMatrix(): Promise<PermissionMatrix> {
@@ -172,12 +250,22 @@ export async function getPermissionMatrix(): Promise<PermissionMatrix> {
       let blockedCount = 0;
       let approvalRequiredCount = 0;
 
+      // Build effective permissions map for level calculation
+      const effectiveTools: Record<string, ToolPermission> = {};
+
       for (const toolName of toolNames) {
         const override = agentToolPerms.find((p) => p.toolName === toolName);
         const perm = override ? (override.permission as ToolPermission) : defaultPerms[toolName];
+        effectiveTools[toolName] = perm;
 
         if (perm === 'block') blockedCount++;
         if (perm === 'require_approval') approvalRequiredCount++;
+      }
+
+      // Calculate permission level
+      let permissionLevel: PermissionLevel = 'none';
+      if (access?.enabled) {
+        permissionLevel = calculatePermissionLevelFromTools(service.type, effectiveTools);
       }
 
       cells.push({
@@ -188,6 +276,7 @@ export async function getPermissionMatrix(): Promise<PermissionMatrix> {
         toolCount: toolNames.length,
         blockedCount,
         approvalRequiredCount,
+        permissionLevel,
       });
     }
   }
@@ -498,4 +587,105 @@ export async function getCredentialsForService(
       accountName: c.accountName,
     };
   });
+}
+
+/**
+ * Set permission level for an agent's service.
+ * This bulk-updates tool permissions based on the selected level:
+ * - 'none': Disables the service entirely
+ * - 'read': Read tools allowed, write and blocked tools blocked
+ * - 'full': Read tools allowed, write tools require approval, blocked tools blocked
+ */
+export async function setPermissionLevel(
+  agentId: string,
+  serviceType: ServiceType,
+  level: PermissionLevel
+): Promise<void> {
+  if (level === 'custom') {
+    // 'custom' is read-only - cannot set directly
+    throw new Error("Cannot set permission level to 'custom'. Use individual tool permissions instead.");
+  }
+
+  if (level === 'none') {
+    // Disable the service
+    await setServiceAccess(agentId, serviceType, false);
+    return;
+  }
+
+  // Enable the service
+  await setServiceAccess(agentId, serviceType, true);
+
+  const preset = PERMISSION_PRESETS[serviceType];
+  const permissions: Record<string, ToolPermission> = {};
+
+  // Configure read tools - always allowed when enabled
+  for (const tool of preset.read) {
+    permissions[tool] = 'allow';
+  }
+
+  // Configure write tools based on level
+  for (const tool of preset.write) {
+    if (level === 'read') {
+      permissions[tool] = 'block';
+    } else {
+      // 'full' - write tools require approval
+      permissions[tool] = 'require_approval';
+    }
+  }
+
+  // Configure blocked tools - always blocked
+  for (const tool of preset.blocked) {
+    permissions[tool] = 'block';
+  }
+
+  // Apply all permissions
+  await setServiceToolPermissions(agentId, serviceType, permissions);
+}
+
+/**
+ * Get the current permission level for an agent's service.
+ * Returns 'custom' if tool permissions don't match any preset.
+ */
+export async function getPermissionLevel(
+  agentId: string,
+  serviceType: ServiceType
+): Promise<PermissionLevel> {
+  const { enabled, tools } = await getEffectivePermissions(agentId, serviceType);
+
+  if (!enabled) {
+    return 'none';
+  }
+
+  const preset = PERMISSION_PRESETS[serviceType];
+
+  // Check if all read tools are allowed
+  const readToolsAllowed = preset.read.every((tool) => tools[tool] === 'allow');
+
+  // Check if all blocked tools are blocked
+  const blockedToolsBlocked = preset.blocked.every((tool) => tools[tool] === 'block');
+
+  // Check write tools
+  const writeToolsBlocked = preset.write.every((tool) => tools[tool] === 'block');
+  const writeToolsApproval = preset.write.every((tool) => tools[tool] === 'require_approval');
+
+  if (!blockedToolsBlocked) {
+    // If any blocked tool is not blocked, it's custom
+    return 'custom';
+  }
+
+  if (!readToolsAllowed) {
+    // If any read tool is not allowed, it's custom
+    return 'custom';
+  }
+
+  if (writeToolsBlocked) {
+    return 'read';
+  }
+
+  if (writeToolsApproval) {
+    return 'full';
+  }
+
+  // Mixed write tool permissions = custom
+  return 'custom';
 }

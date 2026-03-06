@@ -161,6 +161,7 @@ export const health = {
 // Permission Matrix Types
 export type ServiceType = 'gmail' | 'drive' | 'calendar' | 'web-search' | 'browser';
 export type ToolPermission = 'allow' | 'block' | 'require_approval';
+export type PermissionLevel = 'none' | 'read' | 'full' | 'custom';
 
 export interface PermissionMatrixCell {
   agentId: string;
@@ -170,6 +171,7 @@ export interface PermissionMatrixCell {
   toolCount: number;
   blockedCount: number;
   approvalRequiredCount: number;
+  permissionLevel: PermissionLevel;
 }
 
 export interface PermissionMatrix {
@@ -194,6 +196,7 @@ export interface AgentServiceConfig {
   credentialId: string | null;
   credentialStatus: 'connected' | 'missing' | 'expired' | 'not_linked';
   tools: ToolPermissionEntry[];
+  permissionLevel?: PermissionLevel;
 }
 
 export interface ServiceCredential {
@@ -219,6 +222,18 @@ export const permissions = {
       method: 'PUT',
       body: JSON.stringify({ enabled }),
     }),
+
+  getPermissionLevel: (agentId: string, serviceType: ServiceType) =>
+    request<{ level: PermissionLevel }>(`/permissions/${agentId}/${serviceType}/level`),
+
+  setPermissionLevel: (agentId: string, serviceType: ServiceType, level: PermissionLevel) =>
+    request<AgentServiceConfig & { permissionLevel: PermissionLevel }>(
+      `/permissions/${agentId}/${serviceType}/level`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ level }),
+      }
+    ),
 
   linkCredential: (agentId: string, serviceType: ServiceType, credentialId: string) =>
     request<AgentServiceConfig>(`/permissions/${agentId}/${serviceType}/credential`, {

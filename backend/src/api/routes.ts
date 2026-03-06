@@ -23,8 +23,11 @@ import {
   resetToolPermission,
   setServiceToolPermissions,
   getCredentialsForService,
+  setPermissionLevel,
+  getPermissionLevel,
   type ServiceType,
   type ToolPermission,
+  type PermissionLevel,
 } from '../services/permissions.js';
 import {
   registerAgent,
@@ -38,6 +41,7 @@ import {
   getPendingOAuthFlow,
   deletePendingOAuthFlow,
 } from '../oauth/pending-flows.js';
+import { handleMCPRequest, type MCPRequest } from '../mcp/agent-endpoint.js';
 import { nanoid } from 'nanoid';
 import {
   CreateAgentSchema,
@@ -526,7 +530,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         });
       }
 
-      return { data: config };
+      // Include the permission level in the response
+      const permissionLevel = await getPermissionLevel(agentId, serviceType as ServiceType);
+
+      return { data: { ...config, permissionLevel } };
     }
   );
 
@@ -555,6 +562,59 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const config = await getAgentServiceConfig(agentId, serviceType as ServiceType);
 
       return { data: config };
+    }
+  );
+
+  /**
+   * Get current permission level for an agent's service
+   */
+  app.get<{ Params: { agentId: string; serviceType: string } }>(
+    '/api/permissions/:agentId/:serviceType/level',
+    async (request, reply) => {
+      const { agentId, serviceType } = request.params;
+
+      if (!validServiceTypes.includes(serviceType as ServiceType)) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
+        });
+      }
+
+      const level = await getPermissionLevel(agentId, serviceType as ServiceType);
+      return { data: { level } };
+    }
+  );
+
+  /**
+   * Set permission level for an agent's service
+   * Levels: none (disabled), read (read-only), full (read + write with approval)
+   */
+  app.put<{ Params: { agentId: string; serviceType: string }; Body: { level: PermissionLevel } }>(
+    '/api/permissions/:agentId/:serviceType/level',
+    async (request, reply) => {
+      const { agentId, serviceType } = request.params;
+      const { level } = request.body;
+
+      if (!validServiceTypes.includes(serviceType as ServiceType)) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
+        });
+      }
+
+      const validLevels: PermissionLevel[] = ['none', 'read', 'full'];
+      if (!validLevels.includes(level)) {
+        return reply.code(400).send({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: `level must be one of: ${validLevels.join(', ')}`,
+          },
+        });
+      }
+
+      await setPermissionLevel(agentId, serviceType as ServiceType, level);
+      const config = await getAgentServiceConfig(agentId, serviceType as ServiceType);
+      const currentLevel = await getPermissionLevel(agentId, serviceType as ServiceType);
+
+      return { data: { ...config, permissionLevel: currentLevel } };
     }
   );
 
@@ -1246,6 +1306,43 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       }
 
       return reply.code(204).send();
+    }
+  );
+
+  // ========================================================================
+  // MCP Endpoint for Agents
+  // ========================================================================
+
+  /**
+   * MCP endpoint for agent tool discovery and execution
+   *
+   * Uses JSON-RPC 2.0 protocol:
+   * - tools/list: Returns all visible tools for this agent
+   * - tools/call: Executes a tool with permission checking
+   */
+  app.post<{ Params: { agentId: string } }>(
+    '/mcp/:agentId',
+    async (request, reply) => {
+      const { agentId } = request.params;
+      const body = request.body as MCPRequest;
+
+      // Validate basic structure
+      if (!body || typeof body !== 'object') {
+        return reply.code(400).send({
+          jsonrpc: '2.0',
+          id: null,
+          error: {
+            code: -32600,
+            message: 'Invalid request: expected JSON-RPC 2.0 request body',
+          },
+        });
+      }
+
+      // Handle the MCP request
+      const response = await handleMCPRequest(agentId, body);
+
+      // JSON-RPC always returns 200 - errors are in the response body
+      return response;
     }
   );
 };

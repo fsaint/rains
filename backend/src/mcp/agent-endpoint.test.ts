@@ -1,0 +1,251 @@
+/**
+ * Tests for MCP Agent Endpoint
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  handleMCPRequest,
+  getServiceTypeFromTool,
+  MCP_ERROR_CODES,
+  type MCPRequest,
+} from './agent-endpoint.js';
+
+// Mock dependencies
+vi.mock('../db/index.js', () => ({
+  db: {
+    select: () => ({
+      from: () => ({
+        where: vi.fn().mockResolvedValue([{ id: 'agent-1', name: 'Test Agent', status: 'active' }]),
+      }),
+    }),
+  },
+}));
+
+vi.mock('../services/permissions.js', () => ({
+  getEffectivePermissions: vi.fn().mockResolvedValue({
+    enabled: true,
+    tools: {
+      gmail_list_messages: 'allow',
+      gmail_get_message: 'allow',
+      gmail_send_message: 'block',
+      gmail_create_draft: 'require_approval',
+    },
+  }),
+  canAccessTool: vi.fn().mockImplementation(async (_agentId: string, _serviceType: string, toolName: string) => {
+    if (toolName === 'gmail_send_message') {
+      return { allowed: false, requiresApproval: false };
+    }
+    if (toolName === 'gmail_create_draft') {
+      return { allowed: true, requiresApproval: true };
+    }
+    return { allowed: true, requiresApproval: false };
+  }),
+}));
+
+vi.mock('./server-manager.js', () => ({
+  serverManager: {
+    getServer: vi.fn().mockReturnValue({
+      serverType: 'gmail',
+      name: 'Gmail',
+      getToolDefinitions: () => [
+        {
+          name: 'gmail_list_messages',
+          description: 'List email messages',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: { type: 'string' },
+              maxResults: { type: 'number' },
+            },
+          },
+        },
+        {
+          name: 'gmail_get_message',
+          description: 'Get email message by ID',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              messageId: { type: 'string' },
+            },
+            required: ['messageId'],
+          },
+        },
+        {
+          name: 'gmail_send_message',
+          description: 'Send an email',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              to: { type: 'string' },
+              subject: { type: 'string' },
+              body: { type: 'string' },
+            },
+          },
+        },
+        {
+          name: 'gmail_create_draft',
+          description: 'Create a draft email',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              to: { type: 'string' },
+              subject: { type: 'string' },
+              body: { type: 'string' },
+            },
+          },
+        },
+      ],
+      callTool: vi.fn().mockResolvedValue({
+        success: true,
+        data: [{ id: 'msg1', subject: 'Hello' }],
+      }),
+    }),
+  },
+}));
+
+vi.mock('../approvals/queue.js', () => ({
+  approvalQueue: {
+    submit: vi.fn().mockResolvedValue('approval-123'),
+    waitForDecision: vi.fn().mockResolvedValue({ approved: true, approver: 'user' }),
+  },
+}));
+
+vi.mock('../audit/logger.js', () => ({
+  auditLogger: {
+    logToolCall: vi.fn().mockResolvedValue(undefined),
+    logApproval: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+vi.mock('../credentials/vault.js', () => ({
+  credentialVault: {
+    retrieve: vi.fn().mockResolvedValue({
+      serviceId: 'gmail',
+      type: 'oauth2',
+      data: { accessToken: 'test-token' },
+    }),
+  },
+}));
+
+describe('getServiceTypeFromTool', () => {
+  it('should return gmail for gmail_ prefix', () => {
+    expect(getServiceTypeFromTool('gmail_list_messages')).toBe('gmail');
+    expect(getServiceTypeFromTool('gmail_get_message')).toBe('gmail');
+  });
+
+  it('should return drive for drive_ prefix', () => {
+    expect(getServiceTypeFromTool('drive_list_files')).toBe('drive');
+    expect(getServiceTypeFromTool('drive_read_file')).toBe('drive');
+  });
+
+  it('should return calendar for calendar_ prefix', () => {
+    expect(getServiceTypeFromTool('calendar_list_events')).toBe('calendar');
+  });
+
+  it('should return web-search for web_search prefix', () => {
+    expect(getServiceTypeFromTool('web_search')).toBe('web-search');
+    expect(getServiceTypeFromTool('web_search_news')).toBe('web-search');
+  });
+
+  it('should return browser for browser_ prefix', () => {
+    expect(getServiceTypeFromTool('browser_navigate')).toBe('browser');
+    expect(getServiceTypeFromTool('browser_screenshot')).toBe('browser');
+  });
+
+  it('should return null for unknown prefix', () => {
+    expect(getServiceTypeFromTool('unknown_tool')).toBeNull();
+    expect(getServiceTypeFromTool('random')).toBeNull();
+  });
+});
+
+describe('handleMCPRequest', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  describe('Invalid requests', () => {
+    it('should reject invalid JSON-RPC version', async () => {
+      const request = {
+        jsonrpc: '1.0' as '2.0',
+        id: 1,
+        method: 'tools/list' as const,
+      };
+
+      const response = await handleMCPRequest('agent-1', request);
+
+      expect(response.error).toBeDefined();
+      expect(response.error?.code).toBe(MCP_ERROR_CODES.INVALID_REQUEST);
+    });
+
+    it('should reject unknown method', async () => {
+      const request: MCPRequest = {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'unknown/method' as 'tools/list',
+      };
+
+      const response = await handleMCPRequest('agent-1', request);
+
+      expect(response.error).toBeDefined();
+      expect(response.error?.code).toBe(MCP_ERROR_CODES.METHOD_NOT_FOUND);
+    });
+  });
+
+  describe('tools/list', () => {
+    it('should return filtered tools for agent', async () => {
+      const request: MCPRequest = {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/list',
+      };
+
+      const response = await handleMCPRequest('agent-1', request);
+
+      expect(response.result).toBeDefined();
+      const result = response.result as { tools: Array<{ name: string }> };
+      expect(result.tools).toBeInstanceOf(Array);
+
+      // Should include allowed tools
+      const toolNames = result.tools.map((t) => t.name);
+      expect(toolNames).toContain('gmail_list_messages');
+      expect(toolNames).toContain('gmail_get_message');
+      expect(toolNames).toContain('gmail_create_draft'); // require_approval is visible
+
+      // Should NOT include blocked tools
+      expect(toolNames).not.toContain('gmail_send_message');
+    });
+  });
+
+  describe('tools/call', () => {
+    it('should reject call without tool name', async () => {
+      const request: MCPRequest = {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {},
+      };
+
+      const response = await handleMCPRequest('agent-1', request);
+
+      expect(response.error).toBeDefined();
+      expect(response.error?.code).toBe(MCP_ERROR_CODES.INVALID_PARAMS);
+    });
+
+    it('should reject call for unknown tool', async () => {
+      const request: MCPRequest = {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'unknown_tool',
+          arguments: {},
+        },
+      };
+
+      const response = await handleMCPRequest('agent-1', request);
+
+      expect(response.error).toBeDefined();
+      expect(response.error?.code).toBe(MCP_ERROR_CODES.INVALID_PARAMS);
+    });
+  });
+});

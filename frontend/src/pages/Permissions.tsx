@@ -5,6 +5,7 @@ import {
   type PermissionMatrixCell,
   type ServiceType,
   type ToolPermission,
+  type PermissionLevel,
 } from '../api/client';
 import {
   Lock,
@@ -16,10 +17,11 @@ import {
   CheckCircle,
   XCircle,
   AlertCircle,
-  Settings,
   X,
   Key,
   Shield,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
 
 const serviceIcons: Record<ServiceType, React.ReactNode> = {
@@ -223,7 +225,10 @@ export default function Permissions() {
                             )}
                             {cell && cell.enabled && (
                               <div className="text-xs text-gray-500">
-                                {cell.toolCount - cell.blockedCount} tools
+                                {cell.permissionLevel === 'read' && 'Read-Only'}
+                                {cell.permissionLevel === 'full' && 'Full Access'}
+                                {cell.permissionLevel === 'custom' && 'Custom'}
+                                {cell.permissionLevel === 'none' && 'Disabled'}
                               </div>
                             )}
                           </div>
@@ -264,6 +269,37 @@ interface ServiceConfigModalProps {
   onUpdate: () => void;
 }
 
+const permissionLevelDescriptions: Record<PermissionLevel, { label: string; description: string }> = {
+  none: { label: 'No Access', description: 'Service disabled for this agent' },
+  read: { label: 'Read-Only', description: 'View and search only, cannot modify' },
+  full: { label: 'Full Access', description: 'Read and write (destructive actions require approval)' },
+  custom: { label: 'Custom', description: 'Individual tool permissions configured' },
+};
+
+// Service-specific descriptions for each permission level
+const servicePermissionDetails: Record<ServiceType, { read: string; full: string }> = {
+  gmail: {
+    read: 'Can list and read emails, search inbox',
+    full: 'Read + create drafts (send requires approval)',
+  },
+  drive: {
+    read: 'Can list and read files, search drive',
+    full: 'Read + create/update files (share/delete blocked)',
+  },
+  calendar: {
+    read: 'Can list and view events, search calendars',
+    full: 'Read + create/update events (delete blocked)',
+  },
+  'web-search': {
+    read: 'Can search the web',
+    full: 'Full search access',
+  },
+  browser: {
+    read: 'Can navigate and take screenshots',
+    full: 'Read + click/type (evaluate blocked)',
+  },
+};
+
 function ServiceConfigModal({
   agentId,
   agentName,
@@ -273,6 +309,7 @@ function ServiceConfigModal({
   onUpdate,
 }: ServiceConfigModalProps) {
   const queryClient = useQueryClient();
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const { data: config, isLoading } = useQuery({
     queryKey: ['permissions', agentId, serviceType],
@@ -284,9 +321,9 @@ function ServiceConfigModal({
     queryFn: () => permissions.getServiceCredentials(serviceType),
   });
 
-  const toggleAccessMutation = useMutation({
-    mutationFn: (enabled: boolean) =>
-      permissions.setServiceAccess(agentId, serviceType, enabled),
+  const setPermissionLevelMutation = useMutation({
+    mutationFn: (level: PermissionLevel) =>
+      permissions.setPermissionLevel(agentId, serviceType, level),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['permissions'] });
       onUpdate();
@@ -319,6 +356,8 @@ function ServiceConfigModal({
     },
   });
 
+  const currentLevel = config?.permissionLevel || 'none';
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white rounded-xl p-6 w-full max-w-2xl shadow-xl max-h-[90vh] overflow-y-auto">
@@ -345,141 +384,218 @@ function ServiceConfigModal({
           </div>
         ) : config ? (
           <div className="space-y-6">
-            {/* Service Toggle */}
-            <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-              <div className="flex items-center gap-3">
-                <Settings className="w-5 h-5 text-gray-400" />
-                <div>
-                  <div className="font-medium text-reins-navy">Service Access</div>
-                  <div className="text-sm text-gray-500">
-                    Enable or disable {serviceName} for this agent
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={() => toggleAccessMutation.mutate(!config.enabled)}
-                disabled={toggleAccessMutation.isPending}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                  config.enabled ? 'bg-trust-blue' : 'bg-gray-300'
-                }`}
-              >
-                <span
-                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                    config.enabled ? 'translate-x-6' : 'translate-x-1'
-                  }`}
-                />
-              </button>
-            </div>
-
-            {/* Credential Section */}
+            {/* Permission Level Selector */}
             <div className="p-4 bg-gray-50 rounded-lg">
-              <div className="flex items-center gap-3 mb-3">
-                <Key className="w-5 h-5 text-gray-400" />
+              <div className="flex items-center gap-3 mb-4">
+                <Shield className="w-5 h-5 text-gray-400" />
                 <div>
-                  <div className="font-medium text-reins-navy">Credential</div>
+                  <div className="font-medium text-reins-navy">Permission Level</div>
                   <div className="text-sm text-gray-500">
-                    Link a credential for authentication
+                    Choose what this agent can do with {serviceName}
                   </div>
                 </div>
               </div>
 
-              {config.credentialId ? (
-                <div className="flex items-center justify-between mt-2">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle
-                      className={`w-4 h-4 ${credentialStatusColors[config.credentialStatus]}`}
-                    />
-                    <span className="text-sm">
-                      {(() => {
-                        const linkedCred = availableCredentials?.find((c) => c.id === config.credentialId);
-                        if (linkedCred?.accountEmail) {
-                          return `${linkedCred.accountEmail} (${config.credentialStatus})`;
-                        }
-                        return `Credential linked (${config.credentialStatus})`;
-                      })()}
-                    </span>
-                  </div>
-                  <button
-                    onClick={() => unlinkCredentialMutation.mutate()}
-                    className="text-xs text-gray-500 hover:text-alert-red"
-                  >
-                    Unlink
-                  </button>
-                </div>
-              ) : (
-                <div className="mt-2">
-                  {availableCredentials && availableCredentials.length > 0 ? (
-                    <select
-                      onChange={(e) => {
-                        if (e.target.value) {
-                          linkCredentialMutation.mutate(e.target.value);
-                        }
-                      }}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-trust-blue focus:border-transparent"
-                      defaultValue=""
-                    >
-                      <option value="">Select a credential...</option>
-                      {availableCredentials.map((cred) => (
-                        <option key={cred.id} value={cred.id}>
-                          {cred.accountEmail || cred.type} ({cred.status})
-                          {cred.expiresAt && ` - expires: ${new Date(cred.expiresAt).toLocaleDateString()}`}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <p className="text-sm text-gray-500">
-                      No credentials available for {serviceName}. Create one in the
-                      Credentials page.
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
+              <div className="space-y-2">
+                {(['none', 'read', 'full'] as const).map((level) => {
+                  const getDescription = () => {
+                    if (level === 'none') return permissionLevelDescriptions.none.description;
+                    const serviceDetails = servicePermissionDetails[serviceType];
+                    if (serviceDetails && (level === 'read' || level === 'full')) {
+                      return serviceDetails[level];
+                    }
+                    return permissionLevelDescriptions[level].description;
+                  };
 
-            {/* Tool Permissions */}
-            {config.enabled && (
-              <div>
-                <h3 className="font-medium text-reins-navy mb-3 flex items-center gap-2">
-                  <Shield className="w-5 h-5 text-gray-400" />
-                  Tool Permissions
-                </h3>
-                <div className="space-y-2">
-                  {config.tools.map((tool) => (
-                    <div
-                      key={tool.toolName}
-                      className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+                  return (
+                    <label
+                      key={level}
+                      className={`flex items-start gap-3 p-3 rounded-lg cursor-pointer transition-colors ${
+                        currentLevel === level
+                          ? 'bg-trust-blue/10 border-2 border-trust-blue'
+                          : 'bg-white border-2 border-gray-200 hover:border-gray-300'
+                      } ${setPermissionLevelMutation.isPending ? 'opacity-50 cursor-wait' : ''}`}
                     >
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium text-sm text-reins-navy truncate">
-                          {tool.toolName}
+                      <input
+                        type="radio"
+                        name="permissionLevel"
+                        value={level}
+                        checked={currentLevel === level}
+                        onChange={() => setPermissionLevelMutation.mutate(level)}
+                        disabled={setPermissionLevelMutation.isPending}
+                        className="mt-1 h-4 w-4 text-trust-blue focus:ring-trust-blue"
+                      />
+                      <div className="flex-1">
+                        <div className="font-medium text-reins-navy">
+                          {permissionLevelDescriptions[level].label}
                         </div>
-                        <div className="text-xs text-gray-500 truncate">
-                          {tool.description}
+                        <div className="text-sm text-gray-500">
+                          {getDescription()}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2 ml-4">
-                        {!tool.isDefault && (
-                          <span className="text-xs text-gray-400">(custom)</span>
-                        )}
-                        <select
-                          value={tool.permission}
-                          onChange={(e) =>
-                            setToolPermissionMutation.mutate({
-                              toolName: tool.toolName,
-                              permission: e.target.value as ToolPermission,
-                            })
-                          }
-                          disabled={setToolPermissionMutation.isPending}
-                          className={`text-xs font-medium px-2 py-1 rounded border ${permissionColors[tool.permission]}`}
-                        >
-                          <option value="allow">Allow</option>
-                          <option value="require_approval">Requires Approval</option>
-                          <option value="block">Block</option>
-                        </select>
+                      {currentLevel === level && !setPermissionLevelMutation.isPending && (
+                        <CheckCircle className="w-5 h-5 text-trust-blue mt-0.5" />
+                      )}
+                      {currentLevel === level && setPermissionLevelMutation.isPending && (
+                        <div className="w-5 h-5 border-2 border-trust-blue border-t-transparent rounded-full animate-spin mt-0.5" />
+                      )}
+                    </label>
+                  );
+                })}
+
+                {/* Show custom option if currently set */}
+                {currentLevel === 'custom' && (
+                  <div className="flex items-start gap-3 p-3 rounded-lg bg-caution-amber/10 border-2 border-caution-amber">
+                    <div className="mt-1 h-4 w-4 rounded-full border-2 border-caution-amber bg-caution-amber flex items-center justify-center">
+                      <div className="w-2 h-2 rounded-full bg-white" />
+                    </div>
+                    <div className="flex-1">
+                      <div className="font-medium text-reins-navy">
+                        {permissionLevelDescriptions.custom.label}
+                      </div>
+                      <div className="text-sm text-gray-500">
+                        {permissionLevelDescriptions.custom.description}
                       </div>
                     </div>
-                  ))}
+                    <AlertCircle className="w-5 h-5 text-caution-amber mt-0.5" />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Credential Section - only show when service is enabled */}
+            {currentLevel !== 'none' && (
+              <div className="p-4 bg-gray-50 rounded-lg">
+                <div className="flex items-center gap-3 mb-3">
+                  <Key className="w-5 h-5 text-gray-400" />
+                  <div>
+                    <div className="font-medium text-reins-navy">Google Account</div>
+                    <div className="text-sm text-gray-500">
+                      Link a credential for authentication
+                    </div>
+                  </div>
                 </div>
+
+                {config.credentialId ? (
+                  <div className="flex items-center justify-between mt-2">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle
+                        className={`w-4 h-4 ${credentialStatusColors[config.credentialStatus]}`}
+                      />
+                      <span className="text-sm">
+                        {(() => {
+                          const linkedCred = availableCredentials?.find((c) => c.id === config.credentialId);
+                          if (linkedCred?.accountEmail) {
+                            return `${linkedCred.accountEmail} (${config.credentialStatus})`;
+                          }
+                          return `Credential linked (${config.credentialStatus})`;
+                        })()}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => unlinkCredentialMutation.mutate()}
+                      className="text-xs text-gray-500 hover:text-alert-red"
+                    >
+                      Unlink
+                    </button>
+                  </div>
+                ) : (
+                  <div className="mt-2">
+                    {availableCredentials && availableCredentials.length > 0 ? (
+                      <select
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            linkCredentialMutation.mutate(e.target.value);
+                          }
+                        }}
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-trust-blue focus:border-transparent"
+                        defaultValue=""
+                      >
+                        <option value="">Select a credential...</option>
+                        {availableCredentials.map((cred) => (
+                          <option key={cred.id} value={cred.id}>
+                            {cred.accountEmail || cred.type} ({cred.status})
+                            {cred.expiresAt && ` - expires: ${new Date(cred.expiresAt).toLocaleDateString()}`}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <p className="text-sm text-gray-500">
+                        No credentials available for {serviceName}. Create one in the
+                        Credentials page.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Advanced: Individual Tool Permissions */}
+            {currentLevel !== 'none' && (
+              <div className="border border-gray-200 rounded-lg">
+                <button
+                  onClick={() => setShowAdvanced(!showAdvanced)}
+                  className="w-full flex items-center justify-between p-4 text-left hover:bg-gray-50"
+                >
+                  <div className="flex items-center gap-2">
+                    {showAdvanced ? (
+                      <ChevronDown className="w-4 h-4 text-gray-400" />
+                    ) : (
+                      <ChevronRight className="w-4 h-4 text-gray-400" />
+                    )}
+                    <span className="text-sm font-medium text-gray-700">
+                      Advanced: Individual tool permissions
+                    </span>
+                  </div>
+                  {currentLevel === 'custom' && (
+                    <span className="text-xs text-caution-amber bg-caution-amber/10 px-2 py-1 rounded">
+                      Custom configuration active
+                    </span>
+                  )}
+                </button>
+
+                {showAdvanced && (
+                  <div className="border-t border-gray-200 p-4 space-y-2">
+                    <p className="text-xs text-gray-500 mb-3">
+                      Modifying individual tools will switch to custom configuration mode.
+                    </p>
+                    {config.tools.map((tool) => (
+                      <div
+                        key={tool.toolName}
+                        className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-sm text-reins-navy truncate">
+                            {tool.toolName}
+                          </div>
+                          <div className="text-xs text-gray-500 truncate">
+                            {tool.description}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 ml-4">
+                          {!tool.isDefault && (
+                            <span className="text-xs text-gray-400">(custom)</span>
+                          )}
+                          <select
+                            value={tool.permission}
+                            onChange={(e) =>
+                              setToolPermissionMutation.mutate({
+                                toolName: tool.toolName,
+                                permission: e.target.value as ToolPermission,
+                              })
+                            }
+                            disabled={setToolPermissionMutation.isPending}
+                            className={`text-xs font-medium px-2 py-1 rounded border ${permissionColors[tool.permission]}`}
+                          >
+                            <option value="allow">Allow</option>
+                            <option value="require_approval">Requires Approval</option>
+                            <option value="block">Block</option>
+                          </select>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>

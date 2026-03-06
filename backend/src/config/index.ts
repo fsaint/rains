@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 const ConfigSchema = z.object({
   // Server
-  port: z.coerce.number().default(3000),
+  port: z.coerce.number().default(5001),
   host: z.string().default('0.0.0.0'),
 
   // Database
@@ -23,7 +23,7 @@ const ConfigSchema = z.object({
   // Google OAuth (for Gmail, Drive, Calendar)
   googleClientId: z.string().optional(),
   googleClientSecret: z.string().optional(),
-  googleRedirectUri: z.string().default('http://localhost:3000/api/oauth/google/callback'),
+  googleRedirectUri: z.string().default('http://localhost:5001/api/oauth/google/callback'),
 
   // Brave Search API
   braveApiKey: z.string().optional(),
