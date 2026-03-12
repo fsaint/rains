@@ -7,13 +7,12 @@
  */
 
 import { db } from '../db/index.js';
-import { agents, agentServiceAccess } from '../db/schema.js';
+import { agents, agentServiceAccess, agentServiceCredentials, credentials } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
-import { serverManager, type NativeServerType, type ToolContext } from './server-manager.js';
+import { serverManager, type ToolContext } from './server-manager.js';
 import {
   getEffectivePermissions,
   canAccessTool,
-  type ServiceType,
   type ToolPermission,
 } from '../services/permissions.js';
 import { approvalQueue } from '../approvals/queue.js';
@@ -71,21 +70,30 @@ export const MCP_ERROR_CODES = {
 } as const;
 
 // ============================================================================
-// Service Type Mapping
+// Service Type Mapping (loaded from registry)
 // ============================================================================
 
-const SERVICE_TYPES: ServiceType[] = ['gmail', 'drive', 'calendar', 'web-search', 'browser'];
+let _registryLoaded = false;
+let _serviceTypes: string[] = [];
+let _getServiceType: (toolName: string) => string | null = () => null;
+
+async function ensureRegistry() {
+  if (_registryLoaded) return;
+  try {
+    const { serviceDefinitions, getServiceTypeFromToolName } = await import('@reins/servers');
+    _serviceTypes = serviceDefinitions.map((d) => d.type);
+    _getServiceType = getServiceTypeFromToolName;
+  } catch {
+    // Registry not available, use empty
+  }
+  _registryLoaded = true;
+}
 
 /**
  * Determine service type from tool name prefix
  */
-export function getServiceTypeFromTool(toolName: string): ServiceType | null {
-  if (toolName.startsWith('gmail_')) return 'gmail';
-  if (toolName.startsWith('drive_')) return 'drive';
-  if (toolName.startsWith('calendar_')) return 'calendar';
-  if (toolName.startsWith('web_search')) return 'web-search';
-  if (toolName.startsWith('browser_')) return 'browser';
-  return null;
+export function getServiceTypeFromTool(toolName: string): string | null {
+  return _getServiceType(toolName);
 }
 
 // ============================================================================
@@ -99,6 +107,8 @@ export async function handleMCPRequest(
   agentId: string,
   request: MCPRequest
 ): Promise<MCPResponse> {
+  await ensureRegistry();
+
   // Validate JSON-RPC version
   if (request.jsonrpc !== '2.0') {
     return {
@@ -186,8 +196,8 @@ async function handleListTools(
 ): Promise<MCPResponse> {
   const tools: MCPToolSchema[] = [];
 
-  // Iterate over all service types
-  for (const serviceType of SERVICE_TYPES) {
+  // Iterate over all service types from registry
+  for (const serviceType of _serviceTypes) {
     const { enabled, tools: toolPermissions } = await getEffectivePermissions(agentId, serviceType);
 
     if (!enabled) {
@@ -195,7 +205,7 @@ async function handleListTools(
     }
 
     // Get server for this service type
-    const server = serverManager.getServer(serviceType as NativeServerType);
+    const server = serverManager.getServer(serviceType );
     if (!server) {
       continue;
     }
@@ -324,11 +334,11 @@ async function handleCallTool(
     await auditLogger.logApproval(agentId, toolName, 'success', decision.approver);
   }
 
-  // Get credential for service
-  const [accessRecord] = await db
+  // Multi-account credential resolution
+  const linkedCreds = await db
     .select()
-    .from(agentServiceAccess)
-    .where(and(eq(agentServiceAccess.agentId, agentId), eq(agentServiceAccess.serviceType, serviceType)));
+    .from(agentServiceCredentials)
+    .where(and(eq(agentServiceCredentials.agentId, agentId), eq(agentServiceCredentials.serviceType, serviceType)));
 
   // Build tool context
   const context: ToolContext = {
@@ -336,33 +346,122 @@ async function handleCallTool(
     agentId,
   };
 
-  // Get credentials if linked
-  if (accessRecord?.credentialId) {
-    const credential = await credentialVault.retrieve(accessRecord.credentialId);
+  // For *_list_accounts tools: populate linkedAccounts, skip single-credential resolution
+  const isListAccountsTool = toolName.endsWith('_list_accounts');
+
+  if (isListAccountsTool && linkedCreds.length > 0) {
+    // Populate linkedAccounts from junction table + credentials metadata
+    const accounts: Array<{ email: string; name?: string; isDefault: boolean }> = [];
+    for (const lc of linkedCreds) {
+      const [cred] = await db.select().from(credentials).where(eq(credentials.id, lc.credentialId));
+      if (cred?.accountEmail) {
+        accounts.push({
+          email: cred.accountEmail,
+          name: cred.accountName ?? undefined,
+          isDefault: lc.isDefault,
+        });
+      }
+    }
+    context.linkedAccounts = accounts;
+  } else if (linkedCreds.length > 0) {
+    // Resolve credential based on args.account or default
+    const requestedAccount = args.account as string | undefined;
+    let targetCredentialId: string | undefined;
+
+    if (requestedAccount) {
+      // Find credential matching the requested account email
+      for (const lc of linkedCreds) {
+        const [cred] = await db.select().from(credentials).where(eq(credentials.id, lc.credentialId));
+        if (cred?.accountEmail === requestedAccount) {
+          targetCredentialId = lc.credentialId;
+          break;
+        }
+      }
+      if (!targetCredentialId) {
+        return {
+          jsonrpc: '2.0',
+          id: requestId,
+          error: {
+            code: MCP_ERROR_CODES.MISSING_CREDENTIALS,
+            message: `No credential found for account: ${requestedAccount}. Use gmail_list_accounts to see available accounts.`,
+            data: { service: serviceType, requestedAccount },
+          },
+        };
+      }
+    } else {
+      // Use default credential, fall back to first
+      const defaultCred = linkedCreds.find((lc) => lc.isDefault);
+      targetCredentialId = defaultCred?.credentialId ?? linkedCreds[0].credentialId;
+    }
+
+    // Strip `account` from args before passing to handler
+    const { account: _account, ...cleanArgs } = args;
+    args = cleanArgs;
+
+    const credential = await credentialVault.retrieve(targetCredentialId);
     if (credential) {
       context.credential = credential;
-      // Extract access token for OAuth credentials
-      const data = credential.data as { accessToken?: string };
-      context.accessToken = data.accessToken;
+      const accessToken = await credentialVault.getValidAccessToken(targetCredentialId);
+      if (accessToken) {
+        context.accessToken = accessToken;
+      } else {
+        return {
+          jsonrpc: '2.0',
+          id: requestId,
+          error: {
+            code: MCP_ERROR_CODES.MISSING_CREDENTIALS,
+            message: `Credentials expired and could not be refreshed for service: ${serviceType}`,
+            data: { service: serviceType },
+          },
+        };
+      }
     }
   } else {
-    // Check if this service requires credentials (Google services do)
-    const requiresAuth = ['gmail', 'drive', 'calendar'].includes(serviceType);
-    if (requiresAuth) {
-      return {
-        jsonrpc: '2.0',
-        id: requestId,
-        error: {
-          code: MCP_ERROR_CODES.MISSING_CREDENTIALS,
-          message: `No credentials linked for service: ${serviceType}`,
-          data: { service: serviceType },
-        },
-      };
+    // Fallback to legacy single credential from agent_service_access
+    const [accessRecord] = await db
+      .select()
+      .from(agentServiceAccess)
+      .where(and(eq(agentServiceAccess.agentId, agentId), eq(agentServiceAccess.serviceType, serviceType)));
+
+    if (accessRecord?.credentialId) {
+      const credential = await credentialVault.retrieve(accessRecord.credentialId);
+      if (credential) {
+        context.credential = credential;
+        const accessToken = await credentialVault.getValidAccessToken(accessRecord.credentialId);
+        if (accessToken) {
+          context.accessToken = accessToken;
+        } else {
+          return {
+            jsonrpc: '2.0',
+            id: requestId,
+            error: {
+              code: MCP_ERROR_CODES.MISSING_CREDENTIALS,
+              message: `Credentials expired and could not be refreshed for service: ${serviceType}`,
+              data: { service: serviceType },
+            },
+          };
+        }
+      }
+    } else {
+      // Check if this service requires credentials (from registry)
+      const serviceDef = _registryLoaded ? (await import('@reins/servers')).serviceRegistry.get(serviceType) : null;
+      const requiresAuth = serviceDef?.auth.required ?? false;
+      if (requiresAuth) {
+        return {
+          jsonrpc: '2.0',
+          id: requestId,
+          error: {
+            code: MCP_ERROR_CODES.MISSING_CREDENTIALS,
+            message: `No credentials linked for service: ${serviceType}`,
+            data: { service: serviceType },
+          },
+        };
+      }
     }
   }
 
   // Get the server and call the tool
-  const server = serverManager.getServer(serviceType as NativeServerType);
+  const server = serverManager.getServer(serviceType );
   if (!server) {
     return {
       jsonrpc: '2.0',

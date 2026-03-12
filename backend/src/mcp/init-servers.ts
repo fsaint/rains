@@ -1,7 +1,7 @@
 /**
  * Native Server Initialization
  *
- * Initializes and registers all native MCP servers with the ServerManager.
+ * Initializes and registers all native MCP servers from the service registry.
  */
 
 import pino from 'pino';
@@ -20,7 +20,7 @@ let browserSessionManager: { start: () => void; stop: () => Promise<void> } | nu
  * Create a wrapper that implements NativeServer interface
  */
 function createServerWrapper(
-  serverType: 'gmail' | 'drive' | 'calendar' | 'web-search' | 'browser',
+  serverType: string,
   name: string,
   tools: ToolDefinition[],
   getAccessToken?: () => string | undefined
@@ -47,13 +47,14 @@ function createServerWrapper(
         requestId: context.requestId,
         accessToken: getAccessToken?.() ?? context.accessToken,
         agentId: context.agentId,
+        linkedAccounts: context.linkedAccounts,
       });
     },
   };
 }
 
 /**
- * Initialize all native servers
+ * Initialize all native servers from the service registry
  */
 export async function initializeNativeServers(): Promise<void> {
   let servers: typeof import('@reins/servers');
@@ -68,86 +69,53 @@ export async function initializeNativeServers(): Promise<void> {
 
   logger.info('Initializing native MCP servers...');
 
-  // Check if Google OAuth is configured
-  const googleOAuthConfigured = !!(config.googleClientId && config.googleClientSecret);
-  if (!googleOAuthConfigured) {
-    logger.warn('Google OAuth not configured - Gmail, Drive, Calendar servers will have limited functionality');
-    logger.warn('Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable OAuth');
-  }
+  for (const def of servers.serviceDefinitions) {
+    try {
+      // Special handling for browser (needs session manager)
+      if (def.type === 'browser') {
+        const { BrowserServer } = servers;
+        const browserServer = new BrowserServer({
+          serverId: 'browser',
+          name: def.name,
+          browserConfig: {
+            maxInstances: config.browserMaxInstances,
+            idleTimeout: config.browserIdleTimeout,
+          },
+        });
 
-  // Initialize Gmail server
-  try {
-    const { gmailTools } = servers;
-    const gmailWrapper = createServerWrapper('gmail', 'Gmail Server', gmailTools);
-    serverManager.registerServer(gmailWrapper);
-    logger.info('Gmail server registered');
-  } catch (error) {
-    logger.error({ error }, 'Failed to initialize Gmail server');
-  }
+        browserSessionManager = browserServer.getSessionManager();
+        browserSessionManager.start();
 
-  // Initialize Drive server
-  try {
-    const { driveTools } = servers;
-    const driveWrapper = createServerWrapper('drive', 'Google Drive Server', driveTools);
-    serverManager.registerServer(driveWrapper);
-    logger.info('Drive server registered');
-  } catch (error) {
-    logger.error({ error }, 'Failed to initialize Drive server');
-  }
+        const wrapper = createServerWrapper(def.type, def.name, def.tools);
+        serverManager.registerServer(wrapper);
+        logger.info(`${def.name} server registered`);
+        continue;
+      }
 
-  // Initialize Calendar server
-  try {
-    const { calendarTools } = servers;
-    const calendarWrapper = createServerWrapper('calendar', 'Google Calendar Server', calendarTools);
-    serverManager.registerServer(calendarWrapper);
-    logger.info('Calendar server registered');
-  } catch (error) {
-    logger.error({ error }, 'Failed to initialize Calendar server');
-  }
+      // Special handling for web-search (needs API key warning)
+      if (def.type === 'web-search') {
+        if (!config.braveApiKey) {
+          logger.warn('BRAVE_API_KEY not set - Web Search server will not be functional');
+        }
 
-  // Initialize Web Search server
-  try {
-    const { webSearchTools } = servers;
+        const wrapper = createServerWrapper(
+          def.type,
+          def.name,
+          def.tools,
+          () => config.braveApiKey
+        );
+        serverManager.registerServer(wrapper);
+        logger.info(`${def.name} server registered`);
+        continue;
+      }
 
-    if (!config.braveApiKey) {
-      logger.warn('BRAVE_API_KEY not set - Web Search server will not be functional');
+      // Default: register tools directly
+      const wrapper = createServerWrapper(def.type, def.name, def.tools);
+      serverManager.registerServer(wrapper);
+      logger.info(`${def.name} server registered`);
+    } catch (error) {
+      logger.error({ error, service: def.type }, `Failed to initialize ${def.name}`);
     }
-
-    const webSearchWrapper = createServerWrapper(
-      'web-search',
-      'Web Search Server',
-      webSearchTools,
-      () => config.braveApiKey
-    );
-    serverManager.registerServer(webSearchWrapper);
-    logger.info('Web Search server registered');
-  } catch (error) {
-    logger.error({ error }, 'Failed to initialize Web Search server');
-  }
-
-  // Initialize Browser server
-  try {
-    const { BrowserServer, browserTools } = servers;
-    const browserServer = new BrowserServer({
-      serverId: 'browser',
-      name: 'Browser Server',
-      browserConfig: {
-        maxInstances: config.browserMaxInstances,
-        idleTimeout: config.browserIdleTimeout,
-      },
-    });
-
-    // Store reference for cleanup
-    browserSessionManager = browserServer.getSessionManager();
-
-    // Start the session manager
-    browserSessionManager.start();
-
-    const browserWrapper = createServerWrapper('browser', 'Browser Automation Server', browserTools);
-    serverManager.registerServer(browserWrapper);
-    logger.info('Browser server registered');
-  } catch (error) {
-    logger.error({ error }, 'Failed to initialize Browser server');
   }
 
   const status = await serverManager.getStatus();
@@ -160,7 +128,6 @@ export async function initializeNativeServers(): Promise<void> {
 export async function shutdownNativeServers(): Promise<void> {
   logger.info('Shutting down native servers...');
 
-  // Close browser sessions
   if (browserSessionManager) {
     try {
       await browserSessionManager.stop();

@@ -72,9 +72,9 @@ export interface RegistrationResponse {
 export const agents = {
   list: () => request<unknown[]>('/agents'),
   get: (id: string) => request<unknown>(`/agents/${id}`),
-  create: (data: { name: string; description?: string; policyId?: string }) =>
+  create: (data: { name: string; description?: string }) =>
     request<unknown>('/agents', { method: 'POST', body: JSON.stringify(data) }),
-  update: (id: string, data: { name?: string; description?: string; policyId?: string; status?: string }) =>
+  update: (id: string, data: { name?: string; description?: string; status?: string }) =>
     request<unknown>(`/agents/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   delete: (id: string) => request<void>(`/agents/${id}`, { method: 'DELETE' }),
 
@@ -89,22 +89,6 @@ export const agents = {
   cancelPending: (id: string) => request<void>(`/agents/pending/${id}`, { method: 'DELETE' }),
 };
 
-// Policies
-export const policies = {
-  list: () => request<unknown[]>('/policies'),
-  get: (id: string) => request<unknown>(`/policies/${id}`),
-  create: (data: { name: string; yaml: string }) =>
-    request<unknown>('/policies', { method: 'POST', body: JSON.stringify(data) }),
-  update: (id: string, data: { name?: string; yaml?: string }) =>
-    request<unknown>(`/policies/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-  delete: (id: string) => request<void>(`/policies/${id}`, { method: 'DELETE' }),
-  validate: (id: string, yaml: string) =>
-    request<{ valid: boolean; errors: unknown[]; parsed: unknown }>(
-      `/policies/${id}/validate`,
-      { method: 'POST', body: JSON.stringify({ yaml }) }
-    ),
-};
-
 // Credential types
 export interface Credential {
   id: string;
@@ -112,6 +96,7 @@ export interface Credential {
   type: string;
   accountEmail?: string;
   accountName?: string;
+  grantedServices?: string[];
   expiresAt?: string;
   createdAt: string;
 }
@@ -121,14 +106,21 @@ export const credentials = {
   list: () => request<Credential[]>('/credentials'),
   create: (data: { serviceId: string; type: string; data: unknown }) =>
     request<unknown>('/credentials', { method: 'POST', body: JSON.stringify(data) }),
+  addGitHub: (token: string) =>
+    request<{ id: string; serviceId: string; login: string; scopes: string[]; grantedServices: string[] }>(
+      '/credentials/github',
+      { method: 'POST', body: JSON.stringify({ token }) }
+    ),
   checkHealth: (id: string) => request<unknown>(`/credentials/${id}/health`),
   delete: (id: string) => request<void>(`/credentials/${id}`, { method: 'DELETE' }),
 };
 
 // OAuth
 export const oauth = {
-  initiateGoogle: () =>
-    request<{ authUrl: string; state: string }>('/oauth/google'),
+  initiateGoogle: (services?: string[]) =>
+    request<{ authUrl: string; state: string }>(
+      `/oauth/google${services?.length ? `?services=${services.join(',')}` : ''}`
+    ),
 };
 
 // Approvals
@@ -158,17 +150,64 @@ export const connections = {
   list: () => request<unknown[]>('/connections'),
 };
 
+// User types
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  role: 'admin' | 'user';
+}
+
+export interface AuthResponse {
+  authenticated: boolean;
+  user?: User;
+}
+
 // Auth
 export const auth = {
-  login: (password: string) =>
-    request<{ authenticated: boolean }>('/auth/login', {
+  login: (email: string, password: string) =>
+    request<AuthResponse>('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ email, password }),
     }),
   logout: () =>
     request<{ authenticated: boolean }>('/auth/logout', { method: 'POST' }),
   session: () =>
-    request<{ authenticated: boolean }>('/auth/session'),
+    request<AuthResponse>('/auth/session'),
+  updateProfile: (data: { name: string }) =>
+    request<{ name: string }>('/auth/profile', { method: 'PATCH', body: JSON.stringify(data) }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ success: boolean }>('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+};
+
+// Admin types
+export interface AdminUser {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// Admin
+export const admin = {
+  listUsers: () => request<AdminUser[]>('/admin/users'),
+  createUser: (data: { email: string; name: string; password: string; role?: string }) =>
+    request<AdminUser>('/admin/users', { method: 'POST', body: JSON.stringify(data) }),
+  updateUser: (id: string, data: { name?: string; role?: string; status?: string }) =>
+    request<AdminUser>(`/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteUser: (id: string) =>
+    request<void>(`/admin/users/${id}`, { method: 'DELETE' }),
+  resetPassword: (id: string, password: string) =>
+    request<{ success: boolean }>(`/admin/users/${id}/reset-password`, {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    }),
 };
 
 // Health
@@ -177,7 +216,7 @@ export const health = {
 };
 
 // Permission Matrix Types
-export type ServiceType = 'gmail' | 'drive' | 'calendar' | 'web-search' | 'browser';
+export type ServiceType = string;
 export type ToolPermission = 'allow' | 'block' | 'require_approval';
 export type PermissionLevel = 'none' | 'read' | 'full' | 'custom';
 
@@ -190,6 +229,7 @@ export interface PermissionMatrixCell {
   blockedCount: number;
   approvalRequiredCount: number;
   permissionLevel: PermissionLevel;
+  linkedCredentialCount: number;
 }
 
 export interface PermissionMatrix {
@@ -205,6 +245,14 @@ export interface ToolPermissionEntry {
   isDefault: boolean;
 }
 
+export interface LinkedCredential {
+  credentialId: string;
+  accountEmail: string | null;
+  accountName: string | null;
+  isDefault: boolean;
+  status: 'connected' | 'missing' | 'expired';
+}
+
 export interface AgentServiceConfig {
   agentId: string;
   agentName: string;
@@ -213,6 +261,7 @@ export interface AgentServiceConfig {
   enabled: boolean;
   credentialId: string | null;
   credentialStatus: 'connected' | 'missing' | 'expired' | 'not_linked';
+  linkedCredentials: LinkedCredential[];
   tools: ToolPermissionEntry[];
   permissionLevel?: PermissionLevel;
 }
@@ -289,4 +338,22 @@ export const permissions = {
 
   getServiceCredentials: (serviceType: ServiceType) =>
     request<ServiceCredential[]>(`/permissions/credentials/${serviceType}`),
+
+  // Multi-account credential management
+  addServiceCredential: (agentId: string, serviceType: ServiceType, credentialId: string, isDefault?: boolean) =>
+    request<LinkedCredential[]>(`/permissions/${agentId}/${serviceType}/credentials`, {
+      method: 'POST',
+      body: JSON.stringify({ credentialId, isDefault }),
+    }),
+
+  removeServiceCredential: (agentId: string, serviceType: ServiceType, credentialId: string) =>
+    request<void>(`/permissions/${agentId}/${serviceType}/credentials/${credentialId}`, { method: 'DELETE' }),
+
+  setDefaultCredential: (agentId: string, serviceType: ServiceType, credentialId: string) =>
+    request<LinkedCredential[]>(`/permissions/${agentId}/${serviceType}/credentials/${credentialId}/default`, {
+      method: 'PUT',
+    }),
+
+  getLinkedCredentials: (agentId: string, serviceType: ServiceType) =>
+    request<LinkedCredential[]>(`/permissions/${agentId}/${serviceType}/credentials`),
 };

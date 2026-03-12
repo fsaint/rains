@@ -30,6 +30,8 @@ export interface ServerContext {
   agentId?: string;
   /** Request ID for tracing */
   requestId: string;
+  /** Linked accounts for multi-account support */
+  linkedAccounts?: Array<{ email: string; name?: string; isDefault: boolean }>;
 }
 
 /**
@@ -89,4 +91,48 @@ export interface BrowserSession {
   createdAt: number;
   lastActivity: number;
   currentUrl?: string;
+}
+
+/**
+ * Service definition — the single source of truth for a service's metadata,
+ * tools, auth requirements, and permission classifications.
+ */
+export interface ServiceDefinition {
+  /** Unique service type key, e.g. 'gmail', 'github' */
+  type: string;
+  /** Human-readable display name */
+  name: string;
+  /** Short description of the service */
+  description: string;
+  /** Lucide icon name, e.g. 'Mail', 'HardDrive', 'Github' */
+  icon: string;
+  /** Category for grouping in the UI */
+  category: 'google' | 'productivity' | 'dev-tools' | 'communication' | 'search' | 'browser';
+  /** Prefix used to match tool names to this service */
+  toolPrefix: string;
+  /** Auth requirements */
+  auth: {
+    type: 'oauth2' | 'api_key' | 'none';
+    /** Whether credentials are required to call tools */
+    required: boolean;
+    /** Credential service IDs to match (e.g. ['gmail', 'google']) */
+    credentialServiceIds?: string[];
+    /** OAuth scopes required for this service */
+    oauthScopes?: string[];
+    /** Instructions for obtaining an API key */
+    instructions?: string;
+    /** URL where the user can get an API key */
+    keyUrl?: string;
+  };
+  /** Permission classification of tools */
+  permissions: {
+    read: string[];
+    write: string[];
+    blocked: string[];
+  };
+  /** Human-readable descriptions for permission levels */
+  permissionDescriptions: {
+    read: string;
+    full: string;
+  };
 }

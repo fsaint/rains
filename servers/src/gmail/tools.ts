@@ -12,7 +12,18 @@ import {
   handleSendMessage,
   handleDeleteMessage,
   handleListLabels,
+  handleListAccounts,
 } from './handlers.js';
+
+/**
+ * Common account property for multi-account support
+ */
+const accountProperty = {
+  account: {
+    type: 'string',
+    description: 'Email of the account to use. Omit for default. See gmail_list_accounts.',
+  },
+} as const;
 
 /**
  * List messages in the mailbox
@@ -24,6 +35,7 @@ export const listMessagesTool: ToolDefinition = {
   inputSchema: {
     type: 'object',
     properties: {
+      ...accountProperty,
       query: {
         type: 'string',
         description:
@@ -57,6 +69,7 @@ export const getMessageTool: ToolDefinition = {
   inputSchema: {
     type: 'object',
     properties: {
+      ...accountProperty,
       messageId: {
         type: 'string',
         description: 'The ID of the message to retrieve',
@@ -82,6 +95,7 @@ export const searchTool: ToolDefinition = {
   inputSchema: {
     type: 'object',
     properties: {
+      ...accountProperty,
       query: {
         type: 'string',
         description:
@@ -111,6 +125,7 @@ export const createDraftTool: ToolDefinition = {
   inputSchema: {
     type: 'object',
     properties: {
+      ...accountProperty,
       to: {
         type: 'array',
         items: { type: 'string' },
@@ -161,6 +176,7 @@ export const sendDraftTool: ToolDefinition = {
   inputSchema: {
     type: 'object',
     properties: {
+      ...accountProperty,
       draftId: {
         type: 'string',
         description: 'The ID of the draft to send',
@@ -181,6 +197,7 @@ export const sendMessageTool: ToolDefinition = {
   inputSchema: {
     type: 'object',
     properties: {
+      ...accountProperty,
       to: {
         type: 'array',
         items: { type: 'string' },
@@ -231,6 +248,7 @@ export const deleteMessageTool: ToolDefinition = {
   inputSchema: {
     type: 'object',
     properties: {
+      ...accountProperty,
       messageId: {
         type: 'string',
         description: 'The ID of the message to delete',
@@ -249,15 +267,32 @@ export const listLabelsTool: ToolDefinition = {
   description: 'List all labels in the mailbox.',
   inputSchema: {
     type: 'object',
-    properties: {},
+    properties: {
+      ...accountProperty,
+    },
   },
   handler: handleListLabels,
+};
+
+/**
+ * List linked accounts
+ */
+export const listAccountsTool: ToolDefinition = {
+  name: 'gmail_list_accounts',
+  description:
+    'List all Gmail accounts linked to this agent. Use the email from the response as the "account" parameter in other Gmail tools to target a specific account.',
+  inputSchema: {
+    type: 'object',
+    properties: {},
+  },
+  handler: handleListAccounts,
 };
 
 /**
  * All Gmail tools
  */
 export const gmailTools: ToolDefinition[] = [
+  listAccountsTool,
   listMessagesTool,
   getMessageTool,
   searchTool,

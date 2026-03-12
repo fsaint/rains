@@ -425,6 +425,19 @@ export async function handleDeleteMessage(
 }
 
 /**
+ * List linked accounts handler
+ */
+export async function handleListAccounts(
+  _args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  return {
+    success: true,
+    data: { accounts: context.linkedAccounts ?? [] },
+  };
+}
+
+/**
  * List labels handler
  */
 export async function handleListLabels(

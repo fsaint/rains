@@ -13,11 +13,6 @@ import { credentialVault } from '../credentials/vault.js';
 import type { ParsedPolicy, CredentialType, CredentialData } from '@reins/shared';
 
 /**
- * Native server types supported by Reins
- */
-export type NativeServerType = 'gmail' | 'drive' | 'calendar' | 'web-search' | 'browser';
-
-/**
  * Tool definition from native servers
  */
 export interface NativeServerTool {
@@ -42,6 +37,7 @@ export interface ToolContext {
     type: CredentialType;
     data: CredentialData;
   };
+  linkedAccounts?: Array<{ email: string; name?: string; isDefault: boolean }>;
 }
 
 /**
@@ -57,7 +53,7 @@ export interface ToolResult {
  * Native server interface that all servers must implement
  */
 export interface NativeServer {
-  readonly serverType: NativeServerType;
+  readonly serverType: string;
   readonly name: string;
   getToolDefinitions(): NativeServerTool[];
   callTool(toolName: string, args: Record<string, unknown>, context: ToolContext): Promise<ToolResult>;
@@ -77,9 +73,9 @@ interface ServerRegistration {
  * Events emitted by the server manager
  */
 export interface ServerManagerEvents {
-  'server_registered': [{ serverType: NativeServerType; name: string }];
-  'server_unregistered': [{ serverType: NativeServerType }];
-  'tool_call': [{ serverType: NativeServerType; tool: string; result: string; agentId: string }];
+  'server_registered': [{ serverType: string; name: string }];
+  'server_unregistered': [{ serverType: string }];
+  'tool_call': [{ serverType: string; tool: string; result: string; agentId: string }];
   'error': [Error];
 }
 
@@ -87,7 +83,7 @@ export interface ServerManagerEvents {
  * Manages native MCP servers and routes tool calls
  */
 export class ServerManager extends EventEmitter<ServerManagerEvents> {
-  private servers: Map<NativeServerType, ServerRegistration> = new Map();
+  private servers: Map<string, ServerRegistration> = new Map();
 
   /**
    * Register a native server
@@ -111,7 +107,7 @@ export class ServerManager extends EventEmitter<ServerManagerEvents> {
   /**
    * Unregister a native server
    */
-  unregisterServer(serverType: NativeServerType): void {
+  unregisterServer(serverType: string): void {
     this.servers.delete(serverType);
     this.emit('server_unregistered', { serverType });
   }
@@ -119,7 +115,7 @@ export class ServerManager extends EventEmitter<ServerManagerEvents> {
   /**
    * Enable/disable a server
    */
-  setServerEnabled(serverType: NativeServerType, enabled: boolean): void {
+  setServerEnabled(serverType: string, enabled: boolean): void {
     const registration = this.servers.get(serverType);
     if (registration) {
       registration.enabled = enabled;
@@ -129,7 +125,7 @@ export class ServerManager extends EventEmitter<ServerManagerEvents> {
   /**
    * Get a registered server
    */
-  getServer(serverType: NativeServerType): NativeServer | undefined {
+  getServer(serverType: string): NativeServer | undefined {
     const registration = this.servers.get(serverType);
     if (registration?.enabled) {
       return registration.server;
@@ -140,7 +136,7 @@ export class ServerManager extends EventEmitter<ServerManagerEvents> {
   /**
    * Get all registered server types
    */
-  getServerTypes(): NativeServerType[] {
+  getServerTypes(): string[] {
     return Array.from(this.servers.keys()).filter(
       (type) => this.servers.get(type)?.enabled
     );
@@ -149,8 +145,8 @@ export class ServerManager extends EventEmitter<ServerManagerEvents> {
   /**
    * Get tools from all enabled servers, filtered by policy
    */
-  getFilteredTools(policy: ParsedPolicy): Array<{ serverType: NativeServerType; tools: NativeServerTool[] }> {
-    const result: Array<{ serverType: NativeServerType; tools: NativeServerTool[] }> = [];
+  getFilteredTools(policy: ParsedPolicy): Array<{ serverType: string; tools: NativeServerTool[] }> {
+    const result: Array<{ serverType: string; tools: NativeServerTool[] }> = [];
 
     for (const [serverType, registration] of this.servers) {
       if (!registration.enabled) continue;
@@ -178,7 +174,7 @@ export class ServerManager extends EventEmitter<ServerManagerEvents> {
   /**
    * Get tools for a specific server type, filtered by policy
    */
-  getServerTools(serverType: NativeServerType, policy: ParsedPolicy): NativeServerTool[] {
+  getServerTools(serverType: string, policy: ParsedPolicy): NativeServerTool[] {
     const registration = this.servers.get(serverType);
     if (!registration?.enabled) return [];
 
@@ -195,7 +191,7 @@ export class ServerManager extends EventEmitter<ServerManagerEvents> {
   /**
    * Get all tools for a specific server type (no policy filtering)
    */
-  getAllServerTools(serverType: NativeServerType): NativeServerTool[] {
+  getAllServerTools(serverType: string): NativeServerTool[] {
     const registration = this.servers.get(serverType);
     if (!registration) return [];
     return registration.server.getToolDefinitions();
@@ -206,7 +202,7 @@ export class ServerManager extends EventEmitter<ServerManagerEvents> {
    */
   async callTool(
     agentId: string,
-    serverType: NativeServerType,
+    serverType: string,
     toolName: string,
     args: Record<string, unknown>,
     policy: ParsedPolicy
@@ -331,7 +327,7 @@ export class ServerManager extends EventEmitter<ServerManagerEvents> {
   /**
    * Check server health (credentials valid, etc.)
    */
-  async checkServerHealth(serverType: NativeServerType): Promise<{
+  async checkServerHealth(serverType: string): Promise<{
     available: boolean;
     hasCredentials: boolean;
     credentialsValid: boolean;
@@ -365,14 +361,14 @@ export class ServerManager extends EventEmitter<ServerManagerEvents> {
    */
   async getStatus(): Promise<
     Array<{
-      serverType: NativeServerType;
+      serverType: string;
       name: string;
       enabled: boolean;
       toolCount: number;
     }>
   > {
     const status: Array<{
-      serverType: NativeServerType;
+      serverType: string;
       name: string;
       enabled: boolean;
       toolCount: number;

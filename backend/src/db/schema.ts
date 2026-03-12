@@ -1,9 +1,22 @@
 import { sqliteTable, text, integer, real, blob } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 
+// Users table
+export const users = sqliteTable('users', {
+  id: text('id').primaryKey(),
+  email: text('email').notNull().unique(),
+  name: text('name').notNull(),
+  passwordHash: text('password_hash').notNull(),
+  role: text('role').default('user').notNull(), // 'admin' | 'user'
+  status: text('status').default('active').notNull(), // 'active' | 'suspended' | 'deleted'
+  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: text('updated_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
 // Agents table
 export const agents = sqliteTable('agents', {
   id: text('id').primaryKey(),
+  userId: text('user_id'),
   name: text('name').notNull(),
   description: text('description'),
   policyId: text('policy_id'),
@@ -31,6 +44,7 @@ export const policies = sqliteTable('policies', {
 // Credentials table (encrypted)
 export const credentials = sqliteTable('credentials', {
   id: text('id').primaryKey(),
+  userId: text('user_id'),
   serviceId: text('service_id').notNull(),
   type: text('type').notNull(), // 'oauth2' | 'api_key' | 'basic'
   encryptedData: blob('encrypted_data', { mode: 'buffer' }).notNull(),
@@ -39,6 +53,7 @@ export const credentials = sqliteTable('credentials', {
   expiresAt: text('expires_at'),
   accountEmail: text('account_email'), // e.g., "user@gmail.com"
   accountName: text('account_name'), // e.g., "John Doe"
+  grantedServices: text('granted_services'), // JSON array of service types, e.g. '["gmail","drive"]'
   createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: text('updated_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
@@ -48,6 +63,7 @@ export const auditLog = sqliteTable('audit_log', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   timestamp: text('timestamp').default(sql`CURRENT_TIMESTAMP`).notNull(),
   eventType: text('event_type').notNull(),
+  userId: text('user_id'),
   agentId: text('agent_id'),
   tool: text('tool'),
   argumentsJson: text('arguments_json'),
@@ -115,6 +131,16 @@ export const agentServiceAccess = sqliteTable('agent_service_access', {
   updatedAt: text('updated_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 
+// Agent service credentials junction table - multiple credentials per agent+service
+export const agentServiceCredentials = sqliteTable('agent_service_credentials', {
+  id: text('id').primaryKey(),
+  agentId: text('agent_id').notNull(),
+  serviceType: text('service_type').notNull(),
+  credentialId: text('credential_id').notNull(),
+  isDefault: integer('is_default', { mode: 'boolean' }).default(false).notNull(),
+  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
 // Agent tool permissions - per-tool permission overrides
 export const agentToolPermissions = sqliteTable('agent_tool_permissions', {
   id: text('id').primaryKey(),
@@ -129,6 +155,7 @@ export const agentToolPermissions = sqliteTable('agent_tool_permissions', {
 // Pending agent registrations - agents waiting to be claimed
 export const pendingAgentRegistrations = sqliteTable('pending_agent_registrations', {
   id: text('id').primaryKey(),
+  userId: text('user_id'),
   name: text('name').notNull(),
   description: text('description'),
   claimCode: text('claim_code').notNull().unique(),

@@ -247,10 +247,15 @@ export default function Permissions() {
                             )}
                             {cell && cell.enabled && (
                               <div className="text-xs text-gray-500">
-                                {cell.permissionLevel === 'read' && 'Read-Only'}
-                                {cell.permissionLevel === 'full' && 'Full Access'}
+                                {cell.permissionLevel === 'read' && 'Read Only'}
+                                {cell.permissionLevel === 'full' && 'Read + Write'}
                                 {cell.permissionLevel === 'custom' && 'Custom'}
-                                {cell.permissionLevel === 'none' && 'Disabled'}
+                                {cell.permissionLevel === 'none' && 'Off'}
+                                {cell.linkedCredentialCount > 1 && (
+                                  <span className="ml-1 text-trust-blue">
+                                    ({cell.linkedCredentialCount} accounts)
+                                  </span>
+                                )}
                               </div>
                             )}
                           </div>
@@ -292,33 +297,33 @@ interface ServiceConfigModalProps {
 }
 
 const permissionLevelDescriptions: Record<PermissionLevel, { label: string; description: string }> = {
-  none: { label: 'No Access', description: 'Service disabled for this agent' },
-  read: { label: 'Read-Only', description: 'View and search only, cannot modify' },
-  full: { label: 'Full Access', description: 'Read and write (destructive actions require approval)' },
-  custom: { label: 'Custom', description: 'Individual tool permissions configured' },
+  none: { label: 'Off', description: 'Service disabled for this agent' },
+  read: { label: 'Read Only', description: 'Can view and search — no modifications allowed' },
+  full: { label: 'Read + Write (with approval)', description: 'Reads are automatic. Writes go to the approval queue for your review.' },
+  custom: { label: 'Custom', description: 'Individual tool permissions configured manually' },
 };
 
 // Service-specific descriptions for each permission level
 const servicePermissionDetails: Record<ServiceType, { read: string; full: string }> = {
   gmail: {
-    read: 'Can list and read emails, search inbox',
-    full: 'Read + create drafts (send requires approval)',
+    read: 'List, read, and search emails',
+    full: 'Read emails freely. Creating drafts and sending require your approval.',
   },
   drive: {
-    read: 'Can list and read files, search drive',
-    full: 'Read + create/update files (share/delete blocked)',
+    read: 'List, read, and search files',
+    full: 'Read files freely. Creating and updating files require your approval.',
   },
   calendar: {
-    read: 'Can list and view events, search calendars',
-    full: 'Read + create/update events (delete blocked)',
+    read: 'List, view, and search events',
+    full: 'View events freely. Creating and updating events require your approval.',
   },
   'web-search': {
-    read: 'Can search the web',
+    read: 'Search the web',
     full: 'Full search access',
   },
   browser: {
-    read: 'Can navigate and take screenshots',
-    full: 'Read + click/type (evaluate blocked)',
+    read: 'Navigate pages and take screenshots',
+    full: 'Navigate freely. Clicking and typing require your approval.',
   },
 };
 
@@ -352,17 +357,27 @@ function ServiceConfigModal({
     },
   });
 
-  const linkCredentialMutation = useMutation({
+  const addServiceCredentialMutation = useMutation({
     mutationFn: (credentialId: string) =>
-      permissions.linkCredential(agentId, serviceType, credentialId),
+      permissions.addServiceCredential(agentId, serviceType, credentialId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['permissions'] });
       onUpdate();
     },
   });
 
-  const unlinkCredentialMutation = useMutation({
-    mutationFn: () => permissions.unlinkCredential(agentId, serviceType),
+  const removeServiceCredentialMutation = useMutation({
+    mutationFn: (credentialId: string) =>
+      permissions.removeServiceCredential(agentId, serviceType, credentialId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['permissions'] });
+      onUpdate();
+    },
+  });
+
+  const setDefaultCredentialMutation = useMutation({
+    mutationFn: (credentialId: string) =>
+      permissions.setDefaultCredential(agentId, serviceType, credentialId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['permissions'] });
       onUpdate();
@@ -498,28 +513,47 @@ function ServiceConfigModal({
                   </div>
                 </div>
 
-                {/* Account selector - always show if there are credentials */}
+                {/* Account selector - checkboxes for multi-account support */}
                 {availableCredentials && availableCredentials.length > 0 ? (
                   <div className="space-y-2 mt-2">
                     {availableCredentials.map((cred) => {
-                      const isLinked = config.credentialId === cred.id;
+                      const linkedCred = config.linkedCredentials?.find(
+                        (lc) => lc.credentialId === cred.id
+                      );
+                      const isLinked = !!linkedCred;
+                      const isDefault = linkedCred?.isDefault ?? false;
+                      const isMutating = addServiceCredentialMutation.isPending
+                        || removeServiceCredentialMutation.isPending
+                        || setDefaultCredentialMutation.isPending;
+
                       return (
-                        <button
+                        <div
                           key={cred.id}
-                          onClick={() => {
-                            if (isLinked) {
-                              unlinkCredentialMutation.mutate();
-                            } else {
-                              linkCredentialMutation.mutate(cred.id);
-                            }
-                          }}
-                          disabled={linkCredentialMutation.isPending || unlinkCredentialMutation.isPending}
-                          className={`w-full flex items-center gap-3 p-3 rounded-lg border-2 text-left transition-all ${
+                          className={`w-full flex items-center gap-3 p-3 rounded-lg border-2 transition-all ${
                             isLinked
                               ? 'border-trust-blue bg-trust-blue/5'
                               : 'border-gray-200 bg-white hover:border-gray-300'
-                          } ${(linkCredentialMutation.isPending || unlinkCredentialMutation.isPending) ? 'opacity-50 cursor-wait' : ''}`}
+                          } ${isMutating ? 'opacity-50' : ''}`}
                         >
+                          <button
+                            onClick={() => {
+                              if (isLinked) {
+                                removeServiceCredentialMutation.mutate(cred.id);
+                              } else {
+                                addServiceCredentialMutation.mutate(cred.id);
+                              }
+                            }}
+                            disabled={isMutating}
+                            className="shrink-0"
+                          >
+                            <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${
+                              isLinked
+                                ? 'bg-trust-blue border-trust-blue'
+                                : 'border-gray-300 hover:border-gray-400'
+                            }`}>
+                              {isLinked && <CheckCircle className="w-3 h-3 text-white" />}
+                            </div>
+                          </button>
                           <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
                             isLinked ? 'bg-trust-blue text-white' : 'bg-gray-100 text-gray-400'
                           }`}>
@@ -537,9 +571,22 @@ function ServiceConfigModal({
                             <span className={`text-xs ${credentialStatusColors[cred.status]}`}>
                               {cred.status}
                             </span>
-                            {isLinked && <CheckCircle className="w-4 h-4 text-trust-blue" />}
+                            {isLinked && isDefault && (
+                              <span className="text-xs font-medium text-trust-blue bg-trust-blue/10 px-1.5 py-0.5 rounded">
+                                Default
+                              </span>
+                            )}
+                            {isLinked && !isDefault && (
+                              <button
+                                onClick={() => setDefaultCredentialMutation.mutate(cred.id)}
+                                disabled={isMutating}
+                                className="text-xs text-gray-400 hover:text-trust-blue transition-colors"
+                              >
+                                Set default
+                              </button>
+                            )}
                           </div>
-                        </button>
+                        </div>
                       );
                     })}
                     <Link

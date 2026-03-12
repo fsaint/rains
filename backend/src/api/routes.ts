@@ -6,7 +6,7 @@ import { credentialVault } from '../credentials/vault.js';
 import { approvalQueue } from '../approvals/queue.js';
 import { auditLogger } from '../audit/logger.js';
 import { mcpProxy } from '../mcp/proxy.js';
-import { serverManager, type NativeServerType } from '../mcp/server-manager.js';
+import { serverManager } from '../mcp/server-manager.js';
 import { apnsService } from '../notifications/apns.js';
 import {
   discoverServicesForAgent,
@@ -25,7 +25,10 @@ import {
   getCredentialsForService,
   setPermissionLevel,
   getPermissionLevel,
-  type ServiceType,
+  addServiceCredential,
+  removeServiceCredential,
+  setDefaultCredential,
+  getLinkedCredentials,
   type ToolPermission,
   type PermissionLevel,
 } from '../services/permissions.js';
@@ -42,6 +45,7 @@ import {
   deletePendingOAuthFlow,
 } from '../oauth/pending-flows.js';
 import { handleMCPRequest, type MCPRequest } from '../mcp/agent-endpoint.js';
+import { getSession, type SessionPayload } from '../auth/index.js';
 import { nanoid } from 'nanoid';
 import {
   CreateAgentSchema,
@@ -54,6 +58,11 @@ import {
 } from '@reins/shared';
 
 export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
+  // Helper to get userId from authenticated request
+  function getUserId(request: any): string {
+    return (request.session as SessionPayload).userId;
+  }
+
   // ========================================================================
   // Health check
   // ========================================================================
@@ -66,8 +75,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // Agents
   // ========================================================================
 
-  app.get('/api/agents', async () => {
-    const result = await client.execute(`SELECT * FROM agents`);
+  app.get('/api/agents', async (request) => {
+    const userId = getUserId(request);
+    const result = await client.execute({
+      sql: `SELECT * FROM agents WHERE user_id = ?`,
+      args: [userId],
+    });
 
     const agentsWithCredentials = await Promise.all(
       result.rows.map(async (agent) => {
@@ -94,10 +107,11 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
   app.get<{ Params: { id: string } }>('/api/agents/:id', async (request, reply) => {
     const { id } = request.params;
+    const userId = getUserId(request);
 
     const result = await client.execute({
-      sql: `SELECT * FROM agents WHERE id = ?`,
-      args: [id],
+      sql: `SELECT * FROM agents WHERE id = ? AND user_id = ?`,
+      args: [id, userId],
     });
 
     if (result.rows.length === 0) {
@@ -127,10 +141,11 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // Connection prompt for an agent
   app.get<{ Params: { id: string } }>('/api/agents/:id/connect-prompt', async (request, reply) => {
     const { id } = request.params;
+    const userId = getUserId(request);
 
     const result = await client.execute({
-      sql: `SELECT * FROM agents WHERE id = ?`,
-      args: [id],
+      sql: `SELECT * FROM agents WHERE id = ? AND user_id = ?`,
+      args: [id, userId],
     });
 
     if (result.rows.length === 0) {
@@ -189,13 +204,14 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: parsed.error.message } });
     }
 
+    const userId = getUserId(request);
     const id = nanoid();
     const now = new Date().toISOString();
 
     await client.execute({
-      sql: `INSERT INTO agents (id, name, description, policy_id, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
-      args: [id, parsed.data.name, parsed.data.description ?? null, parsed.data.policyId ?? null, now, now],
+      sql: `INSERT INTO agents (id, user_id, name, description, policy_id, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`,
+      args: [id, userId, parsed.data.name, parsed.data.description ?? null, parsed.data.policyId ?? null, now, now],
     });
 
     const result = await client.execute({
@@ -203,11 +219,14 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       args: [id],
     });
 
+    await auditLogger.logAgentEvent(id, 'created', { name: parsed.data.name });
+
     return reply.code(201).send({ data: result.rows[0] });
   });
 
   app.patch<{ Params: { id: string } }>('/api/agents/:id', async (request, reply) => {
     const { id } = request.params;
+    const userId = getUserId(request);
     const parsed = UpdateAgentSchema.safeParse(request.body);
 
     if (!parsed.success) {
@@ -235,15 +254,16 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
 
     args.push(id);
+    args.push(userId);
 
     await client.execute({
-      sql: `UPDATE agents SET ${updates.join(', ')} WHERE id = ?`,
+      sql: `UPDATE agents SET ${updates.join(', ')} WHERE id = ? AND user_id = ?`,
       args,
     });
 
     const result = await client.execute({
-      sql: `SELECT * FROM agents WHERE id = ?`,
-      args: [id],
+      sql: `SELECT * FROM agents WHERE id = ? AND user_id = ?`,
+      args: [id, userId],
     });
 
     if (result.rows.length === 0) {
@@ -255,6 +275,16 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
   app.delete<{ Params: { id: string } }>('/api/agents/:id', async (request, reply) => {
     const { id } = request.params;
+    const userId = getUserId(request);
+
+    // Verify ownership
+    const check = await client.execute({
+      sql: `SELECT id FROM agents WHERE id = ? AND user_id = ?`,
+      args: [id, userId],
+    });
+    if (check.rows.length === 0) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Agent not found' } });
+    }
 
     await mcpProxy.disconnectAgent(id);
     await client.execute({
@@ -265,6 +295,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       sql: `DELETE FROM agents WHERE id = ?`,
       args: [id],
     });
+
+    await auditLogger.logAgentEvent(id, 'deleted');
 
     return reply.code(204).send();
   });
@@ -289,6 +321,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       }
 
       const result = await registerAgent(name, description);
+
+      await auditLogger.logAgentEvent(result.agentId, 'registered', { name, description });
 
       // Build claim URL using config
       const claimUrl = `${config.dashboardUrl}/claim/${result.claimCode}`;
@@ -330,6 +364,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
    */
   app.post<{ Body: { code: string } }>('/api/agents/claim', async (request, reply) => {
     const { code } = request.body;
+    const userId = getUserId(request);
 
     if (!code || typeof code !== 'string') {
       return reply.code(400).send({
@@ -337,7 +372,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       });
     }
 
-    const agent = await claimAgent(code);
+    const agent = await claimAgent(code, userId);
 
     if (!agent) {
       return reply.code(404).send({
@@ -345,14 +380,17 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       });
     }
 
+    await auditLogger.logAgentEvent(agent.id, 'claimed', { name: agent.name });
+
     return reply.code(201).send({ data: agent });
   });
 
   /**
    * List pending registrations (admin view)
    */
-  app.get('/api/agents/pending', async () => {
-    const pending = await listPendingRegistrations();
+  app.get('/api/agents/pending', async (request) => {
+    const userId = getUserId(request);
+    const pending = await listPendingRegistrations(userId);
     return { data: pending };
   });
 
@@ -420,14 +458,14 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     async (request, reply) => {
       const { id, serviceType } = request.params;
 
-      const validTypes: NativeServerType[] = ['gmail', 'drive', 'calendar', 'web-search', 'browser'];
-      if (!validTypes.includes(serviceType as NativeServerType)) {
+      const validTypes = validServiceTypes;
+      if (!validTypes.includes(serviceType)) {
         return reply.code(400).send({
           error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
         });
       }
 
-      const tools = await discoverServiceToolsForAgent(id, serviceType as NativeServerType);
+      const tools = await discoverServiceToolsForAgent(id, serviceType);
       if (!tools) {
         return reply.code(404).send({
           error: { code: 'NOT_FOUND', message: 'Agent not found or has no policy' },
@@ -515,14 +553,14 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     async (request, reply) => {
       const { serverType } = request.params;
 
-      const validTypes: NativeServerType[] = ['gmail', 'drive', 'calendar', 'web-search', 'browser'];
-      if (!validTypes.includes(serverType as NativeServerType)) {
+      const validTypes = validServiceTypes;
+      if (!validTypes.includes(serverType)) {
         return reply.code(400).send({
           error: { code: 'INVALID_SERVICE', message: `Invalid server type: ${serverType}` },
         });
       }
 
-      const server = serverManager.getServer(serverType as NativeServerType);
+      const server = serverManager.getServer(serverType);
       if (!server) {
         return reply.code(404).send({
           error: { code: 'NOT_FOUND', message: `Server not registered: ${serverType}` },
@@ -542,29 +580,60 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     async (request, reply) => {
       const { serverType } = request.params;
 
-      const validTypes: NativeServerType[] = ['gmail', 'drive', 'calendar', 'web-search', 'browser'];
-      if (!validTypes.includes(serverType as NativeServerType)) {
+      const validTypes = validServiceTypes;
+      if (!validTypes.includes(serverType)) {
         return reply.code(400).send({
           error: { code: 'INVALID_SERVICE', message: `Invalid server type: ${serverType}` },
         });
       }
 
-      const health = await serverManager.checkServerHealth(serverType as NativeServerType);
+      const health = await serverManager.checkServerHealth(serverType);
       return { data: health };
     }
   );
 
   // ========================================================================
+  // Services (from registry)
+  // ========================================================================
+
+  app.get('/api/services', async () => {
+    try {
+      const { serviceDefinitions } = await import('@reins/servers');
+      return {
+        data: serviceDefinitions.map((def) => ({
+          type: def.type,
+          name: def.name,
+          description: def.description,
+          icon: def.icon,
+          category: def.category,
+          toolPrefix: def.toolPrefix,
+          auth: def.auth,
+          permissions: def.permissions,
+          permissionDescriptions: def.permissionDescriptions,
+          toolCount: def.tools.length,
+        })),
+      };
+    } catch {
+      return { data: [] };
+    }
+  });
+
+  // ========================================================================
   // Permission Matrix
   // ========================================================================
 
-  const validServiceTypes: ServiceType[] = ['gmail', 'drive', 'calendar', 'web-search', 'browser'];
+  // Service types are validated dynamically from the registry
+  let validServiceTypes: string[] = [];
+  import('@reins/servers').then((s) => {
+    validServiceTypes = s.serviceDefinitions.map((d) => d.type);
+  }).catch(() => {});
 
   /**
    * Get full permission matrix: all agents x all services
    */
-  app.get('/api/permissions/matrix', async () => {
-    const matrix = await getPermissionMatrix();
+  app.get('/api/permissions/matrix', async (request) => {
+    const userId = getUserId(request);
+    const matrix = await getPermissionMatrix(userId);
     return { data: matrix };
   });
 
@@ -576,13 +645,13 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     async (request, reply) => {
       const { agentId, serviceType } = request.params;
 
-      if (!validServiceTypes.includes(serviceType as ServiceType)) {
+      if (!validServiceTypes.includes(serviceType)) {
         return reply.code(400).send({
           error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
         });
       }
 
-      const config = await getAgentServiceConfig(agentId, serviceType as ServiceType);
+      const config = await getAgentServiceConfig(agentId, serviceType);
       if (!config) {
         return reply.code(404).send({
           error: { code: 'NOT_FOUND', message: 'Agent not found' },
@@ -590,7 +659,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       }
 
       // Include the permission level in the response
-      const permissionLevel = await getPermissionLevel(agentId, serviceType as ServiceType);
+      const permissionLevel = await getPermissionLevel(agentId, serviceType);
 
       return { data: { ...config, permissionLevel } };
     }
@@ -605,7 +674,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const { agentId, serviceType } = request.params;
       const { enabled } = request.body;
 
-      if (!validServiceTypes.includes(serviceType as ServiceType)) {
+      if (!validServiceTypes.includes(serviceType)) {
         return reply.code(400).send({
           error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
         });
@@ -617,8 +686,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         });
       }
 
-      await setServiceAccess(agentId, serviceType as ServiceType, enabled);
-      const config = await getAgentServiceConfig(agentId, serviceType as ServiceType);
+      await setServiceAccess(agentId, serviceType, enabled);
+      const config = await getAgentServiceConfig(agentId, serviceType);
 
       return { data: config };
     }
@@ -632,13 +701,13 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     async (request, reply) => {
       const { agentId, serviceType } = request.params;
 
-      if (!validServiceTypes.includes(serviceType as ServiceType)) {
+      if (!validServiceTypes.includes(serviceType)) {
         return reply.code(400).send({
           error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
         });
       }
 
-      const level = await getPermissionLevel(agentId, serviceType as ServiceType);
+      const level = await getPermissionLevel(agentId, serviceType);
       return { data: { level } };
     }
   );
@@ -653,7 +722,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const { agentId, serviceType } = request.params;
       const { level } = request.body;
 
-      if (!validServiceTypes.includes(serviceType as ServiceType)) {
+      if (!validServiceTypes.includes(serviceType)) {
         return reply.code(400).send({
           error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
         });
@@ -669,9 +738,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         });
       }
 
-      await setPermissionLevel(agentId, serviceType as ServiceType, level);
-      const config = await getAgentServiceConfig(agentId, serviceType as ServiceType);
-      const currentLevel = await getPermissionLevel(agentId, serviceType as ServiceType);
+      await setPermissionLevel(agentId, serviceType, level);
+      const config = await getAgentServiceConfig(agentId, serviceType);
+      const currentLevel = await getPermissionLevel(agentId, serviceType);
 
       return { data: { ...config, permissionLevel: currentLevel } };
     }
@@ -686,7 +755,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const { agentId, serviceType } = request.params;
       const { credentialId } = request.body;
 
-      if (!validServiceTypes.includes(serviceType as ServiceType)) {
+      if (!validServiceTypes.includes(serviceType)) {
         return reply.code(400).send({
           error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
         });
@@ -698,8 +767,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         });
       }
 
-      await linkCredential(agentId, serviceType as ServiceType, credentialId);
-      const config = await getAgentServiceConfig(agentId, serviceType as ServiceType);
+      await linkCredential(agentId, serviceType, credentialId);
+      const config = await getAgentServiceConfig(agentId, serviceType);
 
       return { data: config };
     }
@@ -713,13 +782,13 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     async (request, reply) => {
       const { agentId, serviceType } = request.params;
 
-      if (!validServiceTypes.includes(serviceType as ServiceType)) {
+      if (!validServiceTypes.includes(serviceType)) {
         return reply.code(400).send({
           error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
         });
       }
 
-      await unlinkCredential(agentId, serviceType as ServiceType);
+      await unlinkCredential(agentId, serviceType);
       return reply.code(204).send();
     }
   );
@@ -736,7 +805,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const { agentId, serviceType, toolName } = request.params;
       const { permission } = request.body;
 
-      if (!validServiceTypes.includes(serviceType as ServiceType)) {
+      if (!validServiceTypes.includes(serviceType)) {
         return reply.code(400).send({
           error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
         });
@@ -752,8 +821,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         });
       }
 
-      await setToolPermission(agentId, serviceType as ServiceType, toolName, permission);
-      const config = await getAgentServiceConfig(agentId, serviceType as ServiceType);
+      await setToolPermission(agentId, serviceType, toolName, permission);
+      const config = await getAgentServiceConfig(agentId, serviceType);
 
       return { data: config };
     }
@@ -767,14 +836,14 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     async (request, reply) => {
       const { agentId, serviceType, toolName } = request.params;
 
-      if (!validServiceTypes.includes(serviceType as ServiceType)) {
+      if (!validServiceTypes.includes(serviceType)) {
         return reply.code(400).send({
           error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
         });
       }
 
-      await resetToolPermission(agentId, serviceType as ServiceType, toolName);
-      const config = await getAgentServiceConfig(agentId, serviceType as ServiceType);
+      await resetToolPermission(agentId, serviceType, toolName);
+      const config = await getAgentServiceConfig(agentId, serviceType);
 
       return { data: config };
     }
@@ -792,7 +861,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const { agentId, serviceType } = request.params;
       const { permissions } = request.body;
 
-      if (!validServiceTypes.includes(serviceType as ServiceType)) {
+      if (!validServiceTypes.includes(serviceType)) {
         return reply.code(400).send({
           error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
         });
@@ -804,8 +873,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         });
       }
 
-      await setServiceToolPermissions(agentId, serviceType as ServiceType, permissions);
-      const config = await getAgentServiceConfig(agentId, serviceType as ServiceType);
+      await setServiceToolPermissions(agentId, serviceType, permissions);
+      const config = await getAgentServiceConfig(agentId, serviceType);
 
       return { data: config };
     }
@@ -819,14 +888,103 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     async (request, reply) => {
       const { serviceType } = request.params;
 
-      if (!validServiceTypes.includes(serviceType as ServiceType)) {
+      if (!validServiceTypes.includes(serviceType)) {
         return reply.code(400).send({
           error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
         });
       }
 
-      const credentials = await getCredentialsForService(serviceType as ServiceType);
+      const userId = getUserId(request);
+      const credentials = await getCredentialsForService(serviceType, userId);
       return { data: credentials };
+    }
+  );
+
+  /**
+   * Add a credential to an agent's service (multi-account)
+   */
+  app.post<{
+    Params: { agentId: string; serviceType: string };
+    Body: { credentialId: string; isDefault?: boolean };
+  }>(
+    '/api/permissions/:agentId/:serviceType/credentials',
+    async (request, reply) => {
+      const { agentId, serviceType } = request.params;
+      const { credentialId, isDefault } = request.body;
+
+      if (!validServiceTypes.includes(serviceType)) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
+        });
+      }
+
+      if (!credentialId) {
+        return reply.code(400).send({
+          error: { code: 'VALIDATION_ERROR', message: 'credentialId is required' },
+        });
+      }
+
+      await addServiceCredential(agentId, serviceType, credentialId, isDefault);
+      const linked = await getLinkedCredentials(agentId, serviceType);
+      return { data: linked };
+    }
+  );
+
+  /**
+   * Remove a credential from an agent's service
+   */
+  app.delete<{ Params: { agentId: string; serviceType: string; credentialId: string } }>(
+    '/api/permissions/:agentId/:serviceType/credentials/:credentialId',
+    async (request, reply) => {
+      const { agentId, serviceType, credentialId } = request.params;
+
+      if (!validServiceTypes.includes(serviceType)) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
+        });
+      }
+
+      await removeServiceCredential(agentId, serviceType, credentialId);
+      return reply.code(204).send();
+    }
+  );
+
+  /**
+   * Set default credential for an agent's service
+   */
+  app.put<{ Params: { agentId: string; serviceType: string; credentialId: string } }>(
+    '/api/permissions/:agentId/:serviceType/credentials/:credentialId/default',
+    async (request, reply) => {
+      const { agentId, serviceType, credentialId } = request.params;
+
+      if (!validServiceTypes.includes(serviceType)) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
+        });
+      }
+
+      await setDefaultCredential(agentId, serviceType, credentialId);
+      const linked = await getLinkedCredentials(agentId, serviceType);
+      return { data: linked };
+    }
+  );
+
+  /**
+   * Get linked credentials for an agent's service
+   */
+  app.get<{ Params: { agentId: string; serviceType: string } }>(
+    '/api/permissions/:agentId/:serviceType/credentials',
+    async (request, reply) => {
+      const { agentId, serviceType } = request.params;
+
+      if (!validServiceTypes.includes(serviceType)) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
+        });
+      }
+
+      const linked = await getLinkedCredentials(agentId, serviceType);
+      return { data: linked };
     }
   );
 
@@ -986,8 +1144,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // Credentials
   // ========================================================================
 
-  app.get('/api/credentials', async () => {
-    const credentials = await credentialVault.list();
+  app.get('/api/credentials', async (request) => {
+    const userId = getUserId(request);
+    const credentials = await credentialVault.list(userId);
     return { data: credentials };
   });
 
@@ -1030,25 +1189,81 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   });
 
   // ========================================================================
+  // GitHub PAT
+  // ========================================================================
+
+  /**
+   * Add a GitHub Personal Access Token.
+   * Validates the token, reads scopes from response headers,
+   * and stores the credential with granted scopes.
+   */
+  app.post('/api/credentials/github', async (request, reply) => {
+    const body = request.body as { token?: string } | undefined;
+    if (!body?.token) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'token is required' } });
+    }
+
+    const userId = getUserId(request);
+
+    // Validate token and get scopes
+    let validation: { valid: boolean; scopes: string[]; login?: string; error?: string };
+    try {
+      const { validateGitHubToken } = await import('@reins/servers');
+      validation = await validateGitHubToken(body.token);
+    } catch {
+      return reply.code(500).send({ error: { code: 'SERVER_ERROR', message: 'GitHub validation not available' } });
+    }
+
+    if (!validation.valid) {
+      return reply.code(401).send({
+        error: { code: 'INVALID_TOKEN', message: validation.error || 'Invalid GitHub token' },
+      });
+    }
+
+    // Determine which services are available based on scopes
+    const grantedServices = ['github'];
+
+    // Store credential
+    const credId = await credentialVault.storeOAuth({
+      serviceId: 'github',
+      accountEmail: validation.login ?? '',
+      accountName: validation.login,
+      userId,
+      grantedServices,
+      data: {
+        accessToken: body.token,
+        scopes: validation.scopes,
+      } as any,
+    });
+
+    return reply.code(201).send({
+      data: {
+        id: credId,
+        serviceId: 'github',
+        login: validation.login,
+        scopes: validation.scopes,
+        grantedServices,
+      },
+    });
+  });
+
+  // ========================================================================
   // OAuth - Google
   // ========================================================================
 
-  // All Google scopes requested at once — one credential covers all Google services
-  const GOOGLE_SCOPES = [
-    'https://www.googleapis.com/auth/gmail.readonly',
-    'https://www.googleapis.com/auth/gmail.compose',
-    'https://www.googleapis.com/auth/drive.readonly',
-    'https://www.googleapis.com/auth/calendar.readonly',
+  // Base Google scopes (always included)
+  const GOOGLE_BASE_SCOPES = [
     'https://www.googleapis.com/auth/userinfo.email',
     'https://www.googleapis.com/auth/userinfo.profile',
   ];
 
   /**
    * Initiate Google OAuth flow
-   * Connects a Google account with access to all Google services (Gmail, Drive, Calendar).
-   * The credential is stored as serviceId='google' and can be linked to any agent.
+   * Accepts optional `services` query param (comma-separated) to request specific scopes.
+   * Example: /api/oauth/google?services=gmail,drive
+   * If no services specified, requests all Google service scopes.
    */
-  app.get('/api/oauth/google', async (_request, reply) => {
+  app.get('/api/oauth/google', async (request, reply) => {
     if (!config.googleClientId || !config.googleRedirectUri) {
       return reply.code(500).send({
         error: {
@@ -1058,16 +1273,59 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       });
     }
 
+    const userId = getUserId(request);
+    const query = request.query as { services?: string };
+
+    // Build scopes from requested services
+    let serviceScopes: string[] = [];
+    let requestedServices: string[] = [];
+
+    try {
+      const { serviceDefinitions } = await import('@reins/servers');
+      const googleServices = serviceDefinitions.filter((d) => d.category === 'google');
+
+      if (query.services) {
+        requestedServices = query.services.split(',').map((s) => s.trim());
+        for (const svcType of requestedServices) {
+          const def = googleServices.find((d) => d.type === svcType);
+          if (def?.auth.oauthScopes) {
+            serviceScopes.push(...def.auth.oauthScopes);
+          }
+        }
+      }
+
+      // Default: request all Google service scopes
+      if (serviceScopes.length === 0) {
+        requestedServices = googleServices.map((d) => d.type);
+        for (const def of googleServices) {
+          if (def.auth.oauthScopes) {
+            serviceScopes.push(...def.auth.oauthScopes);
+          }
+        }
+      }
+    } catch {
+      // Fallback if registry unavailable
+      serviceScopes = [
+        'https://www.googleapis.com/auth/gmail.readonly',
+        'https://www.googleapis.com/auth/gmail.compose',
+        'https://www.googleapis.com/auth/drive.readonly',
+        'https://www.googleapis.com/auth/calendar.readonly',
+      ];
+      requestedServices = ['gmail', 'drive', 'calendar'];
+    }
+
+    const allScopes = [...new Set([...GOOGLE_BASE_SCOPES, ...serviceScopes])];
+
     // Generate state token for CSRF protection
     const state = nanoid(32);
-    storePendingOAuthFlow(state, { service: 'google' });
+    storePendingOAuthFlow(state, { service: 'google', userId, grantedServices: requestedServices });
 
     // Build authorization URL
     const params = new URLSearchParams({
       client_id: config.googleClientId,
       redirect_uri: config.googleRedirectUri,
       response_type: 'code',
-      scope: GOOGLE_SCOPES.join(' '),
+      scope: allScopes.join(' '),
       state,
       access_type: 'offline',
       prompt: 'consent',
@@ -1154,11 +1412,14 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         // Calculate expiration date
         const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);
 
-        // Store the credential with account info
+        // Store the credential with account info and granted services
+        const grantedServices = pendingFlow.grantedServices ?? ['gmail', 'drive', 'calendar'];
         await credentialVault.storeOAuth({
           serviceId: 'google',
           accountEmail: userInfo.email,
           accountName: userInfo.name,
+          userId: pendingFlow.userId,
+          grantedServices,
           data: {
             accessToken: tokens.access_token,
             refreshToken: tokens.refresh_token,
@@ -1184,8 +1445,28 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
   app.get('/api/approvals', async (request) => {
     const query = request.query as { agentId?: string };
-    const approvals = await approvalQueue.listPending(query.agentId);
-    return { data: approvals };
+    const userId = getUserId(request);
+
+    // Get user's agents to filter approvals
+    const userAgents = await client.execute({
+      sql: `SELECT id FROM agents WHERE user_id = ?`,
+      args: [userId],
+    });
+    const userAgentIds = userAgents.rows.map((r) => r.id as string);
+
+    if (query.agentId) {
+      // Verify the requested agent belongs to the user
+      if (!userAgentIds.includes(query.agentId)) {
+        return { data: [] };
+      }
+      const approvals = await approvalQueue.listPending(query.agentId);
+      return { data: approvals };
+    }
+
+    // Return approvals for all of user's agents
+    const allApprovals = await approvalQueue.listPending();
+    const filtered = allApprovals.filter((a: any) => userAgentIds.includes(a.agentId));
+    return { data: filtered };
   });
 
   // Test endpoint: Create an approval request (for mobile app testing)
@@ -1233,8 +1514,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: parsed.error.message } });
     }
 
-    // In a real app, get approver from auth context
-    const approver = 'dashboard-user';
+    const session = getSession(request);
+    const approver = session?.email ?? 'dashboard-user';
 
     const success = await approvalQueue.approve(id, approver, parsed.data.comment);
     if (!success) {
@@ -1249,8 +1530,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const { id } = request.params;
     const body = request.body as { reason?: string };
 
-    // In a real app, get approver from auth context
-    const approver = 'dashboard-user';
+    const session = getSession(request);
+    const approver = session?.email ?? 'dashboard-user';
 
     const success = await approvalQueue.reject(id, approver, body.reason ?? 'Rejected');
     if (!success) {
@@ -1267,28 +1548,39 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
   app.get('/api/audit', async (request) => {
     const query = request.query as Record<string, string>;
+    const userId = getUserId(request);
+
+    // Get user's agents to scope audit entries
+    const userAgents = await client.execute({
+      sql: `SELECT id FROM agents WHERE user_id = ?`,
+      args: [userId],
+    });
+    const userAgentIds = userAgents.rows.map((r) => r.id as string);
 
     const filter = AuditFilterSchema.parse({
       startDate: query.startDate ? new Date(query.startDate) : undefined,
       endDate: query.endDate ? new Date(query.endDate) : undefined,
-      agentId: query.agentId,
-      eventType: query.eventType,
-      tool: query.tool,
-      result: query.result,
+      agentId: query.agentId || undefined,
+      eventType: query.eventType || undefined,
+      tool: query.tool || undefined,
+      result: query.result || undefined,
       limit: query.limit ? parseInt(query.limit) : undefined,
       offset: query.offset ? parseInt(query.offset) : undefined,
     });
 
     const entries = await auditLogger.query(filter);
-    const total = await auditLogger.count(filter);
+    const filteredEntries = entries.filter((e: any) =>
+      !e.agentId || userAgentIds.includes(e.agentId)
+    );
+    const total = filteredEntries.length;
 
     return {
-      data: entries,
+      data: filteredEntries,
       pagination: {
         total,
         limit: filter.limit,
         offset: filter.offset,
-        hasMore: filter.offset + entries.length < total,
+        hasMore: false,
       },
     };
   });
