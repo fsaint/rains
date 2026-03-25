@@ -67,5 +67,6 @@ export class WebSearchServer extends BaseServer {
   }
 }
 
-// Re-export tools for external use
+// Re-export tools and definition for external use
 export { webSearchTools } from './tools.js';
+export { definition } from './definition.js';

@@ -111,5 +111,6 @@ export class GmailServer extends BaseServer {
   }
 }
 
-// Re-export tools for external use
+// Re-export tools and definition for external use
 export { gmailTools } from './tools.js';
+export { definition } from './definition.js';

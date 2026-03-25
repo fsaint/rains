@@ -109,6 +109,8 @@ export class CredentialVault {
     serviceId: string;
     accountEmail: string;
     accountName?: string;
+    userId?: string;
+    grantedServices?: string[];
     data: CredentialData;
   }): Promise<string> {
     const id = nanoid();
@@ -121,9 +123,10 @@ export class CredentialVault {
     }
 
     await client.execute({
-      sql: `INSERT INTO credentials (id, service_id, type, encrypted_data, iv, auth_tag, expires_at, account_email, account_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      sql: `INSERT INTO credentials (id, user_id, service_id, type, encrypted_data, iv, auth_tag, expires_at, account_email, account_name, granted_services) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         id,
+        options.userId ?? null,
         options.serviceId,
         'oauth2',
         encrypted.encryptedData,
@@ -132,6 +135,7 @@ export class CredentialVault {
         expiresAt ?? null,
         options.accountEmail,
         options.accountName ?? null,
+        options.grantedServices ? JSON.stringify(options.grantedServices) : null,
       ],
     });
 
@@ -215,16 +219,22 @@ export class CredentialVault {
   /**
    * List all credentials (metadata only, no decryption)
    */
-  async list(): Promise<Array<{
+  async list(userId?: string): Promise<Array<{
     id: string;
     serviceId: string;
     type: CredentialType;
     accountEmail?: string;
     accountName?: string;
+    grantedServices?: string[];
     expiresAt?: Date;
     createdAt: Date;
   }>> {
-    const result = await client.execute(`SELECT id, service_id, type, account_email, account_name, expires_at, created_at FROM credentials`);
+    const result = userId
+      ? await client.execute({
+          sql: `SELECT id, service_id, type, account_email, account_name, granted_services, expires_at, created_at FROM credentials WHERE user_id = ?`,
+          args: [userId],
+        })
+      : await client.execute(`SELECT id, service_id, type, account_email, account_name, granted_services, expires_at, created_at FROM credentials`);
 
     return result.rows.map((row) => ({
       id: row.id as string,
@@ -232,13 +242,14 @@ export class CredentialVault {
       type: row.type as CredentialType,
       accountEmail: row.account_email as string | undefined,
       accountName: row.account_name as string | undefined,
+      grantedServices: row.granted_services ? JSON.parse(row.granted_services as string) : undefined,
       expiresAt: row.expires_at ? new Date(row.expires_at as string) : undefined,
       createdAt: new Date(row.created_at as string),
     }));
   }
 
   /**
-   * Check credential health
+   * Check credential health, attempting a token refresh if expired.
    */
   async checkHealth(credentialId: string): Promise<CredentialHealth> {
     const credential = await this.retrieve(credentialId);
@@ -260,7 +271,20 @@ export class CredentialVault {
     }
 
     const now = new Date();
-    const valid = !expiresAt || expiresAt > now;
+    let valid = !expiresAt || expiresAt > now;
+
+    // If expired, try refreshing the token
+    if (!valid) {
+      const refreshed = await this.getValidAccessToken(credentialId);
+      if (refreshed) {
+        // Re-read the updated credential to get the new expiresAt
+        const updated = await this.retrieve(credentialId);
+        if (updated && 'expiresAt' in updated.data && updated.data.expiresAt) {
+          expiresAt = new Date(updated.data.expiresAt);
+        }
+        valid = true;
+      }
+    }
 
     return {
       credentialId,
@@ -268,7 +292,7 @@ export class CredentialVault {
       valid,
       expiresAt,
       lastChecked: now,
-      error: valid ? undefined : 'Credential expired',
+      error: valid ? undefined : 'Credential expired and refresh failed',
     };
   }
 
@@ -297,6 +321,154 @@ export class CredentialVault {
 
     return result.rowsAffected > 0;
   }
+
+  /**
+   * Get a valid access token for a Google OAuth credential, refreshing if expired.
+   * Returns the access token string or null if refresh fails.
+   */
+  async getValidAccessToken(credentialId: string): Promise<string | null> {
+    const credential = await this.retrieve(credentialId);
+    if (!credential) return null;
+
+    const data = credential.data as {
+      accessToken?: string;
+      refreshToken?: string;
+      expiresAt?: string | Date;
+      tokenType?: string;
+    };
+
+    if (!data.accessToken) return null;
+
+    // No expiration means token never expires (e.g. GitHub PATs, API keys)
+    if (!data.expiresAt) {
+      return data.accessToken;
+    }
+
+    // Check if token is still valid (with 5-minute buffer)
+    const expiresAt = new Date(data.expiresAt);
+    const bufferMs = 5 * 60 * 1000;
+    if (expiresAt.getTime() - bufferMs > Date.now()) {
+      return data.accessToken;
+    }
+
+    // Token expired — refresh it
+    if (!data.refreshToken) {
+      console.warn(`Credential ${credentialId} expired and has no refresh token`);
+      return null;
+    }
+
+    const { config } = await import('../config/index.js');
+    if (!config.googleClientId || !config.googleClientSecret) {
+      console.error('Cannot refresh token: Google OAuth not configured');
+      return null;
+    }
+
+    try {
+      const response = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: config.googleClientId,
+          client_secret: config.googleClientSecret,
+          refresh_token: data.refreshToken,
+          grant_type: 'refresh_token',
+        }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        console.error('Token refresh failed:', err);
+        return null;
+      }
+
+      const tokens = await response.json() as {
+        access_token: string;
+        expires_in: number;
+        token_type: string;
+      };
+
+      // Update stored credential with new access token
+      const newData: CredentialData = {
+        ...data,
+        accessToken: tokens.access_token,
+        expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
+        tokenType: tokens.token_type,
+      } as CredentialData;
+
+      await this.update(credentialId, newData);
+
+      return tokens.access_token;
+    } catch (error) {
+      console.error('Token refresh error:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Proactively refresh all OAuth credentials that are expired or expiring soon.
+   * Runs as a background task to keep tokens fresh.
+   */
+  async refreshAllExpiring(): Promise<{ refreshed: number; failed: number }> {
+    const bufferMs = 10 * 60 * 1000; // 10 minutes before expiry
+    const threshold = new Date(Date.now() + bufferMs).toISOString();
+
+    const result = await client.execute({
+      sql: `SELECT id FROM credentials WHERE type = 'oauth2' AND expires_at IS NOT NULL AND expires_at < ?`,
+      args: [threshold],
+    });
+
+    let refreshed = 0;
+    let failed = 0;
+
+    for (const row of result.rows) {
+      const id = row.id as string;
+      const token = await this.getValidAccessToken(id);
+      if (token) {
+        refreshed++;
+      } else {
+        failed++;
+      }
+    }
+
+    return { refreshed, failed };
+  }
 }
 
 export const credentialVault = new CredentialVault(process.env.REINS_ENCRYPTION_KEY);
+
+let refreshInterval: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Start background token refresh loop.
+ * Refreshes tokens every 45 minutes (Google access tokens last 1 hour).
+ */
+export function startTokenRefreshLoop() {
+  const INTERVAL_MS = 45 * 60 * 1000; // 45 minutes
+
+  // Run once immediately
+  credentialVault.refreshAllExpiring().then(({ refreshed, failed }) => {
+    if (refreshed > 0 || failed > 0) {
+      console.log(`Token refresh: ${refreshed} refreshed, ${failed} failed`);
+    }
+  }).catch((err) => {
+    console.error('Token refresh error:', err);
+  });
+
+  refreshInterval = setInterval(async () => {
+    try {
+      const { refreshed, failed } = await credentialVault.refreshAllExpiring();
+      if (refreshed > 0 || failed > 0) {
+        console.log(`Token refresh: ${refreshed} refreshed, ${failed} failed`);
+      }
+    } catch (err) {
+      console.error('Token refresh error:', err);
+    }
+  }, INTERVAL_MS);
+}
+
+export function stopTokenRefreshLoop() {
+  if (refreshInterval) {
+    clearInterval(refreshInterval);
+    refreshInterval = null;
+  }
+}

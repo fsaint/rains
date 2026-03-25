@@ -3,6 +3,7 @@
  */
 
 import type { Credential } from '@reins/shared';
+import type { ToolDefinition } from './base-server.js';
 
 /**
  * Configuration for initializing a server
@@ -135,4 +136,12 @@ export interface ServiceDefinition {
     read: string;
     full: string;
   };
+}
+
+/**
+ * Service definition with its tool definitions included.
+ * Each server co-locates this in its own `definition.ts`.
+ */
+export interface ServiceDefinitionWithTools extends ServiceDefinition {
+  tools: ToolDefinition[];
 }

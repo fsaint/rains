@@ -7,6 +7,9 @@
 
 interface PendingOAuthFlow {
   service: string;
+  userId?: string;
+  grantedServices?: string[];
+  reconnectCredentialId?: string;
   initiatedAt: Date;
 }
 
@@ -19,10 +22,13 @@ const pendingFlows = new Map<string, PendingOAuthFlow>();
  */
 export function storePendingOAuthFlow(
   state: string,
-  flow: { service: string }
+  flow: { service: string; userId?: string; grantedServices?: string[]; reconnectCredentialId?: string }
 ): void {
   pendingFlows.set(state, {
     service: flow.service,
+    userId: flow.userId,
+    grantedServices: flow.grantedServices,
+    reconnectCredentialId: flow.reconnectCredentialId,
     initiatedAt: new Date(),
   });
 

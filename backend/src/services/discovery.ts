@@ -7,7 +7,7 @@
 
 import { client } from '../db/index.js';
 import { policyEngine } from '../policy/engine.js';
-import { serverManager, type NativeServerType } from '../mcp/server-manager.js';
+import { serverManager } from '../mcp/server-manager.js';
 import type { ParsedPolicy } from '@reins/shared';
 
 /**
@@ -15,7 +15,7 @@ import type { ParsedPolicy } from '@reins/shared';
  */
 export interface AgentService {
   /** Service type (gmail, drive, calendar, web-search, browser) */
-  serviceType: NativeServerType;
+  serviceType: string;
   /** Human-readable name */
   name: string;
   /** Whether the service is available (server registered) */
@@ -39,7 +39,7 @@ export interface AgentTool {
   /** Tool description */
   description: string;
   /** Which service provides this tool */
-  serviceType: NativeServerType;
+  serviceType: string;
   /** Whether this tool requires approval */
   requiresApproval: boolean;
   /** Tool input schema */
@@ -99,7 +99,7 @@ async function getAgentCredentials(agentId: string): Promise<Map<string, { id: s
  * Determine credential status for a service
  */
 function getCredentialStatus(
-  serviceType: NativeServerType,
+  serviceType: string,
   credentials: Map<string, { id: string; type: string; expiresAt?: string }>
 ): { status: AgentService['credentialStatus']; credentialId?: string } {
   const cred = credentials.get(serviceType);
@@ -146,7 +146,7 @@ export async function discoverServicesForAgent(agentId: string): Promise<AgentSe
   const serverTypes = serverManager.getServerTypes();
 
   // Also check policy for services that might not have servers registered yet
-  const policyServices = Object.keys(policy.services) as NativeServerType[];
+  const policyServices = Object.keys(policy.services) as string[];
   const allServiceTypes = [...new Set([...serverTypes, ...policyServices])];
 
   for (const serviceType of allServiceTypes) {
@@ -215,7 +215,7 @@ export async function discoverToolsForAgent(agentId: string): Promise<AgentTool[
  */
 export async function discoverServiceToolsForAgent(
   agentId: string,
-  serviceType: NativeServerType
+  serviceType: string
 ): Promise<AgentTool[] | null> {
   const policy = await getAgentPolicy(agentId);
   if (!policy) {

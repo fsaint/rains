@@ -37,6 +37,7 @@ const ConfigSchema = z.object({
   braveApiKey: z.string().optional(),
 
   // Auth
+  adminEmail: z.string().email().optional(),
   adminPassword: z.string().min(1, 'REINS_ADMIN_PASSWORD is required'),
   sessionSecret: z.string().min(32).default('change-me-to-a-random-32-char-string!!'),
 
@@ -62,6 +63,7 @@ function loadConfig(): Config {
     googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
     googleRedirectUri: process.env.GOOGLE_REDIRECT_URI,
     // Auth
+    adminEmail: process.env.REINS_ADMIN_EMAIL,
     adminPassword: process.env.REINS_ADMIN_PASSWORD,
     sessionSecret: process.env.REINS_SESSION_SECRET,
     // Brave Search

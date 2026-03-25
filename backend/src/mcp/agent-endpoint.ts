@@ -7,11 +7,12 @@
  */
 
 import { db } from '../db/index.js';
-import { agents, agentServiceAccess, agentServiceCredentials, credentials } from '../db/schema.js';
+import { agents, agentServiceAccess, agentServiceCredentials, agentServiceInstances, credentials } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
 import { serverManager, type ToolContext } from './server-manager.js';
 import {
   getEffectivePermissions,
+  getEffectiveInstancePermissions,
   canAccessTool,
   type ToolPermission,
 } from '../services/permissions.js';
@@ -26,10 +27,14 @@ import { credentialVault } from '../credentials/vault.js';
 export interface MCPRequest {
   jsonrpc: '2.0';
   id: string | number;
-  method: 'tools/list' | 'tools/call';
+  method: string;
   params?: {
     name?: string;
     arguments?: Record<string, unknown>;
+    protocolVersion?: string;
+    capabilities?: Record<string, unknown>;
+    clientInfo?: { name: string; version: string };
+    [key: string]: unknown;
   };
 }
 
@@ -149,6 +154,41 @@ export async function handleMCPRequest(
 
   // Dispatch based on method
   switch (request.method) {
+    case 'initialize': {
+      // Echo back the client's protocol version if provided, otherwise default
+      const clientVersion = request.params?.protocolVersion as string | undefined;
+      return {
+        jsonrpc: '2.0',
+        id: request.id,
+        result: {
+          protocolVersion: clientVersion ?? '2024-11-05',
+          capabilities: {
+            tools: { listChanged: false },
+          },
+          serverInfo: {
+            name: 'reins',
+            version: '1.0.0',
+          },
+        },
+      };
+    }
+
+    case 'notifications/initialized':
+      // Client acknowledgement — no response needed for notifications,
+      // but since this is HTTP request-response we return an empty success
+      return {
+        jsonrpc: '2.0',
+        id: request.id,
+        result: {},
+      };
+
+    case 'ping':
+      return {
+        jsonrpc: '2.0',
+        id: request.id,
+        result: {},
+      };
+
     case 'tools/list':
       return handleListTools(agentId, request.id);
 
@@ -188,42 +228,64 @@ export async function handleMCPRequest(
 
 /**
  * Handle tools/list request
- * Returns all visible tools for the agent across enabled services
+ * Returns all visible tools for the agent across enabled service instances.
+ * Deduplicates tools across instances of the same service type (show tool if ANY instance allows it).
  */
 async function handleListTools(
   agentId: string,
   requestId: string | number
 ): Promise<MCPResponse> {
   const tools: MCPToolSchema[] = [];
+  const seenTools = new Set<string>();
 
-  // Iterate over all service types from registry
-  for (const serviceType of _serviceTypes) {
-    const { enabled, tools: toolPermissions } = await getEffectivePermissions(agentId, serviceType);
+  // Query instances for this agent
+  const instances = await db
+    .select()
+    .from(agentServiceInstances)
+    .where(and(eq(agentServiceInstances.agentId, agentId), eq(agentServiceInstances.enabled, true)));
 
-    if (!enabled) {
-      continue;
+  if (instances.length > 0) {
+    // Instance-based path: aggregate tools across enabled instances
+    for (const instance of instances) {
+      const { enabled, tools: toolPermissions } = await getEffectiveInstancePermissions(instance.id);
+      if (!enabled) continue;
+
+      const server = serverManager.getServer(instance.serviceType);
+      if (!server) continue;
+
+      const serverTools = server.getToolDefinitions();
+      for (const tool of serverTools) {
+        if (seenTools.has(tool.name)) continue;
+        const permission = toolPermissions[tool.name] as ToolPermission | undefined;
+        if (permission === 'allow' || permission === 'require_approval') {
+          seenTools.add(tool.name);
+          tools.push({
+            name: tool.name,
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+          });
+        }
+      }
     }
+  } else {
+    // Fallback: legacy path using agent_service_access
+    for (const serviceType of _serviceTypes) {
+      const { enabled, tools: toolPermissions } = await getEffectivePermissions(agentId, serviceType);
+      if (!enabled) continue;
 
-    // Get server for this service type
-    const server = serverManager.getServer(serviceType );
-    if (!server) {
-      continue;
-    }
+      const server = serverManager.getServer(serviceType);
+      if (!server) continue;
 
-    // Get tool definitions from the server
-    const serverTools = server.getToolDefinitions();
-
-    // Filter tools based on permissions - only include 'allow' and 'require_approval'
-    for (const tool of serverTools) {
-      const permission = toolPermissions[tool.name] as ToolPermission | undefined;
-
-      // Default to 'block' if no permission set
-      if (permission === 'allow' || permission === 'require_approval') {
-        tools.push({
-          name: tool.name,
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-        });
+      const serverTools = server.getToolDefinitions();
+      for (const tool of serverTools) {
+        const permission = toolPermissions[tool.name] as ToolPermission | undefined;
+        if (permission === 'allow' || permission === 'require_approval') {
+          tools.push({
+            name: tool.name,
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+          });
+        }
       }
     }
   }
@@ -267,22 +329,68 @@ async function handleCallTool(
     };
   }
 
-  // Check if service is enabled for this agent
-  const { enabled } = await getEffectivePermissions(agentId, serviceType);
-  if (!enabled) {
-    return {
-      jsonrpc: '2.0',
-      id: requestId,
-      error: {
-        code: MCP_ERROR_CODES.SERVICE_NOT_ENABLED,
-        message: `Service not enabled for this agent: ${serviceType}`,
-        data: { service: serviceType },
-      },
-    };
+  // Find instances for this agent+service
+  const serviceInstances = await db
+    .select()
+    .from(agentServiceInstances)
+    .where(and(
+      eq(agentServiceInstances.agentId, agentId),
+      eq(agentServiceInstances.serviceType, serviceType),
+      eq(agentServiceInstances.enabled, true)
+    ));
+
+  // Check if service is enabled (either via instances or legacy)
+  const hasInstances = serviceInstances.length > 0;
+  if (!hasInstances) {
+    const { enabled } = await getEffectivePermissions(agentId, serviceType);
+    if (!enabled) {
+      return {
+        jsonrpc: '2.0',
+        id: requestId,
+        error: {
+          code: MCP_ERROR_CODES.SERVICE_NOT_ENABLED,
+          message: `Service not enabled for this agent: ${serviceType}`,
+          data: { service: serviceType },
+        },
+      };
+    }
   }
 
-  // Check tool permission
-  const { allowed, requiresApproval } = await canAccessTool(agentId, serviceType, toolName);
+  // Check tool permission (instance-based or legacy)
+  let allowed: boolean;
+  let requiresApproval: boolean;
+
+  if (hasInstances) {
+    // Resolve which instance to use based on `account` arg
+    const requestedAccount = args.account as string | undefined;
+    let targetInstance = serviceInstances[0]; // default
+
+    if (requestedAccount) {
+      // Find instance by credential email
+      for (const inst of serviceInstances) {
+        if (inst.credentialId) {
+          const [cred] = await db.select().from(credentials).where(eq(credentials.id, inst.credentialId));
+          if (cred?.accountEmail === requestedAccount) {
+            targetInstance = inst;
+            break;
+          }
+        }
+      }
+    } else {
+      // Use default instance
+      const defaultInst = serviceInstances.find((i) => i.isDefault);
+      if (defaultInst) targetInstance = defaultInst;
+    }
+
+    const { tools: instanceToolPerms } = await getEffectiveInstancePermissions(targetInstance.id);
+    const toolPerm = instanceToolPerms[toolName] ?? 'block';
+    allowed = toolPerm !== 'block';
+    requiresApproval = toolPerm === 'require_approval';
+  } else {
+    const result = await canAccessTool(agentId, serviceType, toolName);
+    allowed = result.allowed;
+    requiresApproval = result.requiresApproval;
+  }
 
   if (!allowed) {
     await auditLogger.logToolCall(agentId, toolName, args, 'blocked', Date.now() - startTime, {
@@ -335,19 +443,92 @@ async function handleCallTool(
   }
 
   // Multi-account credential resolution
-  const linkedCreds = await db
-    .select()
-    .from(agentServiceCredentials)
-    .where(and(eq(agentServiceCredentials.agentId, agentId), eq(agentServiceCredentials.serviceType, serviceType)));
-
-  // Build tool context
+  // First try instances, then fall back to legacy junction table
   const context: ToolContext = {
     requestId: crypto.randomUUID(),
     agentId,
   };
 
-  // For *_list_accounts tools: populate linkedAccounts, skip single-credential resolution
   const isListAccountsTool = toolName.endsWith('_list_accounts');
+
+  if (hasInstances) {
+    // Instance-based credential resolution
+    if (isListAccountsTool) {
+      const accounts: Array<{ email: string; name?: string; isDefault: boolean }> = [];
+      for (const inst of serviceInstances) {
+        if (inst.credentialId) {
+          const [cred] = await db.select().from(credentials).where(eq(credentials.id, inst.credentialId));
+          if (cred?.accountEmail) {
+            accounts.push({
+              email: cred.accountEmail,
+              name: cred.accountName ?? undefined,
+              isDefault: inst.isDefault,
+            });
+          }
+        }
+      }
+      context.linkedAccounts = accounts;
+    } else {
+      // Resolve instance credential based on args.account or default
+      const requestedAccount = args.account as string | undefined;
+      let targetInstance = serviceInstances.find((i) => i.isDefault) ?? serviceInstances[0];
+
+      if (requestedAccount) {
+        let found = false;
+        for (const inst of serviceInstances) {
+          if (inst.credentialId) {
+            const [cred] = await db.select().from(credentials).where(eq(credentials.id, inst.credentialId));
+            if (cred?.accountEmail === requestedAccount) {
+              targetInstance = inst;
+              found = true;
+              break;
+            }
+          }
+        }
+        if (!found) {
+          return {
+            jsonrpc: '2.0',
+            id: requestId,
+            error: {
+              code: MCP_ERROR_CODES.MISSING_CREDENTIALS,
+              message: `No credential found for account: ${requestedAccount}. Use ${serviceType}_list_accounts to see available accounts.`,
+              data: { service: serviceType, requestedAccount },
+            },
+          };
+        }
+      }
+
+      // Strip `account` from args before passing to handler
+      const { account: _account, ...cleanArgs } = args;
+      args = cleanArgs;
+
+      if (targetInstance.credentialId) {
+        const credential = await credentialVault.retrieve(targetInstance.credentialId);
+        if (credential) {
+          context.credential = credential;
+          const accessToken = await credentialVault.getValidAccessToken(targetInstance.credentialId);
+          if (accessToken) {
+            context.accessToken = accessToken;
+          } else {
+            return {
+              jsonrpc: '2.0',
+              id: requestId,
+              error: {
+                code: MCP_ERROR_CODES.MISSING_CREDENTIALS,
+                message: `Credentials expired and could not be refreshed for service: ${serviceType}`,
+                data: { service: serviceType },
+              },
+            };
+          }
+        }
+      }
+    }
+  } else {
+  // Legacy credential resolution path
+  const linkedCreds = await db
+    .select()
+    .from(agentServiceCredentials)
+    .where(and(eq(agentServiceCredentials.agentId, agentId), eq(agentServiceCredentials.serviceType, serviceType)));
 
   if (isListAccountsTool && linkedCreds.length > 0) {
     // Populate linkedAccounts from junction table + credentials metadata
@@ -459,6 +640,7 @@ async function handleCallTool(
       }
     }
   }
+  } // end hasInstances else
 
   // Get the server and call the tool
   const server = serverManager.getServer(serviceType );

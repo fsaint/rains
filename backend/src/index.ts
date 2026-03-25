@@ -8,6 +8,7 @@ import { apiRoutes } from './api/routes.js';
 import { registerAuth } from './auth/index.js';
 import { approvalQueue } from './approvals/queue.js';
 import { initializeNativeServers, shutdownNativeServers } from './mcp/init-servers.js';
+import { startTokenRefreshLoop, stopTokenRefreshLoop } from './credentials/vault.js';
 
 // Create Fastify server
 const app = Fastify({
@@ -68,9 +69,14 @@ app.register(async (fastify) => {
   });
 });
 
+// Start background token refresh (every 45 minutes)
+startTokenRefreshLoop();
+app.log.info('Token refresh loop started');
+
 // Graceful shutdown
 const shutdown = async () => {
   app.log.info('Shutting down...');
+  stopTokenRefreshLoop();
   await shutdownNativeServers();
   await app.close();
   process.exit(0);

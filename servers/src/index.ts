@@ -7,6 +7,7 @@
  * - Calendar (Google Calendar API)
  * - Web Search (Brave Search API)
  * - Browser (Playwright headless browser)
+ * - GitHub (GitHub REST API)
  */
 
 export { GmailServer, gmailTools } from './gmail/index.js';
@@ -14,10 +15,20 @@ export { DriveServer, driveTools } from './drive/index.js';
 export { CalendarServer, calendarTools } from './calendar/index.js';
 export { WebSearchServer, webSearchTools } from './web-search/index.js';
 export { BrowserServer, browserTools } from './browser/index.js';
+export { GitHubServer, githubTools, validateToken as validateGitHubToken, TOOL_REQUIRED_SCOPES as GITHUB_TOOL_SCOPES } from './github/index.js';
+export { LinearServer, linearTools } from './linear/index.js';
 
 export { BaseServer } from './common/base-server.js';
 export { GoogleOAuthHandler } from './common/oauth-handler.js';
 export { CredentialBridge } from './common/credential-bridge.js';
 
-export type { ServerConfig, ServerContext } from './common/types.js';
+export type { ServerConfig, ServerContext, ServiceDefinition, ServiceDefinitionWithTools } from './common/types.js';
 export type { ToolDefinition } from './common/base-server.js';
+
+// Service Registry
+export {
+  serviceDefinitions,
+  serviceRegistry,
+  getServiceTypeFromToolName,
+  getDefaultPermissions,
+} from './registry.js';

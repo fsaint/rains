@@ -3,41 +3,48 @@ import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import {
   Shield,
   Users,
-  FileText,
   Key,
   CheckCircle,
   Activity,
   PlugZap,
   Lock,
   LogOut,
+  UserCog,
+  User,
 } from 'lucide-react';
 import Dashboard from './pages/Dashboard';
 import Agents from './pages/Agents';
-import Policies from './pages/Policies';
 import Credentials from './pages/Credentials';
 import Approvals from './pages/Approvals';
 import AuditLog from './pages/AuditLog';
 import Permissions from './pages/Permissions';
 import ClaimAgent from './pages/ClaimAgent';
 import Login from './pages/Login';
+import AdminUsers from './pages/AdminUsers';
 import { auth } from './api/client';
+import type { User as UserType } from './api/client';
 
 const navItems = [
   { path: '/', label: 'Dashboard', icon: Activity },
   { path: '/agents', label: 'Agents', icon: Users },
   { path: '/permissions', label: 'Permissions', icon: Lock },
-  { path: '/policies', label: 'Policies', icon: FileText },
   { path: '/credentials', label: 'Credentials', icon: Key },
   { path: '/approvals', label: 'Approvals', icon: CheckCircle },
   { path: '/audit', label: 'Audit Log', icon: Activity },
 ];
 
+const adminNavItems = [
+  { path: '/admin/users', label: 'Users', icon: UserCog },
+];
+
 function App() {
   const location = useLocation();
-  const [authenticated, setAuthenticated] = useState<boolean | null>(null);
+  const [user, setUser] = useState<UserType | null | undefined>(undefined);
 
   useEffect(() => {
-    auth.session().then((r) => setAuthenticated(r.authenticated)).catch(() => setAuthenticated(false));
+    auth.session()
+      .then((r) => setUser(r.authenticated && r.user ? r.user : null))
+      .catch(() => setUser(null));
   }, []);
 
   // Render claim page without sidebar (it's a standalone page, no auth required)
@@ -50,7 +57,7 @@ function App() {
   }
 
   // Loading session check
-  if (authenticated === null) {
+  if (user === undefined) {
     return (
       <div className="min-h-screen bg-reins-navy flex items-center justify-center">
         <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-600 border-t-trust-blue" />
@@ -59,14 +66,16 @@ function App() {
   }
 
   // Not authenticated
-  if (!authenticated) {
-    return <Login onSuccess={() => setAuthenticated(true)} />;
+  if (!user) {
+    return <Login onSuccess={(u) => setUser(u)} />;
   }
 
   const handleLogout = async () => {
     await auth.logout();
-    setAuthenticated(false);
+    setUser(null);
   };
+
+  const isAdmin = user.role === 'admin';
 
   return (
     <div className="min-h-screen flex">
@@ -104,6 +113,35 @@ function App() {
               );
             })}
           </ul>
+
+          {isAdmin && (
+            <>
+              <div className="mt-6 mb-2 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                Admin
+              </div>
+              <ul className="space-y-1">
+                {adminNavItems.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = location.pathname === item.path;
+                  return (
+                    <li key={item.path}>
+                      <Link
+                        to={item.path}
+                        className={`flex items-center gap-3 px-4 py-2.5 rounded-lg transition-colors ${
+                          isActive
+                            ? 'bg-trust-blue text-white'
+                            : 'text-gray-300 hover:bg-white/10 hover:text-white'
+                        }`}
+                      >
+                        <Icon className="w-5 h-5" />
+                        <span className="font-medium">{item.label}</span>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          )}
         </nav>
 
         {/* Footer */}
@@ -115,6 +153,15 @@ function App() {
               <span className="w-2 h-2 rounded-full bg-safe-green"></span>
               <span className="text-safe-green">Online</span>
             </span>
+          </div>
+          <div className="flex items-center gap-2 text-sm text-gray-400">
+            <User className="w-4 h-4" />
+            <span className="truncate">{user.name}</span>
+            {isAdmin && (
+              <span className="ml-auto text-xs bg-trust-blue/20 text-trust-blue px-1.5 py-0.5 rounded">
+                Admin
+              </span>
+            )}
           </div>
           <button
             onClick={handleLogout}
@@ -132,10 +179,10 @@ function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/agents" element={<Agents />} />
           <Route path="/permissions" element={<Permissions />} />
-          <Route path="/policies" element={<Policies />} />
           <Route path="/credentials" element={<Credentials />} />
           <Route path="/approvals" element={<Approvals />} />
           <Route path="/audit" element={<AuditLog />} />
+          {isAdmin && <Route path="/admin/users" element={<AdminUsers />} />}
         </Routes>
       </main>
     </div>

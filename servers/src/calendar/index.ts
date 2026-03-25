@@ -108,5 +108,6 @@ export class CalendarServer extends BaseServer {
   }
 }
 
-// Re-export tools for external use
+// Re-export tools and definition for external use
 export { calendarTools } from './tools.js';
+export { definition } from './definition.js';

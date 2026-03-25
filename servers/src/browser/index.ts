@@ -81,3 +81,4 @@ export class BrowserServer extends BaseServer {
 // Re-export for external use
 export { BrowserSessionManager } from './session-manager.js';
 export { browserTools } from './tools.js';
+export { definition } from './definition.js';

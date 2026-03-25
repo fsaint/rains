@@ -80,7 +80,14 @@ export const agents = {
 
   // Connection prompt
   getConnectPrompt: (id: string) =>
-    request<{ prompt: string; mcpUrl: string; agentName: string; enabledServices: string[] }>(`/agents/${id}/connect-prompt`),
+    request<{
+      prompt: string;
+      mcpUrl: string;
+      agentName: string;
+      enabledServices: string[];
+      claudeCodeConfig: Record<string, unknown>;
+      openaiClawConfig: Record<string, unknown>;
+    }>(`/agents/${id}/connect-prompt`),
 
   // Self-registration
   claim: (code: string) =>
@@ -111,16 +118,26 @@ export const credentials = {
       '/credentials/github',
       { method: 'POST', body: JSON.stringify({ token }) }
     ),
+  addLinear: (token: string, workspaceName: string) =>
+    request<{ id: string; serviceId: string; workspaceName: string; workspaceId: string }>(
+      '/credentials/linear',
+      { method: 'POST', body: JSON.stringify({ token, workspaceName }) }
+    ),
   checkHealth: (id: string) => request<unknown>(`/credentials/${id}/health`),
   delete: (id: string) => request<void>(`/credentials/${id}`, { method: 'DELETE' }),
 };
 
 // OAuth
 export const oauth = {
-  initiateGoogle: (services?: string[]) =>
-    request<{ authUrl: string; state: string }>(
-      `/oauth/google${services?.length ? `?services=${services.join(',')}` : ''}`
-    ),
+  initiateGoogle: (services?: string[], reconnectCredentialId?: string) => {
+    const params = new URLSearchParams();
+    if (services?.length) params.set('services', services.join(','));
+    if (reconnectCredentialId) params.set('reconnect', reconnectCredentialId);
+    const qs = params.toString();
+    return request<{ authUrl: string; state: string }>(
+      `/oauth/google${qs ? `?${qs}` : ''}`
+    );
+  },
 };
 
 // Approvals
@@ -276,6 +293,39 @@ export interface ServiceCredential {
 }
 
 
+// Service Instance Types
+export interface ServiceInstance {
+  id: string;
+  agentId: string;
+  serviceType: string;
+  serviceName: string;
+  label: string | null;
+  credentialId: string | null;
+  credentialEmail: string | null;
+  credentialName: string | null;
+  credentialStatus: 'connected' | 'missing' | 'expired' | 'not_linked';
+  enabled: boolean;
+  isDefault: boolean;
+  permissionLevel: PermissionLevel;
+  toolCount: number;
+  blockedCount: number;
+  approvalRequiredCount: number;
+}
+
+export interface InstanceConfig extends ServiceInstance {
+  tools: ToolPermissionEntry[];
+}
+
+export interface AgentPermissionsResponse {
+  agents: Array<{
+    id: string;
+    name: string;
+    status: string;
+    instances: ServiceInstance[];
+  }>;
+  availableServices: Array<{ type: string; name: string; icon: string }>;
+}
+
 // Permissions
 export const permissions = {
   getMatrix: () => request<PermissionMatrix>('/permissions/matrix'),
@@ -356,4 +406,46 @@ export const permissions = {
 
   getLinkedCredentials: (agentId: string, serviceType: ServiceType) =>
     request<LinkedCredential[]>(`/permissions/${agentId}/${serviceType}/credentials`),
+
+  // Instance-based API
+  getAgentPermissions: () =>
+    request<AgentPermissionsResponse>('/permissions/agents'),
+
+  getAvailableServices: () =>
+    request<Array<{ type: string; name: string; icon: string }>>('/permissions/available-services'),
+
+  createInstance: (agentId: string, serviceType: string, label?: string, credentialId?: string) =>
+    request<ServiceInstance>(`/permissions/${agentId}/instances`, {
+      method: 'POST',
+      body: JSON.stringify({ serviceType, label, credentialId }),
+    }),
+
+  getInstanceConfig: (instanceId: string) =>
+    request<InstanceConfig>(`/permissions/instances/${instanceId}`),
+
+  updateInstance: (instanceId: string, data: { label?: string; credentialId?: string; enabled?: boolean }) =>
+    request<ServiceInstance>(`/permissions/instances/${instanceId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  deleteInstance: (instanceId: string) =>
+    request<void>(`/permissions/instances/${instanceId}`, { method: 'DELETE' }),
+
+  setInstanceLevel: (instanceId: string, level: PermissionLevel) =>
+    request<InstanceConfig>(`/permissions/instances/${instanceId}/level`, {
+      method: 'PUT',
+      body: JSON.stringify({ level }),
+    }),
+
+  setInstanceToolPermission: (instanceId: string, toolName: string, permission: ToolPermission) =>
+    request<InstanceConfig>(`/permissions/instances/${instanceId}/tools/${toolName}`, {
+      method: 'PUT',
+      body: JSON.stringify({ permission }),
+    }),
+
+  resetInstanceToolPermission: (instanceId: string, toolName: string) =>
+    request<InstanceConfig>(`/permissions/instances/${instanceId}/tools/${toolName}`, {
+      method: 'DELETE',
+    }),
 };

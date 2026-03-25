@@ -10,7 +10,12 @@ windows:
     options:
       main-pane-width: 50%
     panes:
-      - shell_command: "npm run build --workspace=shared && npm run build --workspace=servers && npm run dev:backend"
+      - shell_command:
+          - |
+            MC_URL="${MISSION_CONTROL_URL:-http://studio:7777}"
+            curl -s -X POST "$MC_URL/api/v1/tmux-sessions/event" -H "Content-Type: application/json" -d '{"session_name":"reins","event":"started","host":"Felipes-Mac-Studio","windows":["dev","shell","tests","git"],"project_path":"/Users/fsaint/git/rains"}' &
+            tmux set-hook -t reins session-closed "run-shell \"curl -s -X POST '${MC_URL}/api/v1/tmux-sessions/event' -H 'Content-Type: application/json' -d '{\\\"session_name\\\":\\\"reins\\\",\\\"event\\\":\\\"stopped\\\",\\\"host\\\":\\\"Felipes-Mac-Studio\\\"}' &\""
+          - "npm run build --workspace=shared && npm run build --workspace=servers && npm run dev:backend"
         focus: true
       - shell_command: "sleep 2 && npm run dev:frontend"
 

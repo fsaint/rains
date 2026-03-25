@@ -18,6 +18,7 @@ import {
   getAgentServiceConfig,
   setServiceAccess,
   linkCredential,
+  autoLinkCredential,
   unlinkCredential,
   setToolPermission,
   resetToolPermission,
@@ -29,6 +30,15 @@ import {
   removeServiceCredential,
   setDefaultCredential,
   getLinkedCredentials,
+  // Instance-based functions
+  getAgentPermissions,
+  createServiceInstance,
+  getInstanceConfig,
+  updateServiceInstance,
+  deleteServiceInstance,
+  setInstancePermissionLevel,
+  setInstanceToolPermission,
+  resetInstanceToolPermission,
   type ToolPermission,
   type PermissionLevel,
 } from '../services/permissions.js';
@@ -195,7 +205,36 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       `Some tools may require approval before execution. If so, the request will block until a human approves it in the Reins dashboard.`,
     ].join('\n');
 
-    return { data: { prompt, mcpUrl, agentName: agent.name, enabledServices } };
+    // MCP JSON config snippets for different clients
+    const claudeCodeConfig = {
+      "mcpServers": {
+        [`reins-${(agent.name as string).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`]: {
+          "type": "url",
+          "url": mcpUrl,
+        },
+      },
+    };
+
+    const openaiClawConfig = {
+      "mcpServers": [
+        {
+          "name": `reins-${(agent.name as string).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+          "type": "url",
+          "url": mcpUrl,
+        },
+      ],
+    };
+
+    return {
+      data: {
+        prompt,
+        mcpUrl,
+        agentName: agent.name,
+        enabledServices,
+        claudeCodeConfig,
+        openaiClawConfig,
+      },
+    };
   });
 
   app.post('/api/agents', async (request, reply) => {
@@ -619,7 +658,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   });
 
   // ========================================================================
-  // Permission Matrix
+  // Permission Instances (new instance-based API)
   // ========================================================================
 
   // Service types are validated dynamically from the registry
@@ -627,6 +666,148 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   import('@reins/servers').then((s) => {
     validServiceTypes = s.serviceDefinitions.map((d) => d.type);
   }).catch(() => {});
+
+  /**
+   * Get all agents with their service instances
+   */
+  app.get('/api/permissions/agents', async (request) => {
+    const userId = getUserId(request);
+    const result = await getAgentPermissions(userId);
+    return { data: result };
+  });
+
+  /**
+   * Get available service types for the "Add Service" picker
+   */
+  app.get('/api/permissions/available-services', async () => {
+    let services: Array<{ type: string; name: string; icon: string }> = [];
+    try {
+      const registry = await import('@reins/servers');
+      services = registry.serviceDefinitions.map((d) => ({
+        type: d.type,
+        name: d.name,
+        icon: d.type,
+      }));
+    } catch {}
+    return { data: services };
+  });
+
+  /**
+   * Add a service instance to an agent
+   */
+  app.post<{
+    Params: { agentId: string };
+    Body: { serviceType: string; label?: string; credentialId?: string };
+  }>('/api/permissions/:agentId/instances', async (request, reply) => {
+    const { agentId } = request.params;
+    const { serviceType, label, credentialId } = request.body;
+
+    if (!serviceType || !validServiceTypes.includes(serviceType)) {
+      return reply.code(400).send({
+        error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
+      });
+    }
+
+    const instance = await createServiceInstance(agentId, serviceType, label, credentialId);
+    return { data: instance };
+  });
+
+  /**
+   * Get instance config with tools
+   */
+  app.get<{ Params: { instanceId: string } }>(
+    '/api/permissions/instances/:instanceId',
+    async (request, reply) => {
+      const config = await getInstanceConfig(request.params.instanceId);
+      if (!config) {
+        return reply.code(404).send({
+          error: { code: 'NOT_FOUND', message: 'Instance not found' },
+        });
+      }
+      return { data: config };
+    }
+  );
+
+  /**
+   * Update instance (label, credential, enabled)
+   */
+  app.put<{
+    Params: { instanceId: string };
+    Body: { label?: string; credentialId?: string; enabled?: boolean };
+  }>('/api/permissions/instances/:instanceId', async (request, reply) => {
+    const result = await updateServiceInstance(request.params.instanceId, request.body);
+    if (!result) {
+      return reply.code(404).send({
+        error: { code: 'NOT_FOUND', message: 'Instance not found' },
+      });
+    }
+    return { data: result };
+  });
+
+  /**
+   * Delete a service instance
+   */
+  app.delete<{ Params: { instanceId: string } }>(
+    '/api/permissions/instances/:instanceId',
+    async (request, reply) => {
+      await deleteServiceInstance(request.params.instanceId);
+      return reply.code(204).send();
+    }
+  );
+
+  /**
+   * Set permission level for an instance
+   */
+  app.put<{
+    Params: { instanceId: string };
+    Body: { level: PermissionLevel };
+  }>('/api/permissions/instances/:instanceId/level', async (request, reply) => {
+    const { level } = request.body;
+    const validLevels: PermissionLevel[] = ['none', 'read', 'full'];
+    if (!validLevels.includes(level)) {
+      return reply.code(400).send({
+        error: { code: 'VALIDATION_ERROR', message: `level must be one of: ${validLevels.join(', ')}` },
+      });
+    }
+    await setInstancePermissionLevel(request.params.instanceId, level);
+    const config = await getInstanceConfig(request.params.instanceId);
+    return { data: config };
+  });
+
+  /**
+   * Set a tool permission for an instance
+   */
+  app.put<{
+    Params: { instanceId: string; toolName: string };
+    Body: { permission: ToolPermission };
+  }>('/api/permissions/instances/:instanceId/tools/:toolName', async (request, reply) => {
+    const { permission } = request.body;
+    const validPermissions: ToolPermission[] = ['allow', 'block', 'require_approval'];
+    if (!validPermissions.includes(permission)) {
+      return reply.code(400).send({
+        error: { code: 'VALIDATION_ERROR', message: `permission must be one of: ${validPermissions.join(', ')}` },
+      });
+    }
+    await setInstanceToolPermission(request.params.instanceId, request.params.toolName, permission);
+    const config = await getInstanceConfig(request.params.instanceId);
+    return { data: config };
+  });
+
+  /**
+   * Reset a tool permission for an instance
+   */
+  app.delete<{ Params: { instanceId: string; toolName: string } }>(
+    '/api/permissions/instances/:instanceId/tools/:toolName',
+    async (request) => {
+      await resetInstanceToolPermission(request.params.instanceId, request.params.toolName);
+      const config = await getInstanceConfig(request.params.instanceId);
+      return { data: config };
+    }
+  );
+
+  // ========================================================================
+  // Permission Matrix (legacy, kept for backward compat)
+  // ========================================================================
 
   /**
    * Get full permission matrix: all agents x all services
@@ -1236,6 +1417,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       } as any,
     });
 
+    // Auto-link to all agents that have github enabled but no credential
+    await autoLinkCredential('github', credId);
+
     return reply.code(201).send({
       data: {
         id: credId,
@@ -1243,6 +1427,97 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         login: validation.login,
         scopes: validation.scopes,
         grantedServices,
+      },
+    });
+  });
+
+  // ========================================================================
+  // Linear API Key
+  // ========================================================================
+
+  /**
+   * Add a Linear API key.
+   * Validates the key against the Linear API, resolves the workspace name,
+   * and stores the credential.
+   */
+  app.post('/api/credentials/linear', async (request, reply) => {
+    const body = request.body as { token?: string; workspaceName?: string } | undefined;
+    if (!body?.token || !body?.workspaceName) {
+      return reply.code(400).send({
+        error: { code: 'VALIDATION_ERROR', message: 'token and workspaceName are required' },
+      });
+    }
+
+    const userId = getUserId(request);
+
+    // Validate token by querying the Linear API for the current viewer and organization
+    let orgName: string;
+    let orgId: string;
+    let viewerEmail: string;
+    let viewerName: string;
+    try {
+      const res = await fetch('https://api.linear.app/graphql', {
+        method: 'POST',
+        headers: {
+          Authorization: body.token,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: `{ viewer { id name email } organization { id name } }`,
+        }),
+      });
+
+      if (!res.ok) {
+        return reply.code(401).send({
+          error: { code: 'INVALID_TOKEN', message: `Linear API returned ${res.status}` },
+        });
+      }
+
+      const json = (await res.json()) as {
+        data?: { viewer: { id: string; name: string; email: string }; organization: { id: string; name: string } };
+        errors?: Array<{ message: string }>;
+      };
+
+      if (json.errors?.length || !json.data) {
+        return reply.code(401).send({
+          error: { code: 'INVALID_TOKEN', message: json.errors?.[0]?.message || 'Invalid Linear API key' },
+        });
+      }
+
+      orgName = json.data.organization.name;
+      orgId = json.data.organization.id;
+      viewerEmail = json.data.viewer.email;
+      viewerName = json.data.viewer.name;
+    } catch (err) {
+      return reply.code(500).send({
+        error: { code: 'SERVER_ERROR', message: 'Failed to validate Linear API key' },
+      });
+    }
+
+    // Store credential
+    const credId = await credentialVault.storeOAuth({
+      serviceId: 'linear',
+      accountEmail: viewerEmail,
+      accountName: `${body.workspaceName} (${orgName})`,
+      userId,
+      grantedServices: ['linear'],
+      data: {
+        accessToken: body.token,
+        organizationId: orgId,
+        organizationName: orgName,
+        workspaceName: body.workspaceName,
+      } as any,
+    });
+
+    // Auto-link to all agents that have linear enabled but no credential
+    await autoLinkCredential('linear', credId);
+
+    return reply.code(201).send({
+      data: {
+        id: credId,
+        serviceId: 'linear',
+        workspaceName: body.workspaceName,
+        workspaceId: orgId,
       },
     });
   });
@@ -1274,7 +1549,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
 
     const userId = getUserId(request);
-    const query = request.query as { services?: string };
+    const query = request.query as { services?: string; reconnect?: string };
 
     // Build scopes from requested services
     let serviceScopes: string[] = [];
@@ -1318,7 +1593,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     // Generate state token for CSRF protection
     const state = nanoid(32);
-    storePendingOAuthFlow(state, { service: 'google', userId, grantedServices: requestedServices });
+    storePendingOAuthFlow(state, {
+      service: 'google',
+      userId,
+      grantedServices: requestedServices,
+      reconnectCredentialId: query.reconnect || undefined,
+    });
 
     // Build authorization URL
     const params = new URLSearchParams({
@@ -1412,20 +1692,33 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         // Calculate expiration date
         const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);
 
-        // Store the credential with account info and granted services
+        // Build token data
+        const tokenData = {
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token,
+          expiresAt,
+          tokenType: tokens.token_type,
+        };
+
         const grantedServices = pendingFlow.grantedServices ?? ['gmail', 'drive', 'calendar'];
+
+        if (pendingFlow.reconnectCredentialId) {
+          // Reconnect: update existing credential with fresh tokens
+          await credentialVault.update(pendingFlow.reconnectCredentialId, tokenData);
+
+          return reply.redirect(
+            `${dashboardUrl}/credentials?oauth_success=true&email=${encodeURIComponent(userInfo.email)}&reconnected=true`
+          );
+        }
+
+        // Store new credential with account info and granted services
         await credentialVault.storeOAuth({
           serviceId: 'google',
           accountEmail: userInfo.email,
           accountName: userInfo.name,
           userId: pendingFlow.userId,
           grantedServices,
-          data: {
-            accessToken: tokens.access_token,
-            refreshToken: tokens.refresh_token,
-            expiresAt,
-            tokenType: tokens.token_type,
-          },
+          data: tokenData,
         });
 
         // Redirect back to credentials page with success
@@ -1651,9 +1944,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   /**
    * MCP endpoint for agent tool discovery and execution
    *
-   * Uses JSON-RPC 2.0 protocol:
-   * - tools/list: Returns all visible tools for this agent
-   * - tools/call: Executes a tool with permission checking
+   * Implements MCP Streamable HTTP transport:
+   * - POST: JSON-RPC 2.0 requests (initialize, tools/list, tools/call, etc.)
+   * - GET: SSE stream (returns 405 for now — we use stateless request-response)
+   * - DELETE: Session termination (no-op, stateless)
    */
   app.post<{ Params: { agentId: string } }>(
     '/mcp/:agentId',
@@ -1678,6 +1972,44 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
       // JSON-RPC always returns 200 - errors are in the response body
       return response;
+    }
+  );
+
+  /**
+   * MCP GET endpoint — SSE stream for server-initiated messages.
+   * Currently returns 405 since we use stateless request-response mode.
+   * Browsers hitting this URL get a friendly message.
+   */
+  app.get<{ Params: { agentId: string } }>(
+    '/mcp/:agentId',
+    async (request, reply) => {
+      const accept = request.headers.accept ?? '';
+
+      // If client wants SSE, return 405 (not supported yet)
+      if (accept.includes('text/event-stream')) {
+        return reply.code(405).send({
+          error: 'SSE streaming not supported. Use POST for JSON-RPC requests.',
+        });
+      }
+
+      // Browser / curl hit — return a human-readable status
+      return {
+        name: 'Reins MCP Endpoint',
+        version: '1.0.0',
+        protocol: 'MCP Streamable HTTP',
+        agentId: request.params.agentId,
+        usage: 'Send a POST request with a JSON-RPC 2.0 body. Start with {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"your-client","version":"1.0"}}}',
+      };
+    }
+  );
+
+  /**
+   * MCP DELETE endpoint — session termination (no-op, stateless)
+   */
+  app.delete<{ Params: { agentId: string } }>(
+    '/mcp/:agentId',
+    async (_request, reply) => {
+      return reply.code(204).send();
     }
   );
 };

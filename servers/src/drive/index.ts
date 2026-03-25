@@ -109,5 +109,6 @@ export class DriveServer extends BaseServer {
   }
 }
 
-// Re-export tools for external use
+// Re-export tools and definition for external use
 export { driveTools } from './tools.js';
+export { definition } from './definition.js';

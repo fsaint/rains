@@ -95,6 +95,22 @@ export class AuditLogger {
   }
 
   /**
+   * Log an agent lifecycle event (created, claimed, deleted, etc.)
+   */
+  async logAgentEvent(
+    agentId: string,
+    action: 'created' | 'registered' | 'claimed' | 'deleted' | 'activated' | 'deactivated',
+    metadata?: Record<string, unknown>
+  ): Promise<number> {
+    return this.log({
+      eventType: 'agent_event',
+      agentId,
+      result: 'success',
+      metadata: { action, ...metadata },
+    });
+  }
+
+  /**
    * Log a connection event
    */
   async logConnection(

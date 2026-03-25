@@ -52,6 +52,7 @@ export default function AuditLog() {
     policy_change: 'Policy Change',
     auth: 'Authentication',
     connection: 'Connection',
+    agent_event: 'Agent Event',
   };
 
   const handlePrevPage = () => {
@@ -118,7 +119,7 @@ export default function AuditLog() {
             <option value="">All Events</option>
             <option value="tool_call">Tool Calls</option>
             <option value="approval">Approvals</option>
-            <option value="policy_change">Policy Changes</option>
+            <option value="agent_event">Agent Events</option>
             <option value="auth">Authentication</option>
             <option value="connection">Connections</option>
           </select>

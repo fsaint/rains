@@ -140,6 +140,7 @@ Use the shared task list to coordinate. Each agent should claim tasks in their d
 - REST API for dashboard
 - WebSocket for real-time updates
 - Audit logging
+- Native MCP servers (use `/new-mcp-server` skill to scaffold new servers)
 
 **Stack:**
 - Node.js 20+ with TypeScript

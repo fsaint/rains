@@ -10,7 +10,9 @@
     "./drive": "./dist/drive/index.js",
     "./calendar": "./dist/calendar/index.js",
     "./web-search": "./dist/web-search/index.js",
-    "./browser": "./dist/browser/index.js"
+    "./browser": "./dist/browser/index.js",
+    "./github": "./dist/github/index.js",
+    "./linear": "./dist/linear/index.js"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",

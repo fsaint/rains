@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Trash2, Key, RefreshCw, CheckCircle, AlertCircle, Clock, X } from 'lucide-react';
+import { Plus, Trash2, Key, RefreshCw, CheckCircle, AlertCircle, Clock, X, Mail, HardDrive, Calendar, Github, SquareKanban } from 'lucide-react';
 import { credentials, oauth, type Credential } from '../api/client';
 
 interface CredentialHealth {
@@ -19,11 +19,17 @@ const GoogleIcon = ({ className = 'w-5 h-5' }: { className?: string }) => (
   </svg>
 );
 
+const GOOGLE_SERVICES = [
+  { type: 'gmail', name: 'Gmail', description: 'Read, search, and draft emails', icon: Mail },
+  { type: 'drive', name: 'Google Drive', description: 'List, read, and search files', icon: HardDrive },
+  { type: 'calendar', name: 'Google Calendar', description: 'View and manage calendar events', icon: Calendar },
+];
+
 export default function Credentials() {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [createType, setCreateType] = useState<'pick' | 'api_key'>('pick');
+  const [createType, setCreateType] = useState<'pick' | 'google_scopes' | 'github_pat' | 'linear_key' | 'api_key'>('pick');
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [newCredential, setNewCredential] = useState({
     serviceId: '',
@@ -31,6 +37,14 @@ export default function Credentials() {
     data: { apiKey: '' },
   });
   const [healthStatus, setHealthStatus] = useState<Record<string, CredentialHealth>>({});
+  const [selectedGoogleServices, setSelectedGoogleServices] = useState<Set<string>>(
+    new Set(['gmail', 'drive', 'calendar'])
+  );
+  const [githubToken, setGithubToken] = useState('');
+  const [githubError, setGithubError] = useState('');
+  const [linearToken, setLinearToken] = useState('');
+  const [linearWorkspace, setLinearWorkspace] = useState('');
+  const [linearError, setLinearError] = useState('');
 
   // Handle OAuth callback
   useEffect(() => {
@@ -39,11 +53,15 @@ export default function Credentials() {
     const email = searchParams.get('email');
 
     if (oauthSuccess === 'true') {
+      const reconnected = searchParams.get('reconnected') === 'true';
       setNotification({
         type: 'success',
-        message: `Google account ${email ? `(${email}) ` : ''}connected successfully!`,
+        message: reconnected
+          ? `Google account ${email ? `(${email}) ` : ''}reconnected successfully!`
+          : `Google account ${email ? `(${email}) ` : ''}connected successfully!`,
       });
       queryClient.invalidateQueries({ queryKey: ['credentials'] });
+      setHealthStatus({});
       setSearchParams({});
     } else if (oauthError) {
       const errorMessages: Record<string, string> = {
@@ -73,6 +91,18 @@ export default function Credentials() {
     queryFn: credentials.list as () => Promise<Credential[]>,
   });
 
+  // Auto-check health for all credentials on load
+  useEffect(() => {
+    if (!credentialsList?.length) return;
+    for (const cred of credentialsList) {
+      if (!healthStatus[cred.id]) {
+        credentials.checkHealth(cred.id).then((health) => {
+          setHealthStatus((prev) => ({ ...prev, [cred.id]: health as CredentialHealth }));
+        }).catch(() => {});
+      }
+    }
+  }, [credentialsList]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const createMutation = useMutation({
     mutationFn: credentials.create,
     onSuccess: () => {
@@ -90,8 +120,49 @@ export default function Credentials() {
     },
   });
 
+  const addGitHubMutation = useMutation({
+    mutationFn: (token: string) => credentials.addGitHub(token),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['credentials'] });
+      setShowCreateModal(false);
+      setGithubToken('');
+      setGithubError('');
+      setCreateType('pick');
+      setNotification({
+        type: 'success',
+        message: `GitHub account (${data.login}) connected with ${data.scopes.length} scope${data.scopes.length !== 1 ? 's' : ''}`,
+      });
+      setTimeout(() => setNotification(null), 5000);
+    },
+    onError: (error: any) => {
+      setGithubError(error?.message || 'Invalid token');
+    },
+  });
+
+  const addLinearMutation = useMutation({
+    mutationFn: ({ token, workspaceName }: { token: string; workspaceName: string }) =>
+      credentials.addLinear(token, workspaceName),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['credentials'] });
+      setShowCreateModal(false);
+      setLinearToken('');
+      setLinearWorkspace('');
+      setLinearError('');
+      setCreateType('pick');
+      setNotification({
+        type: 'success',
+        message: `Linear workspace "${data.workspaceName}" connected successfully`,
+      });
+      setTimeout(() => setNotification(null), 5000);
+    },
+    onError: (error: any) => {
+      setLinearError(error?.message || 'Invalid API key');
+    },
+  });
+
   const initiateGoogleOAuthMutation = useMutation({
-    mutationFn: () => oauth.initiateGoogle(),
+    mutationFn: ({ services, reconnectId }: { services: string[]; reconnectId?: string }) =>
+      oauth.initiateGoogle(services, reconnectId),
     onSuccess: (data) => {
       window.location.href = data.authUrl;
     },
@@ -114,6 +185,29 @@ export default function Credentials() {
     createMutation.mutate(newCredential);
   };
 
+  const handleGoogleConnect = () => {
+    const services = Array.from(selectedGoogleServices);
+    if (services.length === 0) return;
+    initiateGoogleOAuthMutation.mutate({ services });
+  };
+
+  const handleReconnect = (cred: Credential) => {
+    const services = cred.grantedServices ?? ['gmail', 'drive', 'calendar'];
+    initiateGoogleOAuthMutation.mutate({ services, reconnectId: cred.id });
+  };
+
+  const toggleGoogleService = (type: string) => {
+    setSelectedGoogleServices((prev) => {
+      const next = new Set(prev);
+      if (next.has(type)) {
+        next.delete(type);
+      } else {
+        next.add(type);
+      }
+      return next;
+    });
+  };
+
   const getHealthIcon = (id: string) => {
     const health = healthStatus[id];
     if (!health) return <Clock className="w-4 h-4 text-gray-400" />;
@@ -124,7 +218,16 @@ export default function Credentials() {
   const openCreateModal = () => {
     setCreateType('pick');
     setNewCredential({ serviceId: '', type: 'api_key', data: { apiKey: '' } });
+    setSelectedGoogleServices(new Set(['gmail', 'drive', 'calendar']));
     setShowCreateModal(true);
+  };
+
+  const getServiceBadge = (type: string) => {
+    if (type === 'github') return 'GitHub';
+    if (type === 'linear') return 'Linear';
+    const svc = GOOGLE_SERVICES.find((s) => s.type === type);
+    if (!svc) return type;
+    return svc.name;
   };
 
   return (
@@ -183,8 +286,8 @@ export default function Credentials() {
               <tr>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Account</th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Services</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Expires</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
                 <th className="text-right px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
               </tr>
@@ -196,11 +299,15 @@ export default function Credentials() {
                     <div className="flex items-center gap-2">
                       {cred.serviceId === 'google' ? (
                         <GoogleIcon className="w-4 h-4" />
+                      ) : cred.serviceId === 'github' ? (
+                        <Github className="w-4 h-4 text-gray-700" />
+                      ) : cred.serviceId === 'linear' ? (
+                        <SquareKanban className="w-4 h-4 text-indigo-600" />
                       ) : (
                         <Key className="w-4 h-4 text-gray-400" />
                       )}
                       <span className="font-medium capitalize">
-                        {cred.serviceId === 'google' ? 'Google' : cred.serviceId}
+                        {cred.serviceId === 'google' ? 'Google' : cred.serviceId === 'github' ? 'GitHub' : cred.serviceId === 'linear' ? 'Linear' : cred.serviceId}
                       </span>
                     </div>
                   </td>
@@ -217,6 +324,22 @@ export default function Credentials() {
                     )}
                   </td>
                   <td className="px-6 py-4">
+                    {cred.grantedServices?.length ? (
+                      <div className="flex flex-wrap gap-1">
+                        {cred.grantedServices.map((svc) => (
+                          <span
+                            key={svc}
+                            className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700"
+                          >
+                            {getServiceBadge(svc)}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-gray-400 text-sm">-</span>
+                    )}
+                  </td>
+                  <td className="px-6 py-4">
                     <div className="flex items-center gap-2">
                       {getHealthIcon(cred.id)}
                       <span className="text-sm">
@@ -226,10 +349,16 @@ export default function Credentials() {
                             : healthStatus[cred.id].error || 'Invalid'
                           : 'Unknown'}
                       </span>
+                      {healthStatus[cred.id] && !healthStatus[cred.id].valid && cred.serviceId === 'google' && (
+                        <button
+                          onClick={() => handleReconnect(cred)}
+                          disabled={initiateGoogleOAuthMutation.isPending}
+                          className="ml-1 px-2 py-0.5 text-xs font-medium text-trust-blue bg-trust-blue/10 rounded hover:bg-trust-blue/20 transition-colors"
+                        >
+                          Reconnect
+                        </button>
+                      )}
                     </div>
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-500">
-                    {cred.expiresAt ? new Date(cred.expiresAt).toLocaleDateString() : 'Never'}
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-500">
                     {new Date(cred.createdAt).toLocaleDateString()}
@@ -265,7 +394,7 @@ export default function Credentials() {
           <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl shadow-reins-navy/10 border border-gray-100">
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-lg font-semibold text-reins-navy">
-                {createType === 'pick' ? 'Add Credential' : 'Add API Key'}
+                {createType === 'pick' ? 'Add Credential' : createType === 'google_scopes' ? 'Google Services' : createType === 'linear_key' ? 'Linear Workspace' : createType === 'github_pat' ? 'GitHub' : 'Add API Key'}
               </h2>
               <button
                 onClick={() => { setShowCreateModal(false); setCreateType('pick'); }}
@@ -284,9 +413,8 @@ export default function Credentials() {
 
                 {/* Google */}
                 <button
-                  onClick={() => initiateGoogleOAuthMutation.mutate()}
-                  disabled={initiateGoogleOAuthMutation.isPending}
-                  className="w-full flex items-center gap-4 p-4 rounded-xl border-2 border-gray-200 hover:border-trust-blue hover:bg-trust-blue/5 transition-all text-left disabled:opacity-50"
+                  onClick={() => setCreateType('google_scopes')}
+                  className="w-full flex items-center gap-4 p-4 rounded-xl border-2 border-gray-200 hover:border-trust-blue hover:bg-trust-blue/5 transition-all text-left"
                 >
                   <div className="w-10 h-10 bg-gray-50 rounded-lg flex items-center justify-center shrink-0">
                     <GoogleIcon />
@@ -297,9 +425,38 @@ export default function Credentials() {
                       Gmail, Drive, Calendar access via OAuth
                     </div>
                   </div>
-                  {initiateGoogleOAuthMutation.isPending && (
-                    <div className="animate-spin rounded-full h-5 w-5 border-2 border-gray-300 border-t-trust-blue shrink-0" />
-                  )}
+                </button>
+
+                {/* GitHub */}
+                <button
+                  onClick={() => { setCreateType('github_pat'); setGithubToken(''); setGithubError(''); }}
+                  className="w-full flex items-center gap-4 p-4 rounded-xl border-2 border-gray-200 hover:border-trust-blue hover:bg-trust-blue/5 transition-all text-left"
+                >
+                  <div className="w-10 h-10 bg-gray-50 rounded-lg flex items-center justify-center shrink-0">
+                    <Github className="w-5 h-5 text-gray-700" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-reins-navy">GitHub</div>
+                    <div className="text-sm text-gray-500">
+                      Repos, issues, PRs via Personal Access Token
+                    </div>
+                  </div>
+                </button>
+
+                {/* Linear */}
+                <button
+                  onClick={() => { setCreateType('linear_key'); setLinearToken(''); setLinearWorkspace(''); setLinearError(''); }}
+                  className="w-full flex items-center gap-4 p-4 rounded-xl border-2 border-gray-200 hover:border-trust-blue hover:bg-trust-blue/5 transition-all text-left"
+                >
+                  <div className="w-10 h-10 bg-gray-50 rounded-lg flex items-center justify-center shrink-0">
+                    <SquareKanban className="w-5 h-5 text-indigo-600" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-reins-navy">Linear</div>
+                    <div className="text-sm text-gray-500">
+                      Issues, projects, and teams via API key (per workspace)
+                    </div>
+                  </div>
                 </button>
 
                 {/* API Key */}
@@ -317,6 +474,205 @@ export default function Credentials() {
                     </div>
                   </div>
                 </button>
+              </div>
+            ) : createType === 'github_pat' ? (
+              /* GitHub PAT Form */
+              <div>
+                <p className="text-sm text-gray-500 mb-4">
+                  Enter your GitHub Personal Access Token. We'll validate it and detect its permissions.
+                </p>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
+                      Personal Access Token
+                    </label>
+                    <input
+                      type="password"
+                      value={githubToken}
+                      onChange={(e) => { setGithubToken(e.target.value); setGithubError(''); }}
+                      placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-mono focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
+                    />
+                  </div>
+                  {githubError && (
+                    <div className="flex items-center gap-2 text-red-600 text-sm">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      {githubError}
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-400">
+                    Create a token at{' '}
+                    <a
+                      href="https://github.com/settings/tokens"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-trust-blue hover:underline"
+                    >
+                      GitHub Settings
+                    </a>
+                    . The token's scopes determine which tools are available.
+                  </p>
+                </div>
+                <div className="flex justify-between items-center mt-6">
+                  <button
+                    onClick={() => setCreateType('pick')}
+                    className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+                  >
+                    Back
+                  </button>
+                  <button
+                    onClick={() => addGitHubMutation.mutate(githubToken)}
+                    disabled={!githubToken || addGitHubMutation.isPending}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-trust-blue text-white rounded-lg text-sm font-medium hover:bg-blue-600 disabled:opacity-40 transition-all shadow-sm shadow-trust-blue/20"
+                  >
+                    {addGitHubMutation.isPending ? (
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-white/30 border-t-white" />
+                    ) : (
+                      <>
+                        <Github className="w-4 h-4" />
+                        Connect
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            ) : createType === 'linear_key' ? (
+              /* Linear API Key Form */
+              <div>
+                <p className="text-sm text-gray-500 mb-4">
+                  Enter your Linear API key and workspace name. Each workspace needs its own key.
+                </p>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
+                      Workspace Name
+                    </label>
+                    <input
+                      type="text"
+                      value={linearWorkspace}
+                      onChange={(e) => { setLinearWorkspace(e.target.value); setLinearError(''); }}
+                      placeholder="e.g. My Company"
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
+                      API Key
+                    </label>
+                    <input
+                      type="password"
+                      value={linearToken}
+                      onChange={(e) => { setLinearToken(e.target.value); setLinearError(''); }}
+                      placeholder="lin_api_xxxxxxxxxxxxxxxxxxxx"
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-mono focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
+                    />
+                  </div>
+                  {linearError && (
+                    <div className="flex items-center gap-2 text-red-600 text-sm">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      {linearError}
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-400">
+                    Create an API key at{' '}
+                    <a
+                      href="https://linear.app/settings/api"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-trust-blue hover:underline"
+                    >
+                      Linear Settings
+                    </a>
+                    . You can add multiple workspaces by repeating this step.
+                  </p>
+                </div>
+                <div className="flex justify-between items-center mt-6">
+                  <button
+                    onClick={() => setCreateType('pick')}
+                    className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+                  >
+                    Back
+                  </button>
+                  <button
+                    onClick={() => addLinearMutation.mutate({ token: linearToken, workspaceName: linearWorkspace })}
+                    disabled={!linearToken || !linearWorkspace || addLinearMutation.isPending}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-trust-blue text-white rounded-lg text-sm font-medium hover:bg-blue-600 disabled:opacity-40 transition-all shadow-sm shadow-trust-blue/20"
+                  >
+                    {addLinearMutation.isPending ? (
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-white/30 border-t-white" />
+                    ) : (
+                      <>
+                        <SquareKanban className="w-4 h-4" />
+                        Connect
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            ) : createType === 'google_scopes' ? (
+              /* Google Scope Picker */
+              <div>
+                <p className="text-sm text-gray-500 mb-4">
+                  Select which Google services to authorize. You can always connect more later.
+                </p>
+
+                <div className="space-y-2 mb-6">
+                  {GOOGLE_SERVICES.map((svc) => {
+                    const Icon = svc.icon;
+                    const isSelected = selectedGoogleServices.has(svc.type);
+                    return (
+                      <button
+                        key={svc.type}
+                        onClick={() => toggleGoogleService(svc.type)}
+                        className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 transition-all text-left ${
+                          isSelected
+                            ? 'border-trust-blue bg-trust-blue/5'
+                            : 'border-gray-200 hover:border-gray-300'
+                        }`}
+                      >
+                        <div className={`w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${
+                          isSelected ? 'border-trust-blue bg-trust-blue' : 'border-gray-300'
+                        }`}>
+                          {isSelected && (
+                            <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                            </svg>
+                          )}
+                        </div>
+                        <Icon className={`w-5 h-5 ${isSelected ? 'text-trust-blue' : 'text-gray-400'}`} />
+                        <div className="flex-1 min-w-0">
+                          <div className={`text-sm font-medium ${isSelected ? 'text-reins-navy' : 'text-gray-600'}`}>
+                            {svc.name}
+                          </div>
+                          <div className="text-xs text-gray-400">{svc.description}</div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="flex justify-between items-center">
+                  <button
+                    onClick={() => setCreateType('pick')}
+                    className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+                  >
+                    Back
+                  </button>
+                  <button
+                    onClick={handleGoogleConnect}
+                    disabled={selectedGoogleServices.size === 0 || initiateGoogleOAuthMutation.isPending}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-trust-blue text-white rounded-lg text-sm font-medium hover:bg-blue-600 disabled:opacity-40 transition-all shadow-sm shadow-trust-blue/20"
+                  >
+                    {initiateGoogleOAuthMutation.isPending ? (
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-white/30 border-t-white" />
+                    ) : (
+                      <>
+                        <GoogleIcon className="w-4 h-4" />
+                        Connect {selectedGoogleServices.size} service{selectedGoogleServices.size !== 1 ? 's' : ''}
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             ) : (
               /* API Key Form */

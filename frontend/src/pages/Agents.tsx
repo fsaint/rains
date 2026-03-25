@@ -14,7 +14,7 @@ import {
   Zap,
   ChevronRight,
 } from 'lucide-react';
-import { agents, policies, type PendingRegistration } from '../api/client';
+import { agents, type PendingRegistration } from '../api/client';
 
 function RegistrationPrompt({ compact = false }: { compact?: boolean }) {
   const [promptCopied, setPromptCopied] = useState(false);
@@ -88,35 +88,25 @@ interface Agent {
   id: string;
   name: string;
   description?: string;
-  policyId: string;
   status: string;
   credentials: string[];
   createdAt: string;
-}
-
-interface Policy {
-  id: string;
-  name: string;
 }
 
 export default function Agents() {
   const queryClient = useQueryClient();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showClaimModal, setShowClaimModal] = useState(false);
-  const [newAgent, setNewAgent] = useState({ name: '', description: '', policyId: '' });
+  const [newAgent, setNewAgent] = useState({ name: '', description: '' });
   const [claimCode, setClaimCode] = useState('');
   const [claimError, setClaimError] = useState('');
   const [connectAgentId, setConnectAgentId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copiedConfig, setCopiedConfig] = useState<string | null>(null);
 
   const { data: agentsList, isLoading } = useQuery<Agent[]>({
     queryKey: ['agents'],
     queryFn: agents.list as () => Promise<Agent[]>,
-  });
-
-  const { data: policiesList } = useQuery<Policy[]>({
-    queryKey: ['policies'],
-    queryFn: policies.list as () => Promise<Policy[]>,
   });
 
   const { data: pendingList } = useQuery<PendingRegistration[]>({
@@ -136,7 +126,7 @@ export default function Agents() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agents'] });
       setShowCreateModal(false);
-      setNewAgent({ name: '', description: '', policyId: '' });
+      setNewAgent({ name: '', description: '' });
     },
   });
 
@@ -325,7 +315,6 @@ export default function Agents() {
       ) : (
         <div className="space-y-3">
           {agentsList.map((agent) => {
-            const policy = policiesList?.find((p) => p.id === agent.policyId);
             const isActive = agent.status === 'active';
             return (
               <div
@@ -363,12 +352,6 @@ export default function Agents() {
 
                   {/* Meta */}
                   <div className="hidden sm:flex items-center gap-6 shrink-0 text-xs text-gray-400">
-                    {policy && (
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-gray-300">Policy</span>
-                        <span className="text-reins-navy font-medium">{policy.name}</span>
-                      </div>
-                    )}
                     {agent.credentials.length > 0 && (
                       <div className="flex items-center gap-1.5">
                         <Key className="w-3 h-3 text-gray-300" />
@@ -471,23 +454,6 @@ export default function Agents() {
                     rows={2}
                     placeholder="What does this agent do?"
                   />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
-                    Policy
-                  </label>
-                  <select
-                    value={newAgent.policyId}
-                    onChange={(e) => setNewAgent({ ...newAgent, policyId: e.target.value })}
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none bg-white"
-                  >
-                    <option value="">Use permission matrix</option>
-                    {policiesList?.map((policy) => (
-                      <option key={policy.id} value={policy.id}>
-                        {policy.name}
-                      </option>
-                    ))}
-                  </select>
                 </div>
               </div>
               <div className="flex justify-end gap-2 mt-6">
@@ -683,6 +649,67 @@ export default function Agents() {
                         No services enabled yet <ChevronRight className="w-3 h-3 inline" /> configure in Permissions
                       </span>
                     )}
+                  </div>
+
+                  {/* MCP Config Snippets */}
+                  <div className="mt-5 space-y-3">
+                    <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">MCP Configuration</h3>
+
+                    {/* Claude Code */}
+                    <div className="rounded-xl overflow-hidden border border-gray-200">
+                      <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-200">
+                        <span className="text-xs font-medium text-reins-navy">Claude Code</span>
+                        <button
+                          onClick={async () => {
+                            await navigator.clipboard.writeText(JSON.stringify(connectPrompt.claudeCodeConfig, null, 2));
+                            setCopiedConfig('claude');
+                            setTimeout(() => setCopiedConfig(null), 2000);
+                          }}
+                          className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded transition-all ${
+                            copiedConfig === 'claude'
+                              ? 'text-safe-green bg-safe-green/10'
+                              : 'text-gray-400 hover:text-gray-600'
+                          }`}
+                        >
+                          {copiedConfig === 'claude' ? (
+                            <><Check className="w-3 h-3" /> Copied</>
+                          ) : (
+                            <><Copy className="w-3 h-3" /> Copy</>
+                          )}
+                        </button>
+                      </div>
+                      <pre className="px-4 py-3 text-[12px] leading-relaxed font-mono text-gray-600 bg-white overflow-x-auto">
+                        {JSON.stringify(connectPrompt.claudeCodeConfig, null, 2)}
+                      </pre>
+                    </div>
+
+                    {/* OpenAI CLA (openaclaw) */}
+                    <div className="rounded-xl overflow-hidden border border-gray-200">
+                      <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-200">
+                        <span className="text-xs font-medium text-reins-navy">OpenAI CLA / ChatGPT</span>
+                        <button
+                          onClick={async () => {
+                            await navigator.clipboard.writeText(JSON.stringify(connectPrompt.openaiClawConfig, null, 2));
+                            setCopiedConfig('openai');
+                            setTimeout(() => setCopiedConfig(null), 2000);
+                          }}
+                          className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded transition-all ${
+                            copiedConfig === 'openai'
+                              ? 'text-safe-green bg-safe-green/10'
+                              : 'text-gray-400 hover:text-gray-600'
+                          }`}
+                        >
+                          {copiedConfig === 'openai' ? (
+                            <><Check className="w-3 h-3" /> Copied</>
+                          ) : (
+                            <><Copy className="w-3 h-3" /> Copy</>
+                          )}
+                        </button>
+                      </div>
+                      <pre className="px-4 py-3 text-[12px] leading-relaxed font-mono text-gray-600 bg-white overflow-x-auto">
+                        {JSON.stringify(connectPrompt.openaiClawConfig, null, 2)}
+                      </pre>
+                    </div>
                   </div>
                 </>
               ) : (

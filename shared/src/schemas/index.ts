@@ -138,7 +138,7 @@ export const ApprovalDecisionSchema = z.object({
 // Audit Schemas
 // ============================================================================
 
-export const AuditEventTypeSchema = z.enum(['tool_call', 'approval', 'policy_change', 'auth', 'connection']);
+export const AuditEventTypeSchema = z.enum(['tool_call', 'approval', 'policy_change', 'auth', 'connection', 'agent_event']);
 export const AuditResultSchema = z.enum(['success', 'blocked', 'error', 'pending']);
 
 export const AuditFilterSchema = z.object({

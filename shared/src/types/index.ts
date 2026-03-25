@@ -142,7 +142,7 @@ export interface ApprovalDecision {
 // Audit Types
 // ============================================================================
 
-export type AuditEventType = 'tool_call' | 'approval' | 'policy_change' | 'auth' | 'connection';
+export type AuditEventType = 'tool_call' | 'approval' | 'policy_change' | 'auth' | 'connection' | 'agent_event';
 export type AuditResult = 'success' | 'blocked' | 'error' | 'pending';
 
 export interface AuditEntry {

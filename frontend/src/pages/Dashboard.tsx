@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { Users, FileText, Key, CheckCircle, Activity, AlertTriangle } from 'lucide-react';
-import { agents, policies, credentials, approvals, audit, connections } from '../api/client';
+import { Users, Key, CheckCircle, Activity, AlertTriangle } from 'lucide-react';
+import { agents, credentials, approvals, audit, connections } from '../api/client';
 
 interface StatCardProps {
   title: string;
@@ -70,11 +70,6 @@ export default function Dashboard() {
     queryFn: agents.list,
   });
 
-  const { data: policiesList } = useQuery({
-    queryKey: ['policies'],
-    queryFn: policies.list,
-  });
-
   const { data: credentialsList } = useQuery({
     queryKey: ['credentials'],
     queryFn: credentials.list,
@@ -113,12 +108,6 @@ export default function Dashboard() {
           subtitle={`${(agentsList as unknown[] || []).length} total`}
           icon={<Users className="w-6 h-6 text-white" />}
           color="bg-trust-blue"
-        />
-        <StatCard
-          title="Policies"
-          value={(policiesList as unknown[] || []).length}
-          icon={<FileText className="w-6 h-6 text-white" />}
-          color="bg-safe-green"
         />
         <StatCard
           title="Credentials"

@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { Shield, ArrowRight, AlertCircle } from 'lucide-react';
 import { auth } from '../api/client';
+import type { User } from '../api/client';
 
 interface LoginProps {
-  onSuccess: () => void;
+  onSuccess: (user: User) => void;
 }
 
 export default function Login({ onSuccess }: LoginProps) {
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -16,12 +18,12 @@ export default function Login({ onSuccess }: LoginProps) {
     setError('');
     setLoading(true);
     try {
-      const result = await auth.login(password);
-      if (result.authenticated) {
-        onSuccess();
+      const result = await auth.login(email, password);
+      if (result.authenticated && result.user) {
+        onSuccess(result.user);
       }
-    } catch {
-      setError('Invalid password');
+    } catch (err: any) {
+      setError(err?.message || 'Invalid email or password');
       setPassword('');
     } finally {
       setLoading(false);
@@ -51,18 +53,30 @@ export default function Login({ onSuccess }: LoginProps) {
         <div className="bg-white/[0.04] backdrop-blur-sm border border-white/[0.06] rounded-2xl p-8">
           <div className="mb-6">
             <h1 className="text-lg font-medium text-white">Sign in</h1>
-            <p className="text-sm text-gray-400 mt-1">Enter your admin password to continue</p>
+            <p className="text-sm text-gray-400 mt-1">Enter your credentials to continue</p>
           </div>
 
           <form onSubmit={handleSubmit}>
             <div className="space-y-4">
               <div>
                 <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => { setEmail(e.target.value); setError(''); }}
+                  placeholder="Email"
+                  autoFocus
+                  autoComplete="email"
+                  className="w-full bg-white/[0.06] border border-white/[0.08] rounded-xl px-4 py-3 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-trust-blue/40 focus:border-trust-blue/30 transition-all"
+                />
+              </div>
+
+              <div>
+                <input
                   type="password"
                   value={password}
                   onChange={(e) => { setPassword(e.target.value); setError(''); }}
                   placeholder="Password"
-                  autoFocus
+                  autoComplete="current-password"
                   className="w-full bg-white/[0.06] border border-white/[0.08] rounded-xl px-4 py-3 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-trust-blue/40 focus:border-trust-blue/30 transition-all"
                 />
               </div>
@@ -76,7 +90,7 @@ export default function Login({ onSuccess }: LoginProps) {
 
               <button
                 type="submit"
-                disabled={loading || !password}
+                disabled={loading || !email || !password}
                 className="w-full flex items-center justify-center gap-2 bg-trust-blue text-white rounded-xl px-4 py-3 text-sm font-medium hover:bg-blue-600 disabled:opacity-40 disabled:hover:bg-trust-blue transition-all shadow-lg shadow-trust-blue/20"
               >
                 {loading ? (

@@ -102,7 +102,7 @@ export async function getPendingByCode(code: string): Promise<PendingRegistratio
 /**
  * Claim an agent by code - moves from pending to active agents
  */
-export async function claimAgent(code: string): Promise<RegisteredAgent | null> {
+export async function claimAgent(code: string, userId?: string): Promise<RegisteredAgent | null> {
   const pending = await getPendingByCode(code);
   if (!pending) return null;
 
@@ -110,9 +110,9 @@ export async function claimAgent(code: string): Promise<RegisteredAgent | null> 
 
   // Create the actual agent
   await client.execute({
-    sql: `INSERT INTO agents (id, name, description, policy_id, status, created_at, updated_at)
-          VALUES (?, ?, ?, NULL, 'active', ?, ?)`,
-    args: [pending.id, pending.name, pending.description, now, now],
+    sql: `INSERT INTO agents (id, user_id, name, description, policy_id, status, created_at, updated_at)
+          VALUES (?, ?, ?, ?, NULL, 'active', ?, ?)`,
+    args: [pending.id, userId ?? null, pending.name, pending.description, now, now],
   });
 
   // Remove from pending
@@ -174,7 +174,7 @@ export async function getRegistrationStatus(
 /**
  * List all pending registrations (for admin view)
  */
-export async function listPendingRegistrations(): Promise<PendingRegistration[]> {
+export async function listPendingRegistrations(userId?: string): Promise<PendingRegistration[]> {
   const now = new Date().toISOString();
 
   // Clean up expired registrations
@@ -183,6 +183,10 @@ export async function listPendingRegistrations(): Promise<PendingRegistration[]>
     args: [now],
   });
 
+  if (userId) {
+    return db.select().from(pendingAgentRegistrations)
+      .where(eq(pendingAgentRegistrations.userId, userId));
+  }
   return db.select().from(pendingAgentRegistrations);
 }
 

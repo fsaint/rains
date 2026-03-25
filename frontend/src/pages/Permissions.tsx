@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   permissions,
-  type PermissionMatrixCell,
   type ServiceType,
   type ToolPermission,
   type PermissionLevel,
@@ -16,7 +15,6 @@ import {
   Search,
   Globe,
   CheckCircle,
-  XCircle,
   AlertCircle,
   X,
   Key,
@@ -24,9 +22,11 @@ import {
   ChevronDown,
   ChevronRight,
   Plus,
+  Trash2,
+  Tag,
 } from 'lucide-react';
 
-const serviceIcons: Record<ServiceType, React.ReactNode> = {
+const serviceIcons: Record<string, React.ReactNode> = {
   gmail: <Mail className="w-5 h-5" />,
   drive: <HardDrive className="w-5 h-5" />,
   calendar: <Calendar className="w-5 h-5" />,
@@ -47,58 +47,61 @@ const credentialStatusColors: Record<string, string> = {
   not_linked: 'text-gray-400',
 };
 
+const permissionLevelBadge: Record<PermissionLevel, { label: string; color: string }> = {
+  none: { label: 'Off', color: 'bg-gray-100 text-gray-500' },
+  read: { label: 'Read Only', color: 'bg-trust-blue/10 text-trust-blue' },
+  full: { label: 'Read + Write', color: 'bg-safe-green/10 text-safe-green' },
+  custom: { label: 'Custom', color: 'bg-caution-amber/10 text-caution-amber' },
+};
+
+const permissionLevelDescriptions: Record<PermissionLevel, { label: string; description: string }> = {
+  none: { label: 'Off', description: 'Service disabled for this agent' },
+  read: { label: 'Read Only', description: 'Can view and search — no modifications allowed' },
+  full: { label: 'Read + Write (with approval)', description: 'Reads are automatic. Writes go to the approval queue for your review.' },
+  custom: { label: 'Custom', description: 'Individual tool permissions configured manually' },
+};
+
+const servicePermissionDetails: Record<ServiceType, { read: string; full: string }> = {
+  gmail: {
+    read: 'List, read, and search emails',
+    full: 'Read emails freely. Creating drafts and sending require your approval.',
+  },
+  drive: {
+    read: 'List, read, and search files',
+    full: 'Read files freely. Creating and updating files require your approval.',
+  },
+  calendar: {
+    read: 'List, view, and search events',
+    full: 'View events freely. Creating and updating events require your approval.',
+  },
+  'web-search': {
+    read: 'Search the web',
+    full: 'Full search access',
+  },
+  browser: {
+    read: 'Navigate pages and take screenshots',
+    full: 'Navigate freely. Clicking and typing require your approval.',
+  },
+};
+
 export default function Permissions() {
   const queryClient = useQueryClient();
-  const [selectedCell, setSelectedCell] = useState<{
-    agentId: string;
-    agentName: string;
-    serviceType: ServiceType;
-    serviceName: string;
-  } | null>(null);
+  const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
+  const [selectedInstance, setSelectedInstance] = useState<string | null>(null);
+  const [addServiceAgent, setAddServiceAgent] = useState<{ agentId: string; agentName: string } | null>(null);
 
-  const { data: matrix, isLoading } = useQuery({
-    queryKey: ['permissions', 'matrix'],
-    queryFn: permissions.getMatrix,
+  const { data: agentPerms, isLoading } = useQuery({
+    queryKey: ['permissions', 'agents'],
+    queryFn: permissions.getAgentPermissions,
   });
 
-  const getCellData = (
-    agentId: string,
-    serviceType: ServiceType
-  ): PermissionMatrixCell | undefined => {
-    return matrix?.cells.find(
-      (c) => c.agentId === agentId && c.serviceType === serviceType
-    );
-  };
-
-  const getCellStatus = (cell: PermissionMatrixCell | undefined) => {
-    if (!cell) return 'disabled';
-    if (!cell.enabled) return 'disabled';
-    if (cell.credentialStatus === 'missing' || cell.credentialStatus === 'not_linked')
-      return 'needs-credential';
-    if (cell.credentialStatus === 'expired') return 'expired';
-    return 'active';
-  };
-
-  const getCellColor = (status: string) => {
-    switch (status) {
-      case 'active':
-        return 'bg-safe-green/10 border-safe-green/30 hover:bg-safe-green/20';
-      case 'needs-credential':
-        return 'bg-caution-amber/10 border-caution-amber/30 hover:bg-caution-amber/20';
-      case 'expired':
-        return 'bg-alert-red/10 border-alert-red/30 hover:bg-alert-red/20';
-      default:
-        return 'bg-gray-50 border-gray-200 hover:bg-gray-100';
-    }
-  };
-
-  const handleCellClick = (
-    agentId: string,
-    agentName: string,
-    serviceType: ServiceType,
-    serviceName: string
-  ) => {
-    setSelectedCell({ agentId, agentName, serviceType, serviceName });
+  const toggleAgent = (agentId: string) => {
+    setExpandedAgents((prev) => {
+      const next = new Set(prev);
+      if (next.has(agentId)) next.delete(agentId);
+      else next.add(agentId);
+      return next;
+    });
   };
 
   if (isLoading) {
@@ -111,7 +114,7 @@ export default function Permissions() {
     );
   }
 
-  if (!matrix || matrix.agents.length === 0) {
+  if (!agentPerms || agentPerms.agents.length === 0) {
     return (
       <div className="p-8">
         <div className="flex items-center justify-between mb-8">
@@ -132,6 +135,13 @@ export default function Permissions() {
       </div>
     );
   }
+
+  // Check if any instance has missing credentials
+  const hasMissingCreds = agentPerms.agents.some((a) =>
+    a.instances.some(
+      (i) => i.enabled && (i.credentialStatus === 'missing' || i.credentialStatus === 'not_linked')
+    )
+  );
 
   return (
     <div className="p-8">
@@ -165,9 +175,7 @@ export default function Permissions() {
       </div>
 
       {/* Credential Warning Banner */}
-      {matrix.cells.some(
-        (c) => c.enabled && (c.credentialStatus === 'missing' || c.credentialStatus === 'not_linked')
-      ) && (
+      {hasMissingCreds && (
         <div className="mb-4 bg-caution-amber/5 border border-caution-amber/20 rounded-xl px-5 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <AlertCircle className="w-5 h-5 text-caution-amber shrink-0" />
@@ -184,32 +192,27 @@ export default function Permissions() {
         </div>
       )}
 
-      {/* Permission Matrix */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-100">
-              <tr>
-                <th className="text-left px-6 py-4 text-xs font-medium text-gray-500 uppercase tracking-wider w-48">
-                  Agent
-                </th>
-                {matrix.services.map((service) => (
-                  <th
-                    key={service.type}
-                    className="text-center px-4 py-4 text-xs font-medium text-gray-500 uppercase tracking-wider w-32"
-                  >
-                    <div className="flex flex-col items-center gap-1">
-                      {serviceIcons[service.type]}
-                      <span>{service.name}</span>
-                    </div>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {matrix.agents.map((agent) => (
-                <tr key={agent.id} className="hover:bg-gray-50/50">
-                  <td className="px-6 py-4">
+      {/* Per-Agent Sections */}
+      <div className="space-y-4">
+        {agentPerms.agents.map((agent) => {
+          const isExpanded = expandedAgents.has(agent.id);
+          return (
+            <div
+              key={agent.id}
+              className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden"
+            >
+              {/* Agent Header */}
+              <button
+                onClick={() => toggleAgent(agent.id)}
+                className="w-full flex items-center justify-between px-6 py-4 hover:bg-gray-50/50"
+              >
+                <div className="flex items-center gap-3">
+                  {isExpanded ? (
+                    <ChevronDown className="w-4 h-4 text-gray-400" />
+                  ) : (
+                    <ChevronRight className="w-4 h-4 text-gray-400" />
+                  )}
+                  <div className="text-left">
                     <div className="font-medium text-reins-navy">{agent.name}</div>
                     <div className="text-xs text-gray-400 mt-0.5">
                       {agent.status === 'active' ? (
@@ -217,69 +220,131 @@ export default function Permissions() {
                       ) : (
                         <span className="text-gray-400">{agent.status}</span>
                       )}
+                      <span className="mx-2">·</span>
+                      {agent.instances.length === 0
+                        ? 'No services'
+                        : `${agent.instances.length} service${agent.instances.length !== 1 ? 's' : ''}`}
                     </div>
-                  </td>
-                  {matrix.services.map((service) => {
-                    const cell = getCellData(agent.id, service.type);
-                    const status = getCellStatus(cell);
-                    const color = getCellColor(status);
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {/* Service type icons summary */}
+                  {[...new Set(agent.instances.map((i) => i.serviceType))].map((st) => (
+                    <div key={st} className="text-gray-300">
+                      {serviceIcons[st] ?? <Globe className="w-4 h-4" />}
+                    </div>
+                  ))}
+                </div>
+              </button>
+
+              {/* Expanded: Instance Cards */}
+              {isExpanded && (
+                <div className="border-t border-gray-100 px-6 py-4 space-y-3">
+                  {agent.instances.length === 0 && (
+                    <p className="text-sm text-gray-400 text-center py-4">
+                      No services added yet. Click &quot;Add Service&quot; to get started.
+                    </p>
+                  )}
+
+                  {agent.instances.map((instance) => {
+                    const statusColor =
+                      !instance.enabled
+                        ? 'border-gray-200'
+                        : instance.credentialStatus === 'connected'
+                          ? 'border-safe-green/30'
+                          : instance.credentialStatus === 'expired'
+                            ? 'border-alert-red/30'
+                            : 'border-caution-amber/30';
+
+                    const statusDot =
+                      !instance.enabled
+                        ? 'bg-gray-300'
+                        : instance.credentialStatus === 'connected'
+                          ? 'bg-safe-green'
+                          : instance.credentialStatus === 'expired'
+                            ? 'bg-alert-red'
+                            : 'bg-caution-amber';
+
+                    const badge = permissionLevelBadge[instance.permissionLevel];
 
                     return (
-                      <td key={service.type} className="px-4 py-4">
-                        <button
-                          onClick={() =>
-                            handleCellClick(agent.id, agent.name, service.type, service.name)
-                          }
-                          className={`w-full p-3 rounded-lg border-2 transition-all ${color}`}
-                        >
-                          <div className="flex flex-col items-center gap-1">
-                            {status === 'active' && (
-                              <CheckCircle className="w-5 h-5 text-safe-green" />
-                            )}
-                            {status === 'needs-credential' && (
-                              <AlertCircle className="w-5 h-5 text-caution-amber" />
-                            )}
-                            {status === 'expired' && (
-                              <XCircle className="w-5 h-5 text-alert-red" />
-                            )}
-                            {status === 'disabled' && (
-                              <XCircle className="w-5 h-5 text-gray-300" />
-                            )}
-                            {cell && cell.enabled && (
-                              <div className="text-xs text-gray-500">
-                                {cell.permissionLevel === 'read' && 'Read Only'}
-                                {cell.permissionLevel === 'full' && 'Read + Write'}
-                                {cell.permissionLevel === 'custom' && 'Custom'}
-                                {cell.permissionLevel === 'none' && 'Off'}
-                                {cell.linkedCredentialCount > 1 && (
-                                  <span className="ml-1 text-trust-blue">
-                                    ({cell.linkedCredentialCount} accounts)
-                                  </span>
-                                )}
-                              </div>
+                      <button
+                        key={instance.id}
+                        onClick={() => setSelectedInstance(instance.id)}
+                        className={`w-full flex items-center gap-4 p-4 rounded-lg border-2 transition-all hover:shadow-sm ${statusColor}`}
+                      >
+                        {/* Service Icon */}
+                        <div className="p-2 bg-gray-50 rounded-lg text-gray-500 shrink-0">
+                          {serviceIcons[instance.serviceType] ?? <Globe className="w-5 h-5" />}
+                        </div>
+
+                        {/* Info */}
+                        <div className="flex-1 min-w-0 text-left">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-sm text-reins-navy truncate">
+                              {instance.label || instance.serviceName}
+                            </span>
+                            {instance.isDefault && (
+                              <span className="text-[10px] font-medium text-trust-blue bg-trust-blue/10 px-1.5 py-0.5 rounded">
+                                Default
+                              </span>
                             )}
                           </div>
-                        </button>
-                      </td>
+                          <div className="text-xs text-gray-400 truncate mt-0.5">
+                            {instance.credentialEmail || 'No account linked'}
+                          </div>
+                        </div>
+
+                        {/* Permission Level Badge */}
+                        <span className={`text-xs font-medium px-2 py-1 rounded shrink-0 ${badge.color}`}>
+                          {badge.label}
+                        </span>
+
+                        {/* Status Dot */}
+                        <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${statusDot}`} />
+                      </button>
                     );
                   })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+
+                  {/* Add Service Button */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setAddServiceAgent({ agentId: agent.id, agentName: agent.name });
+                    }}
+                    className="w-full flex items-center justify-center gap-2 p-3 rounded-lg border-2 border-dashed border-gray-200 text-sm font-medium text-gray-400 hover:text-trust-blue hover:border-trust-blue/30 transition-colors"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Add Service
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
-      {/* Service Configuration Modal */}
-      {selectedCell && (
-        <ServiceConfigModal
-          agentId={selectedCell.agentId}
-          agentName={selectedCell.agentName}
-          serviceType={selectedCell.serviceType}
-          serviceName={selectedCell.serviceName}
-          onClose={() => setSelectedCell(null)}
+      {/* Instance Config Modal */}
+      {selectedInstance && (
+        <InstanceConfigModal
+          instanceId={selectedInstance}
+          onClose={() => setSelectedInstance(null)}
           onUpdate={() => {
-            queryClient.invalidateQueries({ queryKey: ['permissions', 'matrix'] });
+            queryClient.invalidateQueries({ queryKey: ['permissions'] });
+          }}
+        />
+      )}
+
+      {/* Add Service Modal */}
+      {addServiceAgent && (
+        <AddServiceModal
+          agentId={addServiceAgent.agentId}
+          agentName={addServiceAgent.agentName}
+          availableServices={agentPerms.availableServices}
+          onClose={() => setAddServiceAgent(null)}
+          onAdded={() => {
+            queryClient.invalidateQueries({ queryKey: ['permissions'] });
+            setAddServiceAgent(null);
           }}
         />
       )}
@@ -287,106 +352,124 @@ export default function Permissions() {
   );
 }
 
-interface ServiceConfigModalProps {
+// ============================================================================
+// Add Service Modal
+// ============================================================================
+
+interface AddServiceModalProps {
   agentId: string;
   agentName: string;
-  serviceType: ServiceType;
-  serviceName: string;
+  availableServices: Array<{ type: string; name: string; icon: string }>;
+  onClose: () => void;
+  onAdded: () => void;
+}
+
+function AddServiceModal({ agentId, agentName, availableServices, onClose, onAdded }: AddServiceModalProps) {
+  const createInstanceMutation = useMutation({
+    mutationFn: (serviceType: string) => permissions.createInstance(agentId, serviceType),
+    onSuccess: () => onAdded(),
+  });
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-xl">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h2 className="text-lg font-semibold text-reins-navy">Add Service</h2>
+            <p className="text-sm text-gray-500">Choose a service to add to {agentName}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="space-y-2">
+          {availableServices.map((service) => (
+            <button
+              key={service.type}
+              onClick={() => createInstanceMutation.mutate(service.type)}
+              disabled={createInstanceMutation.isPending}
+              className="w-full flex items-center gap-3 p-4 rounded-lg border-2 border-gray-200 hover:border-trust-blue/30 hover:bg-trust-blue/5 transition-all disabled:opacity-50"
+            >
+              <div className="p-2 bg-gray-50 rounded-lg text-gray-500">
+                {serviceIcons[service.type] ?? <Globe className="w-5 h-5" />}
+              </div>
+              <div className="text-left">
+                <div className="font-medium text-sm text-reins-navy">{service.name}</div>
+              </div>
+            </button>
+          ))}
+        </div>
+
+        <div className="flex justify-end mt-6 pt-4 border-t border-gray-100">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// Instance Config Modal
+// ============================================================================
+
+interface InstanceConfigModalProps {
+  instanceId: string;
   onClose: () => void;
   onUpdate: () => void;
 }
 
-const permissionLevelDescriptions: Record<PermissionLevel, { label: string; description: string }> = {
-  none: { label: 'Off', description: 'Service disabled for this agent' },
-  read: { label: 'Read Only', description: 'Can view and search — no modifications allowed' },
-  full: { label: 'Read + Write (with approval)', description: 'Reads are automatic. Writes go to the approval queue for your review.' },
-  custom: { label: 'Custom', description: 'Individual tool permissions configured manually' },
-};
-
-// Service-specific descriptions for each permission level
-const servicePermissionDetails: Record<ServiceType, { read: string; full: string }> = {
-  gmail: {
-    read: 'List, read, and search emails',
-    full: 'Read emails freely. Creating drafts and sending require your approval.',
-  },
-  drive: {
-    read: 'List, read, and search files',
-    full: 'Read files freely. Creating and updating files require your approval.',
-  },
-  calendar: {
-    read: 'List, view, and search events',
-    full: 'View events freely. Creating and updating events require your approval.',
-  },
-  'web-search': {
-    read: 'Search the web',
-    full: 'Full search access',
-  },
-  browser: {
-    read: 'Navigate pages and take screenshots',
-    full: 'Navigate freely. Clicking and typing require your approval.',
-  },
-};
-
-function ServiceConfigModal({
-  agentId,
-  agentName,
-  serviceType,
-  serviceName,
-  onClose,
-  onUpdate,
-}: ServiceConfigModalProps) {
+function InstanceConfigModal({ instanceId, onClose, onUpdate }: InstanceConfigModalProps) {
   const queryClient = useQueryClient();
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [editingLabel, setEditingLabel] = useState(false);
+  const [labelValue, setLabelValue] = useState('');
 
   const { data: config, isLoading } = useQuery({
-    queryKey: ['permissions', agentId, serviceType],
-    queryFn: () => permissions.getServiceConfig(agentId, serviceType),
+    queryKey: ['permissions', 'instance', instanceId],
+    queryFn: () => permissions.getInstanceConfig(instanceId),
   });
 
   const { data: availableCredentials } = useQuery({
-    queryKey: ['permissions', 'credentials', serviceType],
-    queryFn: () => permissions.getServiceCredentials(serviceType),
+    queryKey: ['permissions', 'credentials', config?.serviceType],
+    queryFn: () => permissions.getServiceCredentials(config!.serviceType),
+    enabled: !!config,
   });
 
-  const setPermissionLevelMutation = useMutation({
-    mutationFn: (level: PermissionLevel) =>
-      permissions.setPermissionLevel(agentId, serviceType, level),
+  const setLevelMutation = useMutation({
+    mutationFn: (level: PermissionLevel) => permissions.setInstanceLevel(instanceId, level),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['permissions'] });
       onUpdate();
     },
   });
 
-  const addServiceCredentialMutation = useMutation({
-    mutationFn: (credentialId: string) =>
-      permissions.addServiceCredential(agentId, serviceType, credentialId),
+  const updateInstanceMutation = useMutation({
+    mutationFn: (data: { label?: string; credentialId?: string; enabled?: boolean }) =>
+      permissions.updateInstance(instanceId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['permissions'] });
       onUpdate();
     },
   });
 
-  const removeServiceCredentialMutation = useMutation({
-    mutationFn: (credentialId: string) =>
-      permissions.removeServiceCredential(agentId, serviceType, credentialId),
+  const deleteInstanceMutation = useMutation({
+    mutationFn: () => permissions.deleteInstance(instanceId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['permissions'] });
       onUpdate();
-    },
-  });
-
-  const setDefaultCredentialMutation = useMutation({
-    mutationFn: (credentialId: string) =>
-      permissions.setDefaultCredential(agentId, serviceType, credentialId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['permissions'] });
-      onUpdate();
+      onClose();
     },
   });
 
   const setToolPermissionMutation = useMutation({
     mutationFn: ({ toolName, permission }: { toolName: string; permission: ToolPermission }) =>
-      permissions.setToolPermission(agentId, serviceType, toolName, permission),
+      permissions.setInstanceToolPermission(instanceId, toolName, permission),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['permissions'] });
       onUpdate();
@@ -401,13 +484,52 @@ function ServiceConfigModal({
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-trust-blue/10 rounded-lg text-trust-blue">
-              {serviceIcons[serviceType]}
+              {config ? (serviceIcons[config.serviceType] ?? <Globe className="w-5 h-5" />) : null}
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-reins-navy">
-                {serviceName} for {agentName}
-              </h2>
-              <p className="text-sm text-gray-500">Configure access and permissions</p>
+              {editingLabel && config ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={labelValue}
+                    onChange={(e) => setLabelValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        updateInstanceMutation.mutate({ label: labelValue });
+                        setEditingLabel(false);
+                      }
+                      if (e.key === 'Escape') setEditingLabel(false);
+                    }}
+                    className="text-lg font-semibold text-reins-navy border border-trust-blue rounded px-2 py-0.5 focus:outline-none focus:ring-2 focus:ring-trust-blue/30"
+                    autoFocus
+                  />
+                  <button
+                    onClick={() => {
+                      updateInstanceMutation.mutate({ label: labelValue });
+                      setEditingLabel(false);
+                    }}
+                    className="text-xs text-trust-blue"
+                  >
+                    Save
+                  </button>
+                </div>
+              ) : (
+                <h2
+                  className="text-lg font-semibold text-reins-navy cursor-pointer hover:text-trust-blue flex items-center gap-1"
+                  onClick={() => {
+                    if (config) {
+                      setLabelValue(config.label || config.serviceName);
+                      setEditingLabel(true);
+                    }
+                  }}
+                >
+                  {config?.label || config?.serviceName || 'Loading...'}
+                  <Tag className="w-3.5 h-3.5 text-gray-300" />
+                </h2>
+              )}
+              <p className="text-sm text-gray-500">
+                {config?.credentialEmail || 'Configure access and permissions'}
+              </p>
             </div>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
@@ -428,7 +550,7 @@ function ServiceConfigModal({
                 <div>
                   <div className="font-medium text-reins-navy">Permission Level</div>
                   <div className="text-sm text-gray-500">
-                    Choose what this agent can do with {serviceName}
+                    Choose what this agent can do with this service
                   </div>
                 </div>
               </div>
@@ -437,7 +559,7 @@ function ServiceConfigModal({
                 {(['none', 'read', 'full'] as const).map((level) => {
                   const getDescription = () => {
                     if (level === 'none') return permissionLevelDescriptions.none.description;
-                    const serviceDetails = servicePermissionDetails[serviceType];
+                    const serviceDetails = servicePermissionDetails[config.serviceType];
                     if (serviceDetails && (level === 'read' || level === 'full')) {
                       return serviceDetails[level];
                     }
@@ -451,36 +573,33 @@ function ServiceConfigModal({
                         currentLevel === level
                           ? 'bg-trust-blue/10 border-2 border-trust-blue'
                           : 'bg-white border-2 border-gray-200 hover:border-gray-300'
-                      } ${setPermissionLevelMutation.isPending ? 'opacity-50 cursor-wait' : ''}`}
+                      } ${setLevelMutation.isPending ? 'opacity-50 cursor-wait' : ''}`}
                     >
                       <input
                         type="radio"
                         name="permissionLevel"
                         value={level}
                         checked={currentLevel === level}
-                        onChange={() => setPermissionLevelMutation.mutate(level)}
-                        disabled={setPermissionLevelMutation.isPending}
+                        onChange={() => setLevelMutation.mutate(level)}
+                        disabled={setLevelMutation.isPending}
                         className="mt-1 h-4 w-4 text-trust-blue focus:ring-trust-blue"
                       />
                       <div className="flex-1">
                         <div className="font-medium text-reins-navy">
                           {permissionLevelDescriptions[level].label}
                         </div>
-                        <div className="text-sm text-gray-500">
-                          {getDescription()}
-                        </div>
+                        <div className="text-sm text-gray-500">{getDescription()}</div>
                       </div>
-                      {currentLevel === level && !setPermissionLevelMutation.isPending && (
+                      {currentLevel === level && !setLevelMutation.isPending && (
                         <CheckCircle className="w-5 h-5 text-trust-blue mt-0.5" />
                       )}
-                      {currentLevel === level && setPermissionLevelMutation.isPending && (
+                      {currentLevel === level && setLevelMutation.isPending && (
                         <div className="w-5 h-5 border-2 border-trust-blue border-t-transparent rounded-full animate-spin mt-0.5" />
                       )}
                     </label>
                   );
                 })}
 
-                {/* Show custom option if currently set */}
                 {currentLevel === 'custom' && (
                   <div className="flex items-start gap-3 p-3 rounded-lg bg-caution-amber/10 border-2 border-caution-amber">
                     <div className="mt-1 h-4 w-4 rounded-full border-2 border-caution-amber bg-caution-amber flex items-center justify-center">
@@ -500,7 +619,7 @@ function ServiceConfigModal({
               </div>
             </div>
 
-            {/* Credential / Account Section - only show when service is enabled */}
+            {/* Credential / Account Section */}
             {currentLevel !== 'none' && (
               <div className="p-4 bg-gray-50 rounded-lg">
                 <div className="flex items-center gap-3 mb-3">
@@ -508,58 +627,41 @@ function ServiceConfigModal({
                   <div>
                     <div className="font-medium text-reins-navy">Account</div>
                     <div className="text-sm text-gray-500">
-                      Which account should this agent use for {serviceName}?
+                      Which account should this instance use?
                     </div>
                   </div>
                 </div>
 
-                {/* Account selector - checkboxes for multi-account support */}
                 {availableCredentials && availableCredentials.length > 0 ? (
                   <div className="space-y-2 mt-2">
                     {availableCredentials.map((cred) => {
-                      const linkedCred = config.linkedCredentials?.find(
-                        (lc) => lc.credentialId === cred.id
-                      );
-                      const isLinked = !!linkedCred;
-                      const isDefault = linkedCred?.isDefault ?? false;
-                      const isMutating = addServiceCredentialMutation.isPending
-                        || removeServiceCredentialMutation.isPending
-                        || setDefaultCredentialMutation.isPending;
-
+                      const isSelected = config.credentialId === cred.id;
                       return (
-                        <div
+                        <button
                           key={cred.id}
+                          onClick={() => {
+                            if (!isSelected) {
+                              updateInstanceMutation.mutate({ credentialId: cred.id });
+                            }
+                          }}
+                          disabled={updateInstanceMutation.isPending}
                           className={`w-full flex items-center gap-3 p-3 rounded-lg border-2 transition-all ${
-                            isLinked
+                            isSelected
                               ? 'border-trust-blue bg-trust-blue/5'
                               : 'border-gray-200 bg-white hover:border-gray-300'
-                          } ${isMutating ? 'opacity-50' : ''}`}
+                          } ${updateInstanceMutation.isPending ? 'opacity-50' : ''}`}
                         >
-                          <button
-                            onClick={() => {
-                              if (isLinked) {
-                                removeServiceCredentialMutation.mutate(cred.id);
-                              } else {
-                                addServiceCredentialMutation.mutate(cred.id);
-                              }
-                            }}
-                            disabled={isMutating}
-                            className="shrink-0"
-                          >
-                            <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${
-                              isLinked
-                                ? 'bg-trust-blue border-trust-blue'
-                                : 'border-gray-300 hover:border-gray-400'
-                            }`}>
-                              {isLinked && <CheckCircle className="w-3 h-3 text-white" />}
-                            </div>
-                          </button>
+                          <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                            isSelected ? 'border-trust-blue bg-trust-blue' : 'border-gray-300'
+                          }`}>
+                            {isSelected && <div className="w-2 h-2 rounded-full bg-white" />}
+                          </div>
                           <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
-                            isLinked ? 'bg-trust-blue text-white' : 'bg-gray-100 text-gray-400'
+                            isSelected ? 'bg-trust-blue text-white' : 'bg-gray-100 text-gray-400'
                           }`}>
                             {(cred.accountEmail || cred.type).charAt(0).toUpperCase()}
                           </div>
-                          <div className="flex-1 min-w-0">
+                          <div className="flex-1 min-w-0 text-left">
                             <div className="font-medium text-sm text-reins-navy truncate">
                               {cred.accountEmail || cred.type}
                             </div>
@@ -567,30 +669,14 @@ function ServiceConfigModal({
                               <div className="text-xs text-gray-400 truncate">{cred.accountName}</div>
                             )}
                           </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <span className={`text-xs ${credentialStatusColors[cred.status]}`}>
-                              {cred.status}
-                            </span>
-                            {isLinked && isDefault && (
-                              <span className="text-xs font-medium text-trust-blue bg-trust-blue/10 px-1.5 py-0.5 rounded">
-                                Default
-                              </span>
-                            )}
-                            {isLinked && !isDefault && (
-                              <button
-                                onClick={() => setDefaultCredentialMutation.mutate(cred.id)}
-                                disabled={isMutating}
-                                className="text-xs text-gray-400 hover:text-trust-blue transition-colors"
-                              >
-                                Set default
-                              </button>
-                            )}
-                          </div>
-                        </div>
+                          <span className={`text-xs ${credentialStatusColors[cred.status]}`}>
+                            {cred.status}
+                          </span>
+                        </button>
                       );
                     })}
                     <Link
-                      to={`/credentials?connect=${serviceType}`}
+                      to={`/credentials?connect=${config.serviceType}`}
                       className="flex items-center justify-center gap-1.5 text-xs font-medium text-gray-400 hover:text-trust-blue py-2 transition-colors"
                     >
                       <Plus className="w-3 h-3" />
@@ -603,17 +689,17 @@ function ServiceConfigModal({
                       <AlertCircle className="w-4 h-4 text-caution-amber shrink-0 mt-0.5" />
                       <div>
                         <p className="text-sm font-medium text-caution-amber">
-                          No accounts connected for {serviceName}
+                          No accounts connected for {config.serviceName}
                         </p>
                         <p className="text-xs text-gray-500 mt-0.5">
-                          Connect a Google account first so this agent can authenticate.
+                          Connect an account first so this agent can authenticate.
                         </p>
                         <Link
-                          to={`/credentials?connect=${serviceType}`}
+                          to={`/credentials?connect=${config.serviceType}`}
                           className="inline-flex items-center gap-1 text-xs font-medium text-trust-blue hover:text-blue-700 mt-2"
                         >
                           <Key className="w-3 h-3" />
-                          Connect Google Account
+                          Connect Account
                         </Link>
                       </div>
                     </div>
@@ -623,7 +709,7 @@ function ServiceConfigModal({
             )}
 
             {/* Advanced: Individual Tool Permissions */}
-            {currentLevel !== 'none' && (
+            {currentLevel !== 'none' && config.tools && (
               <div className="border border-gray-200 rounded-lg">
                 <button
                   onClick={() => setShowAdvanced(!showAdvanced)}
@@ -690,6 +776,22 @@ function ServiceConfigModal({
                 )}
               </div>
             )}
+
+            {/* Remove Instance */}
+            <div className="pt-2">
+              <button
+                onClick={() => {
+                  if (confirm('Remove this service instance? This cannot be undone.')) {
+                    deleteInstanceMutation.mutate();
+                  }
+                }}
+                disabled={deleteInstanceMutation.isPending}
+                className="flex items-center gap-2 text-sm text-alert-red hover:text-red-700 transition-colors disabled:opacity-50"
+              >
+                <Trash2 className="w-4 h-4" />
+                Remove this service
+              </button>
+            </div>
           </div>
         ) : (
           <p className="text-gray-500">Failed to load configuration</p>

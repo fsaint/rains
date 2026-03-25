@@ -148,6 +148,20 @@ export const agentToolPermissions = sqliteTable('agent_tool_permissions', {
   serviceType: text('service_type').notNull(),
   toolName: text('tool_name').notNull(),
   permission: text('permission').notNull(), // 'allow' | 'block' | 'require_approval'
+  instanceId: text('instance_id'), // links to agent_service_instances
+  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: text('updated_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+// Agent service instances - per-account permission slots
+export const agentServiceInstances = sqliteTable('agent_service_instances', {
+  id: text('id').primaryKey(),
+  agentId: text('agent_id').notNull(),
+  serviceType: text('service_type').notNull(),
+  label: text('label'),
+  credentialId: text('credential_id'),
+  enabled: integer('enabled', { mode: 'boolean' }).default(true).notNull(),
+  isDefault: integer('is_default', { mode: 'boolean' }).default(false).notNull(),
   createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: text('updated_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
 });

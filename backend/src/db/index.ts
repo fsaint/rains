@@ -232,6 +232,33 @@ export async function initializeDatabase() {
 
   await client.execute(`CREATE INDEX IF NOT EXISTS idx_agent_tool_perm ON agent_tool_permissions(agent_id, service_type);`);
 
+  // Migrate: add instance_id to agent_tool_permissions if not present
+  {
+    const toolPermCols = await client.execute(`PRAGMA table_info(agent_tool_permissions)`);
+    const toolPermColNames = toolPermCols.rows.map((r) => r.name as string);
+    if (!toolPermColNames.includes('instance_id')) {
+      await client.execute(`ALTER TABLE agent_tool_permissions ADD COLUMN instance_id TEXT`);
+    }
+  }
+
+  // Agent service instances table
+  await client.execute(`
+    CREATE TABLE IF NOT EXISTS agent_service_instances (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      service_type TEXT NOT NULL,
+      label TEXT,
+      credential_id TEXT,
+      enabled INTEGER DEFAULT 1 NOT NULL,
+      is_default INTEGER DEFAULT 0 NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
+    );
+  `);
+
+  await client.execute(`CREATE INDEX IF NOT EXISTS idx_asi_agent ON agent_service_instances(agent_id);`);
+  await client.execute(`CREATE INDEX IF NOT EXISTS idx_asi_agent_service ON agent_service_instances(agent_id, service_type);`);
+
   // Agent service credentials junction table (multi-account support)
   await client.execute(`
     CREATE TABLE IF NOT EXISTS agent_service_credentials (
@@ -265,6 +292,75 @@ export async function initializeDatabase() {
       }
       if (accessRows.rows.length > 0) {
         console.log(`Backfilled ${accessRows.rows.length} agent_service_credentials from agent_service_access`);
+      }
+    }
+  }
+
+  // Migrate: backfill agent_service_instances from agent_service_credentials and agent_service_access
+  {
+    const instanceCount = await client.execute(`SELECT COUNT(*) as count FROM agent_service_instances`);
+    const count = instanceCount.rows[0].count as number;
+    if (count === 0) {
+      // First, create instances from agent_service_credentials (multi-account)
+      const credRows = await client.execute(
+        `SELECT asc2.agent_id, asc2.service_type, asc2.credential_id, asc2.is_default,
+                asa.enabled
+         FROM agent_service_credentials asc2
+         LEFT JOIN agent_service_access asa ON asa.agent_id = asc2.agent_id AND asa.service_type = asc2.service_type`
+      );
+      const seenAgentService = new Set<string>();
+      for (const row of credRows.rows) {
+        const agentId = row.agent_id as string;
+        const serviceType = row.service_type as string;
+        const credentialId = row.credential_id as string;
+        const isDefault = row.is_default as number;
+        const enabled = row.enabled ?? 0;
+        const id = nanoid();
+        await client.execute({
+          sql: `INSERT OR IGNORE INTO agent_service_instances (id, agent_id, service_type, credential_id, enabled, is_default, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+          args: [id, agentId, serviceType, credentialId, enabled, isDefault],
+        });
+        seenAgentService.add(`${agentId}:${serviceType}`);
+
+        // Link tool permissions to the default instance
+        if (isDefault) {
+          await client.execute({
+            sql: `UPDATE agent_tool_permissions SET instance_id = ? WHERE agent_id = ? AND service_type = ? AND instance_id IS NULL`,
+            args: [id, agentId, serviceType],
+          });
+        }
+      }
+
+      // Then handle agent_service_access rows without junction entries
+      const accessRows = await client.execute(
+        `SELECT id, agent_id, service_type, credential_id, enabled FROM agent_service_access`
+      );
+      for (const row of accessRows.rows) {
+        const agentId = row.agent_id as string;
+        const serviceType = row.service_type as string;
+        const key = `${agentId}:${serviceType}`;
+        if (seenAgentService.has(key)) continue;
+        if (!row.enabled) continue; // skip disabled services without credentials
+
+        const id = nanoid();
+        await client.execute({
+          sql: `INSERT OR IGNORE INTO agent_service_instances (id, agent_id, service_type, credential_id, enabled, is_default, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+          args: [id, agentId, serviceType, row.credential_id ?? null, row.enabled],
+        });
+
+        // Link tool permissions to this instance
+        await client.execute({
+          sql: `UPDATE agent_tool_permissions SET instance_id = ? WHERE agent_id = ? AND service_type = ? AND instance_id IS NULL`,
+          args: [id, agentId, serviceType],
+        });
+      }
+
+      const newCount = await client.execute(`SELECT COUNT(*) as count FROM agent_service_instances`);
+      const created = newCount.rows[0].count as number;
+      if (created > 0) {
+        console.log(`Backfilled ${created} agent_service_instances from existing data`);
       }
     }
   }
