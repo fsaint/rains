@@ -546,7 +546,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
       // Link credential to agent
       await client.execute({
-        sql: `INSERT OR REPLACE INTO agent_credentials (agent_id, credential_id) VALUES (?, ?)`,
+        sql: `INSERT INTO agent_credentials (agent_id, credential_id) VALUES (?, ?) ON CONFLICT DO NOTHING`,
         args: [id, credentialId],
       });
 
@@ -2064,8 +2064,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const gatewayToken = nanoid(32);
     const now = new Date().toISOString();
 
-    // Build MCP config that routes through Reins proxy for policy enforcement
-    const reinsUrl = config.dashboardUrl;
+    // Build MCP config that routes through Reins proxy for policy enforcement.
+    // REINS_PUBLIC_URL takes precedence (for when backend URL differs from dashboard).
+    const reinsUrl = process.env.REINS_PUBLIC_URL || config.dashboardUrl;
     const mcpConfigs = [
       {
         name: 'reins',
@@ -2262,7 +2263,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       modelName?: string;
     };
 
-    const reinsUrl = config.dashboardUrl;
+    const reinsUrl = process.env.REINS_PUBLIC_URL || config.dashboardUrl;
     const mcpConfigs = [
       { name: 'reins', url: `${reinsUrl}/mcp/${id}`, transport: 'http' },
     ];
