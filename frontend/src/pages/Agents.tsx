@@ -13,8 +13,10 @@ import {
   Radio,
   Zap,
   ChevronRight,
+  Rocket,
 } from 'lucide-react';
 import { agents, type PendingRegistration } from '../api/client';
+import { DeploymentPanel } from '../components/DeploymentPanel';
 
 function RegistrationPrompt({ compact = false }: { compact?: boolean }) {
   const [promptCopied, setPromptCopied] = useState(false);
@@ -101,6 +103,7 @@ export default function Agents() {
   const [claimCode, setClaimCode] = useState('');
   const [claimError, setClaimError] = useState('');
   const [connectAgentId, setConnectAgentId] = useState<string | null>(null);
+  const [deployAgentId, setDeployAgentId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [copiedConfig, setCopiedConfig] = useState<string | null>(null);
 
@@ -378,6 +381,14 @@ export default function Agents() {
                     >
                       <Terminal className="w-3.5 h-3.5" />
                       Connect
+                    </button>
+                    <button
+                      onClick={() => setDeployAgentId(agent.id)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-600 bg-emerald-50 hover:bg-emerald-100 border border-emerald-100 rounded-lg transition-all"
+                      title="Deploy to Fly.io or Docker"
+                    >
+                      <Rocket className="w-3.5 h-3.5" />
+                      Deploy
                     </button>
                     {isActive ? (
                       <button
@@ -730,6 +741,17 @@ export default function Agents() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Deploy Modal */}
+      {deployAgentId && (
+        <DeploymentPanel
+          agentId={deployAgentId}
+          agentName={
+            (agentsList as any[])?.find((a: any) => a.id === deployAgentId)?.name || 'Agent'
+          }
+          onClose={() => setDeployAgentId(null)}
+        />
       )}
     </div>
   );

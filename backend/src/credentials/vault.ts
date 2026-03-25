@@ -92,9 +92,9 @@ export class CredentialVault {
         id,
         serviceId,
         type,
-        encrypted.encryptedData,
-        encrypted.iv,
-        encrypted.authTag,
+        encrypted.encryptedData.toString('base64'),
+        encrypted.iv.toString('base64'),
+        encrypted.authTag.toString('base64'),
         expiresAt ?? null,
       ],
     });
@@ -129,9 +129,9 @@ export class CredentialVault {
         options.userId ?? null,
         options.serviceId,
         'oauth2',
-        encrypted.encryptedData,
-        encrypted.iv,
-        encrypted.authTag,
+        encrypted.encryptedData.toString('base64'),
+        encrypted.iv.toString('base64'),
+        encrypted.authTag.toString('base64'),
         expiresAt ?? null,
         options.accountEmail,
         options.accountName ?? null,
@@ -163,9 +163,9 @@ export class CredentialVault {
 
     const row = result.rows[0];
     const data = this.decrypt({
-      encryptedData: Buffer.from(row.encrypted_data as ArrayBuffer),
-      iv: Buffer.from(row.iv as ArrayBuffer),
-      authTag: Buffer.from(row.auth_tag as ArrayBuffer),
+      encryptedData: Buffer.from(row.encrypted_data as string, 'base64'),
+      iv: Buffer.from(row.iv as string, 'base64'),
+      authTag: Buffer.from(row.auth_tag as string, 'base64'),
     });
 
     return {
@@ -192,9 +192,9 @@ export class CredentialVault {
 
     const row = result.rows[0];
     const data = this.decrypt({
-      encryptedData: Buffer.from(row.encrypted_data as ArrayBuffer),
-      iv: Buffer.from(row.iv as ArrayBuffer),
-      authTag: Buffer.from(row.auth_tag as ArrayBuffer),
+      encryptedData: Buffer.from(row.encrypted_data as string, 'base64'),
+      iv: Buffer.from(row.iv as string, 'base64'),
+      authTag: Buffer.from(row.auth_tag as string, 'base64'),
     });
 
     return {
@@ -310,9 +310,9 @@ export class CredentialVault {
     const result = await client.execute({
       sql: `UPDATE credentials SET encrypted_data = ?, iv = ?, auth_tag = ?, expires_at = ?, updated_at = ? WHERE id = ?`,
       args: [
-        encrypted.encryptedData,
-        encrypted.iv,
-        encrypted.authTag,
+        encrypted.encryptedData.toString('base64'),
+        encrypted.iv.toString('base64'),
+        encrypted.authTag.toString('base64'),
         expiresAt ?? null,
         new Date().toISOString(),
         credentialId,

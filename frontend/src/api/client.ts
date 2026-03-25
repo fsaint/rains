@@ -41,6 +41,33 @@ async function request<T>(
   return data.data ?? data;
 }
 
+// Deployment types
+export interface DeployConfig {
+  telegramToken: string;
+  telegramUserId?: string;
+  soulMd?: string;
+  modelProvider?: string;
+  modelName?: string;
+  region?: string;
+}
+
+export interface DeploymentInfo {
+  id?: string;
+  deploymentId?: string;
+  agentId: string;
+  flyAppName?: string;
+  flyMachineId?: string;
+  status: string;
+  managementUrl?: string;
+  modelProvider?: string;
+  modelName?: string;
+  region?: string;
+  appName?: string;
+  machineId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 // Agent types
 export interface PendingRegistration {
   id: string;
@@ -94,6 +121,20 @@ export const agents = {
     request<ClaimedAgent>('/agents/claim', { method: 'POST', body: JSON.stringify({ code }) }),
   listPending: () => request<PendingRegistration[]>('/agents/pending'),
   cancelPending: (id: string) => request<void>(`/agents/pending/${id}`, { method: 'DELETE' }),
+
+  // Deployment lifecycle
+  deploy: (id: string, data: DeployConfig) =>
+    request<DeploymentInfo>(`/agents/${id}/deploy`, { method: 'POST', body: JSON.stringify(data) }),
+  getDeployment: (id: string) =>
+    request<DeploymentInfo>(`/agents/${id}/deployment`),
+  startDeployment: (id: string) =>
+    request<{ status: string }>(`/agents/${id}/start`, { method: 'POST' }),
+  stopDeployment: (id: string) =>
+    request<{ status: string }>(`/agents/${id}/stop`, { method: 'POST' }),
+  redeployAgent: (id: string, data?: Partial<DeployConfig>) =>
+    request<{ status: string; managementUrl: string }>(`/agents/${id}/redeploy`, { method: 'POST', body: JSON.stringify(data ?? {}) }),
+  destroyDeployment: (id: string) =>
+    request<void>(`/agents/${id}/deploy`, { method: 'DELETE' }),
 };
 
 // Credential types

@@ -56,6 +56,7 @@ import {
 } from '../oauth/pending-flows.js';
 import { handleMCPRequest, type MCPRequest } from '../mcp/agent-endpoint.js';
 import { getSession, type SessionPayload } from '../auth/index.js';
+import * as provider from '../providers/index.js';
 import { nanoid } from 'nanoid';
 import {
   CreateAgentSchema,
@@ -2012,4 +2013,377 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.code(204).send();
     }
   );
+
+  // ========================================================================
+  // Agent Deployment (Fly.io / Docker provisioning)
+  // ========================================================================
+
+  /**
+   * Deploy an agent — provision on Fly.io or local Docker.
+   * Generates MCP config pointing back to this Reins instance for policy enforcement.
+   */
+  app.post<{ Params: { id: string } }>('/api/agents/:id/deploy', async (request, reply) => {
+    const { id } = request.params;
+
+    // Verify agent exists
+    const agentResult = await client.execute({
+      sql: `SELECT * FROM agents WHERE id = ?`,
+      args: [id],
+    });
+    if (agentResult.rows.length === 0) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Agent not found' } });
+    }
+
+    // Check not already deployed
+    const existing = await client.execute({
+      sql: `SELECT * FROM deployed_agents WHERE agent_id = ? AND status NOT IN ('destroyed', 'error')`,
+      args: [id],
+    });
+    if (existing.rows.length > 0) {
+      return reply.code(409).send({
+        error: { code: 'ALREADY_DEPLOYED', message: 'Agent already has an active deployment' },
+      });
+    }
+
+    const body = request.body as {
+      telegramToken: string;
+      telegramUserId?: string;
+      soulMd?: string;
+      modelProvider?: string;
+      modelName?: string;
+      region?: string;
+    };
+
+    if (!body?.telegramToken) {
+      return reply.code(400).send({
+        error: { code: 'VALIDATION_ERROR', message: 'telegramToken is required' },
+      });
+    }
+
+    const deploymentId = nanoid();
+    const gatewayToken = nanoid(32);
+    const now = new Date().toISOString();
+
+    // Build MCP config that routes through Reins proxy for policy enforcement
+    const reinsUrl = config.dashboardUrl;
+    const mcpConfigs = [
+      {
+        name: 'reins',
+        url: `${reinsUrl}/mcp/${id}`,
+        transport: 'http',
+      },
+    ];
+
+    try {
+      const result = await provider.provision({
+        instanceId: deploymentId,
+        telegramToken: body.telegramToken,
+        telegramUserId: body.telegramUserId,
+        mcpConfigs,
+        gatewayToken,
+        soulMd: body.soulMd,
+        modelProvider: body.modelProvider,
+        modelName: body.modelName,
+        region: body.region,
+      });
+
+      await client.execute({
+        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [
+          deploymentId,
+          id,
+          result.appName,
+          result.machineId,
+          'running',
+          result.managementUrl,
+          body.telegramToken,
+          body.telegramUserId ?? null,
+          body.soulMd ?? null,
+          body.modelProvider ?? 'anthropic',
+          body.modelName ?? 'claude-sonnet-4-5',
+          body.region ?? 'iad',
+          gatewayToken,
+          now,
+          now,
+        ],
+      });
+
+      // Update agent status to active
+      await client.execute({
+        sql: `UPDATE agents SET status = 'active', updated_at = ? WHERE id = ?`,
+        args: [now, id],
+      });
+
+      return reply.code(201).send({
+        data: {
+          deploymentId,
+          agentId: id,
+          status: 'running',
+          appName: result.appName,
+          machineId: result.machineId,
+          managementUrl: result.managementUrl,
+        },
+      });
+    } catch (err) {
+      // Store failed deployment
+      await client.execute({
+        sql: `INSERT INTO deployed_agents (id, agent_id, status, gateway_token, created_at, updated_at) VALUES (?, ?, 'error', ?, ?, ?)`,
+        args: [deploymentId, id, gatewayToken, now, now],
+      });
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return reply.code(500).send({
+        error: { code: 'DEPLOY_FAILED', message: `Deployment failed: ${message}` },
+      });
+    }
+  });
+
+  /**
+   * Get deployment status for an agent
+   */
+  app.get<{ Params: { id: string } }>('/api/agents/:id/deployment', async (request, reply) => {
+    const { id } = request.params;
+
+    const result = await client.execute({
+      sql: `SELECT * FROM deployed_agents WHERE agent_id = ? ORDER BY created_at DESC LIMIT 1`,
+      args: [id],
+    });
+
+    if (result.rows.length === 0) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No deployment found' } });
+    }
+
+    const deployment = result.rows[0];
+
+    // Fetch live status from provider if deployed
+    let liveStatus = deployment.status as string;
+    if (deployment.fly_app_name && deployment.fly_machine_id && !['destroyed', 'error'].includes(liveStatus)) {
+      try {
+        liveStatus = await provider.getStatus(
+          deployment.fly_app_name as string,
+          deployment.fly_machine_id as string
+        );
+        // Update cached status
+        await client.execute({
+          sql: `UPDATE deployed_agents SET status = ?, updated_at = ? WHERE id = ?`,
+          args: [liveStatus, new Date().toISOString(), deployment.id as string],
+        });
+      } catch {
+        // Use cached status on failure
+      }
+    }
+
+    return {
+      data: {
+        id: deployment.id,
+        agentId: deployment.agent_id,
+        flyAppName: deployment.fly_app_name,
+        flyMachineId: deployment.fly_machine_id,
+        status: liveStatus,
+        managementUrl: deployment.management_url,
+        modelProvider: deployment.model_provider,
+        modelName: deployment.model_name,
+        region: deployment.region,
+        createdAt: deployment.created_at,
+        updatedAt: deployment.updated_at,
+      },
+    };
+  });
+
+  /**
+   * Start a stopped agent deployment
+   */
+  app.post<{ Params: { id: string } }>('/api/agents/:id/start', async (request, reply) => {
+    const { id } = request.params;
+    const deployment = await getActiveDeployment(id);
+    if (!deployment) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No active deployment found' } });
+    }
+
+    try {
+      await provider.start(
+        deployment.fly_app_name as string,
+        deployment.fly_machine_id as string
+      );
+      await client.execute({
+        sql: `UPDATE deployed_agents SET status = 'running', updated_at = ? WHERE id = ?`,
+        args: [new Date().toISOString(), deployment.id as string],
+      });
+      return { data: { status: 'running' } };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return reply.code(500).send({
+        error: { code: 'START_FAILED', message },
+      });
+    }
+  });
+
+  /**
+   * Stop a running agent deployment
+   */
+  app.post<{ Params: { id: string } }>('/api/agents/:id/stop', async (request, reply) => {
+    const deployment = await getActiveDeployment(request.params.id);
+    if (!deployment) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No active deployment found' } });
+    }
+
+    try {
+      await provider.stop(
+        deployment.fly_app_name as string,
+        deployment.fly_machine_id as string
+      );
+      await client.execute({
+        sql: `UPDATE deployed_agents SET status = 'stopped', updated_at = ? WHERE id = ?`,
+        args: [new Date().toISOString(), deployment.id as string],
+      });
+      return { data: { status: 'stopped' } };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return reply.code(500).send({
+        error: { code: 'STOP_FAILED', message },
+      });
+    }
+  });
+
+  /**
+   * Redeploy an agent with updated configuration
+   */
+  app.post<{ Params: { id: string } }>('/api/agents/:id/redeploy', async (request, reply) => {
+    const { id } = request.params;
+    const deployment = await getActiveDeployment(id);
+    if (!deployment) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No active deployment found' } });
+    }
+
+    const body = request.body as {
+      telegramToken?: string;
+      telegramUserId?: string;
+      soulMd?: string;
+      modelProvider?: string;
+      modelName?: string;
+    };
+
+    const reinsUrl = config.dashboardUrl;
+    const mcpConfigs = [
+      { name: 'reins', url: `${reinsUrl}/mcp/${id}`, transport: 'http' },
+    ];
+
+    try {
+      const managementUrl = await provider.redeploy(
+        deployment.fly_app_name as string,
+        deployment.fly_machine_id as string,
+        {
+          instanceId: deployment.id as string,
+          telegramToken: (body?.telegramToken || deployment.telegram_token) as string,
+          telegramUserId: body?.telegramUserId || deployment.telegram_user_id as string | undefined,
+          mcpConfigs,
+          gatewayToken: deployment.gateway_token as string,
+          soulMd: body?.soulMd || deployment.soul_md as string | undefined,
+          modelProvider: body?.modelProvider || deployment.model_provider as string | undefined,
+          modelName: body?.modelName || deployment.model_name as string | undefined,
+        }
+      );
+
+      const now = new Date().toISOString();
+      await client.execute({
+        sql: `UPDATE deployed_agents SET status = 'running', management_url = ?, telegram_token = COALESCE(?, telegram_token), telegram_user_id = COALESCE(?, telegram_user_id), soul_md = COALESCE(?, soul_md), model_provider = COALESCE(?, model_provider), model_name = COALESCE(?, model_name), updated_at = ? WHERE id = ?`,
+        args: [
+          managementUrl,
+          body?.telegramToken ?? null,
+          body?.telegramUserId ?? null,
+          body?.soulMd ?? null,
+          body?.modelProvider ?? null,
+          body?.modelName ?? null,
+          now,
+          deployment.id as string,
+        ],
+      });
+
+      return { data: { status: 'running', managementUrl } };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return reply.code(500).send({
+        error: { code: 'REDEPLOY_FAILED', message },
+      });
+    }
+  });
+
+  /**
+   * Destroy an agent deployment
+   */
+  app.delete<{ Params: { id: string } }>('/api/agents/:id/deploy', async (request, reply) => {
+    const { id } = request.params;
+    const deployment = await getActiveDeployment(id);
+    if (!deployment) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No active deployment found' } });
+    }
+
+    try {
+      await provider.destroy(
+        deployment.fly_app_name as string,
+        deployment.fly_machine_id as string
+      );
+
+      const now = new Date().toISOString();
+      await client.execute({
+        sql: `UPDATE deployed_agents SET status = 'destroyed', updated_at = ? WHERE id = ?`,
+        args: [now, deployment.id as string],
+      });
+      await client.execute({
+        sql: `UPDATE agents SET status = 'pending', updated_at = ? WHERE id = ?`,
+        args: [now, id],
+      });
+
+      return reply.code(204).send();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return reply.code(500).send({
+        error: { code: 'DESTROY_FAILED', message },
+      });
+    }
+  });
+
+  /**
+   * Usage webhook — receives token usage reports from deployed agents
+   */
+  app.post('/api/webhooks/usage', async (request) => {
+    const body = request.body as {
+      userId: string; // deployment ID
+      inputTokens: number;
+      outputTokens: number;
+    };
+
+    if (body?.userId && (body.inputTokens || body.outputTokens)) {
+      // Look up which agent this deployment belongs to
+      const deployment = await client.execute({
+        sql: `SELECT agent_id FROM deployed_agents WHERE id = ?`,
+        args: [body.userId],
+      });
+
+      if (deployment.rows.length > 0) {
+        const agentId = deployment.rows[0].agent_id as string;
+        const now = new Date().toISOString();
+
+        // Rough cost estimate (Sonnet pricing)
+        const inputCost = (body.inputTokens / 1_000_000) * 3;
+        const outputCost = (body.outputTokens / 1_000_000) * 15;
+        const totalCost = inputCost + outputCost;
+
+        await client.execute({
+          sql: `INSERT INTO spend_records (agent_id, service_id, amount, currency, recorded_at) VALUES (?, ?, ?, 'USD', ?)`,
+          args: [agentId, 'llm', totalCost, now],
+        });
+      }
+    }
+
+    return { ok: true };
+  });
+
+  // Helper: get active (non-destroyed, non-error) deployment for an agent
+  async function getActiveDeployment(agentId: string) {
+    const result = await client.execute({
+      sql: `SELECT * FROM deployed_agents WHERE agent_id = ? AND status NOT IN ('destroyed', 'error') ORDER BY created_at DESC LIMIT 1`,
+      args: [agentId],
+    });
+    return result.rows.length > 0 ? result.rows[0] : null;
+  }
 };

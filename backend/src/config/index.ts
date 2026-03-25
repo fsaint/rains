@@ -14,7 +14,7 @@ const ConfigSchema = z.object({
   host: z.string().default('0.0.0.0'),
 
   // Database
-  dbPath: z.string().default('./data/reins.db'),
+  databaseUrl: z.string().default('postgres://localhost:5432/reins'),
 
   // Encryption
   encryptionKey: z.string().length(64).optional(), // 32-byte hex
@@ -52,7 +52,7 @@ function loadConfig(): Config {
   const raw = {
     port: process.env.REINS_PORT,
     host: process.env.REINS_HOST,
-    dbPath: process.env.REINS_DB_PATH,
+    databaseUrl: process.env.DATABASE_URL,
     encryptionKey: process.env.REINS_ENCRYPTION_KEY,
     logLevel: process.env.REINS_LOG_LEVEL,
     nodeEnv: process.env.NODE_ENV,

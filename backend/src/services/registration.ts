@@ -198,5 +198,5 @@ export async function cancelRegistration(agentId: string): Promise<boolean> {
     .delete(pendingAgentRegistrations)
     .where(eq(pendingAgentRegistrations.id, agentId));
 
-  return result.rowsAffected > 0;
+  return (result as any).rowsAffected > 0 || (result as any).length > 0;
 }

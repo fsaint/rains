@@ -1,30 +1,64 @@
-import { createClient } from '@libsql/client';
-import { drizzle } from 'drizzle-orm/libsql';
+import postgres from 'postgres';
+import { drizzle } from 'drizzle-orm/postgres-js';
 import bcrypt from 'bcryptjs';
 import { nanoid } from 'nanoid';
 import { config } from '../config/index.js';
 import * as schema from './schema.js';
-import { mkdirSync, existsSync } from 'fs';
-import { dirname } from 'path';
 
-// Ensure data directory exists
-const dbDir = dirname(config.dbPath);
-if (!existsSync(dbDir)) {
-  mkdirSync(dbDir, { recursive: true });
-}
+const DATABASE_URL = config.databaseUrl;
 
-// Create libsql client
-const client = createClient({
-  url: `file:${config.dbPath}`,
-});
+// Create postgres.js connection
+const sql = postgres(DATABASE_URL);
 
 // Create Drizzle ORM instance
-export const db = drizzle(client, { schema });
+export const db = drizzle(sql, { schema });
+
+// ============================================================================
+// Compatibility layer: wraps postgres.js to match the @libsql/client API
+// so existing code using client.execute() doesn't need to change.
+// ============================================================================
+
+interface LibSQLResult {
+  rows: Record<string, unknown>[];
+  columns: string[];
+  rowsAffected: number;
+  lastInsertRowid: bigint;
+}
+
+function toResult(rows: postgres.Row[]): LibSQLResult {
+  return {
+    rows: rows as Record<string, unknown>[],
+    columns: rows.length > 0 ? Object.keys(rows[0]) : [],
+    rowsAffected: rows.length,
+    lastInsertRowid: rows.length > 0 && 'id' in rows[0] ? BigInt(rows[0].id as number) : 0n,
+  };
+}
+
+/**
+ * Compatibility client that matches the @libsql/client execute() API.
+ * Accepts either a raw SQL string or { sql, args } object.
+ */
+export const client = {
+  async execute(
+    input: string | { sql: string; args: unknown[] }
+  ): Promise<LibSQLResult> {
+    if (typeof input === 'string') {
+      const rows = await sql.unsafe(input);
+      return toResult(rows as postgres.Row[]);
+    }
+
+    // Replace ? placeholders with $1, $2, ... for postgres
+    let idx = 0;
+    const pgSql = input.sql.replace(/\?/g, () => `$${++idx}`);
+    const rows = await sql.unsafe(pgSql, input.args as any[]);
+    return toResult(rows as postgres.Row[]);
+  },
+};
 
 // Initialize database tables
 export async function initializeDatabase() {
   // Users table
-  await client.execute(`
+  await sql`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT NOT NULL UNIQUE,
@@ -32,13 +66,12 @@ export async function initializeDatabase() {
       password_hash TEXT NOT NULL,
       role TEXT DEFAULT 'user' NOT NULL,
       status TEXT DEFAULT 'active' NOT NULL,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
-    );
-  `);
+      created_at TEXT DEFAULT now() NOT NULL,
+      updated_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
 
-  await client.execute(`
-    -- Agents table
+  await sql`
     CREATE TABLE IF NOT EXISTS agents (
       id TEXT PRIMARY KEY,
       user_id TEXT,
@@ -46,78 +79,71 @@ export async function initializeDatabase() {
       description TEXT,
       policy_id TEXT,
       status TEXT DEFAULT 'pending' NOT NULL,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
-    );
-  `);
+      created_at TEXT DEFAULT now() NOT NULL,
+      updated_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
 
-  // Migrate: add user_id to agents if not present
-  const agentCols = await client.execute(`PRAGMA table_info(agents)`);
-  const agentColNames = agentCols.rows.map((r) => r.name as string);
-  if (!agentColNames.includes('user_id')) {
-    await client.execute(`ALTER TABLE agents ADD COLUMN user_id TEXT`);
-  }
+  // Add user_id column if missing (migration from pre-users schema)
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE agents ADD COLUMN IF NOT EXISTS user_id TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
 
-  await client.execute(`
-    -- Agent credentials junction table
+  await sql`
     CREATE TABLE IF NOT EXISTS agent_credentials (
       agent_id TEXT NOT NULL,
       credential_id TEXT NOT NULL,
       PRIMARY KEY (agent_id, credential_id)
-    );
-  `);
+    )
+  `;
 
-  await client.execute(`
-    -- Policies table
+  await sql`
     CREATE TABLE IF NOT EXISTS policies (
       id TEXT PRIMARY KEY,
       version TEXT NOT NULL,
       name TEXT NOT NULL,
       yaml TEXT NOT NULL,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
-    );
-  `);
+      created_at TEXT DEFAULT now() NOT NULL,
+      updated_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
 
-  await client.execute(`
-    -- Credentials table (encrypted)
+  await sql`
     CREATE TABLE IF NOT EXISTS credentials (
       id TEXT PRIMARY KEY,
       user_id TEXT,
       service_id TEXT NOT NULL,
       type TEXT NOT NULL,
-      encrypted_data BLOB NOT NULL,
-      iv BLOB NOT NULL,
-      auth_tag BLOB NOT NULL,
+      encrypted_data TEXT NOT NULL,
+      iv TEXT NOT NULL,
+      auth_tag TEXT NOT NULL,
       expires_at TEXT,
       account_email TEXT,
       account_name TEXT,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
-    );
-  `);
+      granted_services TEXT,
+      created_at TEXT DEFAULT now() NOT NULL,
+      updated_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
 
-  // Migrate: add account columns if table predates them
-  const credCols = await client.execute(`PRAGMA table_info(credentials)`);
-  const credColNames = credCols.rows.map((r) => r.name as string);
-  if (!credColNames.includes('account_email')) {
-    await client.execute(`ALTER TABLE credentials ADD COLUMN account_email TEXT`);
-  }
-  if (!credColNames.includes('account_name')) {
-    await client.execute(`ALTER TABLE credentials ADD COLUMN account_name TEXT`);
-  }
-  if (!credColNames.includes('user_id')) {
-    await client.execute(`ALTER TABLE credentials ADD COLUMN user_id TEXT`);
-  }
-  if (!credColNames.includes('granted_services')) {
-    await client.execute(`ALTER TABLE credentials ADD COLUMN granted_services TEXT`);
-  }
+  // Add columns if missing (migration)
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE credentials ADD COLUMN IF NOT EXISTS user_id TEXT;
+      ALTER TABLE credentials ADD COLUMN IF NOT EXISTS account_email TEXT;
+      ALTER TABLE credentials ADD COLUMN IF NOT EXISTS account_name TEXT;
+      ALTER TABLE credentials ADD COLUMN IF NOT EXISTS granted_services TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
 
-  await client.execute(`
-    -- Audit log table (append-only)
+  await sql`
     CREATE TABLE IF NOT EXISTS audit_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      timestamp TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
+      id SERIAL PRIMARY KEY,
+      timestamp TEXT DEFAULT now() NOT NULL,
       event_type TEXT NOT NULL,
       user_id TEXT,
       agent_id TEXT,
@@ -126,21 +152,20 @@ export async function initializeDatabase() {
       result TEXT,
       duration_ms INTEGER,
       metadata_json TEXT
-    );
-  `);
+    )
+  `;
 
-  await client.execute(`CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp);`);
-  await client.execute(`CREATE INDEX IF NOT EXISTS idx_audit_agent ON audit_log(agent_id);`);
+  await sql`CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_audit_agent ON audit_log(agent_id)`;
 
-  // Migrate: add user_id to audit_log if not present
-  const auditCols = await client.execute(`PRAGMA table_info(audit_log)`);
-  const auditColNames = auditCols.rows.map((r) => r.name as string);
-  if (!auditColNames.includes('user_id')) {
-    await client.execute(`ALTER TABLE audit_log ADD COLUMN user_id TEXT`);
-  }
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS user_id TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
 
-  await client.execute(`
-    -- Approval queue table
+  await sql`
     CREATE TABLE IF NOT EXISTS approvals (
       id TEXT PRIMARY KEY,
       agent_id TEXT NOT NULL,
@@ -148,33 +173,31 @@ export async function initializeDatabase() {
       arguments_json TEXT,
       context TEXT,
       status TEXT DEFAULT 'pending' NOT NULL,
-      requested_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
+      requested_at TEXT DEFAULT now() NOT NULL,
       expires_at TEXT NOT NULL,
       resolved_at TEXT,
       resolved_by TEXT,
       resolution_comment TEXT
-    );
-  `);
+    )
+  `;
 
-  await client.execute(`CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);`);
-  await client.execute(`CREATE INDEX IF NOT EXISTS idx_approvals_agent ON approvals(agent_id);`);
+  await sql`CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_approvals_agent ON approvals(agent_id)`;
 
-  await client.execute(`
-    -- Spend records table
+  await sql`
     CREATE TABLE IF NOT EXISTS spend_records (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       agent_id TEXT NOT NULL,
       service_id TEXT NOT NULL,
       amount REAL NOT NULL,
       currency TEXT DEFAULT 'USD' NOT NULL,
-      recorded_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
-    );
-  `);
+      recorded_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
 
-  await client.execute(`CREATE INDEX IF NOT EXISTS idx_spend_agent_date ON spend_records(agent_id, recorded_at);`);
+  await sql`CREATE INDEX IF NOT EXISTS idx_spend_agent_date ON spend_records(agent_id, recorded_at)`;
 
-  await client.execute(`
-    -- MCP Servers table
+  await sql`
     CREATE TABLE IF NOT EXISTS mcp_servers (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -182,191 +205,177 @@ export async function initializeDatabase() {
       config_json TEXT NOT NULL,
       health_status TEXT DEFAULT 'unknown' NOT NULL,
       last_health_check TEXT,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
-    );
-  `);
+      created_at TEXT DEFAULT now() NOT NULL,
+      updated_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
 
-  await client.execute(`
-    -- Device tokens table for push notifications
+  await sql`
     CREATE TABLE IF NOT EXISTS device_tokens (
       id TEXT PRIMARY KEY,
       device_id TEXT NOT NULL UNIQUE,
       token TEXT NOT NULL,
       platform TEXT NOT NULL,
       user_id TEXT,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
-    );
-  `);
+      created_at TEXT DEFAULT now() NOT NULL,
+      updated_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
 
-  await client.execute(`
-    -- Agent service access - controls which services each agent can access
+  await sql`
     CREATE TABLE IF NOT EXISTS agent_service_access (
       id TEXT PRIMARY KEY,
       agent_id TEXT NOT NULL,
       service_type TEXT NOT NULL,
-      enabled INTEGER DEFAULT 0 NOT NULL,
+      enabled BOOLEAN DEFAULT false NOT NULL,
       credential_id TEXT,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
+      created_at TEXT DEFAULT now() NOT NULL,
+      updated_at TEXT DEFAULT now() NOT NULL,
       UNIQUE(agent_id, service_type)
-    );
-  `);
+    )
+  `;
 
-  await client.execute(`CREATE INDEX IF NOT EXISTS idx_agent_service_agent ON agent_service_access(agent_id);`);
+  await sql`CREATE INDEX IF NOT EXISTS idx_agent_service_agent ON agent_service_access(agent_id)`;
 
-  await client.execute(`
-    -- Agent tool permissions - per-tool permission overrides
+  await sql`
+    CREATE TABLE IF NOT EXISTS agent_service_credentials (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      service_type TEXT NOT NULL,
+      credential_id TEXT NOT NULL,
+      is_default BOOLEAN DEFAULT false NOT NULL,
+      created_at TEXT DEFAULT now() NOT NULL,
+      UNIQUE(agent_id, service_type, credential_id)
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_asc_agent_service ON agent_service_credentials(agent_id, service_type)`;
+
+  await sql`
     CREATE TABLE IF NOT EXISTS agent_tool_permissions (
       id TEXT PRIMARY KEY,
       agent_id TEXT NOT NULL,
       service_type TEXT NOT NULL,
       tool_name TEXT NOT NULL,
       permission TEXT NOT NULL,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
+      instance_id TEXT,
+      created_at TEXT DEFAULT now() NOT NULL,
+      updated_at TEXT DEFAULT now() NOT NULL,
       UNIQUE(agent_id, service_type, tool_name)
-    );
-  `);
+    )
+  `;
 
-  await client.execute(`CREATE INDEX IF NOT EXISTS idx_agent_tool_perm ON agent_tool_permissions(agent_id, service_type);`);
+  await sql`CREATE INDEX IF NOT EXISTS idx_agent_tool_perm ON agent_tool_permissions(agent_id, service_type)`;
 
-  // Migrate: add instance_id to agent_tool_permissions if not present
-  {
-    const toolPermCols = await client.execute(`PRAGMA table_info(agent_tool_permissions)`);
-    const toolPermColNames = toolPermCols.rows.map((r) => r.name as string);
-    if (!toolPermColNames.includes('instance_id')) {
-      await client.execute(`ALTER TABLE agent_tool_permissions ADD COLUMN instance_id TEXT`);
-    }
-  }
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE agent_tool_permissions ADD COLUMN IF NOT EXISTS instance_id TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
 
-  // Agent service instances table
-  await client.execute(`
+  await sql`
     CREATE TABLE IF NOT EXISTS agent_service_instances (
       id TEXT PRIMARY KEY,
       agent_id TEXT NOT NULL,
       service_type TEXT NOT NULL,
       label TEXT,
       credential_id TEXT,
-      enabled INTEGER DEFAULT 1 NOT NULL,
-      is_default INTEGER DEFAULT 0 NOT NULL,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
-    );
-  `);
+      enabled BOOLEAN DEFAULT true NOT NULL,
+      is_default BOOLEAN DEFAULT false NOT NULL,
+      created_at TEXT DEFAULT now() NOT NULL,
+      updated_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
 
-  await client.execute(`CREATE INDEX IF NOT EXISTS idx_asi_agent ON agent_service_instances(agent_id);`);
-  await client.execute(`CREATE INDEX IF NOT EXISTS idx_asi_agent_service ON agent_service_instances(agent_id, service_type);`);
+  await sql`CREATE INDEX IF NOT EXISTS idx_asi_agent ON agent_service_instances(agent_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_asi_agent_service ON agent_service_instances(agent_id, service_type)`;
 
-  // Agent service credentials junction table (multi-account support)
-  await client.execute(`
-    CREATE TABLE IF NOT EXISTS agent_service_credentials (
-      id TEXT PRIMARY KEY,
-      agent_id TEXT NOT NULL,
-      service_type TEXT NOT NULL,
-      credential_id TEXT NOT NULL,
-      is_default INTEGER DEFAULT 0 NOT NULL,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
-      UNIQUE(agent_id, service_type, credential_id)
-    );
-  `);
-
-  await client.execute(`CREATE INDEX IF NOT EXISTS idx_asc_agent_service ON agent_service_credentials(agent_id, service_type);`);
-
-  // Migrate: backfill agent_service_credentials from agent_service_access rows that have a credential_id
+  // Backfill agent_service_credentials from agent_service_access
   {
-    const existing = await client.execute(`SELECT COUNT(*) as count FROM agent_service_credentials`);
-    const existingCount = existing.rows[0].count as number;
+    const existing = await sql`SELECT COUNT(*) as count FROM agent_service_credentials`;
+    const existingCount = Number(existing[0]?.count ?? 0);
     if (existingCount === 0) {
-      const accessRows = await client.execute(
-        `SELECT id, agent_id, service_type, credential_id FROM agent_service_access WHERE credential_id IS NOT NULL`
-      );
-      for (const row of accessRows.rows) {
+      const accessRows = await sql`
+        SELECT id, agent_id, service_type, credential_id FROM agent_service_access WHERE credential_id IS NOT NULL
+      `;
+      for (const row of accessRows) {
         const id = `asc_${row.agent_id}_${row.service_type}_${row.credential_id}`;
-        await client.execute({
-          sql: `INSERT OR IGNORE INTO agent_service_credentials (id, agent_id, service_type, credential_id, is_default, created_at)
-                VALUES (?, ?, ?, ?, 1, CURRENT_TIMESTAMP)`,
-          args: [id, row.agent_id as string, row.service_type as string, row.credential_id as string],
-        });
+        await sql`
+          INSERT INTO agent_service_credentials (id, agent_id, service_type, credential_id, is_default, created_at)
+          VALUES (${id}, ${row.agent_id}, ${row.service_type}, ${row.credential_id}, true, now())
+          ON CONFLICT DO NOTHING
+        `;
       }
-      if (accessRows.rows.length > 0) {
-        console.log(`Backfilled ${accessRows.rows.length} agent_service_credentials from agent_service_access`);
+      if (accessRows.length > 0) {
+        console.log(`Backfilled ${accessRows.length} agent_service_credentials from agent_service_access`);
       }
     }
   }
 
-  // Migrate: backfill agent_service_instances from agent_service_credentials and agent_service_access
+  // Backfill agent_service_instances from agent_service_credentials and agent_service_access
   {
-    const instanceCount = await client.execute(`SELECT COUNT(*) as count FROM agent_service_instances`);
-    const count = instanceCount.rows[0].count as number;
+    const instanceCount = await sql`SELECT COUNT(*) as count FROM agent_service_instances`;
+    const count = Number(instanceCount[0]?.count ?? 0);
     if (count === 0) {
-      // First, create instances from agent_service_credentials (multi-account)
-      const credRows = await client.execute(
-        `SELECT asc2.agent_id, asc2.service_type, asc2.credential_id, asc2.is_default,
-                asa.enabled
-         FROM agent_service_credentials asc2
-         LEFT JOIN agent_service_access asa ON asa.agent_id = asc2.agent_id AND asa.service_type = asc2.service_type`
-      );
+      const credRows = await sql`
+        SELECT asc2.agent_id, asc2.service_type, asc2.credential_id, asc2.is_default,
+               asa.enabled
+        FROM agent_service_credentials asc2
+        LEFT JOIN agent_service_access asa ON asa.agent_id = asc2.agent_id AND asa.service_type = asc2.service_type
+      `;
       const seenAgentService = new Set<string>();
-      for (const row of credRows.rows) {
+      for (const row of credRows) {
         const agentId = row.agent_id as string;
         const serviceType = row.service_type as string;
         const credentialId = row.credential_id as string;
-        const isDefault = row.is_default as number;
-        const enabled = row.enabled ?? 0;
+        const isDefault = row.is_default as boolean;
+        const enabled = row.enabled ?? false;
         const id = nanoid();
-        await client.execute({
-          sql: `INSERT OR IGNORE INTO agent_service_instances (id, agent_id, service_type, credential_id, enabled, is_default, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-          args: [id, agentId, serviceType, credentialId, enabled, isDefault],
-        });
+        await sql`
+          INSERT INTO agent_service_instances (id, agent_id, service_type, credential_id, enabled, is_default, created_at, updated_at)
+          VALUES (${id}, ${agentId}, ${serviceType}, ${credentialId}, ${enabled}, ${isDefault}, now(), now())
+          ON CONFLICT DO NOTHING
+        `;
         seenAgentService.add(`${agentId}:${serviceType}`);
-
-        // Link tool permissions to the default instance
         if (isDefault) {
-          await client.execute({
-            sql: `UPDATE agent_tool_permissions SET instance_id = ? WHERE agent_id = ? AND service_type = ? AND instance_id IS NULL`,
-            args: [id, agentId, serviceType],
-          });
+          await sql`
+            UPDATE agent_tool_permissions SET instance_id = ${id}
+            WHERE agent_id = ${agentId} AND service_type = ${serviceType} AND instance_id IS NULL
+          `;
         }
       }
 
-      // Then handle agent_service_access rows without junction entries
-      const accessRows = await client.execute(
-        `SELECT id, agent_id, service_type, credential_id, enabled FROM agent_service_access`
-      );
-      for (const row of accessRows.rows) {
+      const accessRows = await sql`
+        SELECT id, agent_id, service_type, credential_id, enabled FROM agent_service_access
+      `;
+      for (const row of accessRows) {
         const agentId = row.agent_id as string;
         const serviceType = row.service_type as string;
         const key = `${agentId}:${serviceType}`;
         if (seenAgentService.has(key)) continue;
-        if (!row.enabled) continue; // skip disabled services without credentials
-
+        if (!row.enabled) continue;
         const id = nanoid();
-        await client.execute({
-          sql: `INSERT OR IGNORE INTO agent_service_instances (id, agent_id, service_type, credential_id, enabled, is_default, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-          args: [id, agentId, serviceType, row.credential_id ?? null, row.enabled],
-        });
-
-        // Link tool permissions to this instance
-        await client.execute({
-          sql: `UPDATE agent_tool_permissions SET instance_id = ? WHERE agent_id = ? AND service_type = ? AND instance_id IS NULL`,
-          args: [id, agentId, serviceType],
-        });
+        await sql`
+          INSERT INTO agent_service_instances (id, agent_id, service_type, credential_id, enabled, is_default, created_at, updated_at)
+          VALUES (${id}, ${agentId}, ${serviceType}, ${row.credential_id}, ${row.enabled}, true, now(), now())
+          ON CONFLICT DO NOTHING
+        `;
+        await sql`
+          UPDATE agent_tool_permissions SET instance_id = ${id}
+          WHERE agent_id = ${agentId} AND service_type = ${serviceType} AND instance_id IS NULL
+        `;
       }
 
-      const newCount = await client.execute(`SELECT COUNT(*) as count FROM agent_service_instances`);
-      const created = newCount.rows[0].count as number;
+      const newCount = await sql`SELECT COUNT(*) as count FROM agent_service_instances`;
+      const created = Number(newCount[0]?.count ?? 0);
       if (created > 0) {
         console.log(`Backfilled ${created} agent_service_instances from existing data`);
       }
     }
   }
 
-  await client.execute(`
-    -- Pending agent registrations - agents waiting to be claimed
+  await sql`
     CREATE TABLE IF NOT EXISTS pending_agent_registrations (
       id TEXT PRIMARY KEY,
       user_id TEXT,
@@ -374,22 +383,48 @@ export async function initializeDatabase() {
       description TEXT,
       claim_code TEXT NOT NULL UNIQUE,
       expires_at TEXT NOT NULL,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
-    );
-  `);
+      created_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
 
-  // Migrate: add user_id to pending_agent_registrations if not present
-  const pendingCols = await client.execute(`PRAGMA table_info(pending_agent_registrations)`);
-  const pendingColNames = pendingCols.rows.map((r) => r.name as string);
-  if (!pendingColNames.includes('user_id')) {
-    await client.execute(`ALTER TABLE pending_agent_registrations ADD COLUMN user_id TEXT`);
-  }
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE pending_agent_registrations ADD COLUMN IF NOT EXISTS user_id TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
 
-  await client.execute(`CREATE INDEX IF NOT EXISTS idx_pending_claim_code ON pending_agent_registrations(claim_code);`);
+  await sql`CREATE INDEX IF NOT EXISTS idx_pending_claim_code ON pending_agent_registrations(claim_code)`;
+
+  // ========================================================================
+  // Deployed agents table (Fly.io/Docker provisioning)
+  // ========================================================================
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS deployed_agents (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL REFERENCES agents(id),
+      fly_app_name TEXT,
+      fly_machine_id TEXT,
+      status TEXT DEFAULT 'pending' NOT NULL,
+      management_url TEXT,
+      telegram_token TEXT,
+      telegram_user_id TEXT,
+      soul_md TEXT,
+      model_provider TEXT DEFAULT 'anthropic',
+      model_name TEXT DEFAULT 'claude-sonnet-4-5',
+      region TEXT DEFAULT 'iad',
+      gateway_token TEXT NOT NULL,
+      created_at TEXT DEFAULT now() NOT NULL,
+      updated_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_deployed_agent ON deployed_agents(agent_id)`;
 
   // Seed: create admin user if no users exist
-  const userCount = await client.execute(`SELECT COUNT(*) as count FROM users`);
-  const count = userCount.rows[0].count as number;
+  const userCount = await sql`SELECT COUNT(*) as count FROM users`;
+  const count = Number(userCount[0]?.count ?? 0);
   if (count === 0) {
     const adminEmail = config.adminEmail || 'admin@reins.local';
     const adminPassword = config.adminPassword;
@@ -397,24 +432,17 @@ export async function initializeDatabase() {
     const adminId = nanoid();
     const now = new Date().toISOString();
 
-    await client.execute({
-      sql: `INSERT INTO users (id, email, name, password_hash, role, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 'admin', 'active', ?, ?)`,
-      args: [adminId, adminEmail, 'Admin', passwordHash, now, now],
-    });
+    await sql`
+      INSERT INTO users (id, email, name, password_hash, role, status, created_at, updated_at)
+      VALUES (${adminId}, ${adminEmail}, 'Admin', ${passwordHash}, 'admin', 'active', ${now}, ${now})
+    `;
 
     // Assign existing agents and credentials to the admin user
-    await client.execute({
-      sql: `UPDATE agents SET user_id = ? WHERE user_id IS NULL`,
-      args: [adminId],
-    });
-    await client.execute({
-      sql: `UPDATE credentials SET user_id = ? WHERE user_id IS NULL`,
-      args: [adminId],
-    });
+    await sql`UPDATE agents SET user_id = ${adminId} WHERE user_id IS NULL`;
+    await sql`UPDATE credentials SET user_id = ${adminId} WHERE user_id IS NULL`;
 
     console.log(`Created admin user: ${adminEmail}`);
   }
 }
 
-export { schema, client };
+export { schema };
