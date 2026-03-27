@@ -34,12 +34,14 @@ const mcpServers = {};
 for (const server of mcpConfig) {
   if (server.name) {
     if (server.url) {
+      // HTTP/SSE remote MCP server
       mcpServers[server.name] = {
         url: server.url,
         ...(server.transport ? { transport: server.transport } : {}),
         ...(server.headers ? { headers: server.headers } : {}),
       };
     } else {
+      // stdio local MCP server
       mcpServers[server.name] = {
         command: server.command || 'npx',
         args: server.args || [],
@@ -80,6 +82,7 @@ const config = {
     headless: true,
     defaultProfile: 'default',
   },
+  // Configure audio transcription (Whisper) when OPENAI_API_KEY is available
   ...(process.env.OPENAI_API_KEY ? {
     tools: {
       media: {
@@ -92,6 +95,7 @@ const config = {
       },
     },
   } : {}),
+  // Configure plugins including MCP bridge for HTTP/stdio MCP servers
   plugins: {
     enabled: true,
     allow: ['openclaw-mcp-bridge'],
@@ -166,17 +170,22 @@ if [ -n "$USAGE_CALLBACK_URL" ] && [ -n "$INSTANCE_USER_ID" ]; then
   " &
 fi
 
-# If Codex tokens provided, do a two-phase startup
+# If Codex tokens provided, do a two-phase startup:
+# 1. Start gateway briefly so it creates dirs and runs doctor
+# 2. Kill it, inject auth, restart
 if [ -n "$OPENAI_CODEX_TOKENS" ]; then
+  # Phase 1: let gateway initialize (creates dirs, runs doctor)
   node /app/openclaw.mjs gateway --bind lan --port 18789 &
   GATEWAY_PID=$!
   sleep 8
   kill $GATEWAY_PID 2>/dev/null
   wait $GATEWAY_PID 2>/dev/null
 
+  # Phase 2: re-generate config (gateway init may have overwritten it) and inject auth
   generate_config
   node /write-codex-auth.js
 
+  # Phase 3: restart gateway — it will read the auth file and correct config this time
   exec node /app/openclaw.mjs gateway --bind lan --port 18789
 else
   exec node /app/openclaw.mjs gateway --bind lan --port 18789
