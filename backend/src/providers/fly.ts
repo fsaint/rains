@@ -17,9 +17,31 @@ function getFlyOrg(): string {
   return org;
 }
 
-function getOpenClawImage(): string {
-  const image = process.env.OPENCLAW_IMAGE;
-  if (!image) throw new Error('OPENCLAW_IMAGE environment variable is required');
+const OPENCLAW_APP = process.env.OPENCLAW_APP || 'agentx-openclaw';
+
+let _cachedImage: string | null = null;
+let _cacheTime = 0;
+const IMAGE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+async function getOpenClawImage(): Promise<string> {
+  // Explicit image takes precedence
+  const explicit = process.env.OPENCLAW_IMAGE;
+  if (explicit) return explicit;
+
+  // Resolve latest image from the openclaw app's most recent release
+  const now = Date.now();
+  if (_cachedImage && now - _cacheTime < IMAGE_CACHE_TTL) return _cachedImage;
+
+  const res = await fetch(`https://api.machines.dev/v1/apps/${OPENCLAW_APP}/machines`, {
+    headers: { Authorization: `Bearer ${getFlyToken()}` },
+  });
+  if (!res.ok) throw new Error(`Failed to resolve OpenClaw image from app ${OPENCLAW_APP}`);
+  const machines = await res.json() as Array<{ config?: { image?: string } }>;
+  const image = machines[0]?.config?.image;
+  if (!image) throw new Error(`No machines found in app ${OPENCLAW_APP} to resolve image`);
+
+  _cachedImage = image;
+  _cacheTime = now;
   return image;
 }
 
@@ -101,7 +123,7 @@ export async function createMachine(opts: CreateMachineOpts) {
     body: JSON.stringify({
       name: `openclaw-${opts.instanceId.slice(0, 8)}`,
       region: opts.region || 'iad',
-      config: buildMachineConfig(opts),
+      config: await buildMachineConfig(opts),
     }),
   });
 
@@ -117,17 +139,17 @@ export async function updateMachine(
   const res = await flyFetch(`/apps/${appName}/machines/${machineId}`, {
     method: 'POST',
     body: JSON.stringify({
-      config: buildMachineConfig({ ...opts, appName }),
+      config: await buildMachineConfig({ ...opts, appName }),
     }),
   });
   return res.json();
 }
 
-function buildMachineConfig(opts: CreateMachineOpts) {
+async function buildMachineConfig(opts: CreateMachineOpts) {
   const reinsUrl = process.env.REINS_PUBLIC_URL || process.env.REINS_DASHBOARD_URL || '';
 
   return {
-    image: getOpenClawImage(),
+    image: await getOpenClawImage(),
     guest: {
       cpu_kind: 'shared',
       cpus: 2,
