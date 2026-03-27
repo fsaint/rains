@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ExternalLink, Loader2, Check, Copy, AlertCircle } from 'lucide-react';
+import { openaiAuth } from '../api/client';
 
 interface CodexDeviceFlowProps {
   onComplete: (tokensJson: string) => void;
