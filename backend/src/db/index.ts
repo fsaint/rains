@@ -30,7 +30,7 @@ function toResult(rows: postgres.Row[]): LibSQLResult {
     rows: rows as Record<string, unknown>[],
     columns: rows.length > 0 ? Object.keys(rows[0]) : [],
     rowsAffected: rows.length,
-    lastInsertRowid: rows.length > 0 && 'id' in rows[0] ? BigInt(rows[0].id as number) : 0n,
+    lastInsertRowid: rows.length > 0 && 'id' in rows[0] && typeof rows[0].id === 'number' ? BigInt(rows[0].id) : 0n,
   };
 }
 
