@@ -68,6 +68,45 @@ export interface DeploymentInfo {
   updatedAt?: string;
 }
 
+// Create & Deploy types
+export interface CreateAndDeployData {
+  name: string;
+  description?: string;
+  telegramToken: string;
+  telegramUserId?: string;
+  modelProvider?: 'anthropic' | 'openai-codex';
+  modelName?: string;
+  soulMd?: string;
+  region?: string;
+  openaiApiKey?: string;
+  modelCredentials?: string;
+  mcpServers?: string;
+}
+
+export interface AgentDetail {
+  id: string;
+  name: string;
+  description: string | null;
+  status: string;
+  createdAt: string;
+  deployment: {
+    id: string;
+    status: string;
+    flyAppName: string | null;
+    flyMachineId: string | null;
+    managementUrl: string | null;
+    gatewayToken: string;
+    telegramToken: string | null;
+    telegramUserId: string | null;
+    soulMd: string | null;
+    modelProvider: string | null;
+    modelName: string | null;
+    region: string | null;
+    mcpConfigJson: string | null;
+    createdAt: string;
+  } | null;
+}
+
 // Agent types
 export interface PendingRegistration {
   id: string;
@@ -135,6 +174,32 @@ export const agents = {
     request<{ status: string; managementUrl: string }>(`/agents/${id}/redeploy`, { method: 'POST', body: JSON.stringify(data ?? {}) }),
   destroyDeployment: (id: string) =>
     request<void>(`/agents/${id}/deploy`, { method: 'DELETE' }),
+  createAndDeploy: (data: CreateAndDeployData) =>
+    request<{ id: string; name: string; status: string; deployment: object }>('/agents/create-and-deploy', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  getDetail: (id: string) =>
+    request<AgentDetail>(`/agents/${id}/detail`),
+  updateSoul: (id: string, soulMd: string) =>
+    request<{ soulMd: string; redeployed: boolean }>(`/agents/${id}/soul`, {
+      method: 'PUT',
+      body: JSON.stringify({ soulMd }),
+    }),
+};
+
+// OpenAI Auth
+export const openaiAuth = {
+  startDeviceFlow: () =>
+    request<{ deviceAuthId: string; userCode: string; verificationUrl: string; interval: number }>('/auth/openai-device', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'start' }),
+    }),
+  pollDeviceFlow: (deviceAuthId: string) =>
+    request<{ status: string; tokens?: string; slowDown?: boolean; error?: string }>('/auth/openai-device', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'poll', deviceAuthId }),
+    }),
 };
 
 // Credential types

@@ -21,6 +21,8 @@ import Permissions from './pages/Permissions';
 import ClaimAgent from './pages/ClaimAgent';
 import Login from './pages/Login';
 import AdminUsers from './pages/AdminUsers';
+import AgentNew from './pages/AgentNew';
+import AgentDetail from './pages/AgentDetail';
 import { auth } from './api/client';
 import type { User as UserType } from './api/client';
 
@@ -177,6 +179,8 @@ function App() {
       <main className="flex-1 overflow-auto">
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/agents/new" element={<AgentNew />} />
+          <Route path="/agents/:id" element={<AgentDetail />} />
           <Route path="/agents" element={<Agents />} />
           <Route path="/permissions" element={<Permissions />} />
           <Route path="/credentials" element={<Credentials />} />

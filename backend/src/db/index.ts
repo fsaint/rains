@@ -422,6 +422,16 @@ export async function initializeDatabase() {
 
   await sql`CREATE INDEX IF NOT EXISTS idx_deployed_agent ON deployed_agents(agent_id)`;
 
+  // Add new columns for agent creation flow (migration)
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS openai_api_key TEXT;
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS model_credentials TEXT;
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS mcp_config_json TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
+
   // Seed: create admin user if no users exist
   const userCount = await sql`SELECT COUNT(*) as count FROM users`;
   const count = Number(userCount[0]?.count ?? 0);

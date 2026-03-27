@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus,
@@ -96,6 +97,7 @@ interface Agent {
 }
 
 export default function Agents() {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showClaimModal, setShowClaimModal] = useState(false);
@@ -220,7 +222,7 @@ export default function Agents() {
             Claim
           </button>
           <button
-            onClick={() => setShowCreateModal(true)}
+            onClick={() => navigate('/agents/new')}
             className="flex items-center gap-2 bg-trust-blue text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition-all text-sm font-medium shadow-sm shadow-trust-blue/20"
           >
             <Plus className="w-4 h-4" />
@@ -337,7 +339,7 @@ export default function Agents() {
                   {/* Agent info */}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="font-medium text-reins-navy">{agent.name}</span>
+                      <Link to={`/agents/${agent.id}`} className="font-medium text-reins-navy hover:text-trust-blue transition-colors">{agent.name}</Link>
                       <span
                         className={`text-[10px] font-medium uppercase tracking-wider px-1.5 py-0.5 rounded ${
                           isActive

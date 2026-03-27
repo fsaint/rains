@@ -195,6 +195,9 @@ export const deployedAgents = pgTable('deployed_agents', {
   modelName: text('model_name').default('claude-sonnet-4-5'),
   region: text('region').default('iad'),
   gatewayToken: text('gateway_token').notNull(),
+  openaiApiKey: text('openai_api_key'),
+  modelCredentials: text('model_credentials'),
+  mcpConfigJson: text('mcp_config_json'),
   createdAt: text('created_at').default(sql`now()`).notNull(),
   updatedAt: text('updated_at').default(sql`now()`).notNull(),
 });
