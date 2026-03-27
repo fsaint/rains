@@ -28,21 +28,53 @@ async function getOpenClawImage(): Promise<string> {
   const explicit = process.env.OPENCLAW_IMAGE;
   if (explicit) return explicit;
 
-  // Resolve latest image from the openclaw app's most recent release
+  // Return cached image if fresh
   const now = Date.now();
   if (_cachedImage && now - _cacheTime < IMAGE_CACHE_TTL) return _cachedImage;
 
-  const res = await fetch(`https://api.machines.dev/v1/apps/${OPENCLAW_APP}/machines`, {
-    headers: { Authorization: `Bearer ${getFlyToken()}` },
-  });
-  if (!res.ok) throw new Error(`Failed to resolve OpenClaw image from app ${OPENCLAW_APP}`);
-  const machines = await res.json() as Array<{ config?: { image?: string } }>;
-  const image = machines[0]?.config?.image;
-  if (!image) throw new Error(`No machines found in app ${OPENCLAW_APP} to resolve image`);
+  // Try to resolve from running machines first
+  try {
+    const res = await fetch(`https://api.machines.dev/v1/apps/${OPENCLAW_APP}/machines`, {
+      headers: { Authorization: `Bearer ${getFlyToken()}` },
+    });
+    if (res.ok) {
+      const machines = await res.json() as Array<{ config?: { image?: string } }>;
+      const image = machines[0]?.config?.image;
+      if (image) {
+        _cachedImage = image;
+        _cacheTime = now;
+        return image;
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to resolve image from machines, falling back to registry:', err);
+  }
 
-  _cachedImage = image;
-  _cacheTime = now;
-  return image;
+  // Fallback: resolve from the app's latest release via GraphQL
+  try {
+    const gqlRes = await fetch('https://api.fly.io/graphql', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${getFlyToken()}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query: `{ app(name: "${OPENCLAW_APP}") { currentRelease { imageRef } } }`,
+      }),
+    });
+    const gql = await gqlRes.json() as { data?: { app?: { currentRelease?: { imageRef?: string } } } };
+    const imageRef = gql.data?.app?.currentRelease?.imageRef;
+    if (imageRef) {
+      console.log(`Resolved image from ${OPENCLAW_APP} latest release: ${imageRef}`);
+      _cachedImage = imageRef;
+      _cacheTime = now;
+      return imageRef;
+    }
+  } catch (err) {
+    console.warn('Failed to resolve image from releases:', err);
+  }
+
+  throw new Error(`Cannot resolve OpenClaw image: no machines or releases found for app ${OPENCLAW_APP}. Set OPENCLAW_IMAGE explicitly.`);
 }
 
 async function flyFetch(path: string, options: RequestInit = {}) {
@@ -202,4 +234,42 @@ export async function destroyMachine(appName: string, machineId: string) {
 
 export async function destroyApp(appName: string) {
   await flyFetch(`/apps/${appName}`, { method: 'DELETE' });
+}
+
+export interface FlyLogEntry {
+  timestamp: string;
+  message: string;
+  level: string;
+  instance: string;
+  region: string;
+}
+
+export async function getAppLogs(appName: string, nextToken?: string): Promise<{ logs: FlyLogEntry[]; nextToken?: string }> {
+  const params = new URLSearchParams();
+  if (nextToken) params.set('next_token', nextToken);
+
+  const res = await fetch(`https://api.fly.io/api/v1/apps/${appName}/logs?${params}`, {
+    headers: { Authorization: getFlyToken() },
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Fly Logs API error ${res.status}: ${body}`);
+  }
+
+  const data = await res.json() as {
+    data: Array<{ attributes: { timestamp: string; message: string; level: string; instance: string; region: string } }>;
+    meta: { next_token?: string };
+  };
+
+  return {
+    logs: (data.data || []).map(entry => ({
+      timestamp: entry.attributes.timestamp,
+      message: entry.attributes.message,
+      level: entry.attributes.level,
+      instance: entry.attributes.instance,
+      region: entry.attributes.region,
+    })),
+    nextToken: data.meta?.next_token || undefined,
+  };
 }

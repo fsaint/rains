@@ -330,6 +330,42 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
 
     await mcpProxy.disconnectAgent(id);
+
+    // Destroy Fly.io deployment if one exists
+    const deployResult = await client.execute({
+      sql: `SELECT fly_app_name, fly_machine_id FROM deployed_agents WHERE agent_id = ? AND status NOT IN ('destroyed', 'error')`,
+      args: [id],
+    });
+    for (const dep of deployResult.rows) {
+      if (dep.fly_app_name && dep.fly_machine_id) {
+        try {
+          await provider.destroy(dep.fly_app_name as string, dep.fly_machine_id as string);
+        } catch (err) {
+          console.warn(`Failed to destroy deployment ${dep.fly_app_name}:`, err);
+        }
+      }
+    }
+
+    await client.execute({
+      sql: `DELETE FROM deployed_agents WHERE agent_id = ?`,
+      args: [id],
+    });
+    await client.execute({
+      sql: `DELETE FROM agent_tool_permissions WHERE agent_id = ?`,
+      args: [id],
+    });
+    await client.execute({
+      sql: `DELETE FROM agent_service_credentials WHERE agent_id = ?`,
+      args: [id],
+    });
+    await client.execute({
+      sql: `DELETE FROM agent_service_instances WHERE agent_id = ?`,
+      args: [id],
+    });
+    await client.execute({
+      sql: `DELETE FROM agent_service_access WHERE agent_id = ?`,
+      args: [id],
+    });
     await client.execute({
       sql: `DELETE FROM agent_credentials WHERE agent_id = ?`,
       args: [id],
@@ -2110,7 +2146,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           result.appName, result.machineId, 'running', result.managementUrl,
           body.telegramToken, body.telegramUserId ?? null,
           body.soulMd ?? null,
-          body.modelProvider ?? 'anthropic', body.modelName ?? 'claude-sonnet-4-5',
+          body.modelProvider ?? 'anthropic', body.modelName || (body.modelProvider === 'openai-codex' ? 'o3' : 'claude-sonnet-4-5'),
           body.region ?? 'iad', gatewayToken,
           body.openaiApiKey ?? null, body.modelCredentials ?? null,
           body.mcpServers ?? null,
@@ -2232,7 +2268,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           body.telegramUserId ?? null,
           body.soulMd ?? null,
           body.modelProvider ?? 'anthropic',
-          body.modelName ?? 'claude-sonnet-4-5',
+          body.modelName || (body.modelProvider === 'openai-codex' ? 'o3' : 'claude-sonnet-4-5'),
           body.region ?? 'iad',
           gatewayToken,
           now,
@@ -2611,6 +2647,31 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       });
     }
   });
+
+  /**
+   * Get logs for a deployed agent
+   */
+  app.get<{ Params: { id: string }; Querystring: { next_token?: string } }>(
+    '/api/agents/:id/logs',
+    async (request, reply) => {
+      const { id } = request.params;
+      const deployment = await getActiveDeployment(id);
+      if (!deployment?.fly_app_name) {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No active deployment found' } });
+      }
+
+      try {
+        const result = await provider.getLogs(
+          deployment.fly_app_name as string,
+          request.query.next_token
+        );
+        return { data: result };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        return reply.code(500).send({ error: { code: 'LOGS_FAILED', message } });
+      }
+    }
+  );
 
   // ========================================================================
   // OpenAI Device Flow Authentication

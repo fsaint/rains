@@ -10,8 +10,10 @@ import {
   Loader2,
   AlertCircle,
   X,
+  ScrollText,
 } from 'lucide-react';
 import { agents, type DeployConfig } from '../api/client';
+import { LogsPanel } from './LogsPanel';
 
 interface DeploymentPanelProps {
   agentId: string;
@@ -31,6 +33,7 @@ const STATUS_COLORS: Record<string, { bg: string; text: string; dot: string }> =
 export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanelProps) {
   const queryClient = useQueryClient();
   const [showDeployForm, setShowDeployForm] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
   const [config, setConfig] = useState<DeployConfig>({
     telegramToken: '',
     telegramUserId: '',
@@ -146,17 +149,26 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
                   </span>
                 </div>
               </div>
-              {deployment.managementUrl && (
-                <a
-                  href={deployment.managementUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 text-sm text-trust-blue hover:underline"
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setShowLogs(true)}
+                  className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors"
                 >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  Open
-                </a>
-              )}
+                  <ScrollText className="w-3.5 h-3.5" />
+                  Logs
+                </button>
+                {deployment.managementUrl && (
+                  <a
+                    href={deployment.managementUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 text-sm text-trust-blue hover:underline"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    Open
+                  </a>
+                )}
+              </div>
             </div>
 
             {/* Info */}
@@ -270,7 +282,11 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
                 </label>
                 <select
                   value={config.modelProvider}
-                  onChange={(e) => setConfig({ ...config, modelProvider: e.target.value })}
+                  onChange={(e) => {
+                    const provider = e.target.value;
+                    const defaultModel = provider === 'openai-codex' ? 'o3' : 'claude-sonnet-4-5';
+                    setConfig({ ...config, modelProvider: provider, modelName: defaultModel });
+                  }}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none bg-white"
                 >
                   <option value="anthropic">Anthropic</option>
@@ -355,6 +371,14 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
               New Deployment
             </button>
           </div>
+        )}
+
+        {showLogs && (
+          <LogsPanel
+            agentId={agentId}
+            agentName={agentName}
+            onClose={() => setShowLogs(false)}
+          />
         )}
       </div>
     </div>

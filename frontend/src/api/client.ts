@@ -181,6 +181,10 @@ export const agents = {
     }),
   getDetail: (id: string) =>
     request<AgentDetail>(`/agents/${id}/detail`),
+  getLogs: (id: string, nextToken?: string) =>
+    request<{ logs: Array<{ timestamp: string; message: string; level: string; instance: string; region: string }>; nextToken?: string }>(
+      `/agents/${id}/logs${nextToken ? `?next_token=${nextToken}` : ''}`
+    ),
   updateSoul: (id: string, soulMd: string) =>
     request<{ soulMd: string; redeployed: boolean }>(`/agents/${id}/soul`, {
       method: 'PUT',

@@ -99,6 +99,21 @@ export async function destroy(appName: string, machineId: string) {
   }
 }
 
+export interface LogEntry {
+  timestamp: string;
+  message: string;
+  level: string;
+  instance: string;
+  region: string;
+}
+
+export async function getLogs(appName: string, nextToken?: string): Promise<{ logs: LogEntry[]; nextToken?: string }> {
+  if (isLocal) {
+    return { logs: [], nextToken: undefined };
+  }
+  return fly.getAppLogs(appName, nextToken);
+}
+
 export async function getManagementUrl(appName: string, gatewayToken: string): Promise<string> {
   if (isLocal) {
     const port = await docker.getLocalContainerPort(appName);
