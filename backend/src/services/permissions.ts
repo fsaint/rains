@@ -867,12 +867,16 @@ async function getCredentialStatus(credentialId: string | null): Promise<{
   const [cred] = await db.select().from(credentials).where(eq(credentials.id, credentialId));
   if (!cred) return { status: 'missing', email: null, name: null };
   if (cred.expiresAt && new Date(cred.expiresAt) < new Date()) {
-    const refreshed = await credentialVault.getValidAccessToken(credentialId);
-    return {
-      status: refreshed ? 'connected' : 'expired',
-      email: cred.accountEmail,
-      name: cred.accountName,
-    };
+    try {
+      const refreshed = await credentialVault.getValidAccessToken(credentialId);
+      return {
+        status: refreshed ? 'connected' : 'expired',
+        email: cred.accountEmail,
+        name: cred.accountName,
+      };
+    } catch {
+      return { status: 'expired', email: cred.accountEmail, name: cred.accountName };
+    }
   }
   return { status: 'connected', email: cred.accountEmail, name: cred.accountName };
 }

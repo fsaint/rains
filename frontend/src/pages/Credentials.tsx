@@ -45,6 +45,7 @@ export default function Credentials() {
   const [linearToken, setLinearToken] = useState('');
   const [linearWorkspace, setLinearWorkspace] = useState('');
   const [linearError, setLinearError] = useState('');
+  const [updatingCredentialId, setUpdatingCredentialId] = useState<string | null>(null);
 
   // Handle OAuth callback
   useEffect(() => {
@@ -121,16 +122,23 @@ export default function Credentials() {
   });
 
   const addGitHubMutation = useMutation({
-    mutationFn: (token: string) => credentials.addGitHub(token),
+    mutationFn: async (token: string) => {
+      if (updatingCredentialId) {
+        await credentials.delete(updatingCredentialId);
+      }
+      return credentials.addGitHub(token);
+    },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['credentials'] });
       setShowCreateModal(false);
       setGithubToken('');
       setGithubError('');
       setCreateType('pick');
+      const action = updatingCredentialId ? 'updated' : 'connected';
+      setUpdatingCredentialId(null);
       setNotification({
         type: 'success',
-        message: `GitHub account (${data.login}) connected with ${data.scopes.length} scope${data.scopes.length !== 1 ? 's' : ''}`,
+        message: `GitHub account (${data.login}) ${action} with ${data.scopes.length} scope${data.scopes.length !== 1 ? 's' : ''}`,
       });
       setTimeout(() => setNotification(null), 5000);
     },
@@ -140,8 +148,12 @@ export default function Credentials() {
   });
 
   const addLinearMutation = useMutation({
-    mutationFn: ({ token, workspaceName }: { token: string; workspaceName: string }) =>
-      credentials.addLinear(token, workspaceName),
+    mutationFn: async ({ token, workspaceName }: { token: string; workspaceName: string }) => {
+      if (updatingCredentialId) {
+        await credentials.delete(updatingCredentialId);
+      }
+      return credentials.addLinear(token, workspaceName);
+    },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['credentials'] });
       setShowCreateModal(false);
@@ -149,9 +161,11 @@ export default function Credentials() {
       setLinearWorkspace('');
       setLinearError('');
       setCreateType('pick');
+      const action = updatingCredentialId ? 'updated' : 'connected';
+      setUpdatingCredentialId(null);
       setNotification({
         type: 'success',
-        message: `Linear workspace "${data.workspaceName}" connected successfully`,
+        message: `Linear workspace "${data.workspaceName}" ${action} successfully`,
       });
       setTimeout(() => setNotification(null), 5000);
     },
@@ -189,6 +203,21 @@ export default function Credentials() {
     const services = Array.from(selectedGoogleServices);
     if (services.length === 0) return;
     initiateGoogleOAuthMutation.mutate({ services });
+  };
+
+  const handleUpdateToken = (cred: Credential) => {
+    setUpdatingCredentialId(cred.id);
+    if (cred.serviceId === 'github') {
+      setCreateType('github_pat');
+      setGithubToken('');
+      setGithubError('');
+    } else if (cred.serviceId === 'linear') {
+      setCreateType('linear_key');
+      setLinearToken('');
+      setLinearWorkspace('');
+      setLinearError('');
+    }
+    setShowCreateModal(true);
   };
 
   const handleReconnect = (cred: Credential) => {
@@ -358,6 +387,14 @@ export default function Credentials() {
                           Reconnect
                         </button>
                       )}
+                      {healthStatus[cred.id] && !healthStatus[cred.id].valid && (cred.serviceId === 'github' || cred.serviceId === 'linear') && (
+                        <button
+                          onClick={() => handleUpdateToken(cred)}
+                          className="ml-1 px-2 py-0.5 text-xs font-medium text-trust-blue bg-trust-blue/10 rounded hover:bg-trust-blue/20 transition-colors"
+                        >
+                          Update token
+                        </button>
+                      )}
                     </div>
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-500">
@@ -394,10 +431,10 @@ export default function Credentials() {
           <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl shadow-reins-navy/10 border border-gray-100">
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-lg font-semibold text-reins-navy">
-                {createType === 'pick' ? 'Add Credential' : createType === 'google_scopes' ? 'Google Services' : createType === 'linear_key' ? 'Linear Workspace' : createType === 'github_pat' ? 'GitHub' : 'Add API Key'}
+                {createType === 'pick' ? 'Add Credential' : createType === 'google_scopes' ? 'Google Services' : createType === 'linear_key' ? (updatingCredentialId ? 'Update Linear Token' : 'Linear Workspace') : createType === 'github_pat' ? (updatingCredentialId ? 'Update GitHub Token' : 'GitHub') : 'Add API Key'}
               </h2>
               <button
-                onClick={() => { setShowCreateModal(false); setCreateType('pick'); }}
+                onClick={() => { setShowCreateModal(false); setCreateType('pick'); setUpdatingCredentialId(null); }}
                 className="text-gray-300 hover:text-gray-500 transition-colors"
               >
                 <X className="w-5 h-5" />

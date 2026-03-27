@@ -2626,15 +2626,24 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (body.action === 'start') {
       // Initiate device flow with OpenAI
       try {
+        const params = new URLSearchParams({
+          client_id: 'pdlLIX2Y72MIl2rhLhTE9VV9bN905kBh',
+          scope: 'openid profile email offline_access',
+          audience: 'https://api.openai.com/v1',
+        });
         const res = await fetch('https://auth0.openai.com/oauth/device/code', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            client_id: 'pdlLIX2Y72MIl2rhLhTE9VV9bN905kBh',
-            scope: 'openid profile email offline_access',
-            audience: 'https://api.openai.com/v1',
-          }),
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json',
+            'User-Agent': 'Reins/1.0',
+          },
+          body: params.toString(),
         });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`Auth0 returned ${res.status}: ${text.slice(0, 200)}`);
+        }
         const data = await res.json() as {
           device_code: string;
           user_code: string;
@@ -2689,14 +2698,19 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
       // Poll OpenAI token endpoint
       try {
+        const tokenParams = new URLSearchParams({
+          grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+          client_id: 'pdlLIX2Y72MIl2rhLhTE9VV9bN905kBh',
+          device_code: flow.deviceCode,
+        });
         const res = await fetch('https://auth0.openai.com/oauth/token', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-            client_id: 'pdlLIX2Y72MIl2rhLhTE9VV9bN905kBh',
-            device_code: flow.deviceCode,
-          }),
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json',
+            'User-Agent': 'Reins/1.0',
+          },
+          body: tokenParams.toString(),
         });
 
         if (res.ok) {

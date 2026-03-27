@@ -252,7 +252,18 @@ export class CredentialVault {
    * Check credential health, attempting a token refresh if expired.
    */
   async checkHealth(credentialId: string): Promise<CredentialHealth> {
-    const credential = await this.retrieve(credentialId);
+    let credential: Awaited<ReturnType<typeof this.retrieve>>;
+    try {
+      credential = await this.retrieve(credentialId);
+    } catch {
+      return {
+        credentialId,
+        serviceId: 'unknown',
+        valid: false,
+        lastChecked: new Date(),
+        error: 'Credential data is corrupted — please re-authorize',
+      };
+    }
 
     if (!credential) {
       return {

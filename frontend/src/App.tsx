@@ -18,7 +18,6 @@ import Credentials from './pages/Credentials';
 import Approvals from './pages/Approvals';
 import AuditLog from './pages/AuditLog';
 import Permissions from './pages/Permissions';
-import ClaimAgent from './pages/ClaimAgent';
 import Login from './pages/Login';
 import AdminUsers from './pages/AdminUsers';
 import AgentNew from './pages/AgentNew';
@@ -48,15 +47,6 @@ function App() {
       .then((r) => setUser(r.authenticated && r.user ? r.user : null))
       .catch(() => setUser(null));
   }, []);
-
-  // Render claim page without sidebar (it's a standalone page, no auth required)
-  if (location.pathname.startsWith('/claim')) {
-    return (
-      <Routes>
-        <Route path="/claim/:code?" element={<ClaimAgent />} />
-      </Routes>
-    );
-  }
 
   // Loading session check
   if (user === undefined) {

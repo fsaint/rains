@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
 import { ExternalLink, Loader2, Check, Copy, AlertCircle } from 'lucide-react';
-import { openaiAuth } from '../api/client';
 
 interface CodexDeviceFlowProps {
   onComplete: (tokensJson: string) => void;
@@ -10,7 +9,7 @@ export function CodexDeviceFlow({ onComplete }: CodexDeviceFlowProps) {
   const [state, setState] = useState<'idle' | 'waiting' | 'complete' | 'error'>('idle');
   const [userCode, setUserCode] = useState('');
   const [verificationUrl, setVerificationUrl] = useState('');
-  const [deviceCode, setDeviceCode] = useState('');
+  const [deviceAuthId, setDeviceAuthId] = useState('');
   const [interval, setInterval_] = useState(5);
   const [error, setError] = useState('');
   const [codeCopied, setCodeCopied] = useState(false);
@@ -20,10 +19,17 @@ export function CodexDeviceFlow({ onComplete }: CodexDeviceFlowProps) {
     setState('waiting');
     setError('');
     try {
-      const data = await openaiAuth.startDeviceFlow();
+      const res = await fetch('/api/auth/openai-device', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'start' }),
+      });
+      if (!res.ok) throw new Error(`Failed to start device flow: ${res.status}`);
+      const json = await res.json();
+      const data = json.data;
       setUserCode(data.userCode);
       setVerificationUrl(data.verificationUrl);
-      setDeviceCode(data.deviceCode);
+      setDeviceAuthId(data.deviceAuthId);
       setInterval_(data.interval || 5);
     } catch (err) {
       setState('error');
@@ -32,11 +38,18 @@ export function CodexDeviceFlow({ onComplete }: CodexDeviceFlowProps) {
   };
 
   useEffect(() => {
-    if (state !== 'waiting' || !deviceCode) return;
+    if (state !== 'waiting' || !deviceAuthId) return;
 
     pollRef.current = setInterval(async () => {
       try {
-        const result = await openaiAuth.pollDeviceFlow(deviceCode);
+        const res = await fetch('/api/auth/openai-device', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'poll', deviceAuthId }),
+        });
+        if (!res.ok) return; // retry on next interval
+        const json = await res.json();
+        const result = json.data;
         if (result.status === 'complete' && result.tokens) {
           setState('complete');
           onComplete(result.tokens);
@@ -54,7 +67,7 @@ export function CodexDeviceFlow({ onComplete }: CodexDeviceFlowProps) {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [state, deviceCode, interval, onComplete]);
+  }, [state, deviceAuthId, interval, onComplete]);
 
   const handleCopyCode = async () => {
     await navigator.clipboard.writeText(userCode);
