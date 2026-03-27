@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { ExternalLink, Loader2, Check, Copy, AlertCircle } from 'lucide-react';
 
 interface CodexDeviceFlowProps {
@@ -9,15 +9,14 @@ export function CodexDeviceFlow({ onComplete }: CodexDeviceFlowProps) {
   const [state, setState] = useState<'idle' | 'waiting' | 'complete' | 'error'>('idle');
   const [userCode, setUserCode] = useState('');
   const [verificationUrl, setVerificationUrl] = useState('');
-  const [deviceAuthId, setDeviceAuthId] = useState('');
-  const [interval, setInterval_] = useState(5);
   const [error, setError] = useState('');
   const [codeCopied, setCodeCopied] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const cancelledRef = useRef(false);
 
-  const startFlow = async () => {
+  const startFlow = useCallback(async () => {
     setState('waiting');
     setError('');
+    cancelledRef.current = false;
     try {
       const res = await fetch('/api/auth/openai-device', {
         method: 'POST',
@@ -29,45 +28,44 @@ export function CodexDeviceFlow({ onComplete }: CodexDeviceFlowProps) {
       const data = json.data;
       setUserCode(data.userCode);
       setVerificationUrl(data.verificationUrl);
-      setDeviceAuthId(data.deviceAuthId);
-      setInterval_(data.interval || 5);
+
+      // Start polling with recursive setTimeout (matching AgentX pattern)
+      const poll = async () => {
+        if (cancelledRef.current) return;
+        try {
+          const result = await openaiAuth.pollDeviceFlow(data.deviceAuthId, data.userCode);
+          if (cancelledRef.current) return;
+          if (result.status === 'complete' && result.tokens) {
+            setState('complete');
+            onComplete(result.tokens);
+            return;
+          }
+          if (result.status === 'pending') {
+            setTimeout(poll, (data.interval || 5) * 1000);
+            return;
+          }
+          // error or expired
+          setState('error');
+          setError(result.error || 'Authorization failed');
+        } catch {
+          if (!cancelledRef.current) {
+            // Retry on network errors
+            setTimeout(poll, (data.interval || 5) * 1000);
+          }
+        }
+      };
+      setTimeout(poll, (data.interval || 5) * 1000);
     } catch (err) {
       setState('error');
       setError(err instanceof Error ? err.message : 'Failed to start device flow');
     }
-  };
+  }, [onComplete]);
 
   useEffect(() => {
-    if (state !== 'waiting' || !deviceAuthId) return;
-
-    pollRef.current = setInterval(async () => {
-      try {
-        const res = await fetch('/api/auth/openai-device', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'poll', deviceAuthId }),
-        });
-        if (!res.ok) return; // retry on next interval
-        const json = await res.json();
-        const result = json.data;
-        if (result.status === 'complete' && result.tokens) {
-          setState('complete');
-          onComplete(result.tokens);
-          if (pollRef.current) clearInterval(pollRef.current);
-        } else if (result.status === 'expired' || result.status === 'error') {
-          setState('error');
-          setError(result.error || 'Device flow expired');
-          if (pollRef.current) clearInterval(pollRef.current);
-        }
-      } catch {
-        // Retry on network errors
-      }
-    }, interval * 1000);
-
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      cancelledRef.current = true;
     };
-  }, [state, deviceAuthId, interval, onComplete]);
+  }, []);
 
   const handleCopyCode = async () => {
     await navigator.clipboard.writeText(userCode);

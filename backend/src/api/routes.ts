@@ -74,8 +74,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     return (request.session as SessionPayload).userId;
   }
 
-  // In-memory store for OpenAI device flows (short-lived, ~5 min)
-  const deviceFlows = new Map<string, { userCode: string; deviceCode: string; verificationUrl: string; interval: number; expiresAt: number; tokens?: string }>();
+  const OPENAI_AUTH_BASE = 'https://auth.openai.com';
+  const OPENAI_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 
   // ========================================================================
   // Health check
@@ -2621,55 +2621,33 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
    * action: "start" initiates the flow, "poll" checks for completion.
    */
   app.post('/api/auth/openai-device', async (request, reply) => {
-    const body = request.body as { action: string; deviceAuthId?: string };
+    const body = request.body as { action: string; deviceAuthId?: string; userCode?: string };
 
     if (body.action === 'start') {
-      // Initiate device flow with OpenAI
+      // Step 1: Request user code from OpenAI
       try {
-        const params = new URLSearchParams({
-          client_id: 'pdlLIX2Y72MIl2rhLhTE9VV9bN905kBh',
-          scope: 'openid profile email offline_access',
-          audience: 'https://api.openai.com/v1',
-        });
-        const res = await fetch('https://auth0.openai.com/oauth/device/code', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Accept': 'application/json',
-            'User-Agent': 'Reins/1.0',
-          },
-          body: params.toString(),
-        });
+        const res = await fetch(
+          `${OPENAI_AUTH_BASE}/api/accounts/deviceauth/usercode`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ client_id: OPENAI_CLIENT_ID }),
+          }
+        );
+
         if (!res.ok) {
-          const text = await res.text();
-          throw new Error(`Auth0 returned ${res.status}: ${text.slice(0, 200)}`);
+          return reply.code(res.status).send({
+            error: { code: 'DEVICE_FLOW_ERROR', message: 'Device code flow not available' },
+          });
         }
-        const data = await res.json() as {
-          device_code: string;
-          user_code: string;
-          verification_uri_complete: string;
-          interval: number;
-          expires_in: number;
-        };
 
-        const deviceAuthId = nanoid();
-        deviceFlows.set(deviceAuthId, {
-          userCode: data.user_code,
-          deviceCode: data.device_code,
-          verificationUrl: data.verification_uri_complete,
-          interval: data.interval || 5,
-          expiresAt: Date.now() + (data.expires_in || 300) * 1000,
-        });
-
-        // Auto-cleanup after expiry
-        setTimeout(() => deviceFlows.delete(deviceAuthId), (data.expires_in || 300) * 1000 + 10000);
-
+        const data = await res.json() as Record<string, unknown>;
         return {
           data: {
-            deviceAuthId,
-            userCode: data.user_code,
-            verificationUrl: data.verification_uri_complete,
-            interval: data.interval || 5,
+            deviceAuthId: data.device_auth_id,
+            userCode: data.user_code || data.usercode,
+            interval: parseInt(String(data.interval)) || 5,
+            verificationUrl: `${OPENAI_AUTH_BASE}/codex/device`,
           },
         };
       } catch (err) {
@@ -2681,54 +2659,69 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
 
     if (body.action === 'poll') {
-      const flow = body.deviceAuthId ? deviceFlows.get(body.deviceAuthId) : null;
-      if (!flow) {
-        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Device flow not found or expired' } });
+      const { deviceAuthId, userCode } = body;
+      if (!deviceAuthId || !userCode) {
+        return reply.code(400).send({
+          error: { code: 'VALIDATION_ERROR', message: 'deviceAuthId and userCode are required' },
+        });
       }
 
-      if (flow.tokens) {
-        deviceFlows.delete(body.deviceAuthId!);
-        return { data: { status: 'complete', tokens: flow.tokens } };
-      }
-
-      if (Date.now() > flow.expiresAt) {
-        deviceFlows.delete(body.deviceAuthId!);
-        return { data: { status: 'expired' } };
-      }
-
-      // Poll OpenAI token endpoint
+      // Step 2: Poll for authorization code
       try {
-        const tokenParams = new URLSearchParams({
-          grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-          client_id: 'pdlLIX2Y72MIl2rhLhTE9VV9bN905kBh',
-          device_code: flow.deviceCode,
-        });
-        const res = await fetch('https://auth0.openai.com/oauth/token', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Accept': 'application/json',
-            'User-Agent': 'Reins/1.0',
-          },
-          body: tokenParams.toString(),
-        });
+        const pollRes = await fetch(
+          `${OPENAI_AUTH_BASE}/api/accounts/deviceauth/token`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              device_auth_id: deviceAuthId,
+              user_code: userCode,
+            }),
+          }
+        );
 
-        if (res.ok) {
-          const tokens = await res.json();
-          const tokensJson = JSON.stringify(tokens);
-          flow.tokens = tokensJson;
-          return { data: { status: 'complete', tokens: tokensJson } };
-        }
-
-        const errBody = await res.json() as { error?: string };
-        if (errBody.error === 'authorization_pending') {
+        if (pollRes.status === 403 || pollRes.status === 404) {
           return { data: { status: 'pending' } };
         }
-        if (errBody.error === 'slow_down') {
-          return { data: { status: 'pending', slowDown: true } };
+
+        if (!pollRes.ok) {
+          return reply.code(pollRes.status).send({
+            error: { code: 'AUTH_FAILED', message: 'Authorization failed' },
+          });
         }
 
-        return { data: { status: 'error', error: errBody.error } };
+        const pollData = await pollRes.json() as { authorization_code: string; code_verifier: string };
+
+        // Step 3: Exchange authorization code for tokens
+        const tokenRes = await fetch(`${OPENAI_AUTH_BASE}/oauth/token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            grant_type: 'authorization_code',
+            code: pollData.authorization_code,
+            redirect_uri: `${OPENAI_AUTH_BASE}/deviceauth/callback`,
+            client_id: OPENAI_CLIENT_ID,
+            code_verifier: pollData.code_verifier,
+          }),
+        });
+
+        if (!tokenRes.ok) {
+          return reply.code(tokenRes.status).send({
+            error: { code: 'TOKEN_EXCHANGE_FAILED', message: 'Token exchange failed' },
+          });
+        }
+
+        const tokens = await tokenRes.json() as Record<string, unknown>;
+        return {
+          data: {
+            status: 'complete',
+            tokens: JSON.stringify({
+              access_token: tokens.access_token,
+              id_token: tokens.id_token,
+              refresh_token: tokens.refresh_token,
+            }),
+          },
+        };
       } catch {
         return { data: { status: 'error', error: 'Failed to poll token endpoint' } };
       }
