@@ -47,11 +47,16 @@ export function CodexDeviceFlow({ onComplete }: CodexDeviceFlowProps) {
           // error or expired
           setState('error');
           setError(result.error || 'Authorization failed');
-        } catch {
-          if (!cancelledRef.current) {
-            // Retry on network errors
-            setTimeout(poll, (data.interval || 5) * 1000);
+        } catch (err) {
+          if (cancelledRef.current) return;
+          // ApiError means the backend responded with an error — don't retry blindly
+          if (err && typeof err === 'object' && 'code' in err) {
+            setState('error');
+            setError(err instanceof Error ? err.message : 'Authorization failed');
+            return;
           }
+          // Network error — retry
+          setTimeout(poll, (data.interval || 5) * 1000);
         }
       };
       setTimeout(poll, (data.interval || 5) * 1000);

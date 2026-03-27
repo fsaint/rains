@@ -2685,8 +2685,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         }
 
         if (!pollRes.ok) {
+          const errText = await pollRes.text().catch(() => '');
+          console.error(`OpenAI device auth poll failed: ${pollRes.status} ${errText}`);
           return reply.code(pollRes.status).send({
-            error: { code: 'AUTH_FAILED', message: 'Authorization failed' },
+            error: { code: 'AUTH_FAILED', message: `Authorization failed: ${pollRes.status}` },
           });
         }
 
@@ -2706,8 +2708,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         });
 
         if (!tokenRes.ok) {
-          return reply.code(tokenRes.status).send({
-            error: { code: 'TOKEN_EXCHANGE_FAILED', message: 'Token exchange failed' },
+          const errText = await tokenRes.text().catch(() => '');
+          console.error(`OpenAI token exchange failed: ${tokenRes.status} ${errText}`);
+          return reply.code(500).send({
+            error: { code: 'TOKEN_EXCHANGE_FAILED', message: `Token exchange failed: ${tokenRes.status}` },
           });
         }
 
