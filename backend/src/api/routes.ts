@@ -74,6 +74,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     return (request.session as SessionPayload).userId;
   }
 
+  // In-memory store for OpenAI device flows (short-lived, ~5 min)
+  const deviceFlows = new Map<string, { userCode: string; deviceCode: string; verificationUrl: string; interval: number; expiresAt: number; tokens?: string }>();
+
   // ========================================================================
   // Health check
   // ========================================================================
@@ -2019,6 +2022,134 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // ========================================================================
 
   /**
+   * Combined create + deploy in one step.
+   * Creates an agent record and immediately provisions it.
+   */
+  app.post('/api/agents/create-and-deploy', async (request, reply) => {
+    const userId = getUserId(request);
+    const body = request.body as {
+      name: string;
+      description?: string;
+      telegramToken: string;
+      telegramUserId?: string;
+      modelProvider?: string;
+      modelName?: string;
+      soulMd?: string;
+      region?: string;
+      openaiApiKey?: string;
+      modelCredentials?: string;
+      mcpServers?: string;
+    };
+
+    if (!body?.name?.trim()) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'name is required' } });
+    }
+    if (!body?.telegramToken?.trim()) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'telegramToken is required' } });
+    }
+
+    // Validate Telegram token
+    try {
+      const tgRes = await fetch(`https://api.telegram.org/bot${body.telegramToken}/getMe`);
+      const tgData = await tgRes.json() as { ok: boolean };
+      if (!tgData.ok) {
+        return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid Telegram bot token' } });
+      }
+    } catch {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Failed to validate Telegram token' } });
+    }
+
+    // Parse MCP servers if provided
+    let userMcpServers: object[] = [];
+    if (body.mcpServers) {
+      try {
+        userMcpServers = JSON.parse(body.mcpServers);
+        if (!Array.isArray(userMcpServers)) throw new Error('not array');
+      } catch {
+        return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'mcpServers must be a valid JSON array' } });
+      }
+    }
+
+    const agentId = nanoid();
+    const deploymentId = nanoid();
+    const gatewayToken = nanoid(32);
+    const now = new Date().toISOString();
+
+    // Create agent record
+    await client.execute({
+      sql: `INSERT INTO agents (id, user_id, name, description, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)`,
+      args: [agentId, userId, body.name.trim(), body.description?.trim() ?? null, now, now],
+    });
+
+    // Build MCP configs
+    const reinsUrl = process.env.REINS_PUBLIC_URL || config.dashboardUrl;
+    const mcpConfigs = [
+      { name: 'reins', url: `${reinsUrl}/mcp/${agentId}`, transport: 'http' },
+      ...userMcpServers,
+    ];
+
+    try {
+      const result = await provider.provision({
+        instanceId: deploymentId,
+        telegramToken: body.telegramToken,
+        telegramUserId: body.telegramUserId,
+        mcpConfigs,
+        gatewayToken,
+        soulMd: body.soulMd,
+        modelProvider: body.modelProvider,
+        modelName: body.modelName,
+        region: body.region,
+        openaiApiKey: body.openaiApiKey,
+        modelCredentials: body.modelCredentials,
+      });
+
+      await client.execute({
+        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openai_api_key, model_credentials, mcp_config_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [
+          deploymentId, agentId,
+          result.appName, result.machineId, 'running', result.managementUrl,
+          body.telegramToken, body.telegramUserId ?? null,
+          body.soulMd ?? null,
+          body.modelProvider ?? 'anthropic', body.modelName ?? 'claude-sonnet-4-5',
+          body.region ?? 'iad', gatewayToken,
+          body.openaiApiKey ?? null, body.modelCredentials ?? null,
+          body.mcpServers ?? null,
+          now, now,
+        ],
+      });
+
+      return reply.code(201).send({
+        data: {
+          id: agentId,
+          name: body.name.trim(),
+          status: 'active',
+          deployment: {
+            deploymentId,
+            status: 'running',
+            appName: result.appName,
+            machineId: result.machineId,
+            managementUrl: result.managementUrl,
+          },
+        },
+      });
+    } catch (err) {
+      // Store failed deployment
+      await client.execute({
+        sql: `INSERT INTO deployed_agents (id, agent_id, status, gateway_token, created_at, updated_at) VALUES (?, ?, 'error', ?, ?, ?)`,
+        args: [deploymentId, agentId, gatewayToken, now, now],
+      });
+      await client.execute({
+        sql: `UPDATE agents SET status = 'error', updated_at = ? WHERE id = ?`,
+        args: [now, agentId],
+      });
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return reply.code(500).send({
+        error: { code: 'DEPLOY_FAILED', message: `Deployment failed: ${message}` },
+      });
+    }
+  });
+
+  /**
    * Deploy an agent — provision on Fly.io or local Docker.
    * Generates MCP config pointing back to this Reins instance for policy enforcement.
    */
@@ -2191,6 +2322,144 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   });
 
   /**
+   * Get agent detail with deployment info joined
+   */
+  app.get<{ Params: { id: string } }>('/api/agents/:id/detail', async (request, reply) => {
+    const { id } = request.params;
+
+    const agentResult = await client.execute({
+      sql: `SELECT * FROM agents WHERE id = ?`,
+      args: [id],
+    });
+    if (agentResult.rows.length === 0) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Agent not found' } });
+    }
+
+    const agent = agentResult.rows[0];
+    const deployResult = await client.execute({
+      sql: `SELECT * FROM deployed_agents WHERE agent_id = ? AND status NOT IN ('destroyed') ORDER BY created_at DESC LIMIT 1`,
+      args: [id],
+    });
+
+    const deployment = deployResult.rows.length > 0 ? deployResult.rows[0] : null;
+
+    // Fetch live status if deployed
+    let liveStatus = deployment?.status as string | undefined;
+    if (deployment?.fly_app_name && deployment?.fly_machine_id && liveStatus && !['destroyed', 'error'].includes(liveStatus)) {
+      try {
+        liveStatus = await provider.getStatus(
+          deployment.fly_app_name as string,
+          deployment.fly_machine_id as string
+        );
+        await client.execute({
+          sql: `UPDATE deployed_agents SET status = ?, updated_at = ? WHERE id = ?`,
+          args: [liveStatus, new Date().toISOString(), deployment.id as string],
+        });
+      } catch {
+        // Use cached status
+      }
+    }
+
+    // Mask telegram token: show first 5 and last 3 chars
+    let maskedTelegram: string | null = null;
+    if (deployment?.telegram_token) {
+      const t = deployment.telegram_token as string;
+      maskedTelegram = t.length > 10 ? `${t.slice(0, 5)}...${t.slice(-3)}` : '***';
+    }
+
+    return {
+      data: {
+        id: agent.id,
+        name: agent.name,
+        description: agent.description,
+        status: agent.status,
+        createdAt: agent.created_at,
+        deployment: deployment ? {
+          id: deployment.id,
+          status: liveStatus || deployment.status,
+          flyAppName: deployment.fly_app_name,
+          flyMachineId: deployment.fly_machine_id,
+          managementUrl: deployment.management_url,
+          gatewayToken: deployment.gateway_token,
+          telegramToken: maskedTelegram,
+          telegramUserId: deployment.telegram_user_id,
+          soulMd: deployment.soul_md,
+          modelProvider: deployment.model_provider,
+          modelName: deployment.model_name,
+          region: deployment.region,
+          mcpConfigJson: deployment.mcp_config_json,
+          createdAt: deployment.created_at,
+        } : null,
+      },
+    };
+  });
+
+  /**
+   * Update Soul MD and trigger redeploy
+   */
+  app.put<{ Params: { id: string } }>('/api/agents/:id/soul', async (request, reply) => {
+    const { id } = request.params;
+    const body = request.body as { soulMd: string };
+
+    const deployment = await getActiveDeployment(id);
+    if (!deployment) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No active deployment found' } });
+    }
+
+    const now = new Date().toISOString();
+    await client.execute({
+      sql: `UPDATE deployed_agents SET soul_md = ?, updated_at = ? WHERE id = ?`,
+      args: [body.soulMd ?? null, now, deployment.id as string],
+    });
+
+    // Trigger redeploy with updated soul
+    if (deployment.fly_app_name && deployment.fly_machine_id) {
+      try {
+        const reinsUrl = process.env.REINS_PUBLIC_URL || config.dashboardUrl;
+        const mcpConfigs = [
+          { name: 'reins', url: `${reinsUrl}/mcp/${id}`, transport: 'http' },
+        ];
+        // Add user MCP servers if stored
+        if (deployment.mcp_config_json) {
+          try {
+            const userServers = JSON.parse(deployment.mcp_config_json as string);
+            if (Array.isArray(userServers)) mcpConfigs.push(...userServers);
+          } catch { /* ignore */ }
+        }
+
+        await provider.redeploy(
+          deployment.fly_app_name as string,
+          deployment.fly_machine_id as string,
+          {
+            instanceId: deployment.id as string,
+            telegramToken: deployment.telegram_token as string,
+            telegramUserId: deployment.telegram_user_id as string | undefined,
+            mcpConfigs,
+            gatewayToken: deployment.gateway_token as string,
+            soulMd: body.soulMd,
+            modelProvider: deployment.model_provider as string | undefined,
+            modelName: deployment.model_name as string | undefined,
+            openaiApiKey: deployment.openai_api_key as string | undefined,
+            modelCredentials: deployment.model_credentials as string | undefined,
+          }
+        );
+
+        await client.execute({
+          sql: `UPDATE deployed_agents SET status = 'running', updated_at = ? WHERE id = ?`,
+          args: [new Date().toISOString(), deployment.id as string],
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        return reply.code(500).send({
+          error: { code: 'REDEPLOY_FAILED', message: `Redeploy failed: ${message}` },
+        });
+      }
+    }
+
+    return { data: { soulMd: body.soulMd, redeployed: true } };
+  });
+
+  /**
    * Start a stopped agent deployment
    */
   app.post<{ Params: { id: string } }>('/api/agents/:id/start', async (request, reply) => {
@@ -2341,6 +2610,117 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         error: { code: 'DESTROY_FAILED', message },
       });
     }
+  });
+
+  // ========================================================================
+  // OpenAI Device Flow Authentication
+  // ========================================================================
+
+  /**
+   * OpenAI Codex device flow — start or poll.
+   * action: "start" initiates the flow, "poll" checks for completion.
+   */
+  app.post('/api/auth/openai-device', async (request, reply) => {
+    const body = request.body as { action: string; deviceAuthId?: string };
+
+    if (body.action === 'start') {
+      // Initiate device flow with OpenAI
+      try {
+        const res = await fetch('https://auth0.openai.com/oauth/device/code', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client_id: 'pdlLIX2Y72MIl2rhLhTE9VV9bN905kBh',
+            scope: 'openid profile email offline_access',
+            audience: 'https://api.openai.com/v1',
+          }),
+        });
+        const data = await res.json() as {
+          device_code: string;
+          user_code: string;
+          verification_uri_complete: string;
+          interval: number;
+          expires_in: number;
+        };
+
+        const deviceAuthId = nanoid();
+        deviceFlows.set(deviceAuthId, {
+          userCode: data.user_code,
+          deviceCode: data.device_code,
+          verificationUrl: data.verification_uri_complete,
+          interval: data.interval || 5,
+          expiresAt: Date.now() + (data.expires_in || 300) * 1000,
+        });
+
+        // Auto-cleanup after expiry
+        setTimeout(() => deviceFlows.delete(deviceAuthId), (data.expires_in || 300) * 1000 + 10000);
+
+        return {
+          data: {
+            deviceAuthId,
+            userCode: data.user_code,
+            verificationUrl: data.verification_uri_complete,
+            interval: data.interval || 5,
+          },
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        return reply.code(500).send({
+          error: { code: 'DEVICE_FLOW_ERROR', message: `Failed to start device flow: ${message}` },
+        });
+      }
+    }
+
+    if (body.action === 'poll') {
+      const flow = body.deviceAuthId ? deviceFlows.get(body.deviceAuthId) : null;
+      if (!flow) {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Device flow not found or expired' } });
+      }
+
+      if (flow.tokens) {
+        deviceFlows.delete(body.deviceAuthId!);
+        return { data: { status: 'complete', tokens: flow.tokens } };
+      }
+
+      if (Date.now() > flow.expiresAt) {
+        deviceFlows.delete(body.deviceAuthId!);
+        return { data: { status: 'expired' } };
+      }
+
+      // Poll OpenAI token endpoint
+      try {
+        const res = await fetch('https://auth0.openai.com/oauth/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+            client_id: 'pdlLIX2Y72MIl2rhLhTE9VV9bN905kBh',
+            device_code: flow.deviceCode,
+          }),
+        });
+
+        if (res.ok) {
+          const tokens = await res.json();
+          const tokensJson = JSON.stringify(tokens);
+          flow.tokens = tokensJson;
+          return { data: { status: 'complete', tokens: tokensJson } };
+        }
+
+        const errBody = await res.json() as { error?: string };
+        if (errBody.error === 'authorization_pending') {
+          return { data: { status: 'pending' } };
+        }
+        if (errBody.error === 'slow_down') {
+          return { data: { status: 'pending', slowDown: true } };
+        }
+
+        return { data: { status: 'error', error: errBody.error } };
+      } catch {
+        return { data: { status: 'error', error: 'Failed to poll token endpoint' } };
+      }
+    }
+
+    return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'action must be "start" or "poll"' } });
   });
 
   /**

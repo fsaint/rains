@@ -25,6 +25,8 @@ export interface ProvisionOpts {
   modelProvider?: string;
   modelName?: string;
   region?: string;
+  openaiApiKey?: string;
+  modelCredentials?: string;
 }
 
 export async function provision(opts: ProvisionOpts): Promise<ProvisionResult> {

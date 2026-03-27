@@ -91,6 +91,8 @@ export interface CreateMachineOpts {
   modelProvider?: string;
   modelName?: string;
   region?: string;
+  openaiApiKey?: string;
+  modelCredentials?: string;
 }
 
 export async function createMachine(opts: CreateMachineOpts) {
@@ -144,6 +146,8 @@ function buildMachineConfig(opts: CreateMachineOpts) {
       ...(opts.telegramUserId ? { TELEGRAM_TRUSTED_USER: opts.telegramUserId } : {}),
       ...(opts.modelProvider ? { MODEL_PROVIDER: opts.modelProvider } : {}),
       ...(opts.modelName ? { MODEL_NAME: opts.modelName } : {}),
+      ...(opts.openaiApiKey ? { OPENAI_API_KEY: opts.openaiApiKey } : {}),
+      ...(opts.modelCredentials ? { OPENAI_CODEX_TOKENS: opts.modelCredentials } : {}),
     },
     services: [
       {
