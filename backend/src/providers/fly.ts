@@ -65,7 +65,7 @@ async function allocateIps(appName: string) {
 }
 
 export async function createApp(instanceId: string): Promise<string> {
-  const appName = `reins-${instanceId.slice(0, 8)}`;
+  const appName = `reins-${instanceId.slice(0, 8).toLowerCase().replace(/[^a-z0-9-]/g, '')}`;
   await flyFetch('/apps', {
     method: 'POST',
     body: JSON.stringify({ app_name: appName, org_slug: getFlyOrg() }),
