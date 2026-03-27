@@ -10,7 +10,7 @@ export function CodexDeviceFlow({ onComplete }: CodexDeviceFlowProps) {
   const [state, setState] = useState<'idle' | 'waiting' | 'complete' | 'error'>('idle');
   const [userCode, setUserCode] = useState('');
   const [verificationUrl, setVerificationUrl] = useState('');
-  const [deviceAuthId, setDeviceAuthId] = useState('');
+  const [deviceCode, setDeviceCode] = useState('');
   const [interval, setInterval_] = useState(5);
   const [error, setError] = useState('');
   const [codeCopied, setCodeCopied] = useState(false);
@@ -23,7 +23,7 @@ export function CodexDeviceFlow({ onComplete }: CodexDeviceFlowProps) {
       const data = await openaiAuth.startDeviceFlow();
       setUserCode(data.userCode);
       setVerificationUrl(data.verificationUrl);
-      setDeviceAuthId(data.deviceAuthId);
+      setDeviceCode(data.deviceCode);
       setInterval_(data.interval || 5);
     } catch (err) {
       setState('error');
@@ -32,11 +32,11 @@ export function CodexDeviceFlow({ onComplete }: CodexDeviceFlowProps) {
   };
 
   useEffect(() => {
-    if (state !== 'waiting' || !deviceAuthId) return;
+    if (state !== 'waiting' || !deviceCode) return;
 
     pollRef.current = setInterval(async () => {
       try {
-        const result = await openaiAuth.pollDeviceFlow(deviceAuthId);
+        const result = await openaiAuth.pollDeviceFlow(deviceCode);
         if (result.status === 'complete' && result.tokens) {
           setState('complete');
           onComplete(result.tokens);
@@ -54,7 +54,7 @@ export function CodexDeviceFlow({ onComplete }: CodexDeviceFlowProps) {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [state, deviceAuthId, interval, onComplete]);
+  }, [state, deviceCode, interval, onComplete]);
 
   const handleCopyCode = async () => {
     await navigator.clipboard.writeText(userCode);

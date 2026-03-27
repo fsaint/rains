@@ -189,17 +189,60 @@ export const agents = {
 };
 
 // OpenAI Auth
+const OPENAI_CLIENT_ID = 'pdlLIX2Y72MIl2rhLhTE9VV9bN905kBh';
+
 export const openaiAuth = {
-  startDeviceFlow: () =>
-    request<{ deviceAuthId: string; userCode: string; verificationUrl: string; interval: number }>('/auth/openai-device', {
+  async startDeviceFlow(): Promise<{ deviceCode: string; userCode: string; verificationUrl: string; interval: number; expiresIn: number }> {
+    const res = await fetch('https://auth0.openai.com/oauth/device/code', {
       method: 'POST',
-      body: JSON.stringify({ action: 'start' }),
-    }),
-  pollDeviceFlow: (deviceAuthId: string) =>
-    request<{ status: string; tokens?: string; slowDown?: boolean; error?: string }>('/auth/openai-device', {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id: OPENAI_CLIENT_ID,
+        scope: 'openid profile email offline_access',
+        audience: 'https://api.openai.com/v1',
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`OpenAI device flow failed: ${res.status}`);
+    }
+    const data = await res.json();
+    return {
+      deviceCode: data.device_code,
+      userCode: data.user_code,
+      verificationUrl: data.verification_uri_complete,
+      interval: data.interval || 5,
+      expiresIn: data.expires_in || 300,
+    };
+  },
+
+  async pollDeviceFlow(deviceCode: string): Promise<{ status: string; tokens?: string; error?: string }> {
+    const res = await fetch('https://auth0.openai.com/oauth/token', {
       method: 'POST',
-      body: JSON.stringify({ action: 'poll', deviceAuthId }),
-    }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        client_id: OPENAI_CLIENT_ID,
+        device_code: deviceCode,
+      }),
+    });
+
+    if (res.ok) {
+      const tokens = await res.json();
+      return { status: 'complete', tokens: JSON.stringify(tokens) };
+    }
+
+    const errBody = await res.json().catch(() => ({ error: 'unknown' }));
+    if (errBody.error === 'authorization_pending') {
+      return { status: 'pending' };
+    }
+    if (errBody.error === 'slow_down') {
+      return { status: 'pending' };
+    }
+    if (errBody.error === 'expired_token') {
+      return { status: 'expired' };
+    }
+    return { status: 'error', error: errBody.error || 'Unknown error' };
+  },
 };
 
 // Credential types
