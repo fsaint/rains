@@ -170,6 +170,10 @@ if [ -n "$USAGE_CALLBACK_URL" ] && [ -n "$INSTANCE_USER_ID" ]; then
   " &
 fi
 
+# Start Xvfb virtual framebuffer for headless browser rendering
+Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp &
+export DISPLAY=:99
+
 # If Codex tokens provided, do a two-phase startup:
 # 1. Start gateway briefly so it creates dirs and runs doctor
 # 2. Kill it, inject auth, restart

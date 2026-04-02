@@ -3,6 +3,16 @@ FROM ghcr.io/openclaw/openclaw:2026.3.13-1
 # Switch to root to install browser dependencies
 USER root
 
+# Install Xvfb (virtual framebuffer) and font packages for headless browser rendering
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xvfb \
+    xfonts-base \
+    xfonts-75dpi \
+    xfonts-100dpi \
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install Chromium via Playwright into the node user's cache
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 RUN node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
@@ -25,10 +35,14 @@ COPY write-codex-auth.js /write-codex-auth.js
 COPY workspace/ /workspace-template/
 RUN chmod +x /entrypoint.sh && chown -R node:node /workspace-template
 
+# Ensure Xvfb socket directory is writable by node user
+RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+
 # Switch back to non-root user
 USER node
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
+ENV DISPLAY=:99
 
 EXPOSE 18789
 
