@@ -108,7 +108,7 @@ export interface ServiceDefinition {
   /** Lucide icon name, e.g. 'Mail', 'HardDrive', 'Github' */
   icon: string;
   /** Category for grouping in the UI */
-  category: 'google' | 'productivity' | 'dev-tools' | 'communication' | 'search' | 'browser';
+  category: 'google' | 'microsoft' | 'productivity' | 'dev-tools' | 'communication' | 'search' | 'browser';
   /** Prefix used to match tool names to this service */
   toolPrefix: string;
   /** Auth requirements */

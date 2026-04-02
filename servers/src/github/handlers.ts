@@ -343,6 +343,170 @@ export async function handleGetUser(
   };
 }
 
+// ============================================================================
+// Git data tools (branches, commits, push)
+// ============================================================================
+
+export async function handleCreateBranch(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const owner = args.owner as string;
+  const repo = args.repo as string;
+  const branch = args.branch as string;
+  const fromBranch = (args.fromBranch as string) || 'main';
+
+  // Get the SHA of the source branch
+  const refResponse = await githubRequest(context, `/repos/${owner}/${repo}/git/ref/heads/${fromBranch}`);
+  if (!refResponse.ok) return handleError(refResponse);
+  const refData = await refResponse.json();
+  const sha = refData.object.sha;
+
+  const response = await githubRequest(context, `/repos/${owner}/${repo}/git/refs`, {
+    method: 'POST',
+    body: JSON.stringify({ ref: `refs/heads/${branch}`, sha }),
+  });
+  if (!response.ok) return handleError(response);
+
+  const data = await response.json();
+  return { success: true, data: { ref: data.ref, sha: data.object.sha } };
+}
+
+export async function handleCreateOrUpdateFile(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const owner = args.owner as string;
+  const repo = args.repo as string;
+  const path = args.path as string;
+  const content = args.content as string;
+  const message = args.message as string;
+  const branch = args.branch as string | undefined;
+  const sha = args.sha as string | undefined;
+
+  const body: any = {
+    message,
+    content: Buffer.from(content).toString('base64'),
+  };
+  if (branch) body.branch = branch;
+  if (sha) body.sha = sha;
+
+  const response = await githubRequest(context, `/repos/${owner}/${repo}/contents/${path}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) return handleError(response);
+
+  const data = await response.json();
+  return {
+    success: true,
+    data: {
+      path: data.content?.path,
+      sha: data.content?.sha,
+      commit_sha: data.commit?.sha,
+      html_url: data.content?.html_url,
+    },
+  };
+}
+
+export async function handleCreateTree(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const owner = args.owner as string;
+  const repo = args.repo as string;
+  const baseTree = args.baseTree as string | undefined;
+  const files = args.files as Array<{ path: string; content: string; mode?: string }>;
+
+  const tree = files.map((f) => ({
+    path: f.path,
+    mode: f.mode || '100644',
+    type: 'blob' as const,
+    content: f.content,
+  }));
+
+  const body: any = { tree };
+  if (baseTree) body.base_tree = baseTree;
+
+  const response = await githubRequest(context, `/repos/${owner}/${repo}/git/trees`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) return handleError(response);
+
+  const data = await response.json();
+  return { success: true, data: { sha: data.sha, tree: data.tree?.map((t: any) => ({ path: t.path, sha: t.sha })) } };
+}
+
+export async function handleCreateCommit(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const owner = args.owner as string;
+  const repo = args.repo as string;
+  const message = args.message as string;
+  const tree = args.tree as string;
+  const parents = args.parents as string[];
+
+  const response = await githubRequest(context, `/repos/${owner}/${repo}/git/commits`, {
+    method: 'POST',
+    body: JSON.stringify({ message, tree, parents }),
+  });
+  if (!response.ok) return handleError(response);
+
+  const data = await response.json();
+  return { success: true, data: { sha: data.sha, message: data.message, html_url: data.html_url } };
+}
+
+export async function handleUpdateRef(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const owner = args.owner as string;
+  const repo = args.repo as string;
+  const ref = args.ref as string;
+  const sha = args.sha as string;
+  const force = (args.force as boolean) || false;
+
+  const response = await githubRequest(context, `/repos/${owner}/${repo}/git/refs/${ref}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ sha, force }),
+  });
+  if (!response.ok) return handleError(response);
+
+  const data = await response.json();
+  return { success: true, data: { ref: data.ref, sha: data.object.sha } };
+}
+
+export async function handleCreatePullRequest(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const owner = args.owner as string;
+  const repo = args.repo as string;
+  const title = args.title as string;
+  const head = args.head as string;
+  const base = args.base as string;
+  const body = args.body as string | undefined;
+  const draft = args.draft as boolean | undefined;
+
+  const payload: any = { title, head, base };
+  if (body) payload.body = body;
+  if (draft !== undefined) payload.draft = draft;
+
+  const response = await githubRequest(context, `/repos/${owner}/${repo}/pulls`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) return handleError(response);
+
+  const data = await response.json();
+  return {
+    success: true,
+    data: { number: data.number, title: data.title, html_url: data.html_url, state: data.state },
+  };
+}
+
 /**
  * Validate a GitHub PAT and return its scopes.
  * Called during credential setup, not as an MCP tool.

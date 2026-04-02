@@ -1563,6 +1563,63 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   });
 
   // ========================================================================
+  // Notion Integration Token
+  // ========================================================================
+
+  /**
+   * Add a Notion internal integration token.
+   * Validates the token against the Notion API, resolves the workspace,
+   * and stores the credential.
+   */
+  app.post('/api/credentials/notion', async (request, reply) => {
+    const body = request.body as { token?: string } | undefined;
+    if (!body?.token) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'token is required' } });
+    }
+
+    const userId = getUserId(request);
+
+    // Validate token
+    let validation: { valid: boolean; botName?: string; workspaceName?: string; error?: string };
+    try {
+      const { validateNotionToken } = await import('@reins/servers');
+      validation = await validateNotionToken(body.token);
+    } catch {
+      return reply.code(500).send({ error: { code: 'SERVER_ERROR', message: 'Notion validation not available' } });
+    }
+
+    if (!validation.valid) {
+      return reply.code(401).send({
+        error: { code: 'INVALID_TOKEN', message: validation.error || 'Invalid Notion token' },
+      });
+    }
+
+    // Store credential
+    const credId = await credentialVault.storeOAuth({
+      serviceId: 'notion',
+      accountEmail: validation.workspaceName ?? '',
+      accountName: validation.botName,
+      userId,
+      grantedServices: ['notion'],
+      data: {
+        accessToken: body.token,
+      } as any,
+    });
+
+    // Auto-link to all agents that have notion enabled but no credential
+    await autoLinkCredential('notion', credId);
+
+    return reply.code(201).send({
+      data: {
+        id: credId,
+        serviceId: 'notion',
+        botName: validation.botName,
+        workspaceName: validation.workspaceName,
+      },
+    });
+  });
+
+  // ========================================================================
   // OAuth - Google
   // ========================================================================
 
@@ -1773,6 +1830,211 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   );
 
   // ========================================================================
+  // OAuth - Microsoft (Outlook Mail, Outlook Calendar)
+  // ========================================================================
+
+  const MICROSOFT_BASE_SCOPES = ['openid', 'profile', 'email', 'offline_access'];
+
+  /**
+   * Initiate Microsoft OAuth flow
+   * Accepts optional `services` query param (comma-separated) to request specific scopes.
+   * Example: /api/oauth/microsoft?services=outlook_mail,outlook_calendar
+   */
+  app.get('/api/oauth/microsoft', async (request, reply) => {
+    if (!config.microsoftClientId || !config.microsoftRedirectUri) {
+      return reply.code(500).send({
+        error: {
+          code: 'CONFIG_ERROR',
+          message: 'Microsoft OAuth is not configured. Set MICROSOFT_CLIENT_ID and MICROSOFT_REDIRECT_URI in .env file.',
+        },
+      });
+    }
+
+    const userId = getUserId(request);
+    const query = request.query as { services?: string; reconnect?: string };
+
+    // Build scopes from requested services
+    let serviceScopes: string[] = [];
+    let requestedServices: string[] = [];
+
+    try {
+      const { serviceDefinitions } = await import('@reins/servers');
+      const msServices = serviceDefinitions.filter((d) => (d.category as string) === 'microsoft');
+
+      if (query.services) {
+        requestedServices = query.services.split(',').map((s) => s.trim());
+        for (const svcType of requestedServices) {
+          const def = msServices.find((d) => d.type === svcType);
+          if (def?.auth.oauthScopes) {
+            serviceScopes.push(...def.auth.oauthScopes);
+          }
+        }
+      }
+
+      // Default: request all Microsoft service scopes
+      if (serviceScopes.length === 0) {
+        requestedServices = msServices.map((d) => d.type);
+        for (const def of msServices) {
+          if (def.auth.oauthScopes) {
+            serviceScopes.push(...def.auth.oauthScopes);
+          }
+        }
+      }
+    } catch {
+      // Fallback if registry unavailable
+      serviceScopes = [
+        'https://graph.microsoft.com/Mail.Read',
+        'https://graph.microsoft.com/Mail.ReadWrite',
+        'https://graph.microsoft.com/Mail.Send',
+        'https://graph.microsoft.com/Calendars.Read',
+        'https://graph.microsoft.com/Calendars.ReadWrite',
+      ];
+      requestedServices = ['outlook_mail', 'outlook_calendar'];
+    }
+
+    const allScopes = [...new Set([...MICROSOFT_BASE_SCOPES, ...serviceScopes])];
+
+    // Generate state token for CSRF protection
+    const state = nanoid(32);
+    storePendingOAuthFlow(state, {
+      service: 'microsoft',
+      userId,
+      grantedServices: requestedServices,
+      reconnectCredentialId: query.reconnect || undefined,
+    });
+
+    const tenantId = config.microsoftTenantId || 'common';
+    const params = new URLSearchParams({
+      client_id: config.microsoftClientId,
+      redirect_uri: config.microsoftRedirectUri,
+      response_type: 'code',
+      scope: allScopes.join(' '),
+      state,
+      response_mode: 'query',
+    });
+
+    const authUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize?${params.toString()}`;
+
+    return { data: { authUrl, state } };
+  });
+
+  /**
+   * Microsoft OAuth callback
+   */
+  app.get<{ Querystring: { code?: string; state?: string; error?: string; error_description?: string } }>(
+    '/api/oauth/microsoft/callback',
+    async (request, reply) => {
+      const { code, state, error, error_description } = request.query;
+      const dashboardUrl = config.dashboardUrl;
+
+      if (error) {
+        return reply.redirect(`${dashboardUrl}/credentials?oauth_error=${encodeURIComponent(error_description || error)}`);
+      }
+
+      if (!code || !state) {
+        return reply.redirect(`${dashboardUrl}/credentials?oauth_error=missing_params`);
+      }
+
+      const pendingFlow = getPendingOAuthFlow(state);
+      if (!pendingFlow) {
+        return reply.redirect(`${dashboardUrl}/credentials?oauth_error=invalid_state`);
+      }
+
+      deletePendingOAuthFlow(state);
+
+      if (!config.microsoftClientId || !config.microsoftClientSecret || !config.microsoftRedirectUri) {
+        return reply.redirect(`${dashboardUrl}/credentials?oauth_error=config_error`);
+      }
+
+      try {
+        const tenantId = config.microsoftTenantId || 'common';
+
+        // Exchange code for tokens
+        const tokenResponse = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            client_id: config.microsoftClientId!,
+            client_secret: config.microsoftClientSecret!,
+            code,
+            grant_type: 'authorization_code',
+            redirect_uri: config.microsoftRedirectUri,
+          }),
+        });
+
+        if (!tokenResponse.ok) {
+          const errorData = await tokenResponse.json().catch(() => ({}));
+          console.error('Microsoft token exchange failed:', errorData);
+          return reply.redirect(`${dashboardUrl}/credentials?oauth_error=token_exchange_failed`);
+        }
+
+        const tokens = await tokenResponse.json() as {
+          access_token: string;
+          refresh_token?: string;
+          expires_in: number;
+          token_type: string;
+        };
+
+        // Fetch user info from Microsoft Graph
+        const userInfoResponse = await fetch('https://graph.microsoft.com/v1.0/me?$select=displayName,mail,userPrincipalName', {
+          headers: { Authorization: `Bearer ${tokens.access_token}` },
+        });
+
+        if (!userInfoResponse.ok) {
+          return reply.redirect(`${dashboardUrl}/credentials?oauth_error=userinfo_failed`);
+        }
+
+        const userInfo = await userInfoResponse.json() as {
+          mail?: string;
+          userPrincipalName: string;
+          displayName?: string;
+        };
+
+        const email = userInfo.mail || userInfo.userPrincipalName;
+        const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);
+
+        const tokenData = {
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token,
+          expiresAt,
+          tokenType: tokens.token_type,
+        };
+
+        const grantedServices = pendingFlow.grantedServices ?? ['outlook_mail', 'outlook_calendar'];
+
+        if (pendingFlow.reconnectCredentialId) {
+          await credentialVault.update(pendingFlow.reconnectCredentialId, tokenData);
+          return reply.redirect(
+            `${dashboardUrl}/credentials?oauth_success=true&email=${encodeURIComponent(email)}&reconnected=true`
+          );
+        }
+
+        // Store new credential
+        const credId = await credentialVault.storeOAuth({
+          serviceId: 'microsoft',
+          accountEmail: email,
+          accountName: userInfo.displayName,
+          userId: pendingFlow.userId,
+          grantedServices,
+          data: tokenData,
+        });
+
+        // Auto-link to agents
+        for (const svc of grantedServices) {
+          await autoLinkCredential(svc, credId);
+        }
+
+        return reply.redirect(
+          `${dashboardUrl}/credentials?oauth_success=true&email=${encodeURIComponent(email)}`
+        );
+      } catch (err) {
+        console.error('Microsoft OAuth callback error:', err);
+        return reply.redirect(`${dashboardUrl}/credentials?oauth_error=internal_error`);
+      }
+    }
+  );
+
+  // ========================================================================
   // Approvals
   // ========================================================================
 
@@ -1907,8 +2169,27 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     );
     const total = filteredEntries.length;
 
+    // Build agent name lookup
+    const agentIds = [...new Set(filteredEntries.map((e: any) => e.agentId).filter(Boolean))];
+    const agentNameMap: Record<string, string> = {};
+    if (agentIds.length > 0) {
+      const agentRows = await client.execute({
+        sql: `SELECT id, name FROM agents WHERE id IN (${agentIds.map(() => '?').join(',')})`,
+        args: agentIds,
+      });
+      for (const row of agentRows.rows) {
+        agentNameMap[row.id as string] = row.name as string;
+      }
+    }
+
+    // Enrich entries with agent names
+    const enrichedEntries = filteredEntries.map((e: any) => ({
+      ...e,
+      agentName: e.agentId ? agentNameMap[e.agentId] || null : null,
+    }));
+
     return {
-      data: filteredEntries,
+      data: enrichedEntries,
       pagination: {
         total,
         limit: filter.limit,

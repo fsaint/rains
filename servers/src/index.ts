@@ -17,6 +17,9 @@ export { WebSearchServer, webSearchTools } from './web-search/index.js';
 export { BrowserServer, browserTools } from './browser/index.js';
 export { GitHubServer, githubTools, validateToken as validateGitHubToken, TOOL_REQUIRED_SCOPES as GITHUB_TOOL_SCOPES } from './github/index.js';
 export { LinearServer, linearTools } from './linear/index.js';
+export { OutlookMailServer, outlookMailTools, validateToken as validateOutlookToken } from './outlook-mail/index.js';
+export { OutlookCalendarServer, outlookCalendarTools } from './outlook-calendar/index.js';
+export { NotionServer, notionTools, validateToken as validateNotionToken } from './notion/index.js';
 
 export { BaseServer } from './common/base-server.js';
 export { GoogleOAuthHandler } from './common/oauth-handler.js';

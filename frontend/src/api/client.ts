@@ -233,6 +233,11 @@ export const credentials = {
       '/credentials/linear',
       { method: 'POST', body: JSON.stringify({ token, workspaceName }) }
     ),
+  addNotion: (token: string) =>
+    request<{ id: string; serviceId: string; botName: string; workspaceName: string }>(
+      '/credentials/notion',
+      { method: 'POST', body: JSON.stringify({ token }) }
+    ),
   checkHealth: (id: string) => request<unknown>(`/credentials/${id}/health`),
   delete: (id: string) => request<void>(`/credentials/${id}`, { method: 'DELETE' }),
 };
@@ -246,6 +251,15 @@ export const oauth = {
     const qs = params.toString();
     return request<{ authUrl: string; state: string }>(
       `/oauth/google${qs ? `?${qs}` : ''}`
+    );
+  },
+  initiateMicrosoft: (services?: string[], reconnectCredentialId?: string) => {
+    const params = new URLSearchParams();
+    if (services?.length) params.set('services', services.join(','));
+    if (reconnectCredentialId) params.set('reconnect', reconnectCredentialId);
+    const qs = params.toString();
+    return request<{ authUrl: string; state: string }>(
+      `/oauth/microsoft${qs ? `?${qs}` : ''}`
     );
   },
 };

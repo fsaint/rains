@@ -369,21 +369,45 @@ export class CredentialVault {
     }
 
     const { config } = await import('../config/index.js');
-    if (!config.googleClientId || !config.googleClientSecret) {
-      console.error('Cannot refresh token: Google OAuth not configured');
-      return null;
+
+    // Determine refresh endpoint and params based on service
+    let tokenUrl: string;
+    let refreshParams: Record<string, string>;
+
+    if (credential.serviceId === 'microsoft') {
+      // Microsoft OAuth2 token refresh
+      if (!config.microsoftClientId || !config.microsoftClientSecret) {
+        console.error('Cannot refresh token: Microsoft OAuth not configured');
+        return null;
+      }
+      const tenantId = config.microsoftTenantId || 'common';
+      tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
+      refreshParams = {
+        client_id: config.microsoftClientId,
+        client_secret: config.microsoftClientSecret,
+        refresh_token: data.refreshToken,
+        grant_type: 'refresh_token',
+      };
+    } else {
+      // Google OAuth2 token refresh (default)
+      if (!config.googleClientId || !config.googleClientSecret) {
+        console.error('Cannot refresh token: Google OAuth not configured');
+        return null;
+      }
+      tokenUrl = 'https://oauth2.googleapis.com/token';
+      refreshParams = {
+        client_id: config.googleClientId,
+        client_secret: config.googleClientSecret,
+        refresh_token: data.refreshToken,
+        grant_type: 'refresh_token',
+      };
     }
 
     try {
-      const response = await fetch('https://oauth2.googleapis.com/token', {
+      const response = await fetch(tokenUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          client_id: config.googleClientId,
-          client_secret: config.googleClientSecret,
-          refresh_token: data.refreshToken,
-          grant_type: 'refresh_token',
-        }),
+        body: new URLSearchParams(refreshParams),
       });
 
       if (!response.ok) {
@@ -394,14 +418,17 @@ export class CredentialVault {
 
       const tokens = await response.json() as {
         access_token: string;
+        refresh_token?: string;
         expires_in: number;
         token_type: string;
       };
 
       // Update stored credential with new access token
+      // Microsoft may return a new refresh token — always save it
       const newData: CredentialData = {
         ...data,
         accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token || data.refreshToken,
         expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
         tokenType: tokens.token_type,
       } as CredentialData;

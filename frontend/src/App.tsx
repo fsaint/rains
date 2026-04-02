@@ -7,13 +7,11 @@ import {
   CheckCircle,
   Activity,
   PlugZap,
-  Lock,
   LogOut,
   UserCog,
   User,
 } from 'lucide-react';
 import Dashboard from './pages/Dashboard';
-import Agents from './pages/Agents';
 import Credentials from './pages/Credentials';
 import Approvals from './pages/Approvals';
 import AuditLog from './pages/AuditLog';
@@ -28,7 +26,6 @@ import type { User as UserType } from './api/client';
 const navItems = [
   { path: '/', label: 'Dashboard', icon: Activity },
   { path: '/agents', label: 'Agents', icon: Users },
-  { path: '/permissions', label: 'Permissions', icon: Lock },
   { path: '/credentials', label: 'Credentials', icon: Key },
   { path: '/approvals', label: 'Approvals', icon: CheckCircle },
   { path: '/audit', label: 'Audit Log', icon: Activity },
@@ -171,8 +168,7 @@ function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/agents/new" element={<AgentNew />} />
           <Route path="/agents/:id" element={<AgentDetail />} />
-          <Route path="/agents" element={<Agents />} />
-          <Route path="/permissions" element={<Permissions />} />
+          <Route path="/agents" element={<Permissions />} />
           <Route path="/credentials" element={<Credentials />} />
           <Route path="/approvals" element={<Approvals />} />
           <Route path="/audit" element={<AuditLog />} />

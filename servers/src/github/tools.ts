@@ -18,6 +18,12 @@ import {
   handleGetFileContent,
   handleSearchCode,
   handleGetUser,
+  handleCreateBranch,
+  handleCreateOrUpdateFile,
+  handleCreateTree,
+  handleCreateCommit,
+  handleUpdateRef,
+  handleCreatePullRequest,
 } from './handlers.js';
 
 // ============================================================================
@@ -224,6 +230,130 @@ export const commentOnIssueTool: ToolDefinition = {
 };
 
 // ============================================================================
+// Git data tools (branches, commits, push)
+// ============================================================================
+
+export const createBranchTool: ToolDefinition = {
+  name: 'github_create_branch',
+  description: 'Create a new branch in a repository from an existing branch.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      owner: { type: 'string', description: 'Repository owner' },
+      repo: { type: 'string', description: 'Repository name' },
+      branch: { type: 'string', description: 'Name of the new branch to create' },
+      fromBranch: { type: 'string', description: 'Source branch to create from (default: main)' },
+    },
+    required: ['owner', 'repo', 'branch'],
+  },
+  handler: handleCreateBranch,
+};
+
+export const createOrUpdateFileTool: ToolDefinition = {
+  name: 'github_create_or_update_file',
+  description: 'Create or update a single file in a repository. For updates, provide the current file SHA.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      owner: { type: 'string', description: 'Repository owner' },
+      repo: { type: 'string', description: 'Repository name' },
+      path: { type: 'string', description: 'File path in the repository' },
+      content: { type: 'string', description: 'File content (plain text, will be base64-encoded)' },
+      message: { type: 'string', description: 'Commit message' },
+      branch: { type: 'string', description: 'Branch to commit to (default: default branch)' },
+      sha: { type: 'string', description: 'SHA of the file being replaced (required for updates, use github_get_file_content to get it)' },
+    },
+    required: ['owner', 'repo', 'path', 'content', 'message'],
+  },
+  handler: handleCreateOrUpdateFile,
+};
+
+export const createTreeTool: ToolDefinition = {
+  name: 'github_create_tree',
+  description: 'Create a git tree with multiple files. Use with github_create_commit and github_update_ref for multi-file commits.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      owner: { type: 'string', description: 'Repository owner' },
+      repo: { type: 'string', description: 'Repository name' },
+      baseTree: { type: 'string', description: 'SHA of the base tree (use the tree SHA from the current commit)' },
+      files: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'File path' },
+            content: { type: 'string', description: 'File content' },
+            mode: { type: 'string', description: 'File mode: 100644 (file), 100755 (executable), 040000 (directory), 160000 (submodule), 120000 (symlink). Default: 100644' },
+          },
+          required: ['path', 'content'],
+        },
+        description: 'Array of files to include in the tree',
+      },
+    },
+    required: ['owner', 'repo', 'files'],
+  },
+  handler: handleCreateTree,
+};
+
+export const createCommitTool: ToolDefinition = {
+  name: 'github_create_commit',
+  description: 'Create a git commit object. Use after github_create_tree to commit staged files.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      owner: { type: 'string', description: 'Repository owner' },
+      repo: { type: 'string', description: 'Repository name' },
+      message: { type: 'string', description: 'Commit message' },
+      tree: { type: 'string', description: 'SHA of the tree object (from github_create_tree)' },
+      parents: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Array of parent commit SHAs (usually the current HEAD commit SHA)',
+      },
+    },
+    required: ['owner', 'repo', 'message', 'tree', 'parents'],
+  },
+  handler: handleCreateCommit,
+};
+
+export const updateRefTool: ToolDefinition = {
+  name: 'github_update_ref',
+  description: 'Update a git reference (branch) to point to a new commit. This is the equivalent of a git push.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      owner: { type: 'string', description: 'Repository owner' },
+      repo: { type: 'string', description: 'Repository name' },
+      ref: { type: 'string', description: 'Reference to update, e.g. "heads/main" or "heads/my-branch"' },
+      sha: { type: 'string', description: 'SHA of the commit to point to' },
+      force: { type: 'boolean', description: 'Force update even if not a fast-forward (default: false)' },
+    },
+    required: ['owner', 'repo', 'ref', 'sha'],
+  },
+  handler: handleUpdateRef,
+};
+
+export const createPullRequestTool: ToolDefinition = {
+  name: 'github_create_pull_request',
+  description: 'Create a pull request in a repository.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      owner: { type: 'string', description: 'Repository owner' },
+      repo: { type: 'string', description: 'Repository name' },
+      title: { type: 'string', description: 'Pull request title' },
+      head: { type: 'string', description: 'Branch containing the changes' },
+      base: { type: 'string', description: 'Branch to merge into (e.g. "main")' },
+      body: { type: 'string', description: 'Pull request description (Markdown supported)' },
+      draft: { type: 'boolean', description: 'Create as a draft PR (default: false)' },
+    },
+    required: ['owner', 'repo', 'title', 'head', 'base'],
+  },
+  handler: handleCreatePullRequest,
+};
+
+// ============================================================================
 // Export all tools
 // ============================================================================
 
@@ -242,6 +372,13 @@ export const githubTools: ToolDefinition[] = [
   // Write
   createIssueTool,
   commentOnIssueTool,
+  // Git data (branch, commit, push)
+  createBranchTool,
+  createOrUpdateFileTool,
+  createTreeTool,
+  createCommitTool,
+  updateRefTool,
+  createPullRequestTool,
 ];
 
 /**
@@ -251,7 +388,7 @@ export const githubTools: ToolDefinition[] = [
  */
 export const TOOL_REQUIRED_SCOPES: Record<string, string | null> = {
   github_list_repos: 'repo',
-  github_get_repo: null, // works for public repos without scope
+  github_get_repo: null,
   github_list_issues: null,
   github_get_issue: null,
   github_list_pull_requests: null,
@@ -262,4 +399,10 @@ export const TOOL_REQUIRED_SCOPES: Record<string, string | null> = {
   github_get_user: null,
   github_create_issue: 'repo',
   github_comment_on_issue: 'repo',
+  github_create_branch: 'repo',
+  github_create_or_update_file: 'repo',
+  github_create_tree: 'repo',
+  github_create_commit: 'repo',
+  github_update_ref: 'repo',
+  github_create_pull_request: 'repo',
 };

@@ -1,14 +1,15 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   permissions,
+  agents,
   type ServiceType,
   type ToolPermission,
   type PermissionLevel,
+  type PendingRegistration,
 } from '../api/client';
 import {
-  Lock,
   Mail,
   HardDrive,
   Calendar,
@@ -24,7 +25,13 @@ import {
   Plus,
   Trash2,
   Tag,
+  Rocket,
+  Power,
+  PowerOff,
+  Loader2,
+  Radio,
 } from 'lucide-react';
+import { DeploymentPanel } from '../components/DeploymentPanel';
 
 const serviceIcons: Record<string, React.ReactNode> = {
   gmail: <Mail className="w-5 h-5" />,
@@ -85,15 +92,62 @@ const servicePermissionDetails: Record<ServiceType, { read: string; full: string
 };
 
 export default function Permissions() {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
   const [selectedInstance, setSelectedInstance] = useState<string | null>(null);
   const [addServiceAgent, setAddServiceAgent] = useState<{ agentId: string; agentName: string } | null>(null);
+  const [deployAgentId, setDeployAgentId] = useState<string | null>(null);
 
   const { data: agentPerms, isLoading } = useQuery({
     queryKey: ['permissions', 'agents'],
     queryFn: permissions.getAgentPermissions,
   });
+
+  const { data: pendingList } = useQuery<PendingRegistration[]>({
+    queryKey: ['agents', 'pending'],
+    queryFn: agents.listPending,
+    refetchInterval: 5000,
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: agents.delete,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      queryClient.invalidateQueries({ queryKey: ['permissions'] });
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: { status: string } }) => agents.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      queryClient.invalidateQueries({ queryKey: ['permissions'] });
+    },
+  });
+
+  const cancelPendingMutation = useMutation({
+    mutationFn: agents.cancelPending,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents', 'pending'] });
+    },
+  });
+
+  const getTimeRemaining = (expiresAt: string) => {
+    const remaining = new Date(expiresAt).getTime() - Date.now();
+    if (remaining <= 0) return 'Expired';
+    const minutes = Math.floor(remaining / 60000);
+    const seconds = Math.floor((remaining % 60000) / 1000);
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  // Auto-refresh pending countdowns
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!pendingList?.length) return;
+    const interval = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, [pendingList?.length]);
 
   const toggleAgent = (agentId: string) => {
     setExpandedAgents((prev) => {
@@ -106,7 +160,7 @@ export default function Permissions() {
 
   if (isLoading) {
     return (
-      <div className="p-8">
+      <div className="p-8 max-w-6xl">
         <div className="flex items-center justify-center py-12">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-trust-blue"></div>
         </div>
@@ -114,45 +168,117 @@ export default function Permissions() {
     );
   }
 
-  if (!agentPerms || agentPerms.agents.length === 0) {
+  const hasAgents = agentPerms && agentPerms.agents.length > 0;
+  const hasPending = pendingList && pendingList.length > 0;
+
+  if (!hasAgents && !hasPending) {
     return (
-      <div className="p-8">
-        <div className="flex items-center justify-between mb-8">
+      <div className="p-8 max-w-6xl">
+        <div className="flex items-end justify-between mb-8">
           <div>
-            <h1 className="text-2xl font-semibold text-reins-navy">Permissions</h1>
-            <p className="text-gray-500 mt-1">
-              Configure which services each agent can access
-            </p>
+            <h1 className="text-2xl font-semibold text-reins-navy tracking-tight">Agents</h1>
+            <p className="text-gray-400 mt-1 text-sm">Manage AI agents, their services, and permissions</p>
           </div>
+          <button
+            onClick={() => navigate('/agents/new')}
+            className="flex items-center gap-2 bg-trust-blue text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition-all text-sm font-medium shadow-sm shadow-trust-blue/20"
+          >
+            <Plus className="w-4 h-4" />
+            Add Agent
+          </button>
         </div>
-        <div className="bg-white rounded-xl p-12 shadow-sm border border-gray-100 text-center">
-          <Lock className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-          <p className="text-gray-500">No agents configured yet</p>
-          <p className="text-sm text-gray-400 mt-2">
-            Create an agent first to configure permissions
-          </p>
+        <div className="border border-dashed border-gray-200 rounded-xl p-10">
+          <div className="text-center">
+            <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
+              <Radio className="w-6 h-6 text-gray-400" />
+            </div>
+            <p className="text-gray-500 font-medium">No agents yet</p>
+            <p className="text-sm text-gray-400 mt-1 max-w-md mx-auto">
+              Create your first agent to start managing AI tool access.
+            </p>
+            <button
+              onClick={() => navigate('/agents/new')}
+              className="mt-5 inline-flex items-center gap-2 bg-trust-blue text-white px-5 py-2.5 rounded-lg hover:bg-blue-600 transition-all text-sm font-medium shadow-sm shadow-trust-blue/20"
+            >
+              <Plus className="w-4 h-4" />
+              Create Agent
+            </button>
+          </div>
         </div>
       </div>
     );
   }
 
   // Check if any instance has missing credentials
-  const hasMissingCreds = agentPerms.agents.some((a) =>
+  const hasMissingCreds = hasAgents && agentPerms.agents.some((a) =>
     a.instances.some(
       (i) => i.enabled && (i.credentialStatus === 'missing' || i.credentialStatus === 'not_linked')
     )
   );
 
   return (
-    <div className="p-8">
-      <div className="flex items-center justify-between mb-8">
+    <div className="p-8 max-w-6xl">
+      <div className="flex items-end justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-semibold text-reins-navy">Permissions</h1>
-          <p className="text-gray-500 mt-1">
-            Configure which services each agent can access
-          </p>
+          <h1 className="text-2xl font-semibold text-reins-navy tracking-tight">Agents</h1>
+          <p className="text-gray-400 mt-1 text-sm">Manage AI agents, their services, and permissions</p>
         </div>
+        <button
+          onClick={() => navigate('/agents/new')}
+          className="flex items-center gap-2 bg-trust-blue text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition-all text-sm font-medium shadow-sm shadow-trust-blue/20"
+        >
+          <Plus className="w-4 h-4" />
+          Add Agent
+        </button>
       </div>
+
+      {/* Pending Registrations */}
+      {hasPending && (
+        <div className="mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-caution-amber opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-caution-amber"></span>
+            </span>
+            <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wider">
+              Awaiting Claim
+            </h2>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {pendingList!.map((pending) => (
+              <div
+                key={pending.id}
+                className="group bg-white border border-caution-amber/20 rounded-xl p-4 relative overflow-hidden"
+              >
+                <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-caution-amber/60 via-caution-amber to-caution-amber/60"></div>
+                <div className="flex items-start justify-between">
+                  <div className="min-w-0">
+                    <p className="font-medium text-reins-navy truncate">{pending.name}</p>
+                    {pending.description && (
+                      <p className="text-xs text-gray-400 mt-0.5 truncate">{pending.description}</p>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => cancelPendingMutation.mutate(pending.id)}
+                    className="text-gray-300 hover:text-alert-red transition-colors opacity-0 group-hover:opacity-100 shrink-0 ml-2"
+                    title="Cancel"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="mt-3 flex items-end justify-between">
+                  <div className="font-mono text-2xl font-bold text-caution-amber tracking-[0.2em] select-all">
+                    {pending.claimCode}
+                  </div>
+                  <div className="text-xs text-gray-400 font-mono tabular-nums">
+                    {getTimeRemaining(pending.expiresAt)}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Legend */}
       <div className="flex gap-6 mb-6 text-sm">
@@ -194,7 +320,7 @@ export default function Permissions() {
 
       {/* Per-Agent Sections */}
       <div className="space-y-4">
-        {agentPerms.agents.map((agent) => {
+        {agentPerms?.agents.map((agent) => {
           const isExpanded = expandedAgents.has(agent.id);
           return (
             <div
@@ -202,40 +328,87 @@ export default function Permissions() {
               className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden"
             >
               {/* Agent Header */}
-              <button
-                onClick={() => toggleAgent(agent.id)}
-                className="w-full flex items-center justify-between px-6 py-4 hover:bg-gray-50/50"
-              >
-                <div className="flex items-center gap-3">
+              <div className="group flex items-center justify-between px-6 py-4 hover:bg-gray-50/50">
+                <button
+                  onClick={() => toggleAgent(agent.id)}
+                  className="flex items-center gap-3 flex-1 min-w-0"
+                >
                   {isExpanded ? (
-                    <ChevronDown className="w-4 h-4 text-gray-400" />
+                    <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" />
                   ) : (
-                    <ChevronRight className="w-4 h-4 text-gray-400" />
+                    <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" />
                   )}
-                  <div className="text-left">
-                    <div className="font-medium text-reins-navy">{agent.name}</div>
+                  <div className="text-left min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-reins-navy">{agent.name}</span>
+                      <span
+                        className={`text-[10px] font-medium uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                          agent.status === 'active'
+                            ? 'bg-safe-green/8 text-safe-green'
+                            : 'bg-gray-100 text-gray-400'
+                        }`}
+                      >
+                        {agent.status}
+                      </span>
+                    </div>
                     <div className="text-xs text-gray-400 mt-0.5">
-                      {agent.status === 'active' ? (
-                        <span className="text-safe-green">Active</span>
-                      ) : (
-                        <span className="text-gray-400">{agent.status}</span>
-                      )}
-                      <span className="mx-2">·</span>
                       {agent.instances.length === 0
                         ? 'No services'
                         : `${agent.instances.length} service${agent.instances.length !== 1 ? 's' : ''}`}
                     </div>
                   </div>
-                </div>
-                <div className="flex items-center gap-2">
+                </button>
+                <div className="flex items-center gap-1 shrink-0">
                   {/* Service type icons summary */}
-                  {[...new Set(agent.instances.map((i) => i.serviceType))].map((st) => (
-                    <div key={st} className="text-gray-300">
-                      {serviceIcons[st] ?? <Globe className="w-4 h-4" />}
-                    </div>
-                  ))}
+                  <div className="hidden sm:flex items-center gap-1.5 mr-3">
+                    {[...new Set(agent.instances.map((i) => i.serviceType))].map((st) => (
+                      <div key={st} className="text-gray-300">
+                        {serviceIcons[st] ?? <Globe className="w-4 h-4" />}
+                      </div>
+                    ))}
+                  </div>
+                  {/* Deploy */}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setDeployAgentId(agent.id); }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-600 bg-emerald-50 hover:bg-emerald-100 border border-emerald-100 rounded-lg transition-all"
+                    title="Deploy to Fly.io or Docker"
+                  >
+                    <Rocket className="w-3.5 h-3.5" />
+                    Deploy
+                  </button>
+                  {/* Activate / Suspend */}
+                  {agent.status === 'active' ? (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); updateMutation.mutate({ id: agent.id, data: { status: 'suspended' } }); }}
+                      className="p-1.5 text-gray-300 hover:text-caution-amber transition-colors opacity-0 group-hover:opacity-100"
+                      title="Suspend"
+                    >
+                      <PowerOff className="w-4 h-4" />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); updateMutation.mutate({ id: agent.id, data: { status: 'active' } }); }}
+                      className="p-1.5 text-gray-300 hover:text-safe-green transition-colors opacity-0 group-hover:opacity-100"
+                      title="Activate"
+                    >
+                      <Power className="w-4 h-4" />
+                    </button>
+                  )}
+                  {/* Delete */}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(agent.id); }}
+                    disabled={deleteMutation.isPending && deleteMutation.variables === agent.id}
+                    className="p-1.5 text-gray-300 hover:text-alert-red transition-colors opacity-0 group-hover:opacity-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Delete"
+                  >
+                    {deleteMutation.isPending && deleteMutation.variables === agent.id ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-4 h-4" />
+                    )}
+                  </button>
                 </div>
-              </button>
+              </div>
 
               {/* Expanded: Instance Cards */}
               {isExpanded && (
@@ -340,12 +513,23 @@ export default function Permissions() {
         <AddServiceModal
           agentId={addServiceAgent.agentId}
           agentName={addServiceAgent.agentName}
-          availableServices={agentPerms.availableServices}
+          availableServices={agentPerms!.availableServices}
           onClose={() => setAddServiceAgent(null)}
           onAdded={() => {
             queryClient.invalidateQueries({ queryKey: ['permissions'] });
             setAddServiceAgent(null);
           }}
+        />
+      )}
+
+      {/* Deploy Modal */}
+      {deployAgentId && (
+        <DeploymentPanel
+          agentId={deployAgentId}
+          agentName={
+            agentPerms?.agents.find((a) => a.id === deployAgentId)?.name || 'Agent'
+          }
+          onClose={() => setDeployAgentId(null)}
         />
       )}
     </div>

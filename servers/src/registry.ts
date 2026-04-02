@@ -14,6 +14,9 @@ import { definition as webSearch } from './web-search/definition.js';
 import { definition as browser } from './browser/definition.js';
 import { definition as github } from './github/definition.js';
 import { definition as linear } from './linear/definition.js';
+import { definition as outlookMail } from './outlook-mail/definition.js';
+import { definition as outlookCalendar } from './outlook-calendar/definition.js';
+import { definition as notion } from './notion/definition.js';
 
 // Re-export the type from its canonical location
 export type { ServiceDefinitionWithTools } from './common/types.js';
@@ -26,6 +29,9 @@ export const serviceDefinitions: ServiceDefinitionWithTools[] = [
   browser,
   github,
   linear,
+  outlookMail,
+  outlookCalendar,
+  notion,
 ];
 
 /** Lookup map by service type */

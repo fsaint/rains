@@ -33,6 +33,12 @@ const ConfigSchema = z.object({
   googleClientSecret: z.string().optional(),
   googleRedirectUri: z.string().default('https://reins.btv.pw/api/oauth/google/callback'),
 
+  // Microsoft OAuth (for Outlook Mail, Outlook Calendar)
+  microsoftClientId: z.string().optional(),
+  microsoftClientSecret: z.string().optional(),
+  microsoftTenantId: z.string().default('common'),
+  microsoftRedirectUri: z.string().default('https://reins.btv.pw/api/oauth/microsoft/callback'),
+
   // Brave Search API
   braveApiKey: z.string().optional(),
 
@@ -62,6 +68,11 @@ function loadConfig(): Config {
     googleClientId: process.env.GOOGLE_CLIENT_ID,
     googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
     googleRedirectUri: process.env.GOOGLE_REDIRECT_URI,
+    // Microsoft OAuth
+    microsoftClientId: process.env.MICROSOFT_CLIENT_ID,
+    microsoftClientSecret: process.env.MICROSOFT_CLIENT_SECRET,
+    microsoftTenantId: process.env.MICROSOFT_TENANT_ID,
+    microsoftRedirectUri: process.env.MICROSOFT_REDIRECT_URI,
     // Auth
     adminEmail: process.env.REINS_ADMIN_EMAIL,
     adminPassword: process.env.REINS_ADMIN_PASSWORD,

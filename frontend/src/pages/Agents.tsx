@@ -10,6 +10,7 @@ import {
   X,
   Radio,
   Rocket,
+  Loader2,
 } from 'lucide-react';
 import { agents, type PendingRegistration } from '../api/client';
 import { DeploymentPanel } from '../components/DeploymentPanel';
@@ -258,10 +259,15 @@ export default function Agents() {
                     )}
                     <button
                       onClick={() => deleteMutation.mutate(agent.id)}
-                      className="p-1.5 text-gray-300 hover:text-alert-red transition-colors opacity-0 group-hover:opacity-100"
+                      disabled={deleteMutation.isPending && deleteMutation.variables === agent.id}
+                      className="p-1.5 text-gray-300 hover:text-alert-red transition-colors opacity-0 group-hover:opacity-100 disabled:opacity-50 disabled:cursor-not-allowed"
                       title="Delete"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      {deleteMutation.isPending && deleteMutation.variables === agent.id ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="w-4 h-4" />
+                      )}
                     </button>
                   </div>
                 </div>

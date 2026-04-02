@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Trash2, Key, RefreshCw, CheckCircle, AlertCircle, Clock, X, Mail, HardDrive, Calendar, Github, SquareKanban } from 'lucide-react';
+import { Plus, Trash2, Key, RefreshCw, CheckCircle, AlertCircle, Clock, X, Mail, HardDrive, Calendar, Github, SquareKanban, BookOpen } from 'lucide-react';
 import { credentials, oauth, type Credential } from '../api/client';
 
 interface CredentialHealth {
@@ -29,7 +29,7 @@ export default function Credentials() {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [createType, setCreateType] = useState<'pick' | 'google_scopes' | 'github_pat' | 'linear_key' | 'api_key'>('pick');
+  const [createType, setCreateType] = useState<'pick' | 'google_scopes' | 'microsoft_connect' | 'github_pat' | 'linear_key' | 'notion_key' | 'api_key'>('pick');
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [newCredential, setNewCredential] = useState({
     serviceId: '',
@@ -45,6 +45,8 @@ export default function Credentials() {
   const [linearToken, setLinearToken] = useState('');
   const [linearWorkspace, setLinearWorkspace] = useState('');
   const [linearError, setLinearError] = useState('');
+  const [notionToken, setNotionToken] = useState('');
+  const [notionError, setNotionError] = useState('');
   const [updatingCredentialId, setUpdatingCredentialId] = useState<string | null>(null);
 
   // Handle OAuth callback
@@ -124,7 +126,7 @@ export default function Credentials() {
   const addGitHubMutation = useMutation({
     mutationFn: async (token: string) => {
       if (updatingCredentialId) {
-        await credentials.delete(updatingCredentialId);
+        await credentials.delete(updatingCredentialId).catch(() => {});
       }
       return credentials.addGitHub(token);
     },
@@ -150,7 +152,7 @@ export default function Credentials() {
   const addLinearMutation = useMutation({
     mutationFn: async ({ token, workspaceName }: { token: string; workspaceName: string }) => {
       if (updatingCredentialId) {
-        await credentials.delete(updatingCredentialId);
+        await credentials.delete(updatingCredentialId).catch(() => {});
       }
       return credentials.addLinear(token, workspaceName);
     },
@@ -174,6 +176,32 @@ export default function Credentials() {
     },
   });
 
+  const addNotionMutation = useMutation({
+    mutationFn: async (token: string) => {
+      if (updatingCredentialId) {
+        await credentials.delete(updatingCredentialId).catch(() => {});
+      }
+      return credentials.addNotion(token);
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['credentials'] });
+      setShowCreateModal(false);
+      setNotionToken('');
+      setNotionError('');
+      setCreateType('pick');
+      const action = updatingCredentialId ? 'updated' : 'connected';
+      setUpdatingCredentialId(null);
+      setNotification({
+        type: 'success',
+        message: `Notion workspace "${data.workspaceName}" ${action} successfully`,
+      });
+      setTimeout(() => setNotification(null), 5000);
+    },
+    onError: (error: any) => {
+      setNotionError(error?.message || 'Invalid token');
+    },
+  });
+
   const initiateGoogleOAuthMutation = useMutation({
     mutationFn: ({ services, reconnectId }: { services: string[]; reconnectId?: string }) =>
       oauth.initiateGoogle(services, reconnectId),
@@ -188,6 +216,25 @@ export default function Credentials() {
       setShowCreateModal(false);
     },
   });
+
+  const initiateMicrosoftOAuthMutation = useMutation({
+    mutationFn: ({ services, reconnectId }: { services: string[]; reconnectId?: string }) =>
+      oauth.initiateMicrosoft(services, reconnectId),
+    onSuccess: (data) => {
+      window.location.href = data.authUrl;
+    },
+    onError: (error) => {
+      setNotification({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Failed to initiate Microsoft OAuth flow',
+      });
+      setShowCreateModal(false);
+    },
+  });
+
+  const handleMicrosoftConnect = () => {
+    initiateMicrosoftOAuthMutation.mutate({ services: ['outlook_mail', 'outlook_calendar'] });
+  };
 
   const checkHealth = async (id: string) => {
     const health = await credentials.checkHealth(id) as CredentialHealth;
@@ -216,13 +263,22 @@ export default function Credentials() {
       setLinearToken('');
       setLinearWorkspace('');
       setLinearError('');
+    } else if (cred.serviceId === 'notion') {
+      setCreateType('notion_key');
+      setNotionToken('');
+      setNotionError('');
     }
     setShowCreateModal(true);
   };
 
   const handleReconnect = (cred: Credential) => {
-    const services = cred.grantedServices ?? ['gmail', 'drive', 'calendar'];
-    initiateGoogleOAuthMutation.mutate({ services, reconnectId: cred.id });
+    if (cred.serviceId === 'microsoft') {
+      const services = cred.grantedServices ?? ['outlook_mail', 'outlook_calendar'];
+      initiateMicrosoftOAuthMutation.mutate({ services, reconnectId: cred.id });
+    } else {
+      const services = cred.grantedServices ?? ['gmail', 'drive', 'calendar'];
+      initiateGoogleOAuthMutation.mutate({ services, reconnectId: cred.id });
+    }
   };
 
   const toggleGoogleService = (type: string) => {
@@ -378,16 +434,16 @@ export default function Credentials() {
                             : healthStatus[cred.id].error || 'Invalid'
                           : 'Unknown'}
                       </span>
-                      {healthStatus[cred.id] && !healthStatus[cred.id].valid && cred.serviceId === 'google' && (
+                      {healthStatus[cred.id] && !healthStatus[cred.id].valid && (cred.serviceId === 'google' || cred.serviceId === 'microsoft') && (
                         <button
                           onClick={() => handleReconnect(cred)}
-                          disabled={initiateGoogleOAuthMutation.isPending}
+                          disabled={initiateGoogleOAuthMutation.isPending || initiateMicrosoftOAuthMutation.isPending}
                           className="ml-1 px-2 py-0.5 text-xs font-medium text-trust-blue bg-trust-blue/10 rounded hover:bg-trust-blue/20 transition-colors"
                         >
                           Reconnect
                         </button>
                       )}
-                      {healthStatus[cred.id] && !healthStatus[cred.id].valid && (cred.serviceId === 'github' || cred.serviceId === 'linear') && (
+                      {healthStatus[cred.id] && !healthStatus[cred.id].valid && (cred.serviceId === 'github' || cred.serviceId === 'linear' || cred.serviceId === 'notion') && (
                         <button
                           onClick={() => handleUpdateToken(cred)}
                           className="ml-1 px-2 py-0.5 text-xs font-medium text-trust-blue bg-trust-blue/10 rounded hover:bg-trust-blue/20 transition-colors"
@@ -431,7 +487,7 @@ export default function Credentials() {
           <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl shadow-reins-navy/10 border border-gray-100">
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-lg font-semibold text-reins-navy">
-                {createType === 'pick' ? 'Add Credential' : createType === 'google_scopes' ? 'Google Services' : createType === 'linear_key' ? (updatingCredentialId ? 'Update Linear Token' : 'Linear Workspace') : createType === 'github_pat' ? (updatingCredentialId ? 'Update GitHub Token' : 'GitHub') : 'Add API Key'}
+                {createType === 'pick' ? 'Add Credential' : createType === 'google_scopes' ? 'Google Services' : createType === 'microsoft_connect' ? 'Microsoft Account' : createType === 'notion_key' ? (updatingCredentialId ? 'Update Notion Token' : 'Notion') : createType === 'linear_key' ? (updatingCredentialId ? 'Update Linear Token' : 'Linear Workspace') : createType === 'github_pat' ? (updatingCredentialId ? 'Update GitHub Token' : 'GitHub') : 'Add API Key'}
               </h2>
               <button
                 onClick={() => { setShowCreateModal(false); setCreateType('pick'); setUpdatingCredentialId(null); }}
@@ -464,6 +520,27 @@ export default function Credentials() {
                   </div>
                 </button>
 
+                {/* Microsoft */}
+                <button
+                  onClick={() => setCreateType('microsoft_connect')}
+                  className="w-full flex items-center gap-4 p-4 rounded-xl border-2 border-gray-200 hover:border-trust-blue hover:bg-trust-blue/5 transition-all text-left"
+                >
+                  <div className="w-10 h-10 bg-gray-50 rounded-lg flex items-center justify-center shrink-0">
+                    <svg className="w-5 h-5" viewBox="0 0 21 21" fill="none">
+                      <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+                      <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+                      <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+                      <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+                    </svg>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-reins-navy">Microsoft Account</div>
+                    <div className="text-sm text-gray-500">
+                      Outlook Mail &amp; Calendar via OAuth
+                    </div>
+                  </div>
+                </button>
+
                 {/* GitHub */}
                 <button
                   onClick={() => { setCreateType('github_pat'); setGithubToken(''); setGithubError(''); }}
@@ -492,6 +569,22 @@ export default function Credentials() {
                     <div className="font-medium text-reins-navy">Linear</div>
                     <div className="text-sm text-gray-500">
                       Issues, projects, and teams via API key (per workspace)
+                    </div>
+                  </div>
+                </button>
+
+                {/* Notion */}
+                <button
+                  onClick={() => { setCreateType('notion_key'); setNotionToken(''); setNotionError(''); }}
+                  className="w-full flex items-center gap-4 p-4 rounded-xl border-2 border-gray-200 hover:border-trust-blue hover:bg-trust-blue/5 transition-all text-left"
+                >
+                  <div className="w-10 h-10 bg-gray-50 rounded-lg flex items-center justify-center shrink-0">
+                    <BookOpen className="w-5 h-5 text-gray-700" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-reins-navy">Notion</div>
+                    <div className="text-sm text-gray-500">
+                      Databases and pages via integration token
                     </div>
                   </div>
                 </button>
@@ -641,6 +734,113 @@ export default function Credentials() {
                       <>
                         <SquareKanban className="w-4 h-4" />
                         Connect
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            ) : createType === 'notion_key' ? (
+              /* Notion Token Form */
+              <div>
+                <p className="text-sm text-gray-500 mb-4">
+                  Enter your Notion internal integration token. Make sure to share your databases with the integration in Notion.
+                </p>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
+                      Integration Token
+                    </label>
+                    <input
+                      type="password"
+                      value={notionToken}
+                      onChange={(e) => { setNotionToken(e.target.value); setNotionError(''); }}
+                      placeholder="ntn_xxxxxxxxxxxxxxxxxxxx"
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-mono focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
+                    />
+                  </div>
+                  {notionError && (
+                    <div className="flex items-center gap-2 text-sm text-alert-red bg-alert-red/5 px-3 py-2 rounded-lg">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      {notionError}
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-400">
+                    Create an integration at{' '}
+                    <a
+                      href="https://www.notion.so/my-integrations"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-trust-blue hover:underline"
+                    >
+                      Notion Settings
+                    </a>
+                    . Then share your databases with the integration.
+                  </p>
+                </div>
+                <div className="flex justify-between items-center mt-6">
+                  <button
+                    onClick={() => setCreateType('pick')}
+                    className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+                  >
+                    Back
+                  </button>
+                  <button
+                    onClick={() => addNotionMutation.mutate(notionToken)}
+                    disabled={!notionToken || addNotionMutation.isPending}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-trust-blue text-white rounded-lg text-sm font-medium hover:bg-blue-600 disabled:opacity-40 transition-all shadow-sm shadow-trust-blue/20"
+                  >
+                    {addNotionMutation.isPending ? (
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-white/30 border-t-white" />
+                    ) : (
+                      <>
+                        <BookOpen className="w-4 h-4" />
+                        Connect
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            ) : createType === 'microsoft_connect' ? (
+              /* Microsoft Connect */
+              <div>
+                <p className="text-sm text-gray-500 mb-4">
+                  Connect your Microsoft account to access Outlook Mail and Calendar.
+                </p>
+                <div className="bg-gray-50 rounded-lg p-4 mb-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 text-sm text-gray-600">
+                      <Mail className="w-4 h-4 text-trust-blue" />
+                      <span>Outlook Mail — read, search, draft, and send emails</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-sm text-gray-600">
+                      <Calendar className="w-4 h-4 text-trust-blue" />
+                      <span>Outlook Calendar — view, create, and manage events</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex justify-end gap-3">
+                  <button
+                    onClick={() => setCreateType('pick')}
+                    className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+                  >
+                    Back
+                  </button>
+                  <button
+                    onClick={handleMicrosoftConnect}
+                    disabled={initiateMicrosoftOAuthMutation.isPending}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-trust-blue text-white rounded-lg text-sm font-medium hover:bg-blue-600 disabled:opacity-40 transition-all shadow-sm shadow-trust-blue/20"
+                  >
+                    {initiateMicrosoftOAuthMutation.isPending ? (
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-white/30 border-t-white" />
+                    ) : (
+                      <>
+                        <svg className="w-4 h-4" viewBox="0 0 21 21" fill="none">
+                          <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+                          <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+                          <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+                          <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+                        </svg>
+                        Connect with Microsoft
                       </>
                     )}
                   </button>

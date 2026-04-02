@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Activity, Filter, Download, ChevronLeft, ChevronRight } from 'lucide-react';
-import { audit } from '../api/client';
+import { audit, agents } from '../api/client';
 
 interface AuditEntry {
   id: number;
   timestamp: string;
   eventType: string;
   agentId?: string;
+  agentName?: string;
   tool?: string;
   arguments?: Record<string, unknown>;
   result?: string;
@@ -25,6 +26,11 @@ interface AuditResponse {
   };
 }
 
+interface Agent {
+  id: string;
+  name: string;
+}
+
 export default function AuditLog() {
   const [filters, setFilters] = useState({
     eventType: '',
@@ -37,6 +43,11 @@ export default function AuditLog() {
   const { data, isLoading } = useQuery<AuditResponse>({
     queryKey: ['audit', filters],
     queryFn: () => audit.query(filters) as Promise<AuditResponse>,
+  });
+
+  const { data: agentsList } = useQuery<Agent[]>({
+    queryKey: ['agents'],
+    queryFn: agents.list as () => Promise<Agent[]>,
   });
 
   const resultColors: Record<string, string> = {
@@ -72,7 +83,7 @@ export default function AuditLog() {
     const rows = data.data.map((entry) => [
       new Date(entry.timestamp).toISOString(),
       entry.eventType,
-      entry.agentId || '',
+      entry.agentName || entry.agentId || '',
       entry.tool || '',
       entry.result || '',
       entry.durationMs?.toString() || '',
@@ -133,13 +144,18 @@ export default function AuditLog() {
             <option value="blocked">Blocked</option>
             <option value="error">Error</option>
           </select>
-          <input
-            type="text"
+          <select
             value={filters.agentId}
             onChange={(e) => setFilters({ ...filters, agentId: e.target.value, offset: 0 })}
-            placeholder="Filter by Agent ID..."
-            className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-48"
-          />
+            className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm"
+          >
+            <option value="">All Agents</option>
+            {agentsList?.map((agent) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.name}
+              </option>
+            ))}
+          </select>
           {(filters.eventType || filters.result || filters.agentId) && (
             <button
               onClick={() => setFilters({ eventType: '', agentId: '', result: '', limit: 50, offset: 0 })}
@@ -185,8 +201,14 @@ export default function AuditLog() {
                         {eventTypeLabels[entry.eventType] || entry.eventType}
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-sm font-mono">
-                      {entry.agentId || '-'}
+                    <td className="px-6 py-4 text-sm">
+                      {entry.agentName ? (
+                        <span className="font-medium text-reins-navy">{entry.agentName}</span>
+                      ) : entry.agentId ? (
+                        <span className="font-mono text-gray-400">{entry.agentId.slice(0, 8)}...</span>
+                      ) : (
+                        <span className="text-gray-300">-</span>
+                      )}
                     </td>
                     <td className="px-6 py-4 text-sm font-mono">
                       {entry.tool || '-'}
