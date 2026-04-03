@@ -50,6 +50,11 @@ const ConfigSchema = z.object({
   // Browser server
   browserMaxInstances: z.coerce.number().default(5),
   browserIdleTimeout: z.coerce.number().default(300000), // 5 minutes
+
+  // Mailgun
+  mailgunApiKey: z.string().optional(),
+  mailgunDomain: z.string().optional(),
+  mailgunFrom: z.string().optional(),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -82,6 +87,10 @@ function loadConfig(): Config {
     // Browser
     browserMaxInstances: process.env.BROWSER_MAX_INSTANCES,
     browserIdleTimeout: process.env.BROWSER_IDLE_TIMEOUT,
+    // Mailgun
+    mailgunApiKey: process.env.MAILGUN_API_KEY,
+    mailgunDomain: process.env.MAILGUN_DOMAIN,
+    mailgunFrom: process.env.MAILGUN_FROM,
   };
 
   const result = ConfigSchema.safeParse(raw);

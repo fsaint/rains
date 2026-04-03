@@ -5,6 +5,7 @@ import {
   Square,
   Play,
   RefreshCw,
+  RotateCcw,
   Trash2,
   ExternalLink,
   Loader2,
@@ -78,6 +79,11 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['deployment', agentId] }),
   });
 
+  const restartMutation = useMutation({
+    mutationFn: () => agents.restartDeployment(agentId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['deployment', agentId] }),
+  });
+
   const redeployMutation = useMutation({
     mutationFn: () => agents.redeployAgent(agentId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['deployment', agentId] }),
@@ -95,6 +101,7 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
     deployMutation.isPending ||
     startMutation.isPending ||
     stopMutation.isPending ||
+    restartMutation.isPending ||
     redeployMutation.isPending ||
     destroyMutation.isPending;
 
@@ -102,6 +109,7 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
     deployMutation.error ||
     startMutation.error ||
     stopMutation.error ||
+    restartMutation.error ||
     redeployMutation.error ||
     destroyMutation.error;
 
@@ -223,6 +231,16 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
                 >
                   {stopMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Square className="w-4 h-4" />}
                   Stop
+                </button>
+              )}
+              {deployment.status === 'running' && (
+                <button
+                  onClick={() => restartMutation.mutate()}
+                  disabled={isLoading}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-amber-600 bg-amber-50 hover:bg-amber-100 border border-amber-100 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {restartMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+                  Restart
                 </button>
               )}
               <button

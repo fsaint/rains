@@ -199,7 +199,8 @@ async function buildMachineConfig(opts: CreateMachineOpts) {
       ...(opts.soulMd ? { SOUL_MD: opts.soulMd } : {}),
       ...(opts.telegramUserId ? { TELEGRAM_TRUSTED_USER: opts.telegramUserId } : {}),
       ...(opts.modelProvider ? { MODEL_PROVIDER: opts.modelProvider } : {}),
-      ...(opts.modelName ? { MODEL_NAME: opts.modelName } : {}),
+      // openai-codex discovers available models at runtime — don't constrain with a model name
+      ...(opts.modelName && opts.modelProvider !== 'openai-codex' ? { MODEL_NAME: opts.modelName } : {}),
       ...(opts.openaiApiKey ? { OPENAI_API_KEY: opts.openaiApiKey } : {}),
       ...(opts.modelCredentials ? { OPENAI_CODEX_TOKENS: opts.modelCredentials } : {}),
     },
@@ -221,6 +222,10 @@ export async function startMachine(appName: string, machineId: string) {
 
 export async function stopMachine(appName: string, machineId: string) {
   await flyFetch(`/apps/${appName}/machines/${machineId}/stop`, { method: 'POST' });
+}
+
+export async function restartMachine(appName: string, machineId: string) {
+  await flyFetch(`/apps/${appName}/machines/${machineId}/restart`, { method: 'POST' });
 }
 
 export async function getMachineStatus(appName: string, machineId: string): Promise<{ state: string }> {

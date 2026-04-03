@@ -56,6 +56,7 @@ import {
 } from '../oauth/pending-flows.js';
 import { handleMCPRequest, type MCPRequest } from '../mcp/agent-endpoint.js';
 import { getSession, type SessionPayload } from '../auth/index.js';
+import { sendReauthEmail } from '../services/email.js';
 import * as provider from '../providers/index.js';
 import { nanoid } from 'nanoid';
 import {
@@ -749,6 +750,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
 
     const instance = await createServiceInstance(agentId, serviceType, label, credentialId);
+    autoRedeployIfDeployed(agentId).catch((err) =>
+      console.error('[autoRedeploy] Failed after instance create:', err)
+    );
     return { data: instance };
   });
 
@@ -781,6 +785,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         error: { code: 'NOT_FOUND', message: 'Instance not found' },
       });
     }
+    // Enabling/disabling a service changes what's in MCP_CONFIG — trigger redeploy
+    if ('enabled' in request.body) {
+      autoRedeployIfDeployed(result.agentId).catch((err) =>
+        console.error('[autoRedeploy] Failed after instance update:', err)
+      );
+    }
     return { data: result };
   });
 
@@ -790,7 +800,13 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.delete<{ Params: { instanceId: string } }>(
     '/api/permissions/instances/:instanceId',
     async (request, reply) => {
+      const instance = await getInstanceConfig(request.params.instanceId);
       await deleteServiceInstance(request.params.instanceId);
+      if (instance) {
+        autoRedeployIfDeployed(instance.agentId).catch((err) =>
+          console.error('[autoRedeploy] Failed after instance delete:', err)
+        );
+      }
       return reply.code(204).send();
     }
   );
@@ -2335,6 +2351,93 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   );
 
   // ========================================================================
+  // ============================================================================
+  // Provisioning error classification + reauth approvals
+  // ============================================================================
+
+  type ReauthProvider = 'anthropic' | 'openai-codex' | 'fly' | 'docker' | 'unknown';
+
+  function classifyProvisionError(err: unknown, modelProvider?: string): {
+    isAuth: boolean;
+    provider: ReauthProvider;
+    hint: string;
+  } {
+    const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+
+    const authPatterns = [
+      'unauthorized', 'authentication', 'invalid.*key', 'invalid.*token',
+      'expired', '401', '403', 'forbidden', 'permission denied',
+      'invalid_api_key', 'invalid_request_error', 'sk-ant', 'oat01',
+    ];
+    const isAuth = authPatterns.some((p) => new RegExp(p).test(msg));
+
+    let provider: ReauthProvider = 'unknown';
+    if (isAuth) {
+      if (modelProvider === 'openai-codex' || /openai|codex/.test(msg)) {
+        provider = 'openai-codex';
+      } else if (modelProvider === 'anthropic' || /anthropic|claude/.test(msg)) {
+        provider = 'anthropic';
+      } else if (/fly\.io|fly api/.test(msg)) {
+        provider = 'fly';
+      } else {
+        provider = modelProvider as ReauthProvider ?? 'unknown';
+      }
+    } else if (/docker|container|image/.test(msg)) {
+      provider = 'docker';
+    } else if (/fly\.io|fly api/.test(msg)) {
+      provider = 'fly';
+    }
+
+    const hints: Record<ReauthProvider, string> = {
+      'anthropic': 'Your Claude setup token may have expired. Run `claude setup-token` and reconnect.',
+      'openai-codex': 'Your OpenAI credentials have expired. Reconnect via the OpenAI device flow.',
+      'fly': 'Fly.io authentication failed. Check your FLY_API_TOKEN.',
+      'docker': 'Docker provisioning failed. Ensure Docker/OrbStack is running and the image is available.',
+      'unknown': 'Provisioning failed. Please re-authenticate and try again.',
+    };
+
+    return { isAuth, provider, hint: hints[provider] };
+  }
+
+  async function createReauthApproval(
+    agentId: string,
+    deploymentId: string,
+    reauthProvider: ReauthProvider,
+    hint: string,
+    errorMessage: string,
+  ): Promise<string> {
+    const approvalId = await approvalQueue.submit(
+      agentId,
+      'reauth',
+      { provider: reauthProvider, deploymentId },
+      `${hint}\n\nError: ${errorMessage}`,
+      7 * 24 * 60 * 60 * 1000, // 7 days
+    );
+
+    // Send email notification — look up agent owner
+    try {
+      const agentRow = await client.execute({
+        sql: `SELECT a.name, u.email FROM agents a JOIN users u ON u.id = a.user_id WHERE a.id = ?`,
+        args: [agentId],
+      });
+      if (agentRow.rows.length > 0) {
+        const { name: agentName, email } = agentRow.rows[0] as { name: string; email: string };
+        await sendReauthEmail({
+          to: email,
+          agentName,
+          provider: reauthProvider,
+          hint,
+          approvalId,
+          dashboardUrl: config.dashboardUrl,
+        });
+      }
+    } catch (emailErr) {
+      console.warn('[reauth] Failed to send email notification:', emailErr);
+    }
+
+    return approvalId;
+  }
+
   // Agent Deployment (Fly.io / Docker provisioning)
   // ========================================================================
 
@@ -2392,6 +2495,18 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const gatewayToken = nanoid(32);
     const now = new Date().toISOString();
 
+    // Resolve model name — ensure it matches the selected provider
+    const resolvedModelName = (() => {
+      const mp = body.modelProvider ?? 'anthropic';
+      const mn = body.modelName?.trim() ?? '';
+      if (mp === 'openai-codex') {
+        // Reject Claude model names for OpenAI provider
+        return mn && !mn.startsWith('claude-') ? mn : 'o3';
+      }
+      // Reject OpenAI model names for Anthropic provider
+      return mn && mn.startsWith('claude-') ? mn : 'claude-sonnet-4-5';
+    })();
+
     // Create agent record
     await client.execute({
       sql: `INSERT INTO agents (id, user_id, name, description, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)`,
@@ -2414,7 +2529,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         gatewayToken,
         soulMd: body.soulMd,
         modelProvider: body.modelProvider,
-        modelName: body.modelName,
+        modelName: resolvedModelName,
         region: body.region,
         openaiApiKey: body.openaiApiKey,
         modelCredentials: body.modelCredentials,
@@ -2427,7 +2542,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           result.appName, result.machineId, 'running', result.managementUrl,
           body.telegramToken, body.telegramUserId ?? null,
           body.soulMd ?? null,
-          body.modelProvider ?? 'anthropic', body.modelName || (body.modelProvider === 'openai-codex' ? 'o3' : 'claude-sonnet-4-5'),
+          body.modelProvider ?? 'anthropic', resolvedModelName,
           body.region ?? 'iad', gatewayToken,
           body.openaiApiKey ?? null, body.modelCredentials ?? null,
           body.mcpServers ?? null,
@@ -2460,8 +2575,18 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         args: [now, agentId],
       });
       const message = err instanceof Error ? err.message : 'Unknown error';
+      const { isAuth, provider, hint } = classifyProvisionError(err, body.modelProvider);
+      let approvalId: string | undefined;
+      if (isAuth) {
+        approvalId = await createReauthApproval(agentId, deploymentId, provider, hint, message);
+        console.warn(`[deploy] Auth failure for agent ${agentId}, created reauth approval ${approvalId}`);
+      }
       return reply.code(500).send({
-        error: { code: 'DEPLOY_FAILED', message: `Deployment failed: ${message}` },
+        error: {
+          code: isAuth ? 'AUTH_FAILED' : 'DEPLOY_FAILED',
+          message: isAuth ? hint : `Deployment failed: ${message}`,
+          details: { approvalId, provider, deploymentId },
+        },
       });
     }
   });
@@ -2580,8 +2705,18 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         args: [deploymentId, id, gatewayToken, now, now],
       });
       const message = err instanceof Error ? err.message : 'Unknown error';
+      const { isAuth, provider, hint } = classifyProvisionError(err, body.modelProvider);
+      let approvalId: string | undefined;
+      if (isAuth) {
+        approvalId = await createReauthApproval(id, deploymentId, provider, hint, message);
+        console.warn(`[deploy] Auth failure for agent ${id}, created reauth approval ${approvalId}`);
+      }
       return reply.code(500).send({
-        error: { code: 'DEPLOY_FAILED', message: `Deployment failed: ${message}` },
+        error: {
+          code: isAuth ? 'AUTH_FAILED' : 'DEPLOY_FAILED',
+          message: isAuth ? hint : `Deployment failed: ${message}`,
+          details: { approvalId, provider, deploymentId },
+        },
       });
     }
   });
@@ -2827,6 +2962,34 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const message = err instanceof Error ? err.message : 'Unknown error';
       return reply.code(500).send({
         error: { code: 'STOP_FAILED', message },
+      });
+    }
+  });
+
+  /**
+   * Restart a running agent deployment (soft restart, no config change)
+   */
+  app.post<{ Params: { id: string } }>('/api/agents/:id/restart', async (request, reply) => {
+    const { id } = request.params;
+    const deployment = await getActiveDeployment(id);
+    if (!deployment) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No active deployment found' } });
+    }
+
+    try {
+      await provider.restart(
+        deployment.fly_app_name as string,
+        deployment.fly_machine_id as string
+      );
+      await client.execute({
+        sql: `UPDATE deployed_agents SET status = 'running', updated_at = ? WHERE id = ?`,
+        args: [new Date().toISOString(), deployment.id as string],
+      });
+      return { data: { status: 'running' } };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return reply.code(500).send({
+        error: { code: 'RESTART_FAILED', message },
       });
     }
   });
@@ -3119,5 +3282,48 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       args: [agentId],
     });
     return result.rows.length > 0 ? result.rows[0] : null;
+  }
+
+  /**
+   * Trigger a redeploy for an agent if it has an active, non-stopped deployment.
+   * Used to pick up provisioning changes (MCP_CONFIG baked into env vars).
+   * Fire-and-forget: call without await and catch errors separately.
+   */
+  async function autoRedeployIfDeployed(agentId: string): Promise<void> {
+    const deployment = await getActiveDeployment(agentId);
+    if (!deployment || deployment.status === 'stopped') return;
+
+    const reinsUrl = process.env.REINS_PUBLIC_URL || config.dashboardUrl;
+    const mcpConfigs: object[] = [
+      { name: 'reins', url: `${reinsUrl}/mcp/${agentId}`, transport: 'http' },
+    ];
+    if (deployment.mcp_config_json) {
+      try {
+        const userServers = JSON.parse(deployment.mcp_config_json as string);
+        if (Array.isArray(userServers)) mcpConfigs.push(...userServers);
+      } catch { /* ignore malformed json */ }
+    }
+
+    await provider.redeploy(
+      deployment.fly_app_name as string,
+      deployment.fly_machine_id as string,
+      {
+        instanceId: deployment.id as string,
+        telegramToken: deployment.telegram_token as string,
+        telegramUserId: deployment.telegram_user_id as string | undefined,
+        mcpConfigs,
+        gatewayToken: deployment.gateway_token as string,
+        soulMd: deployment.soul_md as string | undefined,
+        modelProvider: deployment.model_provider as string | undefined,
+        modelName: deployment.model_name as string | undefined,
+        openaiApiKey: deployment.openai_api_key as string | undefined,
+        modelCredentials: deployment.model_credentials as string | undefined,
+      }
+    );
+
+    await client.execute({
+      sql: `UPDATE deployed_agents SET status = 'running', updated_at = ? WHERE id = ?`,
+      args: [new Date().toISOString(), deployment.id as string],
+    });
   }
 };

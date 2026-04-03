@@ -64,6 +64,14 @@ export async function stop(appName: string, machineId: string) {
   }
 }
 
+export async function restart(appName: string, machineId: string) {
+  if (isLocal) {
+    await docker.restartLocalContainer(appName);
+  } else {
+    await fly.restartMachine(appName, machineId);
+  }
+}
+
 export async function getStatus(appName: string, machineId: string): Promise<string> {
   if (isLocal) {
     return docker.getLocalContainerStatus(appName);

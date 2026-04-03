@@ -27,7 +27,8 @@ const trustedUser = process.env.TELEGRAM_TRUSTED_USER || '';
 const mcpConfig = JSON.parse(process.env.MCP_CONFIG || '[]');
 const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN || 'reins-' + Math.random().toString(36).slice(2);
 const modelProvider = process.env.MODEL_PROVIDER || 'anthropic';
-const modelName = process.env.MODEL_NAME || 'claude-sonnet-4-5';
+const defaultModelName = modelProvider === 'openai-codex' ? 'gpt-5.4' : 'claude-sonnet-4-5';
+const modelName = process.env.MODEL_NAME || defaultModelName;
 
 // Build MCP servers object from array
 const mcpServers = {};

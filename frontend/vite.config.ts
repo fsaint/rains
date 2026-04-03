@@ -9,15 +9,15 @@ export default defineConfig({
     allowedHosts: ['reins.btv.pw'],
     proxy: {
       '/api': {
-        target: 'http://localhost:5001',
+        target: 'http://localhost:3000',
         changeOrigin: true,
       },
       '/mcp': {
-        target: 'http://localhost:5001',
+        target: 'http://localhost:3000',
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://localhost:5001',
+        target: 'ws://localhost:3000',
         ws: true,
       },
     },

@@ -170,6 +170,8 @@ export const agents = {
     request<{ status: string }>(`/agents/${id}/start`, { method: 'POST' }),
   stopDeployment: (id: string) =>
     request<{ status: string }>(`/agents/${id}/stop`, { method: 'POST' }),
+  restartDeployment: (id: string) =>
+    request<{ status: string }>(`/agents/${id}/restart`, { method: 'POST' }),
   redeployAgent: (id: string, data?: Partial<DeployConfig>) =>
     request<{ status: string; managementUrl: string }>(`/agents/${id}/redeploy`, { method: 'POST', body: JSON.stringify(data ?? {}) }),
   destroyDeployment: (id: string) =>
