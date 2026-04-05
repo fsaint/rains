@@ -192,6 +192,9 @@ export const agents = {
       method: 'PUT',
       body: JSON.stringify({ soulMd }),
     }),
+  getManagementUrl: (id: string) =>
+    request<{ url: string }>(`/agents/${id}/management-url`),
+  logsStreamUrl: (id: string) => `${API_BASE}/agents/${id}/logs/stream`,
 };
 
 // OpenAI Auth

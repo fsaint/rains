@@ -13,8 +13,13 @@ import {
   Loader2,
   Save,
   Server,
+  ScrollText,
+  MessageSquare,
+  RotateCcw,
 } from 'lucide-react';
 import { agents, type AgentDetail as AgentDetailType } from '../api/client';
+import LogViewer from '../components/LogViewer';
+import ChatModal from '../components/ChatModal';
 
 const STATUS_COLORS: Record<string, { bg: string; text: string; dot: string }> = {
   running: { bg: 'bg-emerald-50', text: 'text-emerald-700', dot: 'bg-emerald-500' },
@@ -32,6 +37,8 @@ export default function AgentDetail() {
   const [tokenCopied, setTokenCopied] = useState(false);
   const [soulMd, setSoulMd] = useState<string | null>(null);
   const [soulDirty, setSoulDirty] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
+  const [showChat, setShowChat] = useState(false);
 
   const { data: agent, isLoading } = useQuery<AgentDetailType>({
     queryKey: ['agent-detail', id],
@@ -71,6 +78,11 @@ export default function AgentDetail() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agent-detail', id] }),
   });
 
+  const restartMutation = useMutation({
+    mutationFn: () => agents.restartDeployment(id!),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agent-detail', id] }),
+  });
+
   const soulMutation = useMutation({
     mutationFn: (newSoul: string) => agents.updateSoul(id!, newSoul),
     onSuccess: () => {
@@ -79,7 +91,7 @@ export default function AgentDetail() {
     },
   });
 
-  const isActionLoading = startMutation.isPending || stopMutation.isPending || redeployMutation.isPending || destroyMutation.isPending;
+  const isActionLoading = startMutation.isPending || stopMutation.isPending || redeployMutation.isPending || destroyMutation.isPending || restartMutation.isPending;
 
   const handleCopyToken = async (token: string) => {
     await navigator.clipboard.writeText(token);
@@ -153,6 +165,23 @@ export default function AgentDetail() {
         </div>
       </div>
 
+      {/* Modals */}
+      {showLogs && (
+        <LogViewer
+          agentId={id!}
+          agentName={agent.name}
+          streamUrl={agents.logsStreamUrl(id!)}
+          onClose={() => setShowLogs(false)}
+        />
+      )}
+      {showChat && dep?.status === 'running' && (
+        <ChatModal
+          agentId={id!}
+          agentName={agent.name}
+          onClose={() => setShowChat(false)}
+        />
+      )}
+
       <div className="space-y-6">
         {/* Controls */}
         {dep && dep.status !== 'destroyed' && dep.status !== 'error' && (
@@ -178,6 +207,17 @@ export default function AgentDetail() {
                   Stop
                 </button>
               )}
+              {dep.status === 'running' && (
+                <button
+                  onClick={() => restartMutation.mutate()}
+                  disabled={isActionLoading}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 border border-gray-200 rounded-lg transition-colors disabled:opacity-50"
+                  title="Restart the gateway container"
+                >
+                  {restartMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+                  Restart
+                </button>
+              )}
               <button
                 onClick={() => redeployMutation.mutate()}
                 disabled={isActionLoading}
@@ -187,6 +227,25 @@ export default function AgentDetail() {
                 Redeploy
               </button>
               <div className="flex-1" />
+              {/* Logs & Chat */}
+              <button
+                onClick={() => setShowLogs(true)}
+                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 border border-gray-200 rounded-lg transition-colors"
+                title="View live logs"
+              >
+                <ScrollText className="w-4 h-4" />
+                Logs
+              </button>
+              {dep.status === 'running' && (
+                <button
+                  onClick={() => setShowChat(true)}
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-white bg-trust-blue hover:bg-trust-blue/90 rounded-lg transition-colors"
+                  title="Chat with this agent"
+                >
+                  <MessageSquare className="w-4 h-4" />
+                  Chat
+                </button>
+              )}
               <button
                 onClick={() => {
                   if (confirm('Destroy this deployment? This cannot be undone.')) {

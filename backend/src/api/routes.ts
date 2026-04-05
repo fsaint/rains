@@ -1,4 +1,5 @@
 import { FastifyInstance, FastifyPluginAsync } from 'fastify';
+import { spawn } from 'child_process';
 import { config } from '../config/index.js';
 import { client } from '../db/index.js';
 import { policyEngine } from '../policy/engine.js';
@@ -1820,7 +1821,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           await credentialVault.update(pendingFlow.reconnectCredentialId, tokenData);
 
           return reply.redirect(
-            `${dashboardUrl}/credentials?oauth_success=true&email=${encodeURIComponent(userInfo.email)}&reconnected=true`
+            `${dashboardUrl}/credentials?oauth_success=true&service=google&email=${encodeURIComponent(userInfo.email)}&reconnected=true`
           );
         }
 
@@ -1836,7 +1837,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
         // Redirect back to credentials page with success
         return reply.redirect(
-          `${dashboardUrl}/credentials?oauth_success=true&email=${encodeURIComponent(userInfo.email)}`
+          `${dashboardUrl}/credentials?oauth_success=true&service=google&email=${encodeURIComponent(userInfo.email)}`
         );
       } catch (err) {
         console.error('OAuth callback error:', err);
@@ -1849,7 +1850,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // OAuth - Microsoft (Outlook Mail, Outlook Calendar)
   // ========================================================================
 
-  const MICROSOFT_BASE_SCOPES = ['openid', 'profile', 'email', 'offline_access'];
+  const MICROSOFT_BASE_SCOPES = ['openid', 'profile', 'email', 'offline_access', 'User.Read'];
 
   /**
    * Initiate Microsoft OAuth flow
@@ -1899,6 +1900,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     } catch {
       // Fallback if registry unavailable
       serviceScopes = [
+        'https://graph.microsoft.com/User.Read',
         'https://graph.microsoft.com/Mail.Read',
         'https://graph.microsoft.com/Mail.ReadWrite',
         'https://graph.microsoft.com/Mail.Send',
@@ -2021,7 +2023,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         if (pendingFlow.reconnectCredentialId) {
           await credentialVault.update(pendingFlow.reconnectCredentialId, tokenData);
           return reply.redirect(
-            `${dashboardUrl}/credentials?oauth_success=true&email=${encodeURIComponent(email)}&reconnected=true`
+            `${dashboardUrl}/credentials?oauth_success=true&service=microsoft&email=${encodeURIComponent(email)}&reconnected=true`
           );
         }
 
@@ -2041,7 +2043,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         }
 
         return reply.redirect(
-          `${dashboardUrl}/credentials?oauth_success=true&email=${encodeURIComponent(email)}`
+          `${dashboardUrl}/credentials?oauth_success=true&service=microsoft&email=${encodeURIComponent(email)}`
         );
       } catch (err) {
         console.error('Microsoft OAuth callback error:', err);
@@ -3113,6 +3115,112 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         return reply.code(500).send({ error: { code: 'LOGS_FAILED', message } });
+      }
+    }
+  );
+
+  /**
+   * SSE stream of live logs for a deployed agent.
+   * For local Docker: streams docker logs -f
+   * For Fly: polls getAppLogs every 2s
+   */
+  app.get<{ Params: { id: string } }>(
+    '/api/agents/:id/logs/stream',
+    async (request, reply) => {
+      const { id } = request.params;
+      const deployment = await getActiveDeployment(id);
+      if (!deployment?.fly_app_name) {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No active deployment found' } });
+      }
+
+      const appName = deployment.fly_app_name as string;
+
+      reply.raw.setHeader('Content-Type', 'text/event-stream');
+      reply.raw.setHeader('Cache-Control', 'no-cache');
+      reply.raw.setHeader('Connection', 'keep-alive');
+      reply.raw.setHeader('X-Accel-Buffering', 'no');
+      reply.raw.flushHeaders();
+
+      const send = (line: string) => {
+        // Escape newlines within the log line for SSE
+        const escaped = line.replace(/\n/g, '\\n');
+        reply.raw.write(`data: ${escaped}\n\n`);
+      };
+
+      const isLocal = process.env.REINS_PROVIDER === 'local';
+
+      if (isLocal) {
+        // Stream docker logs -f
+        const child = spawn('docker', ['logs', '-f', '--timestamps', appName]);
+
+        const onData = (chunk: Buffer) => {
+          const lines = chunk.toString().split('\n');
+          for (const line of lines) {
+            if (line.trim()) send(line);
+          }
+        };
+
+        child.stdout.on('data', onData);
+        child.stderr.on('data', onData);
+
+        request.raw.on('close', () => { child.kill(); });
+        child.on('exit', () => { try { reply.raw.end(); } catch { /* ignore */ } });
+      } else {
+        // Poll Fly logs every 2 seconds
+        let nextToken: string | undefined;
+        let stopped = false;
+
+        request.raw.on('close', () => { stopped = true; });
+
+        const poll = async () => {
+          if (stopped) return;
+          try {
+            const result = await provider.getLogs(appName, nextToken);
+            nextToken = result.nextToken;
+            for (const entry of result.logs) {
+              send(`[${entry.timestamp}] ${entry.message}`);
+            }
+          } catch { /* ignore transient errors */ }
+          if (!stopped) setTimeout(poll, 2000);
+        };
+
+        poll();
+      }
+
+      // Keep-alive ping every 15s
+      const keepAlive = setInterval(() => {
+        if (!reply.raw.destroyed) reply.raw.write(': ping\n\n');
+        else clearInterval(keepAlive);
+      }, 15000);
+      request.raw.on('close', () => clearInterval(keepAlive));
+
+      // Return hijacked response
+      return reply;
+    }
+  );
+
+  /**
+   * Get the current management URL for a deployed agent.
+   * For local Docker this resolves the current dynamic port.
+   */
+  app.get<{ Params: { id: string } }>(
+    '/api/agents/:id/management-url',
+    async (request, reply) => {
+      const { id } = request.params;
+      const deployment = await getActiveDeployment(id);
+      if (!deployment?.fly_app_name) {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No active deployment found' } });
+      }
+
+      try {
+        const url = await provider.getManagementUrl(
+          deployment.fly_app_name as string,
+          deployment.gateway_token as string
+        );
+        return { data: { url } };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        return reply.code(500).send({ error: { code: 'URL_FAILED', message } });
       }
     }
   );
