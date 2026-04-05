@@ -12,9 +12,11 @@ import {
   AlertCircle,
   X,
   ScrollText,
+  MessageSquare,
 } from 'lucide-react';
 import { agents, type DeployConfig } from '../api/client';
-import { LogsPanel } from './LogsPanel';
+import LogViewer from './LogViewer';
+import ChatModal from './ChatModal';
 
 interface DeploymentPanelProps {
   agentId: string;
@@ -35,6 +37,7 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
   const queryClient = useQueryClient();
   const [showDeployForm, setShowDeployForm] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
+  const [showChat, setShowChat] = useState(false);
   const [config, setConfig] = useState<DeployConfig>({
     telegramToken: '',
     telegramUserId: '',
@@ -165,15 +168,23 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
                   <ScrollText className="w-3.5 h-3.5" />
                   Logs
                 </button>
+                {deployment.status === 'running' && (
+                  <button
+                    onClick={() => setShowChat(true)}
+                    className="flex items-center gap-1.5 text-sm text-trust-blue hover:text-trust-blue/80 font-medium transition-colors"
+                  >
+                    <MessageSquare className="w-3.5 h-3.5" />
+                    Chat
+                  </button>
+                )}
                 {deployment.managementUrl && (
                   <a
                     href={deployment.managementUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center gap-1.5 text-sm text-trust-blue hover:underline"
+                    className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-600 transition-colors"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
-                    Open
                   </a>
                 )}
               </div>
@@ -392,10 +403,18 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
         )}
 
         {showLogs && (
-          <LogsPanel
+          <LogViewer
             agentId={agentId}
             agentName={agentName}
+            streamUrl={agents.logsStreamUrl(agentId)}
             onClose={() => setShowLogs(false)}
+          />
+        )}
+        {showChat && (
+          <ChatModal
+            agentId={agentId}
+            agentName={agentName}
+            onClose={() => setShowChat(false)}
           />
         )}
       </div>
