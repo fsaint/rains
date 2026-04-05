@@ -57,11 +57,13 @@ export default function Credentials() {
 
     if (oauthSuccess === 'true') {
       const reconnected = searchParams.get('reconnected') === 'true';
+      const service = searchParams.get('service');
+      const providerLabel = service === 'microsoft' ? 'Microsoft account' : 'Google account';
       setNotification({
         type: 'success',
         message: reconnected
-          ? `Google account ${email ? `(${email}) ` : ''}reconnected successfully!`
-          : `Google account ${email ? `(${email}) ` : ''}connected successfully!`,
+          ? `${providerLabel} ${email ? `(${email}) ` : ''}reconnected successfully!`
+          : `${providerLabel} ${email ? `(${email}) ` : ''}connected successfully!`,
       });
       queryClient.invalidateQueries({ queryKey: ['credentials'] });
       setHealthStatus({});
