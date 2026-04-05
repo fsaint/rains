@@ -59,6 +59,7 @@ const config = {
     auth: { token: gatewayToken },
     controlUi: {
       dangerouslyAllowHostHeaderOriginFallback: true,
+      dangerouslyDisableDeviceAuth: true,
     },
   },
   agents: {
