@@ -2,7 +2,7 @@
  * Tests for MCP Agent Endpoint
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import {
   handleMCPRequest,
   getServiceTypeFromTool,
@@ -31,6 +31,15 @@ vi.mock('../services/permissions.js', () => ({
       gmail_create_draft: 'require_approval',
     },
   }),
+  getEffectiveInstancePermissions: vi.fn().mockResolvedValue({
+    enabled: true,
+    tools: {
+      gmail_list_messages: 'allow',
+      gmail_get_message: 'allow',
+      gmail_send_message: 'block',
+      gmail_create_draft: 'require_approval',
+    },
+  }),
   canAccessTool: vi.fn().mockImplementation(async (_agentId: string, _serviceType: string, toolName: string) => {
     if (toolName === 'gmail_send_message') {
       return { allowed: false, requiresApproval: false };
@@ -40,6 +49,31 @@ vi.mock('../services/permissions.js', () => ({
     }
     return { allowed: true, requiresApproval: false };
   }),
+}));
+
+vi.mock('@reins/servers', () => ({
+  serviceDefinitions: [
+    { type: 'gmail', name: 'Gmail' },
+    { type: 'drive', name: 'Google Drive' },
+    { type: 'calendar', name: 'Google Calendar' },
+    { type: 'web-search', name: 'Web Search' },
+    { type: 'browser', name: 'Browser' },
+  ],
+  serviceRegistry: new Map([
+    ['gmail', { type: 'gmail', auth: { required: false } }],
+    ['drive', { type: 'drive', auth: { required: false } }],
+    ['calendar', { type: 'calendar', auth: { required: false } }],
+    ['web-search', { type: 'web-search', auth: { required: false } }],
+    ['browser', { type: 'browser', auth: { required: false } }],
+  ]),
+  getServiceTypeFromToolName: (name: string) => {
+    if (name.startsWith('gmail_')) return 'gmail';
+    if (name.startsWith('drive_')) return 'drive';
+    if (name.startsWith('calendar_')) return 'calendar';
+    if (name === 'web_search' || name.startsWith('web_search_')) return 'web-search';
+    if (name.startsWith('browser_')) return 'browser';
+    return null;
+  },
 }));
 
 vi.mock('./server-manager.js', () => ({
@@ -126,6 +160,11 @@ vi.mock('../credentials/vault.js', () => ({
     }),
   },
 }));
+
+// Trigger ensureRegistry() so _getServiceType is populated before synchronous tests run
+beforeAll(async () => {
+  await handleMCPRequest('any', { jsonrpc: '1.0' as '2.0', id: 0, method: 'tools/list' });
+});
 
 describe('getServiceTypeFromTool', () => {
   it('should return gmail for gmail_ prefix', () => {

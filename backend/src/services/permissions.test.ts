@@ -15,10 +15,12 @@ vi.mock('../db/index.js', () => ({
 }));
 
 vi.mock('../db/schema.js', () => ({
-  agents: { id: 'id', name: 'name', status: 'status' },
+  agents: { id: 'id', name: 'name', status: 'status', userId: 'user_id' },
   agentServiceAccess: { id: 'id', agentId: 'agent_id', serviceType: 'service_type', enabled: 'enabled', credentialId: 'credential_id' },
-  agentToolPermissions: { id: 'id', agentId: 'agent_id', serviceType: 'service_type', toolName: 'tool_name', permission: 'permission' },
-  credentials: { id: 'id', serviceId: 'service_id', type: 'type', expiresAt: 'expires_at' },
+  agentToolPermissions: { id: 'id', agentId: 'agent_id', serviceType: 'service_type', toolName: 'tool_name', permission: 'permission', instanceId: 'instance_id' },
+  credentials: { id: 'id', serviceId: 'service_id', type: 'type', expiresAt: 'expires_at', userId: 'user_id', accountEmail: 'account_email', accountName: 'account_name' },
+  agentServiceCredentials: { id: 'id', agentId: 'agent_id', serviceType: 'service_type', credentialId: 'credential_id', isDefault: 'is_default' },
+  agentServiceInstances: { id: 'id', agentId: 'agent_id', serviceType: 'service_type', credentialId: 'credential_id', enabled: 'enabled', isDefault: 'is_default' },
 }));
 
 vi.mock('nanoid', () => ({
@@ -30,6 +32,76 @@ vi.mock('../mcp/server-manager.js', () => ({
     getAllServerTools: vi.fn(() => []),
   },
 }));
+
+vi.mock('../credentials/vault.js', () => ({
+  credentialVault: {
+    getValidAccessToken: vi.fn().mockResolvedValue(null),
+    retrieve: vi.fn().mockResolvedValue(null),
+  },
+}));
+
+vi.mock('@reins/servers', () => {
+  const defs = [
+    {
+      type: 'gmail',
+      name: 'Gmail',
+      auth: { required: true, type: 'oauth2', credentialServiceIds: ['gmail'] },
+      permissions: {
+        read: ['gmail_list_accounts', 'gmail_list_messages', 'gmail_get_message', 'gmail_search', 'gmail_list_labels'],
+        write: ['gmail_create_draft', 'gmail_send_draft'],
+        blocked: ['gmail_send_message', 'gmail_delete_message'],
+      },
+    },
+    {
+      type: 'drive',
+      name: 'Google Drive',
+      auth: { required: true, type: 'oauth2', credentialServiceIds: ['drive'] },
+      permissions: {
+        read: ['drive_list_files', 'drive_get_file', 'drive_read_file', 'drive_search'],
+        write: ['drive_create_file', 'drive_update_file'],
+        blocked: ['drive_share_file', 'drive_delete_file'],
+      },
+    },
+    {
+      type: 'calendar',
+      name: 'Google Calendar',
+      auth: { required: true, type: 'oauth2', credentialServiceIds: ['calendar'] },
+      permissions: {
+        read: ['calendar_list_events', 'calendar_get_event', 'calendar_search_events', 'calendar_list_calendars'],
+        write: ['calendar_create_event', 'calendar_update_event'],
+        blocked: ['calendar_delete_event'],
+      },
+    },
+    {
+      type: 'web-search',
+      name: 'Web Search',
+      auth: { required: false, type: 'api-key', credentialServiceIds: ['web-search'] },
+      permissions: { read: ['web_search', 'web_search_news', 'web_search_images'], write: [], blocked: [] },
+    },
+    {
+      type: 'browser',
+      name: 'Browser',
+      auth: { required: false, type: 'none', credentialServiceIds: [] },
+      permissions: {
+        read: ['browser_navigate', 'browser_screenshot', 'browser_get_content', 'browser_close'],
+        write: ['browser_click', 'browser_type'],
+        blocked: ['browser_evaluate'],
+      },
+    },
+  ];
+  return {
+    serviceDefinitions: defs,
+    serviceRegistry: new Map(defs.map((d) => [d.type, d])),
+    getServiceTypeFromToolName: (name: string) => {
+      if (name.startsWith('gmail_')) return 'gmail';
+      if (name.startsWith('drive_')) return 'drive';
+      if (name.startsWith('calendar_')) return 'calendar';
+      if (name === 'web_search' || name.startsWith('web_search_')) return 'web-search';
+      if (name.startsWith('browser_')) return 'browser';
+      return null;
+    },
+  };
+});
 
 import { db } from '../db/index.js';
 import {
@@ -94,7 +166,8 @@ describe('Permission Service', () => {
         .mockReturnValueOnce(mockQueryChain(mockAgents, false) as never) // agents
         .mockReturnValueOnce(mockQueryChain(mockAccessRecords, false) as never) // agentServiceAccess
         .mockReturnValueOnce(mockQueryChain(mockToolPerms, false) as never) // agentToolPermissions
-        .mockReturnValueOnce(mockQueryChain(mockCredentials, false) as never); // credentials
+        .mockReturnValueOnce(mockQueryChain(mockCredentials, false) as never) // credentials
+        .mockReturnValueOnce(mockQueryChain([], false) as never); // agentServiceCredentials
 
       const result = await getPermissionMatrix();
 
@@ -116,7 +189,8 @@ describe('Permission Service', () => {
         .mockReturnValueOnce(mockQueryChain(mockAgents, false) as never)
         .mockReturnValueOnce(mockQueryChain(mockAccessRecords, false) as never)
         .mockReturnValueOnce(mockQueryChain(mockToolPerms, false) as never)
-        .mockReturnValueOnce(mockQueryChain([], false) as never);
+        .mockReturnValueOnce(mockQueryChain([], false) as never) // credentials
+        .mockReturnValueOnce(mockQueryChain([], false) as never); // agentServiceCredentials
 
       const result = await getPermissionMatrix();
 
@@ -142,7 +216,8 @@ describe('Permission Service', () => {
       vi.mocked(db.select)
         .mockReturnValueOnce(mockQueryChain([mockAgent]) as never) // agent
         .mockReturnValueOnce(mockQueryChain([mockAccess]) as never) // access
-        .mockReturnValueOnce(mockQueryChain([]) as never); // tool overrides
+        .mockReturnValueOnce(mockQueryChain([]) as never) // tool overrides
+        .mockReturnValueOnce(mockQueryChain([]) as never); // agentServiceCredentials
 
       const result = await getAgentServiceConfig('agent-1', 'gmail');
 
@@ -163,7 +238,8 @@ describe('Permission Service', () => {
       vi.mocked(db.select)
         .mockReturnValueOnce(mockQueryChain([mockAgent]) as never)
         .mockReturnValueOnce(mockQueryChain([mockAccess]) as never)
-        .mockReturnValueOnce(mockQueryChain(mockOverrides) as never);
+        .mockReturnValueOnce(mockQueryChain(mockOverrides) as never) // tool overrides
+        .mockReturnValueOnce(mockQueryChain([]) as never); // agentServiceCredentials
 
       const result = await getAgentServiceConfig('agent-1', 'gmail');
 

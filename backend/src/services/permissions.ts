@@ -24,6 +24,38 @@ async function getRegistry() {
 export type ToolPermission = 'allow' | 'block' | 'require_approval';
 export type PermissionLevel = 'none' | 'read' | 'full' | 'custom';
 
+/**
+ * Static permission presets per service (read/write/blocked tool lists).
+ * Mirrors the registry definitions but available without async import.
+ */
+export const PERMISSION_PRESETS: Record<string, { read: string[]; write: string[]; blocked: string[] }> = {
+  gmail: {
+    read: ['gmail_list_accounts', 'gmail_list_messages', 'gmail_get_message', 'gmail_search', 'gmail_list_labels'],
+    write: ['gmail_create_draft', 'gmail_send_draft'],
+    blocked: ['gmail_send_message', 'gmail_delete_message'],
+  },
+  drive: {
+    read: ['drive_list_files', 'drive_get_file', 'drive_read_file', 'drive_search'],
+    write: ['drive_create_file', 'drive_update_file'],
+    blocked: ['drive_share_file', 'drive_delete_file'],
+  },
+  calendar: {
+    read: ['calendar_list_events', 'calendar_get_event', 'calendar_search_events', 'calendar_list_calendars'],
+    write: ['calendar_create_event', 'calendar_update_event'],
+    blocked: ['calendar_delete_event'],
+  },
+  'web-search': {
+    read: ['web_search', 'web_search_news', 'web_search_images'],
+    write: [],
+    blocked: [],
+  },
+  browser: {
+    read: ['browser_navigate', 'browser_screenshot', 'browser_get_content', 'browser_close'],
+    write: ['browser_click', 'browser_type'],
+    blocked: ['browser_evaluate'],
+  },
+};
+
 export interface ServiceAccess {
   serviceType: string;
   enabled: boolean;
