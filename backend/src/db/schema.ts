@@ -198,6 +198,7 @@ export const deployedAgents = pgTable('deployed_agents', {
   openaiApiKey: text('openai_api_key'),
   modelCredentials: text('model_credentials'),
   mcpConfigJson: text('mcp_config_json'),
+  isManual: integer('is_manual').default(0),
   createdAt: text('created_at').default(sql`now()`).notNull(),
   updatedAt: text('updated_at').default(sql`now()`).notNull(),
 });

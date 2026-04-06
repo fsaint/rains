@@ -64,6 +64,7 @@ export interface DeploymentInfo {
   region?: string;
   appName?: string;
   machineId?: string;
+  isManual?: boolean;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -178,6 +179,11 @@ export const agents = {
     request<void>(`/agents/${id}/deploy`, { method: 'DELETE' }),
   createAndDeploy: (data: CreateAndDeployData) =>
     request<{ id: string; name: string; status: string; deployment: object }>('/agents/create-and-deploy', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  createManual: (data: { name: string; description?: string; soulMd?: string }) =>
+    request<{ id: string; name: string; status: string; deployment: object }>('/agents/create-manual', {
       method: 'POST',
       body: JSON.stringify(data),
     }),

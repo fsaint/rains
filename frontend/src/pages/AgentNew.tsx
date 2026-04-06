@@ -114,9 +114,11 @@ const PRESET_AGENTS = [
 ];
 
 const STEPS = ['Basics', 'Model', 'Personality', 'Deploy'];
+const MANUAL_STEPS = ['Basics', 'Personality', 'Finish'];
 
 export default function AgentNew() {
   const navigate = useNavigate();
+  const [agentType, setAgentType] = useState<'hosted' | 'manual' | null>(null);
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<CreateAndDeployData>({
     name: '',
@@ -133,6 +135,8 @@ export default function AgentNew() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState('');
   const [reauthApprovalId, setReauthApprovalId] = useState<string | null>(null);
+
+  const steps = agentType === 'manual' ? MANUAL_STEPS : STEPS;
 
   const createMutation = useMutation({
     mutationFn: (data: CreateAndDeployData) => agents.createAndDeploy(data),
@@ -152,16 +156,34 @@ export default function AgentNew() {
     },
   });
 
+  const createManualMutation = useMutation({
+    mutationFn: () => agents.createManual({
+      name: form.name.trim(),
+      description: form.description || undefined,
+      soulMd: form.soulMd || undefined,
+    }),
+    onSuccess: (result) => {
+      navigate(`/agents/${result.id}`);
+    },
+    onError: (err: unknown) => {
+      setError(err instanceof Error ? err.message : 'Failed to create agent');
+    },
+  });
+
   const update = (patch: Partial<CreateAndDeployData>) => setForm((f) => ({ ...f, ...patch }));
 
   const canAdvance = () => {
-    if (step === 0) return form.name.trim() !== '' && form.telegramToken.trim() !== '';
-    if (step === 1) return !!form.modelCredentials;
+    if (step === 0) {
+      if (agentType === 'manual') return form.name.trim() !== '';
+      return form.name.trim() !== '' && form.telegramToken.trim() !== '';
+    }
+    // For hosted agents, step 1 is Model (requires credentials)
+    if (agentType !== 'manual' && step === 1) return !!form.modelCredentials;
     return true;
   };
 
   const handleNext = () => {
-    if (step < STEPS.length - 1) setStep((s) => s + 1);
+    if (step < steps.length - 1) setStep((s) => s + 1);
   };
 
   const handleBack = () => {
@@ -170,38 +192,76 @@ export default function AgentNew() {
 
   const handleSubmit = () => {
     setError('');
-    createMutation.mutate({
-      ...form,
-      telegramUserId: form.telegramUserId || undefined,
-      soulMd: form.soulMd || undefined,
-      openaiApiKey: form.openaiApiKey || undefined,
-      modelCredentials: form.modelCredentials || undefined,
-      mcpServers: form.mcpServers || undefined,
-      description: form.description || undefined,
-    });
+    if (agentType === 'manual') {
+      createManualMutation.mutate();
+    } else {
+      createMutation.mutate({
+        ...form,
+        telegramUserId: form.telegramUserId || undefined,
+        soulMd: form.soulMd || undefined,
+        openaiApiKey: form.openaiApiKey || undefined,
+        modelCredentials: form.modelCredentials || undefined,
+        mcpServers: form.mcpServers || undefined,
+        description: form.description || undefined,
+      });
+    }
   };
 
-  const isLastStep = step === STEPS.length - 1;
+  const isLastStep = step === steps.length - 1;
 
   return (
     <div className="p-8 max-w-2xl">
       {/* Header */}
       <div className="flex items-center gap-4 mb-8">
         <button
-          onClick={() => (step === 0 ? navigate('/agents') : handleBack())}
+          onClick={() => {
+            if (agentType && step === 0) { setAgentType(null); }
+            else if (step === 0) { navigate('/agents'); }
+            else { handleBack(); }
+          }}
           className="p-2 text-gray-400 hover:text-reins-navy hover:bg-gray-100 rounded-lg transition-all"
         >
           <ArrowLeft className="w-5 h-5" />
         </button>
         <div>
           <h1 className="text-2xl font-semibold text-reins-navy tracking-tight">Create Agent</h1>
-          <p className="text-gray-400 text-sm mt-0.5">Configure and deploy a new AI agent</p>
+          <p className="text-gray-400 text-sm mt-0.5">
+            {agentType === 'manual' ? 'Configure a manual / BYO agent' : 'Configure and deploy a new AI agent'}
+          </p>
         </div>
       </div>
 
-      {/* Step indicator */}
+      {/* Agent type chooser */}
+      {!agentType && (
+        <div className="space-y-4">
+          <p className="text-sm text-gray-500">How do you want to run this agent?</p>
+          <div className="grid grid-cols-2 gap-4">
+            <button
+              type="button"
+              onClick={() => setAgentType('hosted')}
+              className="p-5 rounded-xl border-2 border-gray-200 hover:border-trust-blue hover:bg-trust-blue/5 text-left transition-all group"
+            >
+              <div className="text-2xl mb-2">🚀</div>
+              <p className="font-semibold text-reins-navy">Hosted Agent</p>
+              <p className="text-xs text-gray-400 mt-1">Deploy OpenClaw on Fly.io or local Docker. Includes Telegram, model, and runtime config.</p>
+            </button>
+            <button
+              type="button"
+              onClick={() => setAgentType('manual')}
+              className="p-5 rounded-xl border-2 border-gray-200 hover:border-trust-blue hover:bg-trust-blue/5 text-left transition-all group"
+            >
+              <div className="text-2xl mb-2">🔧</div>
+              <p className="font-semibold text-reins-navy">Manual Agent</p>
+              <p className="text-xs text-gray-400 mt-1">Bring your own agent runtime. Get an MCP URL and credentials to paste into any AI agent.</p>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Step indicator (only shown after type is chosen) */}
+      {agentType && (
       <div className="flex items-center gap-2 mb-8">
-        {STEPS.map((label, i) => (
+        {steps.map((label, i) => (
           <div key={label} className="flex items-center gap-2">
             <div className="flex items-center gap-1.5">
               <div
@@ -223,20 +283,21 @@ export default function AgentNew() {
                 {label}
               </span>
             </div>
-            {i < STEPS.length - 1 && (
+            {i < steps.length - 1 && (
               <div className={`h-px w-8 transition-colors ${i < step ? 'bg-trust-blue' : 'bg-gray-200'}`} />
             )}
           </div>
         ))}
       </div>
+      )}
 
-      {error && (
+      {agentType && error && (
         <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-xl text-sm text-red-700">
           {error}
         </div>
       )}
 
-      {reauthApprovalId && (
+      {agentType && reauthApprovalId && (
         <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl space-y-2">
           <p className="text-sm font-medium text-amber-800">Authentication required</p>
           <p className="text-sm text-amber-700">
@@ -253,7 +314,7 @@ export default function AgentNew() {
       )}
 
       {/* Step 1: Basics */}
-      {step === 0 && (
+      {agentType && step === 0 && (
         <section className="bg-white rounded-xl border border-gray-100 p-6 space-y-4">
           <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Basics</h2>
           <div>
@@ -281,37 +342,41 @@ export default function AgentNew() {
               placeholder="What does this agent do?"
             />
           </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
-              Telegram Bot Token *
-            </label>
-            <input
-              type="text"
-              value={form.telegramToken}
-              onChange={(e) => update({ telegramToken: e.target.value })}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-mono focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
-              placeholder="123456789:ABC..."
-            />
-            <p className="text-xs text-gray-400 mt-1">Get this from <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="text-trust-blue hover:underline">@BotFather</a> on Telegram</p>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
-              Telegram User ID <span className="normal-case font-normal text-gray-400">(optional)</span>
-            </label>
-            <input
-              type="text"
-              value={form.telegramUserId || ''}
-              onChange={(e) => update({ telegramUserId: e.target.value })}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
-              placeholder="Restrict to this user ID"
-            />
-            <p className="text-xs text-gray-400 mt-1">Find your ID using <a href="https://t.me/userinfobot" target="_blank" rel="noreferrer" className="text-trust-blue hover:underline">@userinfobot</a></p>
-          </div>
+          {agentType !== 'manual' && (
+            <>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
+                  Telegram Bot Token *
+                </label>
+                <input
+                  type="text"
+                  value={form.telegramToken}
+                  onChange={(e) => update({ telegramToken: e.target.value })}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-mono focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
+                  placeholder="123456789:ABC..."
+                />
+                <p className="text-xs text-gray-400 mt-1">Get this from <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="text-trust-blue hover:underline">@BotFather</a> on Telegram</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
+                  Telegram User ID <span className="normal-case font-normal text-gray-400">(optional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={form.telegramUserId || ''}
+                  onChange={(e) => update({ telegramUserId: e.target.value })}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
+                  placeholder="Restrict to this user ID"
+                />
+                <p className="text-xs text-gray-400 mt-1">Find your ID using <a href="https://t.me/userinfobot" target="_blank" rel="noreferrer" className="text-trust-blue hover:underline">@userinfobot</a></p>
+              </div>
+            </>
+          )}
         </section>
       )}
 
-      {/* Step 2: Model */}
-      {step === 1 && (
+      {/* Step 2: Model (hosted only) */}
+      {agentType === 'hosted' && step === 1 && (
         <section className="bg-white rounded-xl border border-gray-100 p-6 space-y-4">
           <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Model Provider</h2>
           <div className="grid grid-cols-2 gap-3">
@@ -369,8 +434,8 @@ export default function AgentNew() {
         </section>
       )}
 
-      {/* Step 3: Personality */}
-      {step === 2 && (
+      {/* Step 3: Personality (hosted step 2, manual step 1) */}
+      {((agentType === 'hosted' && step === 2) || (agentType === 'manual' && step === 1)) && (
         <div className="space-y-4">
           <section className="bg-white rounded-xl border border-gray-100 p-6 space-y-4">
             <div>
@@ -414,8 +479,8 @@ export default function AgentNew() {
         </div>
       )}
 
-      {/* Step 4: Deploy */}
-      {step === 3 && (
+      {/* Step 4: Deploy (hosted only) */}
+      {agentType === 'hosted' && step === 3 && (
         <div className="space-y-4">
           <section className="bg-white rounded-xl border border-gray-100 p-6 space-y-4">
             <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Region</h2>
@@ -480,11 +545,28 @@ export default function AgentNew() {
         </div>
       )}
 
+      {/* Manual: Finish step */}
+      {agentType === 'manual' && step === 2 && (
+        <section className="bg-white rounded-xl border border-gray-100 p-6 space-y-3">
+          <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Ready to Connect</h2>
+          <p className="text-sm text-gray-600">
+            Clicking <strong>Create Manual Agent</strong> will provision a Reins agent and give you an MCP endpoint URL.
+            Paste that URL into any MCP-compatible AI agent — no hosted runtime required.
+          </p>
+          <ul className="text-sm text-gray-500 space-y-1 list-disc list-inside">
+            <li>Works with Claude Desktop, Claude Code, OpenAI, and any MCP client</li>
+            <li>Reins enforces policies and manages OAuth credentials</li>
+            <li>Add credentials and permissions after creation</li>
+          </ul>
+        </section>
+      )}
+
       {/* Navigation */}
+      {agentType && (
       <div className="flex items-center justify-between mt-8">
         <button
           type="button"
-          onClick={() => (step === 0 ? navigate('/agents') : handleBack())}
+          onClick={() => (step === 0 ? setAgentType(null) : handleBack())}
           className="px-5 py-2.5 text-sm text-gray-500 hover:text-gray-700 transition-colors"
         >
           {step === 0 ? 'Cancel' : 'Back'}
@@ -494,11 +576,14 @@ export default function AgentNew() {
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={createMutation.isPending}
+            disabled={createMutation.isPending || createManualMutation.isPending}
             className="flex items-center gap-2 px-6 py-2.5 bg-trust-blue text-white rounded-xl hover:bg-blue-600 transition-colors disabled:opacity-50 text-sm font-medium shadow-sm shadow-trust-blue/20"
           >
-            {createMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
-            {createMutation.isPending ? 'Creating & Deploying...' : 'Create & Deploy'}
+            {(createMutation.isPending || createManualMutation.isPending) && <Loader2 className="w-4 h-4 animate-spin" />}
+            {agentType === 'manual'
+              ? (createManualMutation.isPending ? 'Creating...' : 'Create Manual Agent')
+              : (createMutation.isPending ? 'Creating & Deploying...' : 'Create & Deploy')
+            }
           </button>
         ) : (
           <button
@@ -507,10 +592,11 @@ export default function AgentNew() {
             disabled={!canAdvance()}
             className="px-6 py-2.5 bg-trust-blue text-white rounded-xl hover:bg-blue-600 transition-colors disabled:opacity-50 text-sm font-medium shadow-sm shadow-trust-blue/20"
           >
-            Next ({step + 1}/{STEPS.length})
+            Next ({step + 1}/{steps.length})
           </button>
         )}
       </div>
+      )}
     </div>
   );
 }

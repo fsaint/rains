@@ -13,6 +13,9 @@ import {
   X,
   ScrollText,
   MessageSquare,
+  Copy,
+  Check,
+  Wrench,
 } from 'lucide-react';
 import { agents, type DeployConfig } from '../api/client';
 import LogViewer from './LogViewer';
@@ -47,6 +50,14 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
     region: 'iad',
   });
 
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const copyToClipboard = (text: string, key: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2000);
+  };
+
   const deploymentQuery = useQuery({
     queryKey: ['deployment', agentId],
     queryFn: () => agents.getDeployment(agentId),
@@ -58,6 +69,13 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
       }
       return false;
     },
+  });
+
+  const connectPromptQuery = useQuery({
+    queryKey: ['connect-prompt', agentId],
+    queryFn: () => agents.getConnectPrompt(agentId),
+    enabled: deploymentQuery.data?.isManual === true,
+    retry: false,
   });
 
   const deployment = deploymentQuery.data;
@@ -150,6 +168,88 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
 
         {hasDeployment ? (
           <div className="space-y-4">
+            {/* Manual agent: MCP config panel */}
+            {deployment.isManual ? (
+              <div className="space-y-4">
+                <div className="flex items-center gap-2 p-3 bg-purple-50 border border-purple-100 rounded-xl">
+                  <Wrench className="w-4 h-4 text-purple-500 shrink-0" />
+                  <span className="text-sm font-medium text-purple-700">Manual Agent — bring your own runtime</span>
+                </div>
+
+                {connectPromptQuery.isLoading && (
+                  <div className="flex items-center gap-2 text-sm text-gray-400">
+                    <Loader2 className="w-4 h-4 animate-spin" /> Loading MCP config...
+                  </div>
+                )}
+
+                {connectPromptQuery.data && (
+                  <>
+                    {/* MCP URL */}
+                    <div>
+                      <label className="block text-xs font-medium text-gray-400 uppercase tracking-wider mb-1.5">MCP Endpoint URL</label>
+                      <div className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg font-mono text-xs text-gray-700 border border-gray-200">
+                        <span className="flex-1 break-all">{connectPromptQuery.data.mcpUrl}</span>
+                        <button
+                          onClick={() => copyToClipboard(connectPromptQuery.data!.mcpUrl, 'url')}
+                          className="shrink-0 text-gray-400 hover:text-gray-600 transition-colors"
+                        >
+                          {copiedKey === 'url' ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Claude Code config */}
+                    <div>
+                      <label className="block text-xs font-medium text-gray-400 uppercase tracking-wider mb-1.5">Claude Code / Claude Desktop</label>
+                      <div className="relative">
+                        <pre className="p-3 bg-gray-900 text-gray-100 rounded-lg text-xs overflow-x-auto leading-relaxed">
+                          {JSON.stringify(connectPromptQuery.data.claudeCodeConfig, null, 2)}
+                        </pre>
+                        <button
+                          onClick={() => copyToClipboard(JSON.stringify(connectPromptQuery.data!.claudeCodeConfig, null, 2), 'claude')}
+                          className="absolute top-2 right-2 text-gray-400 hover:text-gray-200 transition-colors"
+                        >
+                          {copiedKey === 'claude' ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* OpenAI/OpenClaw config */}
+                    <div>
+                      <label className="block text-xs font-medium text-gray-400 uppercase tracking-wider mb-1.5">OpenAI / OpenClaw</label>
+                      <div className="relative">
+                        <pre className="p-3 bg-gray-900 text-gray-100 rounded-lg text-xs overflow-x-auto leading-relaxed">
+                          {JSON.stringify(connectPromptQuery.data.openaiClawConfig, null, 2)}
+                        </pre>
+                        <button
+                          onClick={() => copyToClipboard(JSON.stringify(connectPromptQuery.data!.openaiClawConfig, null, 2), 'openai')}
+                          className="absolute top-2 right-2 text-gray-400 hover:text-gray-200 transition-colors"
+                        >
+                          {copiedKey === 'openai' ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* Destroy only */}
+                <div className="flex justify-end pt-2 border-t border-gray-100">
+                  <button
+                    onClick={() => {
+                      if (confirm('Remove this manual agent? This cannot be undone.')) {
+                        destroyMutation.mutate();
+                      }
+                    }}
+                    disabled={destroyMutation.isPending}
+                    className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    {destroyMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ) : (
+            <>
             {/* Status */}
             <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
               <div className="flex items-center gap-3">
@@ -276,6 +376,8 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
                 Destroy
               </button>
             </div>
+            </>
+            )}
           </div>
         ) : showDeployForm ? (
           <form onSubmit={handleDeploy} className="space-y-4">

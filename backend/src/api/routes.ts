@@ -2444,6 +2444,58 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // ========================================================================
 
   /**
+   * Create a manual (BYO) agent — no container provisioned.
+   * Just creates the agent + a deployed_agents record with is_manual=1 and status=running.
+   * The user copies the MCP URL and configures their own agent runtime.
+   */
+  app.post('/api/agents/create-manual', async (request, reply) => {
+    const userId = getUserId(request);
+    const body = request.body as {
+      name: string;
+      description?: string;
+      soulMd?: string;
+    };
+
+    if (!body.name?.trim()) {
+      return reply.code(400).send({ error: { code: 'INVALID_INPUT', message: 'Agent name is required' } });
+    }
+
+    const agentId = nanoid();
+    const deploymentId = nanoid();
+    const gatewayToken = nanoid(32);
+    const now = new Date().toISOString();
+
+    // Create agent record
+    await client.execute({
+      sql: `INSERT INTO agents (id, user_id, name, description, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'active', ?, ?)`,
+      args: [agentId, userId, body.name.trim(), body.description || null, now, now],
+    });
+
+    // Create deployment record — no fly app, no machine, is_manual=1
+    await client.execute({
+      sql: `INSERT INTO deployed_agents
+              (id, agent_id, status, gateway_token, soul_md, is_manual, created_at, updated_at)
+            VALUES (?, ?, 'running', ?, ?, 1, ?, ?)`,
+      args: [deploymentId, agentId, gatewayToken, body.soulMd || null, now, now],
+    });
+
+    return reply.code(201).send({
+      data: {
+        id: agentId,
+        name: body.name.trim(),
+        status: 'active',
+        deployment: {
+          id: deploymentId,
+          status: 'running',
+          isManual: true,
+          gatewayToken,
+        },
+      },
+    });
+  });
+
+  /**
    * Combined create + deploy in one step.
    * Creates an agent record and immediately provisions it.
    */
@@ -2769,6 +2821,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         modelProvider: deployment.model_provider,
         modelName: deployment.model_name,
         region: deployment.region,
+        isManual: deployment.is_manual === 1 || deployment.is_manual === true,
         createdAt: deployment.created_at,
         updatedAt: deployment.updated_at,
       },

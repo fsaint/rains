@@ -432,6 +432,14 @@ export async function initializeDatabase() {
     END $$
   `;
 
+  // Add is_manual column for manual agent support
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS is_manual INTEGER DEFAULT 0;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
+
   // Seed: create admin user if no users exist
   const userCount = await sql`SELECT COUNT(*) as count FROM users`;
   const count = Number(userCount[0]?.count ?? 0);
