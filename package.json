@@ -18,17 +18,24 @@
     "test": "npm run test --workspaces --if-present",
     "test:coverage": "npm run test:coverage --workspaces --if-present",
     "test:watch": "npm run test:watch --workspaces --if-present",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:debug": "playwright test --debug",
+    "stub:build": "docker build -t reins-stub-openclaw:latest docker/stub-openclaw",
+    "stub:run": "docker run -p 18789:18789 --name reins-stub reins-stub-openclaw:latest",
     "lint": "eslint . --ext .ts,.tsx",
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "clean": "rm -rf node_modules */node_modules */dist"
   },
   "devDependencies": {
+    "@playwright/test": "^1.44.0",
     "@types/node": "^20.11.0",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
     "better-sqlite3": "^12.8.0",
     "eslint": "^8.56.0",
+    "serve": "^14.2.3",
     "typescript": "^5.3.3"
   },
   "engines": {

@@ -1,0 +1,167 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-flight runs for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Unit + Integration tests (no external services) ─────────────────────────
+  unit-tests:
+    name: Unit & Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run all tests (backend + frontend + servers)
+        run: npm test
+        env:
+          # Integration tests use mocked DB — no real Postgres needed
+          NODE_ENV: test
+          REINS_ENCRYPTION_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
+
+      - name: Typecheck
+        run: npm run typecheck --workspaces --if-present
+
+  # ── Build stub OpenClaw Docker image ────────────────────────────────────────
+  build-stub-image:
+    name: Build Stub OpenClaw Image
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build stub image
+        run: docker build -t reins-stub-openclaw:latest docker/stub-openclaw
+
+      - name: Smoke-test stub image
+        run: |
+          docker run -d --name stub-test -p 18789:18789 reins-stub-openclaw:latest
+          # Wait for container to be healthy (up to 15 s)
+          for i in $(seq 1 15); do
+            if curl -sf http://localhost:18789/healthz | grep -q '"ok"'; then
+              echo "✓ Stub gateway healthy after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          curl -sf http://localhost:18789/healthz
+          curl -sf http://localhost:18789/api/v1/stats
+          docker rm -f stub-test
+
+  # ── E2E tests ────────────────────────────────────────────────────────────────
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    needs: [unit-tests, build-stub-image]
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: reins_e2e
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/reins_e2e
+      REINS_ENCRYPTION_KEY: ${{ secrets.REINS_ENCRYPTION_KEY || '0000000000000000000000000000000000000000000000000000000000000000' }}
+      ADMIN_EMAIL: admin@reins.local
+      ADMIN_PASSWORD: e2etestpassword123
+      REINS_PROVIDER: local
+      OPENCLAW_IMAGE: reins-stub-openclaw:latest
+      REINS_PUBLIC_URL: http://localhost:3000
+      VITE_API_URL: http://localhost:3000
+      # Set in GitHub repo secrets → Settings → Secrets → Actions
+      TEST_TELEGRAM_BOT_TOKEN: ${{ secrets.TEST_TELEGRAM_BOT_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build stub Docker image
+        run: docker build -t reins-stub-openclaw:latest docker/stub-openclaw
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Build frontend
+        run: npm run build --workspace=frontend
+
+      - name: Start backend server
+        run: npm run dev:backend &
+        env:
+          NODE_ENV: development
+
+      - name: Wait for backend to be ready
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/health; then
+              echo "Backend ready"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Serve frontend build
+        run: npx serve -s frontend/dist -l 6173 &
+
+      - name: Wait for frontend to be ready
+        run: |
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:6173; then
+              echo "Frontend ready"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Run Playwright tests
+        run: npx playwright test
+        env:
+          CI: true
+          E2E_BASE_URL: http://localhost:6173
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+      - name: Upload test traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: test-results/
+          retention-days: 7

@@ -1,31 +1,11 @@
-import Fastify from 'fastify';
-import cors from '@fastify/cors';
-import cookie from '@fastify/cookie';
-import websocket from '@fastify/websocket';
+import { buildApp } from './app.js';
 import { config } from './config/index.js';
 import { initializeDatabase } from './db/index.js';
-import { apiRoutes } from './api/routes.js';
-import { registerAuth } from './auth/index.js';
 import { approvalQueue } from './approvals/queue.js';
 import { initializeNativeServers, shutdownNativeServers } from './mcp/init-servers.js';
 import { startTokenRefreshLoop, stopTokenRefreshLoop } from './credentials/vault.js';
 
-// Create Fastify server
-const app = Fastify({
-  logger: {
-    level: config.logLevel,
-    transport: config.nodeEnv === 'development' ? { target: 'pino-pretty' } : undefined,
-  },
-});
-
-// Register plugins
-await app.register(cors, {
-  origin: config.nodeEnv === 'development' ? true : ['http://localhost:5173'],
-  credentials: true,
-});
-
-await app.register(cookie);
-await app.register(websocket);
+const app = await buildApp();
 
 // Initialize database
 app.log.info('Initializing database...');
@@ -37,19 +17,12 @@ app.log.info('Initializing native MCP servers...');
 await initializeNativeServers();
 app.log.info('Native MCP servers initialized');
 
-// Register auth (routes + guard)
-await registerAuth(app);
-
-// Register API routes
-await app.register(apiRoutes);
-
 // WebSocket endpoint for real-time updates
 app.register(async (fastify) => {
   fastify.get('/ws', { websocket: true }, (connection) => {
     app.log.info('WebSocket client connected');
     const ws = connection.socket;
 
-    // Send approval requests in real-time
     const onApprovalRequest = (approval: unknown) => {
       ws.send(JSON.stringify({ type: 'approval_request', data: approval }));
     };
