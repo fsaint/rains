@@ -147,6 +147,7 @@ export interface CreateMachineOpts {
   region?: string;
   openaiApiKey?: string;
   modelCredentials?: string;
+  thinkingDefault?: string;
 }
 
 export async function createMachine(opts: CreateMachineOpts) {
@@ -203,6 +204,7 @@ async function buildMachineConfig(opts: CreateMachineOpts) {
       ...(opts.modelName && opts.modelProvider !== 'openai-codex' ? { MODEL_NAME: opts.modelName } : {}),
       ...(opts.openaiApiKey ? { OPENAI_API_KEY: opts.openaiApiKey } : {}),
       ...(opts.modelCredentials ? { OPENAI_CODEX_TOKENS: opts.modelCredentials } : {}),
+      THINKING_DEFAULT: opts.thinkingDefault ?? 'medium',
     },
     services: [
       {

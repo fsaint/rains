@@ -25,6 +25,7 @@ export async function createLocalContainer(opts: {
   modelName?: string;
   openaiApiKey?: string;
   modelCredentials?: string;
+  thinkingDefault?: string;
 }): Promise<{ containerId: string; containerName: string; port: number }> {
   const containerName = `reins-${opts.instanceId.slice(0, 12)}`;
 
@@ -55,6 +56,7 @@ export async function createLocalContainer(opts: {
   if (opts.modelName && opts.modelProvider !== 'openai-codex') env.MODEL_NAME = opts.modelName;
   if (opts.openaiApiKey) env.OPENAI_API_KEY = opts.openaiApiKey;
   if (opts.modelCredentials) env.OPENAI_CODEX_TOKENS = opts.modelCredentials;
+  env.THINKING_DEFAULT = opts.thinkingDefault ?? 'medium';
 
   const envArgs = Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
 

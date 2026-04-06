@@ -29,6 +29,7 @@ const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN || 'reins-' + Math.rando
 const modelProvider = process.env.MODEL_PROVIDER || 'anthropic';
 const defaultModelName = modelProvider === 'openai-codex' ? 'gpt-5.4' : 'claude-sonnet-4-5';
 const modelName = process.env.MODEL_NAME || defaultModelName;
+const thinkingDefault = process.env.THINKING_DEFAULT || 'medium';
 
 // Build MCP servers object from array
 const mcpServers = {};
@@ -68,6 +69,7 @@ const config = {
       model: {
         primary: modelProvider + '/' + modelName,
       },
+      thinkingDefault: thinkingDefault,
     },
   },
   channels: {
