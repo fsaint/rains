@@ -34,9 +34,11 @@ jobs:
       - name: Run all tests (backend + frontend + servers)
         run: npm test
         env:
-          # Integration tests use mocked DB — no real Postgres needed
           NODE_ENV: test
           REINS_ENCRYPTION_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
+          ADMIN_PASSWORD: ci-test-password
+          ADMIN_EMAIL: admin@ci.test
+          DATABASE_URL: postgres://localhost/ci_unused
 
       - name: Typecheck
         run: npm run typecheck --workspaces --if-present
