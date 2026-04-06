@@ -36,8 +36,8 @@ jobs:
         env:
           NODE_ENV: test
           REINS_ENCRYPTION_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
-          ADMIN_PASSWORD: ci-test-password
-          ADMIN_EMAIL: admin@ci.test
+          REINS_ADMIN_PASSWORD: ci-test-password
+          REINS_ADMIN_EMAIL: admin@ci.test
           DATABASE_URL: postgres://localhost/ci_unused
 
       - name: Typecheck
@@ -94,6 +94,8 @@ jobs:
       REINS_ENCRYPTION_KEY: ${{ secrets.REINS_ENCRYPTION_KEY || '0000000000000000000000000000000000000000000000000000000000000000' }}
       ADMIN_EMAIL: admin@reins.local
       ADMIN_PASSWORD: e2etestpassword123
+      REINS_ADMIN_EMAIL: admin@reins.local
+      REINS_ADMIN_PASSWORD: e2etestpassword123
       REINS_PROVIDER: local
       OPENCLAW_IMAGE: reins-stub-openclaw:latest
       REINS_PUBLIC_URL: http://localhost:3000
