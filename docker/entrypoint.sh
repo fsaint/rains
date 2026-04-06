@@ -83,6 +83,7 @@ const config = {
     enabled: true,
     headless: true,
     defaultProfile: 'default',
+    executablePath: '/home/node/.cache/ms-playwright/chromium-1208/chrome-linux/chrome',
   },
   // Configure audio transcription (Whisper) when OPENAI_API_KEY is available
   ...(process.env.OPENAI_API_KEY ? {
