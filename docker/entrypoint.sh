@@ -82,7 +82,7 @@ const config = {
   browser: {
     enabled: true,
     headless: true,
-    defaultProfile: 'default',
+    defaultProfile: 'openclaw',
     executablePath: '/home/node/.cache/ms-playwright/chromium-1208/chrome-linux/chrome',
   },
   // Configure audio transcription (Whisper) when OPENAI_API_KEY is available
