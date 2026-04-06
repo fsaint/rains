@@ -84,6 +84,7 @@ const config = {
     headless: true,
     defaultProfile: 'openclaw',
     executablePath: '/home/node/.cache/ms-playwright/chromium-1208/chrome-linux/chrome',
+    noSandbox: true,
   },
   // Configure audio transcription (Whisper) when OPENAI_API_KEY is available
   ...(process.env.OPENAI_API_KEY ? {
