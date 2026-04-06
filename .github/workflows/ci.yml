@@ -28,6 +28,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build workspace packages (required for @reins/servers resolution)
+        run: npm run build --workspace=shared --workspace=servers --if-present
+
       - name: Run all tests (backend + frontend + servers)
         run: npm test
         env:
