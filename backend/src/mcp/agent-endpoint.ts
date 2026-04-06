@@ -6,7 +6,7 @@
  * and routes tool calls with permission checking and approval workflows.
  */
 
-import { db } from '../db/index.js';
+import { db, client } from '../db/index.js';
 import { agents, agentServiceAccess, agentServiceCredentials, agentServiceInstances, credentials } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
 import { serverManager, type ToolContext } from './server-manager.js';
@@ -19,6 +19,8 @@ import {
 import { approvalQueue } from '../approvals/queue.js';
 import { auditLogger } from '../audit/logger.js';
 import { credentialVault } from '../credentials/vault.js';
+import { sendReauthEmail } from '../services/email.js';
+import { config } from '../config/index.js';
 
 // ============================================================================
 // Types
@@ -99,6 +101,59 @@ async function ensureRegistry() {
  */
 export function getServiceTypeFromTool(toolName: string): string | null {
   return _getServiceType(toolName);
+}
+
+// ============================================================================
+// Reauth Approval Helper
+// ============================================================================
+
+/**
+ * Create (or reuse) a reauth approval when MCP credential access fails.
+ * De-duplicates via submitReauth and respects the 24-hour email throttle.
+ */
+async function createMCPReauthApproval(
+  agentId: string,
+  serviceType: string,
+  credentialId?: string | null,
+): Promise<void> {
+  const hint = `The ${serviceType} credentials for your agent have expired or are invalid. Please re-authenticate to restore access.`;
+
+  const { id: approvalId, isNew, emailThrottled } = await approvalQueue.submitReauth(
+    agentId,
+    serviceType,
+    hint,
+    { credentialId: credentialId ?? null, source: 'mcp_tool_call' },
+    7 * 24 * 60 * 60 * 1000,
+  );
+
+  if (isNew) {
+    console.log(`[reauth] Created reauth approval ${approvalId} for agent ${agentId} (service: ${serviceType})`);
+  } else {
+    console.log(`[reauth] Reusing reauth approval ${approvalId} for agent ${agentId} (service: ${serviceType})${emailThrottled ? ' — email throttled' : ''}`);
+  }
+
+  if (!emailThrottled) {
+    try {
+      const agentRow = await client.execute({
+        sql: `SELECT a.name, u.email FROM agents a JOIN users u ON u.id = a.user_id WHERE a.id = ?`,
+        args: [agentId],
+      });
+      if (agentRow.rows.length > 0) {
+        const { name: agentName, email } = agentRow.rows[0] as { name: string; email: string };
+        await sendReauthEmail({
+          to: email,
+          agentName,
+          provider: serviceType,
+          hint,
+          approvalId,
+          dashboardUrl: config.dashboardUrl,
+        });
+        await approvalQueue.markEmailSent(approvalId);
+      }
+    } catch {
+      // Non-fatal — email failure should not block the MCP error response
+    }
+  }
 }
 
 // ============================================================================
@@ -510,6 +565,7 @@ async function handleCallTool(
           if (accessToken) {
             context.accessToken = accessToken;
           } else {
+            await createMCPReauthApproval(agentId, serviceType, targetInstance.credentialId).catch(() => {});
             return {
               jsonrpc: '2.0',
               id: requestId,
@@ -586,6 +642,7 @@ async function handleCallTool(
       if (accessToken) {
         context.accessToken = accessToken;
       } else {
+        await createMCPReauthApproval(agentId, serviceType, targetCredentialId).catch(() => {});
         return {
           jsonrpc: '2.0',
           id: requestId,
@@ -612,6 +669,7 @@ async function handleCallTool(
         if (accessToken) {
           context.accessToken = accessToken;
         } else {
+          await createMCPReauthApproval(agentId, serviceType, accessRecord.credentialId).catch(() => {});
           return {
             jsonrpc: '2.0',
             id: requestId,

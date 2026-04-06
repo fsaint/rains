@@ -2408,33 +2408,41 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     hint: string,
     errorMessage: string,
   ): Promise<string> {
-    const approvalId = await approvalQueue.submit(
+    const { id: approvalId, isNew, emailThrottled } = await approvalQueue.submitReauth(
       agentId,
-      'reauth',
-      { provider: reauthProvider, deploymentId },
+      reauthProvider,
       `${hint}\n\nError: ${errorMessage}`,
-      7 * 24 * 60 * 60 * 1000, // 7 days
+      { deploymentId },
+      7 * 24 * 60 * 60 * 1000,
     );
 
-    // Send email notification — look up agent owner
-    try {
-      const agentRow = await client.execute({
-        sql: `SELECT a.name, u.email FROM agents a JOIN users u ON u.id = a.user_id WHERE a.id = ?`,
-        args: [agentId],
-      });
-      if (agentRow.rows.length > 0) {
-        const { name: agentName, email } = agentRow.rows[0] as { name: string; email: string };
-        await sendReauthEmail({
-          to: email,
-          agentName,
-          provider: reauthProvider,
-          hint,
-          approvalId,
-          dashboardUrl: config.dashboardUrl,
+    if (isNew) {
+      console.log(`[reauth] Created reauth approval ${approvalId} for agent ${agentId} (provider: ${reauthProvider})`);
+    } else {
+      console.log(`[reauth] Reusing existing reauth approval ${approvalId} for agent ${agentId}${emailThrottled ? ' (email throttled)' : ''}`);
+    }
+
+    if (!emailThrottled) {
+      try {
+        const agentRow = await client.execute({
+          sql: `SELECT a.name, u.email FROM agents a JOIN users u ON u.id = a.user_id WHERE a.id = ?`,
+          args: [agentId],
         });
+        if (agentRow.rows.length > 0) {
+          const { name: agentName, email } = agentRow.rows[0] as { name: string; email: string };
+          await sendReauthEmail({
+            to: email,
+            agentName,
+            provider: reauthProvider,
+            hint,
+            approvalId,
+            dashboardUrl: config.dashboardUrl,
+          });
+          await approvalQueue.markEmailSent(approvalId);
+        }
+      } catch (emailErr) {
+        console.warn('[reauth] Failed to send email notification:', emailErr);
       }
-    } catch (emailErr) {
-      console.warn('[reauth] Failed to send email notification:', emailErr);
     }
 
     return approvalId;

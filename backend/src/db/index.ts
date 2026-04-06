@@ -184,6 +184,14 @@ export async function initializeDatabase() {
   await sql`CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_approvals_agent ON approvals(agent_id)`;
 
+  // Add email_last_sent_at for 24-hour re-send throttle on reauth approvals (migration)
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE approvals ADD COLUMN IF NOT EXISTS email_last_sent_at TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
+
   await sql`
     CREATE TABLE IF NOT EXISTS spend_records (
       id SERIAL PRIMARY KEY,

@@ -12,7 +12,8 @@
     "./web-search": "./dist/web-search/index.js",
     "./browser": "./dist/browser/index.js",
     "./github": "./dist/github/index.js",
-    "./linear": "./dist/linear/index.js"
+    "./linear": "./dist/linear/index.js",
+    "./hermeneutix": "./dist/hermeneutix/index.js"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
