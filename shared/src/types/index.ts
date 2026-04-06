@@ -130,6 +130,7 @@ export interface ApprovalRequest {
   resolvedAt?: Date;
   resolvedBy?: string;
   resolutionComment?: string;
+  emailLastSentAt?: Date;
 }
 
 export interface ApprovalDecision {

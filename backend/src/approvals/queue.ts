@@ -213,6 +213,60 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
     }
   }
 
+  /**
+   * Submit a reauth approval — de-duplicates by agentId+provider and checks the
+   * 24-hour email throttle.
+   *
+   * Returns:
+   *   id             — existing or newly created approval ID
+   *   isNew          — true if a new row was inserted
+   *   emailThrottled — true if email was already sent within the last 24 hours
+   */
+  async submitReauth(
+    agentId: string,
+    provider: string,
+    context: string,
+    extraArgs: Record<string, unknown> = {},
+    expiryMs: number = 7 * 24 * 60 * 60 * 1000,
+  ): Promise<{ id: string; isNew: boolean; emailThrottled: boolean }> {
+    // Check for an existing pending reauth for this agent + provider
+    const existing = await client.execute({
+      sql: `SELECT id, email_last_sent_at FROM approvals
+            WHERE status = 'pending' AND tool = 'reauth' AND agent_id = ?
+              AND arguments_json::jsonb->>'provider' = ?
+            LIMIT 1`,
+      args: [agentId, provider],
+    });
+
+    if (existing.rows.length > 0) {
+      const row = existing.rows[0] as { id: string; email_last_sent_at: string | null };
+      const lastSent = row.email_last_sent_at ? new Date(row.email_last_sent_at).getTime() : 0;
+      const emailThrottled = Date.now() - lastSent < 24 * 60 * 60 * 1000;
+      return { id: row.id, isNew: false, emailThrottled };
+    }
+
+    // No existing — insert a new approval
+    const id = await this.submit(
+      agentId,
+      'reauth',
+      { provider, ...extraArgs },
+      context,
+      expiryMs,
+    );
+
+    return { id, isNew: true, emailThrottled: false };
+  }
+
+  /**
+   * Record that a notification email was sent for an approval (for 24h throttle).
+   */
+  async markEmailSent(id: string): Promise<void> {
+    await client.execute({
+      sql: `UPDATE approvals SET email_last_sent_at = ? WHERE id = ?`,
+      args: [new Date().toISOString(), id],
+    });
+  }
+
   private mapToRequest(row: Record<string, unknown>): ApprovalRequest {
     return {
       id: row.id as string,
@@ -226,6 +280,7 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
       resolvedAt: row.resolved_at ? new Date(row.resolved_at as string) : undefined,
       resolvedBy: row.resolved_by as string | undefined,
       resolutionComment: row.resolution_comment as string | undefined,
+      emailLastSentAt: row.email_last_sent_at ? new Date(row.email_last_sent_at as string) : undefined,
     };
   }
 }

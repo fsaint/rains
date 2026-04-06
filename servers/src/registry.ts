@@ -17,6 +17,7 @@ import { definition as linear } from './linear/definition.js';
 import { definition as outlookMail } from './outlook-mail/definition.js';
 import { definition as outlookCalendar } from './outlook-calendar/definition.js';
 import { definition as notion } from './notion/definition.js';
+import { definition as hermeneutix } from './hermeneutix/definition.js';
 
 // Re-export the type from its canonical location
 export type { ServiceDefinitionWithTools } from './common/types.js';
@@ -32,6 +33,7 @@ export const serviceDefinitions: ServiceDefinitionWithTools[] = [
   outlookMail,
   outlookCalendar,
   notion,
+  hermeneutix,
 ];
 
 /** Lookup map by service type */

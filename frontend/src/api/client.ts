@@ -49,6 +49,7 @@ export interface DeployConfig {
   modelProvider?: string;
   modelName?: string;
   region?: string;
+  modelCredentials?: string;
 }
 
 export interface DeploymentInfo {
@@ -248,6 +249,11 @@ export const credentials = {
     request<{ id: string; serviceId: string; botName: string; workspaceName: string }>(
       '/credentials/notion',
       { method: 'POST', body: JSON.stringify({ token }) }
+    ),
+  addApiKey: (serviceId: string, apiKey: string) =>
+    request<{ id: string; serviceId: string }>(
+      '/credentials',
+      { method: 'POST', body: JSON.stringify({ serviceId, type: 'api_key', data: { apiKey } }) }
     ),
   checkHealth: (id: string) => request<unknown>(`/credentials/${id}/health`),
   delete: (id: string) => request<void>(`/credentials/${id}`, { method: 'DELETE' }),

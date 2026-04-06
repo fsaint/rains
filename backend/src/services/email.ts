@@ -53,7 +53,17 @@ export async function sendReauthEmail(opts: {
     'openai-codex': 'OpenAI',
     'fly': 'Fly.io',
     'docker': 'Docker',
-    'unknown': 'your AI provider',
+    'gmail': 'Gmail',
+    'drive': 'Google Drive',
+    'calendar': 'Google Calendar',
+    'github': 'GitHub',
+    'linear': 'Linear',
+    'notion': 'Notion',
+    'outlook-mail': 'Outlook Mail',
+    'outlook-calendar': 'Outlook Calendar',
+    'microsoft': 'Microsoft',
+    'hermeneutix': 'Hermeneutix',
+    'unknown': 'your service',
   };
 
   const label = providerLabel[opts.provider] ?? opts.provider;
