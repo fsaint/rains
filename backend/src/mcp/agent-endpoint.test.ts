@@ -11,6 +11,24 @@ import {
 } from './agent-endpoint.js';
 
 // Mock dependencies
+vi.mock('../config/index.js', () => ({
+  config: {
+    sessionSecret: 'test-secret-32-chars-long-padded!!',
+    nodeEnv: 'test',
+    dashboardUrl: 'http://localhost:5173',
+    adminPassword: 'test-password',
+    logLevel: 'silent',
+    port: 0,
+    host: '127.0.0.1',
+    databaseUrl: 'postgres://localhost/test',
+    encryptionKey: '0'.repeat(64),
+  },
+}));
+
+vi.mock('../services/email.js', () => ({
+  sendReauthEmail: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('../db/index.js', () => ({
   db: {
     select: () => ({
