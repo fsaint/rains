@@ -21,6 +21,7 @@ export { OutlookMailServer, outlookMailTools, validateToken as validateOutlookTo
 export { OutlookCalendarServer, outlookCalendarTools } from './outlook-calendar/index.js';
 export { NotionServer, notionTools, validateToken as validateNotionToken } from './notion/index.js';
 export { HermeneutixServer, hermeneutixTools } from './hermeneutix/index.js';
+export { ZendeskServer, zendeskTools } from './zendesk/index.js';
 
 export { BaseServer } from './common/base-server.js';
 export { GoogleOAuthHandler } from './common/oauth-handler.js';

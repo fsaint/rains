@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Trash2, Key, RefreshCw, CheckCircle, AlertCircle, Clock, X, Mail, HardDrive, Calendar, Github, SquareKanban, BookOpen } from 'lucide-react';
+import { Plus, Trash2, Key, RefreshCw, CheckCircle, AlertCircle, Clock, X, Mail, HardDrive, Calendar, Github, SquareKanban, BookOpen, Headphones } from 'lucide-react';
 import { credentials, oauth, type Credential } from '../api/client';
 
 interface CredentialHealth {
@@ -29,7 +29,7 @@ export default function Credentials() {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [createType, setCreateType] = useState<'pick' | 'google_scopes' | 'microsoft_connect' | 'github_pat' | 'linear_key' | 'notion_key' | 'hermeneutix_key' | 'api_key'>('pick');
+  const [createType, setCreateType] = useState<'pick' | 'google_scopes' | 'microsoft_connect' | 'github_pat' | 'linear_key' | 'notion_key' | 'hermeneutix_key' | 'zendesk_key' | 'api_key'>('pick');
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [newCredential, setNewCredential] = useState({
     serviceId: '',
@@ -49,6 +49,10 @@ export default function Credentials() {
   const [notionError, setNotionError] = useState('');
   const [hermeneutixToken, setHermeneutixToken] = useState('');
   const [hermeneutixError, setHermeneutixError] = useState('');
+  const [zendeskToken, setZendeskToken] = useState('');
+  const [zendeskEmail, setZendeskEmail] = useState('');
+  const [zendeskSubdomain, setZendeskSubdomain] = useState('');
+  const [zendeskError, setZendeskError] = useState('');
   const [updatingCredentialId, setUpdatingCredentialId] = useState<string | null>(null);
 
   // Handle OAuth callback
@@ -225,6 +229,30 @@ export default function Credentials() {
     },
     onError: (error: any) => {
       setHermeneutixError(error?.message || 'Invalid token');
+    },
+  });
+
+  const addZendeskMutation = useMutation({
+    mutationFn: async ({ token, email, subdomain }: { token: string; email: string; subdomain: string }) => {
+      if (updatingCredentialId) {
+        await credentials.delete(updatingCredentialId).catch(() => {});
+      }
+      return credentials.addZendesk(token, email, subdomain);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['credentials'] });
+      setShowCreateModal(false);
+      setZendeskToken('');
+      setZendeskEmail('');
+      setZendeskSubdomain('');
+      setZendeskError('');
+      setCreateType('pick');
+      setUpdatingCredentialId(null);
+      setNotification({ type: 'success', message: 'Zendesk account connected successfully' });
+      setTimeout(() => setNotification(null), 5000);
+    },
+    onError: (error: any) => {
+      setZendeskError(error?.message || 'Invalid credentials');
     },
   });
 
@@ -517,7 +545,7 @@ export default function Credentials() {
           <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl shadow-reins-navy/10 border border-gray-100">
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-lg font-semibold text-reins-navy">
-                {createType === 'pick' ? 'Add Credential' : createType === 'google_scopes' ? 'Google Services' : createType === 'microsoft_connect' ? 'Microsoft Account' : createType === 'notion_key' ? (updatingCredentialId ? 'Update Notion Token' : 'Notion') : createType === 'linear_key' ? (updatingCredentialId ? 'Update Linear Token' : 'Linear Workspace') : createType === 'github_pat' ? (updatingCredentialId ? 'Update GitHub Token' : 'GitHub') : createType === 'hermeneutix_key' ? (updatingCredentialId ? 'Update Hermeneutix Token' : 'Hermeneutix') : 'Add API Key'}
+                {createType === 'pick' ? 'Add Credential' : createType === 'google_scopes' ? 'Google Services' : createType === 'microsoft_connect' ? 'Microsoft Account' : createType === 'notion_key' ? (updatingCredentialId ? 'Update Notion Token' : 'Notion') : createType === 'linear_key' ? (updatingCredentialId ? 'Update Linear Token' : 'Linear Workspace') : createType === 'github_pat' ? (updatingCredentialId ? 'Update GitHub Token' : 'GitHub') : createType === 'hermeneutix_key' ? (updatingCredentialId ? 'Update Hermeneutix Token' : 'Hermeneutix') : createType === 'zendesk_key' ? (updatingCredentialId ? 'Update Zendesk Credentials' : 'Zendesk') : 'Add API Key'}
               </h2>
               <button
                 onClick={() => { setShowCreateModal(false); setCreateType('pick'); setUpdatingCredentialId(null); }}
@@ -631,6 +659,22 @@ export default function Credentials() {
                     <div className="font-medium text-reins-navy">Hermeneutix</div>
                     <div className="text-sm text-gray-500">
                       Meeting transcriptions and speaker profiles via API token
+                    </div>
+                  </div>
+                </button>
+
+                {/* Zendesk */}
+                <button
+                  onClick={() => { setCreateType('zendesk_key'); setZendeskToken(''); setZendeskEmail(''); setZendeskSubdomain(''); setZendeskError(''); }}
+                  className="w-full flex items-center gap-4 p-4 rounded-xl border-2 border-gray-200 hover:border-trust-blue hover:bg-trust-blue/5 transition-all text-left"
+                >
+                  <div className="w-10 h-10 bg-gray-50 rounded-lg flex items-center justify-center shrink-0">
+                    <Headphones className="w-5 h-5 text-green-600" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-reins-navy">Zendesk</div>
+                    <div className="text-sm text-gray-500">
+                      Support tickets and conversations via API token
                     </div>
                   </div>
                 </button>
@@ -889,6 +933,82 @@ export default function Credentials() {
                     ) : (
                       <>
                         <Key className="w-4 h-4" />
+                        Connect
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            ) : createType === 'zendesk_key' ? (
+              /* Zendesk API Token Form */
+              <div>
+                <p className="text-sm text-gray-500 mb-4">
+                  Enter your Zendesk subdomain, agent email, and API token.
+                </p>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
+                      Subdomain
+                    </label>
+                    <div className="flex items-center border border-gray-200 rounded-lg overflow-hidden focus-within:ring-2 focus-within:ring-trust-blue/20 focus-within:border-trust-blue transition-all">
+                      <input
+                        type="text"
+                        value={zendeskSubdomain}
+                        onChange={(e) => { setZendeskSubdomain(e.target.value); setZendeskError(''); }}
+                        placeholder="mycompany"
+                        className="flex-1 px-3 py-2.5 text-sm outline-none"
+                      />
+                      <span className="px-3 py-2.5 text-sm text-gray-400 bg-gray-50 border-l border-gray-200 shrink-0">.zendesk.com</span>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
+                      Agent Email
+                    </label>
+                    <input
+                      type="email"
+                      value={zendeskEmail}
+                      onChange={(e) => { setZendeskEmail(e.target.value); setZendeskError(''); }}
+                      placeholder="you@yourcompany.com"
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
+                      API Token
+                    </label>
+                    <input
+                      type="password"
+                      value={zendeskToken}
+                      onChange={(e) => { setZendeskToken(e.target.value); setZendeskError(''); }}
+                      placeholder="Your Zendesk API token"
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-mono focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
+                    />
+                  </div>
+                  {zendeskError && (
+                    <div className="flex items-center gap-2 text-sm text-alert-red bg-alert-red/5 px-3 py-2 rounded-lg">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      {zendeskError}
+                    </div>
+                  )}
+                </div>
+                <div className="flex justify-between items-center mt-6">
+                  <button
+                    onClick={() => setCreateType('pick')}
+                    className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+                  >
+                    Back
+                  </button>
+                  <button
+                    onClick={() => addZendeskMutation.mutate({ token: zendeskToken, email: zendeskEmail, subdomain: zendeskSubdomain })}
+                    disabled={!zendeskToken || !zendeskEmail || !zendeskSubdomain || addZendeskMutation.isPending}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-trust-blue text-white rounded-lg text-sm font-medium hover:bg-blue-600 disabled:opacity-40 transition-all shadow-sm shadow-trust-blue/20"
+                  >
+                    {addZendeskMutation.isPending ? (
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-white/30 border-t-white" />
+                    ) : (
+                      <>
+                        <Headphones className="w-4 h-4" />
                         Connect
                       </>
                     )}

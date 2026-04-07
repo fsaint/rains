@@ -255,6 +255,11 @@ export const credentials = {
       '/credentials/hermeneutix',
       { method: 'POST', body: JSON.stringify({ token }) }
     ),
+  addZendesk: (token: string, email: string, subdomain: string) =>
+    request<{ id: string; serviceId: string }>(
+      '/credentials/zendesk',
+      { method: 'POST', body: JSON.stringify({ token, email, subdomain }) }
+    ),
   addApiKey: (serviceId: string, apiKey: string) =>
     request<{ id: string; serviceId: string }>(
       '/credentials',

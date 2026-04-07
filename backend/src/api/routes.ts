@@ -59,6 +59,7 @@ import { handleMCPRequest, type MCPRequest } from '../mcp/agent-endpoint.js';
 import { getSession, type SessionPayload } from '../auth/index.js';
 import { sendReauthEmail } from '../services/email.js';
 import { performBackup, listBackups, getBackup } from '../services/agent-backup.js';
+import { isCodexTokenExpired } from '../services/token-monitor.js';
 import * as provider from '../providers/index.js';
 import { nanoid } from 'nanoid';
 import {
@@ -1671,6 +1672,50 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     return reply.code(201).send({ data: { id: credId, serviceId: 'hermeneutix' } });
   });
 
+  app.post('/api/credentials/zendesk', async (request, reply) => {
+    const body = request.body as { token?: string; email?: string; subdomain?: string } | undefined;
+    if (!body?.token) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'token is required' } });
+    }
+    if (!body?.email) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'email is required' } });
+    }
+    if (!body?.subdomain) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'subdomain is required' } });
+    }
+
+    const userId = getUserId(request);
+    const basicAuth = Buffer.from(`${body.email}/token:${body.token}`).toString('base64');
+
+    // Validate by fetching the current user profile
+    try {
+      const res = await fetch(`https://${body.subdomain}.zendesk.com/api/v2/users/me.json`, {
+        headers: { Authorization: `Basic ${basicAuth}` },
+      });
+      if (!res.ok) {
+        return reply.code(401).send({ error: { code: 'INVALID_TOKEN', message: 'Invalid Zendesk credentials' } });
+      }
+    } catch {
+      return reply.code(502).send({ error: { code: 'SERVER_ERROR', message: 'Could not reach Zendesk API' } });
+    }
+
+    const credId = await credentialVault.storeOAuth({
+      serviceId: 'zendesk',
+      accountEmail: body.email,
+      userId,
+      grantedServices: ['zendesk'],
+      data: {
+        accessToken: body.token,
+        email: body.email,
+        subdomain: body.subdomain,
+      } as any,
+    });
+
+    await autoLinkCredential('zendesk', credId);
+
+    return reply.code(201).send({ data: { id: credId, serviceId: 'zendesk' } });
+  });
+
   // ========================================================================
   // OAuth - Google
   // ========================================================================
@@ -2576,6 +2621,18 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Failed to validate Telegram token' } });
     }
 
+    // Reject deploys with an already-expired Codex token
+    if (body.modelProvider === 'openai-codex' && body.modelCredentials) {
+      if (isCodexTokenExpired(body.modelCredentials)) {
+        return reply.code(400).send({
+          error: {
+            code: 'CODEX_TOKEN_EXPIRED',
+            message: 'The OpenAI Codex token has expired. Please re-authenticate before deploying.',
+          },
+        });
+      }
+    }
+
     // Parse MCP servers if provided
     let userMcpServers: object[] = [];
     if (body.mcpServers) {
@@ -3118,7 +3175,20 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       soulMd?: string;
       modelProvider?: string;
       modelName?: string;
+      modelCredentials?: string;
     };
+
+    // Reject redeploy with an already-expired Codex token
+    const redeployProvider = body?.modelProvider || deployment.model_provider as string;
+    const redeployCreds = body?.modelCredentials || deployment.model_credentials as string | undefined;
+    if (redeployProvider === 'openai-codex' && redeployCreds && isCodexTokenExpired(redeployCreds)) {
+      return reply.code(400).send({
+        error: {
+          code: 'CODEX_TOKEN_EXPIRED',
+          message: 'The OpenAI Codex token has expired. Please re-authenticate before redeploying.',
+        },
+      });
+    }
 
     const reinsUrl = process.env.REINS_PUBLIC_URL || config.dashboardUrl;
     const mcpConfigs = [
@@ -3136,6 +3206,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     })();
 
     try {
+      const newModelCredentials = body?.modelCredentials || deployment.model_credentials as string | undefined;
+
       const managementUrl = await provider.redeploy(
         deployment.fly_app_name as string,
         deployment.fly_machine_id as string,
@@ -3148,12 +3220,13 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           soulMd: body?.soulMd || deployment.soul_md as string | undefined,
           modelProvider: redeployModelProvider,
           modelName: redeployModelName,
+          modelCredentials: newModelCredentials,
         }
       );
 
       const now = new Date().toISOString();
       await client.execute({
-        sql: `UPDATE deployed_agents SET status = 'running', management_url = ?, telegram_token = COALESCE(?, telegram_token), telegram_user_id = COALESCE(?, telegram_user_id), soul_md = COALESCE(?, soul_md), model_provider = ?, model_name = ?, updated_at = ? WHERE id = ?`,
+        sql: `UPDATE deployed_agents SET status = 'running', management_url = ?, telegram_token = COALESCE(?, telegram_token), telegram_user_id = COALESCE(?, telegram_user_id), soul_md = COALESCE(?, soul_md), model_provider = ?, model_name = ?, model_credentials = COALESCE(?, model_credentials), updated_at = ? WHERE id = ?`,
         args: [
           managementUrl,
           body?.telegramToken ?? null,
@@ -3161,6 +3234,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           body?.soulMd ?? null,
           redeployModelProvider,
           redeployModelName,
+          body?.modelCredentials ?? null,
           now,
           deployment.id as string,
         ],

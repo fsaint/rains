@@ -11,6 +11,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xfonts-100dpi \
     fonts-liberation \
     fonts-noto-color-emoji \
+    python3 \
+    python3-pip \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Chromium via Playwright into the node user's cache

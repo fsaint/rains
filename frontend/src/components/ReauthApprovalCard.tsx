@@ -48,6 +48,7 @@ export function ReauthApprovalCard({ approval, onReauth }: Props) {
   const source = approval.arguments.source as string | undefined;
   const providerLabel = PROVIDER_LABELS[provider] ?? provider;
   const isFromToolCall = source === 'mcp_tool_call';
+  const isFromMonitor = source === 'token_monitor' || source === 'health_monitor';
 
   return (
     <div className="bg-white rounded-xl p-6 shadow-sm border border-amber-100">
@@ -64,6 +65,8 @@ export function ReauthApprovalCard({ approval, onReauth }: Props) {
               <p className="text-xs text-gray-500 mt-0.5">
                 {isFromToolCall
                   ? 'Credentials expired during a tool call'
+                  : isFromMonitor
+                  ? 'Token expired — agent is unable to start'
                   : 'Credentials required for deployment'}
               </p>
             </div>

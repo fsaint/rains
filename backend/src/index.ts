@@ -5,6 +5,7 @@ import { approvalQueue } from './approvals/queue.js';
 import { initializeNativeServers, shutdownNativeServers } from './mcp/init-servers.js';
 import { startTokenRefreshLoop, stopTokenRefreshLoop } from './credentials/vault.js';
 import { startBackupLoop, stopBackupLoop } from './services/agent-backup.js';
+import { startTokenMonitor, stopTokenMonitor } from './services/token-monitor.js';
 
 const app = await buildApp();
 
@@ -51,11 +52,16 @@ app.log.info('Token refresh loop started');
 startBackupLoop();
 app.log.info('Agent backup loop started (every 24 hours)');
 
+// Start Codex token expiry monitor
+startTokenMonitor();
+app.log.info('Token monitor started');
+
 // Graceful shutdown
 const shutdown = async () => {
   app.log.info('Shutting down...');
   stopTokenRefreshLoop();
   stopBackupLoop();
+  stopTokenMonitor();
   await shutdownNativeServers();
   await app.close();
   process.exit(0);
