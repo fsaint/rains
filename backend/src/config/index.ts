@@ -55,6 +55,9 @@ const ConfigSchema = z.object({
   mailgunApiKey: z.string().optional(),
   mailgunDomain: z.string().optional(),
   mailgunFrom: z.string().optional(),
+
+  // Hermeneutix (shared server-side key — users don't need their own)
+  hermeneutixApiKey: z.string().optional(),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -91,6 +94,8 @@ function loadConfig(): Config {
     mailgunApiKey: process.env.MAILGUN_API_KEY,
     mailgunDomain: process.env.MAILGUN_DOMAIN,
     mailgunFrom: process.env.MAILGUN_FROM,
+    // Hermeneutix
+    hermeneutixApiKey: process.env.HERMENEUTIX_API_KEY,
   };
 
   const result = ConfigSchema.safeParse(raw);

@@ -682,19 +682,24 @@ async function handleCallTool(
         }
       }
     } else {
-      // Check if this service requires credentials (from registry)
-      const serviceDef = _registryLoaded ? (await import('@reins/servers')).serviceRegistry.get(serviceType) : null;
-      const requiresAuth = serviceDef?.auth.required ?? false;
-      if (requiresAuth) {
-        return {
-          jsonrpc: '2.0',
-          id: requestId,
-          error: {
-            code: MCP_ERROR_CODES.MISSING_CREDENTIALS,
-            message: `No credentials linked for service: ${serviceType}`,
-            data: { service: serviceType },
-          },
-        };
+      // Use server-side key for services that have one configured
+      if (serviceType === 'hermeneutix' && config.hermeneutixApiKey) {
+        context.accessToken = config.hermeneutixApiKey;
+      } else {
+        // Check if this service requires credentials (from registry)
+        const serviceDef = _registryLoaded ? (await import('@reins/servers')).serviceRegistry.get(serviceType) : null;
+        const requiresAuth = serviceDef?.auth.required ?? false;
+        if (requiresAuth) {
+          return {
+            jsonrpc: '2.0',
+            id: requestId,
+            error: {
+              code: MCP_ERROR_CODES.MISSING_CREDENTIALS,
+              message: `No credentials linked for service: ${serviceType}`,
+              data: { service: serviceType },
+            },
+          };
+        }
       }
     }
   }
