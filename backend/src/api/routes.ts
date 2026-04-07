@@ -58,6 +58,7 @@ import {
 import { handleMCPRequest, type MCPRequest } from '../mcp/agent-endpoint.js';
 import { getSession, type SessionPayload } from '../auth/index.js';
 import { sendReauthEmail } from '../services/email.js';
+import { performBackup, listBackups, getBackup } from '../services/agent-backup.js';
 import * as provider from '../providers/index.js';
 import { nanoid } from 'nanoid';
 import {
@@ -1634,6 +1635,40 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         workspaceName: validation.workspaceName,
       },
     });
+  });
+
+  app.post('/api/credentials/hermeneutix', async (request, reply) => {
+    const body = request.body as { token?: string } | undefined;
+    if (!body?.token) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'token is required' } });
+    }
+
+    const userId = getUserId(request);
+
+    // Validate token by hitting the projects list endpoint
+    let username: string | undefined;
+    try {
+      const res = await fetch('https://studio.curl-newton.ts.net/api/mobile/projects/', {
+        headers: { Authorization: `Token ${body.token}` },
+      });
+      if (!res.ok) {
+        return reply.code(401).send({ error: { code: 'INVALID_TOKEN', message: 'Invalid Hermeneutix API token' } });
+      }
+    } catch {
+      return reply.code(502).send({ error: { code: 'SERVER_ERROR', message: 'Could not reach Hermeneutix API' } });
+    }
+
+    const credId = await credentialVault.storeOAuth({
+      serviceId: 'hermeneutix',
+      accountEmail: username ?? 'hermeneutix',
+      userId,
+      grantedServices: ['hermeneutix'],
+      data: { accessToken: body.token } as any,
+    });
+
+    await autoLinkCredential('hermeneutix', credId);
+
+    return reply.code(201).send({ data: { id: credId, serviceId: 'hermeneutix' } });
   });
 
   // ========================================================================
@@ -3515,4 +3550,46 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       args: [new Date().toISOString(), deployment.id as string],
     });
   }
+
+  // ============================================================================
+  // Backup Routes
+  // ============================================================================
+
+  // List all backups
+  app.get('/api/backups', async (request, reply) => {
+    const session = getSession(request);
+    if (!session) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const backups = await listBackups();
+    return reply.send({ backups });
+  });
+
+  // Trigger a manual backup
+  app.post('/api/backups', async (request, reply) => {
+    const session = getSession(request);
+    if (!session) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const metadata = await performBackup();
+    return reply.status(201).send({ backup: metadata });
+  });
+
+  // Download a specific backup by ID
+  app.get('/api/backups/:id', async (request, reply) => {
+    const session = getSession(request);
+    if (!session) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const { id } = request.params as { id: string };
+    // Basic path traversal guard
+    if (!/^[\w\-:.]+$/.test(id)) {
+      return reply.status(400).send({ error: 'Invalid backup ID' });
+    }
+
+    const backup = await getBackup(id);
+    if (!backup) return reply.status(404).send({ error: 'Backup not found' });
+
+    reply
+      .header('Content-Type', 'application/json')
+      .header('Content-Disposition', `attachment; filename="backup-${id}.json"`)
+      .send(JSON.stringify(backup, null, 2));
+  });
 };

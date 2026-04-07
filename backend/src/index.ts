@@ -4,6 +4,7 @@ import { initializeDatabase } from './db/index.js';
 import { approvalQueue } from './approvals/queue.js';
 import { initializeNativeServers, shutdownNativeServers } from './mcp/init-servers.js';
 import { startTokenRefreshLoop, stopTokenRefreshLoop } from './credentials/vault.js';
+import { startBackupLoop, stopBackupLoop } from './services/agent-backup.js';
 
 const app = await buildApp();
 
@@ -46,10 +47,15 @@ app.register(async (fastify) => {
 startTokenRefreshLoop();
 app.log.info('Token refresh loop started');
 
+// Start 24-hour agent backup loop
+startBackupLoop();
+app.log.info('Agent backup loop started (every 24 hours)');
+
 // Graceful shutdown
 const shutdown = async () => {
   app.log.info('Shutting down...');
   stopTokenRefreshLoop();
+  stopBackupLoop();
   await shutdownNativeServers();
   await app.close();
   process.exit(0);
