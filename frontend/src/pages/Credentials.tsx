@@ -29,7 +29,7 @@ export default function Credentials() {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [createType, setCreateType] = useState<'pick' | 'google_scopes' | 'microsoft_connect' | 'github_pat' | 'linear_key' | 'notion_key' | 'api_key'>('pick');
+  const [createType, setCreateType] = useState<'pick' | 'google_scopes' | 'microsoft_connect' | 'github_pat' | 'linear_key' | 'notion_key' | 'hermeneutix_key' | 'api_key'>('pick');
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [newCredential, setNewCredential] = useState({
     serviceId: '',
@@ -47,6 +47,8 @@ export default function Credentials() {
   const [linearError, setLinearError] = useState('');
   const [notionToken, setNotionToken] = useState('');
   const [notionError, setNotionError] = useState('');
+  const [hermeneutixToken, setHermeneutixToken] = useState('');
+  const [hermeneutixError, setHermeneutixError] = useState('');
   const [updatingCredentialId, setUpdatingCredentialId] = useState<string | null>(null);
 
   // Handle OAuth callback
@@ -204,6 +206,28 @@ export default function Credentials() {
     },
   });
 
+  const addHermeneutixMutation = useMutation({
+    mutationFn: async (token: string) => {
+      if (updatingCredentialId) {
+        await credentials.delete(updatingCredentialId).catch(() => {});
+      }
+      return credentials.addHermeneutix(token);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['credentials'] });
+      setShowCreateModal(false);
+      setHermeneutixToken('');
+      setHermeneutixError('');
+      setCreateType('pick');
+      setUpdatingCredentialId(null);
+      setNotification({ type: 'success', message: 'Hermeneutix account connected successfully' });
+      setTimeout(() => setNotification(null), 5000);
+    },
+    onError: (error: any) => {
+      setHermeneutixError(error?.message || 'Invalid token');
+    },
+  });
+
   const initiateGoogleOAuthMutation = useMutation({
     mutationFn: ({ services, reconnectId }: { services: string[]; reconnectId?: string }) =>
       oauth.initiateGoogle(services, reconnectId),
@@ -269,6 +293,10 @@ export default function Credentials() {
       setCreateType('notion_key');
       setNotionToken('');
       setNotionError('');
+    } else if (cred.serviceId === 'hermeneutix') {
+      setCreateType('hermeneutix_key');
+      setHermeneutixToken('');
+      setHermeneutixError('');
     }
     setShowCreateModal(true);
   };
@@ -445,7 +473,7 @@ export default function Credentials() {
                           Reconnect
                         </button>
                       )}
-                      {healthStatus[cred.id] && !healthStatus[cred.id].valid && (cred.serviceId === 'github' || cred.serviceId === 'linear' || cred.serviceId === 'notion') && (
+                      {healthStatus[cred.id] && !healthStatus[cred.id].valid && (cred.serviceId === 'github' || cred.serviceId === 'linear' || cred.serviceId === 'notion' || cred.serviceId === 'hermeneutix') && (
                         <button
                           onClick={() => handleUpdateToken(cred)}
                           className="ml-1 px-2 py-0.5 text-xs font-medium text-trust-blue bg-trust-blue/10 rounded hover:bg-trust-blue/20 transition-colors"
@@ -489,7 +517,7 @@ export default function Credentials() {
           <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl shadow-reins-navy/10 border border-gray-100">
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-lg font-semibold text-reins-navy">
-                {createType === 'pick' ? 'Add Credential' : createType === 'google_scopes' ? 'Google Services' : createType === 'microsoft_connect' ? 'Microsoft Account' : createType === 'notion_key' ? (updatingCredentialId ? 'Update Notion Token' : 'Notion') : createType === 'linear_key' ? (updatingCredentialId ? 'Update Linear Token' : 'Linear Workspace') : createType === 'github_pat' ? (updatingCredentialId ? 'Update GitHub Token' : 'GitHub') : 'Add API Key'}
+                {createType === 'pick' ? 'Add Credential' : createType === 'google_scopes' ? 'Google Services' : createType === 'microsoft_connect' ? 'Microsoft Account' : createType === 'notion_key' ? (updatingCredentialId ? 'Update Notion Token' : 'Notion') : createType === 'linear_key' ? (updatingCredentialId ? 'Update Linear Token' : 'Linear Workspace') : createType === 'github_pat' ? (updatingCredentialId ? 'Update GitHub Token' : 'GitHub') : createType === 'hermeneutix_key' ? (updatingCredentialId ? 'Update Hermeneutix Token' : 'Hermeneutix') : 'Add API Key'}
               </h2>
               <button
                 onClick={() => { setShowCreateModal(false); setCreateType('pick'); setUpdatingCredentialId(null); }}
@@ -587,6 +615,22 @@ export default function Credentials() {
                     <div className="font-medium text-reins-navy">Notion</div>
                     <div className="text-sm text-gray-500">
                       Databases and pages via integration token
+                    </div>
+                  </div>
+                </button>
+
+                {/* Hermeneutix */}
+                <button
+                  onClick={() => { setCreateType('hermeneutix_key'); setHermeneutixToken(''); setHermeneutixError(''); }}
+                  className="w-full flex items-center gap-4 p-4 rounded-xl border-2 border-gray-200 hover:border-trust-blue hover:bg-trust-blue/5 transition-all text-left"
+                >
+                  <div className="w-10 h-10 bg-gray-50 rounded-lg flex items-center justify-center shrink-0">
+                    <Key className="w-5 h-5 text-purple-600" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-reins-navy">Hermeneutix</div>
+                    <div className="text-sm text-gray-500">
+                      Meeting transcriptions and speaker profiles via API token
                     </div>
                   </div>
                 </button>
@@ -796,6 +840,55 @@ export default function Credentials() {
                     ) : (
                       <>
                         <BookOpen className="w-4 h-4" />
+                        Connect
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            ) : createType === 'hermeneutix_key' ? (
+              /* Hermeneutix Token Form */
+              <div>
+                <p className="text-sm text-gray-500 mb-4">
+                  Enter your Hermeneutix API token. You can generate one from your account settings.
+                </p>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
+                      API Token
+                    </label>
+                    <input
+                      type="password"
+                      value={hermeneutixToken}
+                      onChange={(e) => { setHermeneutixToken(e.target.value); setHermeneutixError(''); }}
+                      placeholder="Your Hermeneutix API token"
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-mono focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
+                    />
+                  </div>
+                  {hermeneutixError && (
+                    <div className="flex items-center gap-2 text-sm text-alert-red bg-alert-red/5 px-3 py-2 rounded-lg">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      {hermeneutixError}
+                    </div>
+                  )}
+                </div>
+                <div className="flex justify-between items-center mt-6">
+                  <button
+                    onClick={() => setCreateType('pick')}
+                    className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+                  >
+                    Back
+                  </button>
+                  <button
+                    onClick={() => addHermeneutixMutation.mutate(hermeneutixToken)}
+                    disabled={!hermeneutixToken || addHermeneutixMutation.isPending}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-trust-blue text-white rounded-lg text-sm font-medium hover:bg-blue-600 disabled:opacity-40 transition-all shadow-sm shadow-trust-blue/20"
+                  >
+                    {addHermeneutixMutation.isPending ? (
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-white/30 border-t-white" />
+                    ) : (
+                      <>
+                        <Key className="w-4 h-4" />
                         Connect
                       </>
                     )}

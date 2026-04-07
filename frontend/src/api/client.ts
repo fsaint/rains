@@ -250,6 +250,11 @@ export const credentials = {
       '/credentials/notion',
       { method: 'POST', body: JSON.stringify({ token }) }
     ),
+  addHermeneutix: (token: string) =>
+    request<{ id: string; serviceId: string }>(
+      '/credentials/hermeneutix',
+      { method: 'POST', body: JSON.stringify({ token }) }
+    ),
   addApiKey: (serviceId: string, apiKey: string) =>
     request<{ id: string; serviceId: string }>(
       '/credentials',
