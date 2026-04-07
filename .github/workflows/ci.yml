@@ -98,8 +98,8 @@ jobs:
       REINS_ADMIN_PASSWORD: e2etestpassword123
       REINS_PROVIDER: local
       OPENCLAW_IMAGE: reins-stub-openclaw:latest
-      REINS_PUBLIC_URL: http://localhost:3000
-      VITE_API_URL: http://localhost:3000
+      REINS_PUBLIC_URL: http://localhost:5001
+      VITE_API_URL: http://localhost:5001
       # Set in GitHub repo secrets → Settings → Secrets → Actions
       TEST_TELEGRAM_BOT_TOKEN: ${{ secrets.TEST_TELEGRAM_BOT_TOKEN }}
 
@@ -131,7 +131,7 @@ jobs:
       - name: Wait for backend to be ready
         run: |
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:3000/health; then
+            if curl -sf http://localhost:5001/health; then
               echo "Backend ready"
               break
             fi

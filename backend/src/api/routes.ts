@@ -2563,7 +2563,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const mn = body.modelName?.trim() ?? '';
       if (mp === 'openai-codex') {
         // Reject Claude model names for OpenAI provider
-        return mn && !mn.startsWith('claude-') ? mn : 'o3';
+        return mn && !mn.startsWith('claude-') ? mn : 'gpt-5.4';
       }
       // Reject OpenAI model names for Anthropic provider
       return mn && mn.startsWith('claude-') ? mn : 'claude-sonnet-4-5';
@@ -2710,6 +2710,16 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       },
     ];
 
+    const resolvedModelProvider = body.modelProvider ?? 'anthropic';
+    const resolvedModelName = (() => {
+      const mp = resolvedModelProvider;
+      const mn = body.modelName?.trim() ?? '';
+      if (mp === 'openai-codex') {
+        return mn && !mn.startsWith('claude-') ? mn : 'gpt-5.4';
+      }
+      return mn && mn.startsWith('claude-') ? mn : 'claude-sonnet-4-5';
+    })();
+
     try {
       const result = await provider.provision({
         instanceId: deploymentId,
@@ -2718,8 +2728,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         mcpConfigs,
         gatewayToken,
         soulMd: body.soulMd,
-        modelProvider: body.modelProvider,
-        modelName: body.modelName,
+        modelProvider: resolvedModelProvider,
+        modelName: resolvedModelName,
         region: body.region,
       });
 
@@ -2735,8 +2745,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           body.telegramToken,
           body.telegramUserId ?? null,
           body.soulMd ?? null,
-          body.modelProvider ?? 'anthropic',
-          body.modelName || (body.modelProvider === 'openai-codex' ? 'o3' : 'claude-sonnet-4-5'),
+          resolvedModelProvider,
+          resolvedModelName,
           body.region ?? 'iad',
           gatewayToken,
           now,
@@ -3080,6 +3090,16 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       { name: 'reins', url: `${reinsUrl}/mcp/${id}`, transport: 'http' },
     ];
 
+    const redeployModelProvider = (body?.modelProvider || deployment.model_provider as string) ?? 'anthropic';
+    const redeployModelName = (() => {
+      const mp = redeployModelProvider;
+      const mn = (body?.modelName || deployment.model_name as string)?.trim() ?? '';
+      if (mp === 'openai-codex') {
+        return mn && !mn.startsWith('claude-') ? mn : 'gpt-5.4';
+      }
+      return mn && mn.startsWith('claude-') ? mn : 'claude-sonnet-4-5';
+    })();
+
     try {
       const managementUrl = await provider.redeploy(
         deployment.fly_app_name as string,
@@ -3091,21 +3111,21 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           mcpConfigs,
           gatewayToken: deployment.gateway_token as string,
           soulMd: body?.soulMd || deployment.soul_md as string | undefined,
-          modelProvider: body?.modelProvider || deployment.model_provider as string | undefined,
-          modelName: body?.modelName || deployment.model_name as string | undefined,
+          modelProvider: redeployModelProvider,
+          modelName: redeployModelName,
         }
       );
 
       const now = new Date().toISOString();
       await client.execute({
-        sql: `UPDATE deployed_agents SET status = 'running', management_url = ?, telegram_token = COALESCE(?, telegram_token), telegram_user_id = COALESCE(?, telegram_user_id), soul_md = COALESCE(?, soul_md), model_provider = COALESCE(?, model_provider), model_name = COALESCE(?, model_name), updated_at = ? WHERE id = ?`,
+        sql: `UPDATE deployed_agents SET status = 'running', management_url = ?, telegram_token = COALESCE(?, telegram_token), telegram_user_id = COALESCE(?, telegram_user_id), soul_md = COALESCE(?, soul_md), model_provider = ?, model_name = ?, updated_at = ? WHERE id = ?`,
         args: [
           managementUrl,
           body?.telegramToken ?? null,
           body?.telegramUserId ?? null,
           body?.soulMd ?? null,
-          body?.modelProvider ?? null,
-          body?.modelName ?? null,
+          redeployModelProvider,
+          redeployModelName,
           now,
           deployment.id as string,
         ],

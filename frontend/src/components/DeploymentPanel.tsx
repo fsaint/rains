@@ -415,25 +415,41 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
                   value={config.modelProvider}
                   onChange={(e) => {
                     const provider = e.target.value;
-                    const defaultModel = provider === 'openai-codex' ? 'o3' : 'claude-sonnet-4-5';
+                    const defaultModel = provider === 'openai-codex' ? 'gpt-5.4' : 'claude-sonnet-4-5';
                     setConfig({ ...config, modelProvider: provider, modelName: defaultModel });
                   }}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none bg-white"
                 >
                   <option value="anthropic">Anthropic</option>
-                  <option value="openai">OpenAI</option>
+                  <option value="openai-codex">OpenAI (ChatGPT)</option>
                 </select>
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
                   Model
                 </label>
-                <input
-                  type="text"
+                <select
                   value={config.modelName}
                   onChange={(e) => setConfig({ ...config, modelName: e.target.value })}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
-                />
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none bg-white"
+                >
+                  {config.modelProvider === 'openai-codex' ? (
+                    <>
+                      <option value="gpt-5.4">GPT-5.4 (default)</option>
+                      <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
+                      <option value="gpt-5.3-codex">GPT-5.3 Codex</option>
+                      <option value="gpt-5.3-codex-spark">GPT-5.3 Codex Spark</option>
+                      <option value="gpt-5-codex">GPT-5 Codex</option>
+                      <option value="gpt-5-codex-mini">GPT-5 Codex Mini</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="claude-sonnet-4-5">Claude Sonnet 4.5</option>
+                      <option value="claude-opus-4-6">Claude Opus 4.6</option>
+                      <option value="claude-haiku-4-5">Claude Haiku 4.5</option>
+                    </>
+                  )}
+                </select>
               </div>
             </div>
             <div>

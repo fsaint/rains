@@ -200,8 +200,7 @@ async function buildMachineConfig(opts: CreateMachineOpts) {
       ...(opts.soulMd ? { SOUL_MD: opts.soulMd } : {}),
       ...(opts.telegramUserId ? { TELEGRAM_TRUSTED_USER: opts.telegramUserId } : {}),
       ...(opts.modelProvider ? { MODEL_PROVIDER: opts.modelProvider } : {}),
-      // openai-codex discovers available models at runtime — don't constrain with a model name
-      ...(opts.modelName && opts.modelProvider !== 'openai-codex' ? { MODEL_NAME: opts.modelName } : {}),
+      ...(opts.modelName ? { MODEL_NAME: opts.modelName } : {}),
       ...(opts.openaiApiKey ? { OPENAI_API_KEY: opts.openaiApiKey } : {}),
       ...(opts.modelCredentials ? { OPENAI_CODEX_TOKENS: opts.modelCredentials } : {}),
       THINKING_DEFAULT: opts.thinkingDefault ?? 'medium',
@@ -213,6 +212,19 @@ async function buildMachineConfig(opts: CreateMachineOpts) {
         internal_port: 18789,
         autostart: true,
         autostop: 'off',
+        checks: [
+          {
+            type: 'http',
+            method: 'get',
+            path: '/healthz',
+            port: 18789,
+            interval: '15s',
+            timeout: '5s',
+            // Allow 30s for 2-phase openai-codex init (phase1: 8s sleep + kill,
+            // phase2: auth injection, phase3: gateway restart)
+            grace_period: '30s',
+          },
+        ],
       },
     ],
   };

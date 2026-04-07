@@ -36,7 +36,7 @@ export default defineConfig({
     : [
         {
           command: 'npm run dev:backend',
-          url: 'http://localhost:3000/health',
+          url: 'http://localhost:5001/health',
           reuseExistingServer: true,
           timeout: 30_000,
           env: {

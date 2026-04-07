@@ -52,8 +52,7 @@ export async function createLocalContainer(opts: {
   if (opts.soulMd) env.SOUL_MD = opts.soulMd;
   if (opts.telegramUserId) env.TELEGRAM_TRUSTED_USER = opts.telegramUserId;
   if (opts.modelProvider) env.MODEL_PROVIDER = opts.modelProvider;
-  // openai-codex discovers available models at runtime from the ChatGPT API — don't constrain
-  if (opts.modelName && opts.modelProvider !== 'openai-codex') env.MODEL_NAME = opts.modelName;
+  if (opts.modelName) env.MODEL_NAME = opts.modelName;
   if (opts.openaiApiKey) env.OPENAI_API_KEY = opts.openaiApiKey;
   if (opts.modelCredentials) env.OPENAI_CODEX_TOKENS = opts.modelCredentials;
   env.THINKING_DEFAULT = opts.thinkingDefault ?? 'medium';

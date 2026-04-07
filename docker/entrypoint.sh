@@ -189,7 +189,7 @@ if [ -n "$OPENAI_CODEX_TOKENS" ]; then
   GATEWAY_PID=$!
   sleep 8
   kill $GATEWAY_PID 2>/dev/null
-  wait $GATEWAY_PID 2>/dev/null
+  wait $GATEWAY_PID 2>/dev/null || true
 
   # Phase 2: re-generate config (gateway init may have overwritten it) and inject auth
   generate_config

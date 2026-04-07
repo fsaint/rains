@@ -394,7 +394,7 @@ export default function AgentNew() {
             </button>
             <button
               type="button"
-              onClick={() => update({ modelProvider: 'openai-codex', modelName: '' })}
+              onClick={() => update({ modelProvider: 'openai-codex', modelName: 'gpt-5.4' })}
               className={`p-4 rounded-xl border-2 text-left transition-all ${
                 form.modelProvider === 'openai-codex'
                   ? 'border-trust-blue bg-trust-blue/5'
@@ -407,7 +407,26 @@ export default function AgentNew() {
           </div>
 
           {form.modelProvider === 'openai-codex' && (
-            <CodexDeviceFlow onComplete={(tokens) => update({ modelCredentials: tokens })} />
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
+                  Model
+                </label>
+                <select
+                  value={form.modelName || 'gpt-5.4'}
+                  onChange={(e) => update({ modelName: e.target.value })}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none bg-white"
+                >
+                  <option value="gpt-5.4">GPT-5.4 (default)</option>
+                  <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
+                  <option value="gpt-5.3-codex">GPT-5.3 Codex</option>
+                  <option value="gpt-5.3-codex-spark">GPT-5.3 Codex Spark</option>
+                  <option value="gpt-5-codex">GPT-5 Codex</option>
+                  <option value="gpt-5-codex-mini">GPT-5 Codex Mini</option>
+                </select>
+              </div>
+              <CodexDeviceFlow onComplete={(tokens) => update({ modelCredentials: tokens })} />
+            </div>
           )}
 
           {form.modelProvider === 'anthropic' && (
