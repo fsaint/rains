@@ -529,7 +529,7 @@ export default function Credentials() {
 
             {createType === 'pick' ? (
               /* Type Picker */
-              <div className="space-y-3">
+              <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
                 <p className="text-sm text-gray-500 mb-4">
                   Choose a credential type to add.
                 </p>
