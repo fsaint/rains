@@ -2261,14 +2261,80 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       offset: query.offset ? parseInt(query.offset) : undefined,
     });
 
-    const entries = await auditLogger.query(filter);
-    const filteredEntries = entries.filter((e: any) =>
-      !e.agentId || userAgentIds.includes(e.agentId)
-    );
-    const total = filteredEntries.length;
+    // Build a scoped query that applies user ownership filter in SQL,
+    // before pagination, so LIMIT/OFFSET work correctly.
+    const scopedAgentId = filter.agentId && userAgentIds.includes(filter.agentId)
+      ? filter.agentId
+      : null;
+
+    // If the user has no agents and no specific agentId filter, return empty result fast.
+    if (userAgentIds.length === 0 && !scopedAgentId) {
+      return {
+        data: [],
+        pagination: { total: 0, limit: filter.limit, offset: filter.offset, hasMore: false },
+      };
+    }
+
+    let whereSql: string;
+    const whereArgs: (string | number)[] = [];
+
+    if (scopedAgentId) {
+      whereSql = `WHERE agent_id = ?`;
+      whereArgs.push(scopedAgentId);
+    } else {
+      whereSql = `WHERE (agent_id IS NULL OR agent_id IN (${userAgentIds.map(() => '?').join(',')}))`;
+      whereArgs.push(...userAgentIds);
+    }
+
+    if (filter.eventType) {
+      whereSql += ` AND event_type = ?`;
+      whereArgs.push(filter.eventType);
+    }
+    if (filter.tool) {
+      whereSql += ` AND tool = ?`;
+      whereArgs.push(filter.tool);
+    }
+    if (filter.result) {
+      whereSql += ` AND result = ?`;
+      whereArgs.push(filter.result);
+    }
+    if (filter.startDate) {
+      whereSql += ` AND timestamp >= ?`;
+      whereArgs.push(filter.startDate.toISOString());
+    }
+    if (filter.endDate) {
+      whereSql += ` AND timestamp <= ?`;
+      whereArgs.push(filter.endDate.toISOString());
+    }
+
+    // Count total matching rows (without pagination)
+    const countResult = await client.execute({
+      sql: `SELECT COUNT(*) as count FROM audit_log ${whereSql}`,
+      args: whereArgs,
+    });
+    const total = Number(countResult.rows[0]?.count ?? 0);
+
+    // Fetch the page
+    const dataResult = await client.execute({
+      sql: `SELECT * FROM audit_log ${whereSql} ORDER BY timestamp DESC LIMIT ? OFFSET ?`,
+      args: [...whereArgs, filter.limit, filter.offset],
+    });
+
+    // Map raw rows to AuditEntry shape
+    const entries = dataResult.rows.map((row: any) => ({
+      id: row.id,
+      timestamp: row.timestamp,
+      eventType: row.event_type,
+      agentId: row.agent_id ?? undefined,
+      tool: row.tool ?? undefined,
+      arguments: row.arguments_json ? JSON.parse(row.arguments_json) : undefined,
+      result: row.result ?? undefined,
+      durationMs: row.duration_ms ?? undefined,
+      metadata: row.metadata_json ? JSON.parse(row.metadata_json) : undefined,
+    }));
 
     // Build agent name lookup
-    const agentIds = [...new Set(filteredEntries.map((e: any) => e.agentId).filter(Boolean))];
+    const agentIds = [...new Set(entries.map((e: any) => e.agentId).filter(Boolean))];
     const agentNameMap: Record<string, string> = {};
     if (agentIds.length > 0) {
       const agentRows = await client.execute({
@@ -2280,8 +2346,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       }
     }
 
-    // Enrich entries with agent names
-    const enrichedEntries = filteredEntries.map((e: any) => ({
+    const enrichedEntries = entries.map((e: any) => ({
       ...e,
       agentName: e.agentId ? agentNameMap[e.agentId] || null : null,
     }));
@@ -2292,7 +2357,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         total,
         limit: filter.limit,
         offset: filter.offset,
-        hasMore: false,
+        hasMore: filter.offset + filter.limit < total,
       },
     };
   });

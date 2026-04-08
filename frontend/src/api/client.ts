@@ -304,12 +304,18 @@ export const approvals = {
 
 // Audit
 export const audit = {
-  query: (filter: Record<string, unknown> = {}) => {
+  query: async (filter: Record<string, unknown> = {}) => {
     const params = new URLSearchParams();
     Object.entries(filter).forEach(([key, value]) => {
       if (value !== undefined) params.append(key, String(value));
     });
-    return request<{ data: unknown[]; pagination: unknown }>(`/audit?${params}`);
+    const headers: Record<string, string> = {};
+    const response = await fetch(`${API_BASE}/audit?${params}`, { headers });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new ApiError(error.error?.code || 'UNKNOWN', error.error?.message || 'Request failed');
+    }
+    return response.json() as Promise<{ data: unknown[]; pagination: { total: number; limit: number; offset: number; hasMore: boolean } }>;
   },
 };
 
