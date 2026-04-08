@@ -48,6 +48,10 @@ USER node
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 ENV DISPLAY=:99
 
+# Bake the git SHA (or custom tag) into the image at build time
+ARG CONTAINER_VERSION=dev
+ENV CONTAINER_VERSION=${CONTAINER_VERSION}
+
 EXPOSE 18789
 
 ENTRYPOINT ["/entrypoint.sh"]

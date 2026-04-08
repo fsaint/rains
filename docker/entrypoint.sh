@@ -17,6 +17,17 @@ if [ -n "$SOUL_MD" ]; then
   echo "$SOUL_MD" > "$WORKSPACE_DIR/SOUL.md"
 fi
 
+# Append container version info so the agent knows what image it's running in
+{
+  echo ""
+  echo "## Container"
+  echo "Version: ${CONTAINER_VERSION:-dev}"
+  if [ -n "$FLY_IMAGE_REF" ]; then
+    echo "Image: ${FLY_IMAGE_REF}"
+    echo "Region: ${FLY_REGION:-unknown}"
+  fi
+} >> "$WORKSPACE_DIR/SOUL.md"
+
 # Generate openclaw.json from environment variables
 generate_config() {
 node -e "
