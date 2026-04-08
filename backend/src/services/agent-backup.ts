@@ -17,7 +17,7 @@
 
 import { mkdir, readdir, writeFile, readFile, unlink, stat } from 'fs/promises';
 import { join } from 'path';
-import { client } from '../db/index.js';
+import { client, sql } from '../db/index.js';
 
 const BACKUP_VERSION = '1';
 const INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -184,6 +184,87 @@ async function pruneOldBackups(backupDir: string): Promise<void> {
       // Ignore
     }
   }
+}
+
+export interface RestoreResult {
+  safetyBackupId: string;
+  restored: {
+    credentials: number;
+    policies: number;
+    agents: number;
+    deployedAgents: number;
+    agentServiceInstances: number;
+    agentToolPermissions: number;
+    agentServiceCredentials: number;
+  };
+}
+
+/**
+ * Restore all agent data from a backup snapshot.
+ *
+ * Takes an automatic safety backup first, then replaces the contents of all
+ * backed-up tables with the data from the specified backup inside a single
+ * PostgreSQL transaction. On error the transaction is rolled back and the
+ * database is left untouched.
+ */
+export async function restoreBackup(id: string): Promise<RestoreResult> {
+  const backup = await getBackup(id);
+  if (!backup) throw new Error(`Backup not found: ${id}`);
+
+  // Take a pre-restore safety snapshot so the current state is recoverable
+  const safety = await performBackup();
+
+  // Helper: INSERT all rows for one table inside the transaction
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async function insertRows(tx: any, table: string, rows: unknown[]): Promise<void> {
+    for (const row of rows) {
+      const r = row as Record<string, unknown>;
+      const cols = Object.keys(r);
+      if (cols.length === 0) continue;
+      const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await tx.unsafe(
+        `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${placeholders})`,
+        Object.values(r) as any[]
+      );
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await sql.begin(async (tx: any) => {
+    // Clear in reverse FK order
+    await tx.unsafe('DELETE FROM agent_tool_permissions');
+    await tx.unsafe('DELETE FROM agent_service_credentials');
+    await tx.unsafe('DELETE FROM agent_service_instances');
+    await tx.unsafe('DELETE FROM deployed_agents');
+    await tx.unsafe('DELETE FROM agents');
+    await tx.unsafe('DELETE FROM credentials');
+    await tx.unsafe('DELETE FROM policies');
+
+    // Re-insert in FK order
+    await insertRows(tx, 'credentials',               backup.credentials);
+    await insertRows(tx, 'policies',                  backup.policies);
+    await insertRows(tx, 'agents',                    backup.agents);
+    await insertRows(tx, 'deployed_agents',           backup.deployedAgents);
+    await insertRows(tx, 'agent_service_instances',   backup.agentServiceInstances);
+    await insertRows(tx, 'agent_tool_permissions',    backup.agentToolPermissions);
+    await insertRows(tx, 'agent_service_credentials', backup.agentServiceCredentials);
+  });
+
+  console.log(`[backup] Restored from ${id} (safety backup: ${safety.id})`);
+
+  return {
+    safetyBackupId: safety.id,
+    restored: {
+      credentials:            backup.credentials.length,
+      policies:               backup.policies.length,
+      agents:                 backup.agents.length,
+      deployedAgents:         backup.deployedAgents.length,
+      agentServiceInstances:  backup.agentServiceInstances.length,
+      agentToolPermissions:   backup.agentToolPermissions.length,
+      agentServiceCredentials: backup.agentServiceCredentials.length,
+    },
+  };
 }
 
 /**

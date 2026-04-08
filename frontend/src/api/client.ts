@@ -337,6 +337,36 @@ export interface AuthResponse {
   user?: User;
 }
 
+// Backups
+export interface BackupMetadata {
+  id: string;
+  filename: string;
+  createdAt: string;
+  sizeBytes: number;
+  agentCount: number;
+}
+
+export interface RestoreResult {
+  ok: boolean;
+  safetyBackupId: string;
+  restored: {
+    credentials: number;
+    policies: number;
+    agents: number;
+    deployedAgents: number;
+    agentServiceInstances: number;
+    agentToolPermissions: number;
+    agentServiceCredentials: number;
+  };
+}
+
+export const backups = {
+  list: () => request<{ backups: BackupMetadata[] }>('/backups'),
+  create: () => request<{ backup: BackupMetadata }>('/backups', { method: 'POST' }),
+  restore: (id: string) => request<RestoreResult>(`/backups/${id}/restore`, { method: 'POST' }),
+  downloadUrl: (id: string) => `/api/backups/${id}`,
+};
+
 // Auth
 export const auth = {
   login: (email: string, password: string) =>

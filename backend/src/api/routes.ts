@@ -58,7 +58,7 @@ import {
 import { handleMCPRequest, type MCPRequest } from '../mcp/agent-endpoint.js';
 import { getSession, type SessionPayload } from '../auth/index.js';
 import { sendReauthEmail } from '../services/email.js';
-import { performBackup, listBackups, getBackup } from '../services/agent-backup.js';
+import { performBackup, listBackups, getBackup, restoreBackup } from '../services/agent-backup.js';
 import { isCodexTokenExpired } from '../services/token-monitor.js';
 import * as provider from '../providers/index.js';
 import { nanoid } from 'nanoid';
@@ -3710,6 +3710,25 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     const metadata = await performBackup();
     return reply.status(201).send({ backup: metadata });
+  });
+
+  // Restore from a specific backup
+  app.post('/api/backups/:id/restore', async (request, reply) => {
+    const session = getSession(request);
+    if (!session) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const { id } = request.params as { id: string };
+    if (!/^[\w\-:.]+$/.test(id)) {
+      return reply.status(400).send({ error: 'Invalid backup ID' });
+    }
+
+    try {
+      const result = await restoreBackup(id);
+      return reply.send({ ok: true, ...result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.status(500).send({ error: message });
+    }
   });
 
   // Download a specific backup by ID

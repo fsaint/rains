@@ -10,6 +10,7 @@ import {
   LogOut,
   UserCog,
   User,
+  Database,
 } from 'lucide-react';
 import Dashboard from './pages/Dashboard';
 import Credentials from './pages/Credentials';
@@ -20,6 +21,7 @@ import Login from './pages/Login';
 import AdminUsers from './pages/AdminUsers';
 import AgentNew from './pages/AgentNew';
 import AgentDetail from './pages/AgentDetail';
+import Backups from './pages/Backups';
 import { auth } from './api/client';
 import type { User as UserType } from './api/client';
 
@@ -29,6 +31,7 @@ const navItems = [
   { path: '/credentials', label: 'Credentials', icon: Key },
   { path: '/approvals', label: 'Approvals', icon: CheckCircle },
   { path: '/audit', label: 'Audit Log', icon: Activity },
+  { path: '/backups', label: 'Backups', icon: Database },
 ];
 
 const adminNavItems = [
@@ -172,6 +175,7 @@ function App() {
           <Route path="/credentials" element={<Credentials />} />
           <Route path="/approvals" element={<Approvals />} />
           <Route path="/audit" element={<AuditLog />} />
+          <Route path="/backups" element={<Backups />} />
           {isAdmin && <Route path="/admin/users" element={<AdminUsers />} />}
         </Routes>
       </main>

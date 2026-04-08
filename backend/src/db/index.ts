@@ -7,8 +7,8 @@ import * as schema from './schema.js';
 
 const DATABASE_URL = config.databaseUrl;
 
-// Create postgres.js connection
-const sql = postgres(DATABASE_URL);
+// Create postgres.js connection (exported for transaction use)
+export const sql = postgres(DATABASE_URL);
 
 // Create Drizzle ORM instance
 export const db = drizzle(sql, { schema });
