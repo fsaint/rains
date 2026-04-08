@@ -26,7 +26,7 @@ RUN node /app/node_modules/playwright-core/cli.js install --with-deps chromium &
 RUN mkdir -p /home/node/.openclaw/plugins/openclaw-mcp-bridge && \
     cd /home/node/.openclaw/plugins/openclaw-mcp-bridge && \
     npm init -y > /dev/null 2>&1 && \
-    npm install openclaw-mcp-bridge@0.3.0 && \
+    npm install openclaw-mcp-bridge@0.3.1 && \
     chown -R node:node /home/node/.openclaw
 
 # Fix missing plugin runtime module (packaging gap in main image)
