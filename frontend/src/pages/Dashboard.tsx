@@ -43,22 +43,28 @@ function ActivityItem({ type, tool, agentId, result, timestamp }: ActivityItemPr
     pending: 'text-gray-500',
   };
 
+  const timeLabel = (() => {
+    if (!timestamp) return '';
+    const d = new Date(timestamp);
+    return isNaN(d.getTime()) ? '' : d.toLocaleTimeString();
+  })();
+
+  const typeLabel = type
+    ? (type === 'tool_call' ? `Tool: ${tool ?? ''}` : type.replace(/_/g, ' '))
+    : 'event';
+
   return (
     <div className="flex items-center gap-4 py-3 border-b border-gray-100 last:border-0">
       <div className={`w-2 h-2 rounded-full ${result === 'success' ? 'bg-safe-green' : result === 'blocked' ? 'bg-alert-red' : 'bg-caution-amber'}`} />
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium truncate">
-          {type === 'tool_call' ? `Tool: ${tool}` : type.replace('_', ' ')}
-        </p>
+        <p className="text-sm font-medium truncate">{typeLabel}</p>
         <p className="text-xs text-gray-500">{agentId || 'System'}</p>
       </div>
       <div className="text-right">
         <p className={`text-sm font-medium ${resultColors[result || 'pending']}`}>
           {result || 'pending'}
         </p>
-        <p className="text-xs text-gray-400">
-          {new Date(timestamp).toLocaleTimeString()}
-        </p>
+        <p className="text-xs text-gray-400">{timeLabel}</p>
       </div>
     </div>
   );
