@@ -63,7 +63,10 @@ export async function handleListMeetings(
   if (!response.ok) {
     return { success: false, error: `API error: ${response.status} ${response.statusText}` };
   }
-  const meetings = await response.json() as Record<string, unknown>[];
+  const raw = await response.json() as Record<string, unknown>[] | { results?: Record<string, unknown>[]; meetings?: Record<string, unknown>[] } & Record<string, unknown>;
+  const meetings: Record<string, unknown>[] = Array.isArray(raw)
+    ? raw
+    : ((raw as Record<string, unknown[]>).results ?? (raw as Record<string, unknown[]>).meetings ?? []);
 
   // Fetch recent instances (last 5) for each meeting in parallel
   const meetingsWithInstances = await Promise.all(
