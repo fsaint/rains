@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   permissions,
   agents,
+  credentials,
   type ServiceType,
   type ToolPermission,
   type PermissionLevel,
@@ -549,10 +550,27 @@ interface AddServiceModalProps {
 }
 
 function AddServiceModal({ agentId, agentName, availableServices, onClose, onAdded }: AddServiceModalProps) {
+  const navigate = useNavigate();
+
   const createInstanceMutation = useMutation({
     mutationFn: (serviceType: string) => permissions.createInstance(agentId, serviceType),
     onSuccess: () => onAdded(),
   });
+
+  const { data: allCredentials = [] } = useQuery({
+    queryKey: ['credentials'],
+    queryFn: () => credentials.list(),
+  });
+
+  // For each service, count how many credentials cover it
+  function getMatchingCredentials(serviceType: string) {
+    return allCredentials.filter(
+      (c) => c.serviceId === serviceType || c.grantedServices?.includes(serviceType)
+    );
+  }
+
+  const servicesWithCreds = availableServices.filter((s) => getMatchingCredentials(s.type).length > 0);
+  const servicesWithoutCreds = availableServices.filter((s) => getMatchingCredentials(s.type).length === 0);
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -568,20 +586,62 @@ function AddServiceModal({ agentId, agentName, availableServices, onClose, onAdd
         </div>
 
         <div className="space-y-2">
-          {availableServices.map((service) => (
-            <button
+          {servicesWithCreds.length > 0 && (
+            <>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-1 pb-1">
+                Connected accounts
+              </p>
+              {servicesWithCreds.map((service) => {
+                const count = getMatchingCredentials(service.type).length;
+                return (
+                  <button
+                    key={service.type}
+                    onClick={() => createInstanceMutation.mutate(service.type)}
+                    disabled={createInstanceMutation.isPending}
+                    className="w-full flex items-center gap-3 p-4 rounded-lg border-2 border-gray-200 hover:border-trust-blue/30 hover:bg-trust-blue/5 transition-all disabled:opacity-50"
+                  >
+                    <div className="p-2 bg-gray-50 rounded-lg text-gray-500">
+                      {serviceIcons[service.type] ?? <Globe className="w-5 h-5" />}
+                    </div>
+                    <div className="text-left flex-1">
+                      <div className="font-medium text-sm text-reins-navy">{service.name}</div>
+                    </div>
+                    <span className="flex items-center gap-1 text-xs font-medium text-safe-green bg-safe-green/10 px-2 py-0.5 rounded-full">
+                      <span className="w-1.5 h-1.5 rounded-full bg-safe-green inline-block" />
+                      {count} account{count !== 1 ? 's' : ''}
+                    </span>
+                  </button>
+                );
+              })}
+            </>
+          )}
+
+          {servicesWithCreds.length > 0 && servicesWithoutCreds.length > 0 && (
+            <div className="flex items-center gap-2 py-2">
+              <div className="flex-1 border-t border-gray-100" />
+              <span className="text-xs text-gray-400">No credentials yet</span>
+              <div className="flex-1 border-t border-gray-100" />
+            </div>
+          )}
+
+          {servicesWithoutCreds.map((service) => (
+            <div
               key={service.type}
-              onClick={() => createInstanceMutation.mutate(service.type)}
-              disabled={createInstanceMutation.isPending}
-              className="w-full flex items-center gap-3 p-4 rounded-lg border-2 border-gray-200 hover:border-trust-blue/30 hover:bg-trust-blue/5 transition-all disabled:opacity-50"
+              className="w-full flex items-center gap-3 p-4 rounded-lg border-2 border-dashed border-gray-200 bg-gray-50/50"
             >
-              <div className="p-2 bg-gray-50 rounded-lg text-gray-500">
+              <div className="p-2 bg-gray-100 rounded-lg text-gray-400">
                 {serviceIcons[service.type] ?? <Globe className="w-5 h-5" />}
               </div>
-              <div className="text-left">
-                <div className="font-medium text-sm text-reins-navy">{service.name}</div>
+              <div className="text-left flex-1">
+                <div className="font-medium text-sm text-gray-400">{service.name}</div>
               </div>
-            </button>
+              <button
+                onClick={() => { onClose(); navigate('/credentials'); }}
+                className="text-xs font-medium text-trust-blue hover:underline whitespace-nowrap"
+              >
+                Add Credential →
+              </button>
+            </div>
           ))}
         </div>
 
