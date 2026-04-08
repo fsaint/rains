@@ -1,4 +1,4 @@
-app = "reins-openclaw"
+app = "agentx-openclaw"
 primary_region = "iad"
 
 [build]
