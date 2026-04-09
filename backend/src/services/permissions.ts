@@ -936,12 +936,29 @@ export async function createServiceInstance(
   const id = nanoid();
   const now = new Date().toISOString();
 
+  // If no credential was explicitly provided, find the first matching one for this agent's user.
+  // This handles the common case where the credential already exists when the service is added.
+  let resolvedCredentialId = credentialId ?? null;
+  if (!resolvedCredentialId) {
+    const [agent] = await db.select().from(agents).where(eq(agents.id, agentId));
+    if (agent?.userId) {
+      const serviceIds = def.auth.credentialServiceIds ?? [serviceType];
+      const [matchingCred] = await db
+        .select()
+        .from(credentials)
+        .where(and(inArray(credentials.serviceId, serviceIds), eq(credentials.userId, agent.userId)));
+      if (matchingCred) {
+        resolvedCredentialId = matchingCred.id;
+      }
+    }
+  }
+
   await db.insert(agentServiceInstances).values({
     id,
     agentId,
     serviceType,
     label: label ?? null,
-    credentialId: credentialId ?? null,
+    credentialId: resolvedCredentialId,
     enabled: true,
     isDefault,
     createdAt: now,
@@ -951,10 +968,10 @@ export async function createServiceInstance(
   // Also ensure agent_service_access exists and is enabled
   await setServiceAccess(agentId, serviceType, true);
 
-  // If a credential was provided, also add it to the legacy junction table
-  if (credentialId) {
+  // Add to legacy junction table if we have a credential
+  if (resolvedCredentialId) {
     try {
-      await addServiceCredential(agentId, serviceType, credentialId, isDefault);
+      await addServiceCredential(agentId, serviceType, resolvedCredentialId, isDefault);
     } catch {
       // May already exist
     }

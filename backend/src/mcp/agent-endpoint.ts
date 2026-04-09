@@ -8,7 +8,7 @@
 
 import { db, client } from '../db/index.js';
 import { agents, agentServiceAccess, agentServiceCredentials, agentServiceInstances, credentials } from '../db/schema.js';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import { serverManager, type ToolContext } from './server-manager.js';
 import {
   getEffectivePermissions,
@@ -556,6 +556,31 @@ async function handleCallTool(
       // Strip `account` from args before passing to handler
       const { account: _account, ...cleanArgs } = args;
       args = cleanArgs;
+
+      // Auto-heal: if instance has no credential, try to find a matching one now.
+      if (!targetInstance.credentialId) {
+        try {
+          const { serviceDefinitions } = await import('@reins/servers');
+          const def = serviceDefinitions.find((d) => d.type === serviceType);
+          const [agentRow] = await db.select().from(agents).where(eq(agents.id, agentId));
+          if (def && agentRow?.userId) {
+            const serviceIds = def.auth.credentialServiceIds ?? [serviceType];
+            const [matchingCred] = await db
+              .select()
+              .from(credentials)
+              .where(and(inArray(credentials.serviceId, serviceIds), eq(credentials.userId, agentRow.userId)));
+            if (matchingCred) {
+              await db
+                .update(agentServiceInstances)
+                .set({ credentialId: matchingCred.id, updatedAt: new Date().toISOString() })
+                .where(eq(agentServiceInstances.id, targetInstance.id));
+              targetInstance = { ...targetInstance, credentialId: matchingCred.id };
+            }
+          }
+        } catch (healErr) {
+          console.warn(`[agent-endpoint] auto-heal failed for ${serviceType}:`, healErr);
+        }
+      }
 
       if (targetInstance.credentialId) {
         const credential = await credentialVault.retrieve(targetInstance.credentialId);
