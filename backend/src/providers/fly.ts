@@ -146,8 +146,23 @@ export interface CreateMachineOpts {
   modelName?: string;
   region?: string;
   openaiApiKey?: string;
+  telegramGroups?: TelegramGroup[];
   modelCredentials?: string;
   thinkingDefault?: string;
+  webhookRelaySecret?: string;
+}
+
+export interface TopicPrompt {
+  threadId: number;
+  prompt: string;
+}
+
+export interface TelegramGroup {
+  chatId: string;
+  name?: string;
+  requireMention?: boolean;
+  allowFrom?: string[];
+  topicPrompts?: TopicPrompt[];
 }
 
 export async function createMachine(opts: CreateMachineOpts) {
@@ -202,8 +217,14 @@ async function buildMachineConfig(opts: CreateMachineOpts) {
       ...(opts.modelProvider ? { MODEL_PROVIDER: opts.modelProvider } : {}),
       ...(opts.modelName ? { MODEL_NAME: opts.modelName } : {}),
       ...(opts.openaiApiKey ? { OPENAI_API_KEY: opts.openaiApiKey } : {}),
+      ...(opts.telegramGroups && opts.telegramGroups.length > 0 ? { TELEGRAM_GROUPS_JSON: JSON.stringify(opts.telegramGroups) } : {}),
       ...(opts.modelCredentials ? { OPENAI_CODEX_TOKENS: opts.modelCredentials } : {}),
       THINKING_DEFAULT: opts.thinkingDefault ?? 'medium',
+      // Webhook relay: OpenClaw registers with Telegram pointing to Reins; Reins forwards back here on port 8443
+      ...(opts.webhookRelaySecret ? {
+        OPENCLAW_WEBHOOK_URL: `${reinsUrl}/api/webhooks/agent-bot/${opts.instanceId}`,
+        OPENCLAW_WEBHOOK_SECRET: opts.webhookRelaySecret,
+      } : {}),
     },
     services: [
       {
@@ -226,6 +247,15 @@ async function buildMachineConfig(opts: CreateMachineOpts) {
           },
         ],
       },
+      // Telegram webhook server — OpenClaw binds on 8787; Fly routes 8443 (TLS) → 8787
+      // Telegram requires HTTPS on ports 443, 80, 88, or 8443; we use 8443.
+      ...(opts.webhookRelaySecret ? [{
+        ports: [{ port: 8443, handlers: ['tls', 'http'] }],
+        protocol: 'tcp',
+        internal_port: 8787,
+        autostart: true,
+        autostop: 'off',
+      }] : []),
     ],
   };
 }
@@ -253,6 +283,73 @@ export async function destroyMachine(appName: string, machineId: string) {
 
 export async function destroyApp(appName: string) {
   await flyFetch(`/apps/${appName}`, { method: 'DELETE' });
+}
+
+/**
+ * Update one or more env vars on a running Fly machine without pulling a new image.
+ * Triggers a container restart (~30s for Codex agents, ~10-15s otherwise).
+ *
+ * @param appName - Fly app name
+ * @param machineId - Fly machine ID
+ * @param envUpdates - Map of env var name → new value (undefined = unset the var)
+ */
+export async function updateMachineEnv(
+  appName: string,
+  machineId: string,
+  envUpdates: Record<string, string | undefined>
+): Promise<void> {
+  // Fetch current machine config
+  const res = await flyFetch(`/apps/${appName}/machines/${machineId}`);
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Fly API error fetching machine ${machineId}: ${res.status} ${body}`);
+  }
+  const machine = await res.json() as { config: { env?: Record<string, string>; image?: string; [key: string]: unknown } };
+
+  // Merge env updates
+  const currentEnv: Record<string, string> = machine.config.env ?? {};
+  const newEnv: Record<string, string> = { ...currentEnv };
+  for (const [key, value] of Object.entries(envUpdates)) {
+    if (value === undefined) {
+      delete newEnv[key];
+    } else {
+      newEnv[key] = value;
+    }
+  }
+
+  // Update the machine with the patched env (same image, same config)
+  const updateRes = await flyFetch(`/apps/${appName}/machines/${machineId}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      config: {
+        ...machine.config,
+        env: newEnv,
+      },
+    }),
+  });
+
+  if (!updateRes.ok) {
+    const body = await updateRes.text();
+    throw new Error(`Fly API error updating machine env: ${updateRes.status} ${body}`);
+  }
+
+  // Wait for the machine to start (it will restart after the config update)
+  await waitForMachine(appName, machineId, 90_000);
+}
+
+async function waitForMachine(appName: string, machineId: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise<void>((r) => setTimeout(r, 3_000));
+    try {
+      const res = await flyFetch(`/apps/${appName}/machines/${machineId}`);
+      const m = await res.json() as { state: string };
+      if (m.state === 'started') return;
+    } catch {
+      // Transient error — keep polling
+    }
+  }
+  throw new Error(`Machine ${machineId} did not reach 'started' state within ${timeoutMs / 1000}s`);
 }
 
 export interface FlyLogEntry {

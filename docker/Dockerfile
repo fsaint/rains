@@ -23,11 +23,16 @@ RUN node /app/node_modules/playwright-core/cli.js install --with-deps chromium &
     chown -R node:node /home/node/.cache
 
 # Install openclaw-mcp-bridge plugin into OpenClaw's plugin directory
+COPY openclaw-mcp-bridge-0.3.5.tgz /tmp/openclaw-mcp-bridge-0.3.5.tgz
 RUN mkdir -p /home/node/.openclaw/plugins/openclaw-mcp-bridge && \
     cd /home/node/.openclaw/plugins/openclaw-mcp-bridge && \
     npm init -y > /dev/null 2>&1 && \
-    npm install openclaw-mcp-bridge@0.3.2 && \
+    npm install /tmp/openclaw-mcp-bridge-0.3.5.tgz && \
     chown -R node:node /home/node/.openclaw
+
+# Bundle reins-thread-prompt plugin — installed at runtime by entrypoint.sh to avoid
+# peer-dep resolution during image build (which bloats the image by ~300 MB).
+COPY reins-thread-prompt-0.1.0.tgz /app/reins-thread-prompt-0.1.0.tgz
 
 # Fix missing plugin runtime module (packaging gap in main image)
 RUN mkdir -p /app/dist/plugins/runtime

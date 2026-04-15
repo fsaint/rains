@@ -84,13 +84,18 @@ export class AuditLogger {
   async logAuth(
     agentId: string,
     action: 'connected' | 'disconnected' | 'auth_failed',
-    metadata?: Record<string, unknown>
+    metadata?: Record<string, unknown>,
+    errorMessage?: string
   ): Promise<number> {
     return this.log({
       eventType: 'auth',
       agentId,
       result: action === 'auth_failed' ? 'error' : 'success',
-      metadata: { action, ...metadata },
+      metadata: {
+        action,
+        ...metadata,
+        ...(errorMessage ? { error: errorMessage } : {}),
+      },
     });
   }
 

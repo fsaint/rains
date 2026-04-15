@@ -438,6 +438,92 @@ export async function handleListAccounts(
 }
 
 /**
+ * Mark message as read/unread handler
+ */
+export async function handleMarkRead(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const gmail = getGmailClient(context);
+
+  const messageId = args.messageId as string;
+  const unread = args.unread as boolean | undefined;
+
+  // Mark as read = remove UNREAD label. Mark as unread = add UNREAD label.
+  const addLabelIds = unread ? ['UNREAD'] : [];
+  const removeLabelIds = unread ? [] : ['UNREAD'];
+
+  await gmail.users.messages.modify({
+    userId: 'me',
+    id: messageId,
+    requestBody: { addLabelIds, removeLabelIds },
+  });
+
+  return {
+    success: true,
+    data: {
+      messageId,
+      message: unread ? 'Message marked as unread' : 'Message marked as read',
+    },
+  };
+}
+
+/**
+ * Archive message handler
+ */
+export async function handleArchive(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const gmail = getGmailClient(context);
+
+  const messageId = args.messageId as string;
+
+  await gmail.users.messages.modify({
+    userId: 'me',
+    id: messageId,
+    requestBody: { removeLabelIds: ['INBOX'] },
+  });
+
+  return {
+    success: true,
+    data: {
+      messageId,
+      message: 'Message archived (removed from inbox)',
+    },
+  };
+}
+
+/**
+ * Modify message labels handler
+ */
+export async function handleModifyLabels(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const gmail = getGmailClient(context);
+
+  const messageId = args.messageId as string;
+  const addLabelIds = (args.addLabelIds as string[]) ?? [];
+  const removeLabelIds = (args.removeLabelIds as string[]) ?? [];
+
+  const response = await gmail.users.messages.modify({
+    userId: 'me',
+    id: messageId,
+    requestBody: { addLabelIds, removeLabelIds },
+  });
+
+  return {
+    success: true,
+    data: {
+      messageId,
+      labelIds: response.data.labelIds,
+      message: 'Message labels updated',
+    },
+  };
+}
+
+/**
  * List labels handler
  */
 export async function handleListLabels(

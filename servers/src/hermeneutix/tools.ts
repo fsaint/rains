@@ -12,6 +12,8 @@ import {
   handleGetConversationPreview,
   handleSearchProfiles,
   handleSearchInstances,
+  handleListProjectSessions,
+  handleListInstanceSessions,
 } from './handlers.js';
 
 export const listProjectsTool: ToolDefinition = {
@@ -185,6 +187,45 @@ export const searchInstancesTool: ToolDefinition = {
   handler: handleSearchInstances,
 };
 
+export const listProjectSessionsTool: ToolDefinition = {
+  name: 'hermeneutix_list_sessions',
+  description:
+    'List all sessions (conversation transcripts) in a project or for a specific meeting instance. ' +
+    'Provide project_id to list all sessions across the project, or instance_id to list sessions for one instance. ' +
+    'Use include="messages" to get full transcripts.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: {
+        type: 'string',
+        description: 'List sessions in this project (use either project_id or instance_id)',
+      },
+      instance_id: {
+        type: 'string',
+        description: 'List sessions for this meeting instance (use either project_id or instance_id)',
+      },
+      include: {
+        type: 'string',
+        enum: ['messages'],
+        description: 'Pass "messages" to include full transcripts in the response',
+      },
+      page: {
+        type: 'number',
+        description: 'Page number for project-level listing (default 1)',
+      },
+      page_size: {
+        type: 'number',
+        description: 'Results per page for project-level listing (default 50, max 200)',
+      },
+    },
+  },
+  handler: async (args, context) => {
+    if (args.instance_id) return handleListInstanceSessions(args, context);
+    if (args.project_id) return handleListProjectSessions(args, context);
+    return { success: false, error: 'Either project_id or instance_id is required' };
+  },
+};
+
 export const hermeneutixTools: ToolDefinition[] = [
   listProjectsTool,
   listMeetingsTool,
@@ -194,4 +235,5 @@ export const hermeneutixTools: ToolDefinition[] = [
   getConversationPreviewTool,
   searchProfilesTool,
   searchInstancesTool,
+  listProjectSessionsTool,
 ];

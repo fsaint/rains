@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { X, Check, KeyRound, ExternalLink } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { X, Check, KeyRound, ExternalLink, Loader } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ClaudeSetupTokenFlow } from './ClaudeSetupTokenFlow';
 import { CodexDeviceFlow } from './CodexDeviceFlow';
@@ -52,9 +52,22 @@ export function ReauthModal({ approval, onComplete, onDismiss }: Props) {
   const credentialId = approval.arguments.credentialId as string | undefined;
   const providerLabel = PROVIDER_LABELS[provider] ?? provider;
 
-  const [status, setStatus] = useState<'idle' | 'working' | 'done' | 'error'>('idle');
+  const [status, setStatus] = useState<'idle' | 'working' | 'waiting' | 'done' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [oauthUrl, setOauthUrl] = useState<string | null>(null);
+
+  const isOAuthProvider = GOOGLE_OAUTH_SERVICES.includes(provider) || MICROSOFT_OAUTH_SERVICES.includes(provider);
+
+  // Pre-fetch the OAuth URL as soon as the modal opens so the link is ready to tap
+  useEffect(() => {
+    if (!isOAuthProvider) return;
+    const oauthProvider = GOOGLE_OAUTH_SERVICES.includes(provider) ? 'google' : 'microsoft';
+    const initiator = oauthProvider === 'google'
+      ? oauth.initiateGoogle(undefined, credentialId, approval.id)
+      : oauth.initiateMicrosoft(undefined, credentialId, approval.id);
+    initiator.then((r) => setOauthUrl(r.authUrl)).catch(() => {/* will show on click */});
+  }, []);
 
   async function closeApproval() {
     await approvals.approve(approval.id, 'Re-authenticated successfully');
@@ -74,24 +87,21 @@ export function ReauthModal({ approval, onComplete, onDismiss }: Props) {
     }
   }
 
-  async function handleOAuthReconnect(provider: 'google' | 'microsoft') {
-    setStatus('working');
-    try {
-      let result: { authUrl: string };
-      if (provider === 'google') {
-        result = await oauth.initiateGoogle(undefined, credentialId);
-      } else {
-        result = await oauth.initiateMicrosoft(undefined, credentialId);
-      }
-      // Open in new tab — the OAuth callback will update the credential
-      window.open(result.authUrl, '_blank', 'noopener,noreferrer');
-      // Approve optimistically — the credential will be refreshed by OAuth flow
-      await closeApproval();
-      setStatus('done');
-    } catch (err) {
-      setStatus('error');
-      setErrorMsg(err instanceof Error ? err.message : 'OAuth initiation failed');
-    }
+  function startOAuthPolling() {
+    setStatus('waiting');
+    let elapsed = 0;
+    const poll = setInterval(async () => {
+      elapsed += 3000;
+      try {
+        const list = (await approvals.list()) as Array<{ id: string }>;
+        if (!list.find((a) => a.id === approval.id)) {
+          clearInterval(poll);
+          setStatus('done');
+          setTimeout(onComplete, 1500);
+        }
+      } catch { /* ignore transient */ }
+      if (elapsed >= 300000) clearInterval(poll);
+    }, 3000);
   }
 
   async function handleApiKeySubmit() {
@@ -128,6 +138,18 @@ export function ReauthModal({ approval, onComplete, onDismiss }: Props) {
       );
     }
 
+    if (status === 'waiting') {
+      return (
+        <div className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-100 rounded-xl">
+          <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin shrink-0" />
+          <div>
+            <p className="font-medium text-blue-800 text-sm">Complete the sign-in in the new tab</p>
+            <p className="text-xs text-blue-600 mt-0.5">This window will update automatically once you're done.</p>
+          </div>
+        </div>
+      );
+    }
+
     if (provider === 'anthropic') {
       return (
         <ClaudeSetupTokenFlow
@@ -144,38 +166,29 @@ export function ReauthModal({ approval, onComplete, onDismiss }: Props) {
       );
     }
 
-    if (GOOGLE_OAUTH_SERVICES.includes(provider)) {
+    if (GOOGLE_OAUTH_SERVICES.includes(provider) || MICROSOFT_OAUTH_SERVICES.includes(provider)) {
       return (
         <div className="space-y-3">
           <p className="text-sm text-gray-600">
-            Your {providerLabel} connection has expired. Click below to re-authorize access.
+            Your {providerLabel} connection has expired. Tap below to re-authorize access.
           </p>
-          <button
-            onClick={() => handleOAuthReconnect('google')}
-            disabled={status === 'working'}
-            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-reins-navy text-white rounded-xl hover:bg-reins-navy/90 transition-colors text-sm font-medium disabled:opacity-60"
-          >
-            <ExternalLink className="w-4 h-4" />
-            {status === 'working' ? 'Opening…' : `Reconnect ${providerLabel}`}
-          </button>
-        </div>
-      );
-    }
-
-    if (MICROSOFT_OAUTH_SERVICES.includes(provider)) {
-      return (
-        <div className="space-y-3">
-          <p className="text-sm text-gray-600">
-            Your {providerLabel} connection has expired. Click below to re-authorize access.
-          </p>
-          <button
-            onClick={() => handleOAuthReconnect('microsoft')}
-            disabled={status === 'working'}
-            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-reins-navy text-white rounded-xl hover:bg-reins-navy/90 transition-colors text-sm font-medium disabled:opacity-60"
-          >
-            <ExternalLink className="w-4 h-4" />
-            {status === 'working' ? 'Opening…' : `Reconnect ${providerLabel}`}
-          </button>
+          {oauthUrl ? (
+            <a
+              href={oauthUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={startOAuthPolling}
+              className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-reins-navy text-white rounded-xl hover:bg-reins-navy/90 transition-colors text-sm font-medium"
+            >
+              <ExternalLink className="w-4 h-4" />
+              Reconnect {providerLabel}
+            </a>
+          ) : (
+            <div className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-reins-navy/40 text-white rounded-xl text-sm font-medium">
+              <Loader className="w-4 h-4 animate-spin" />
+              Preparing link…
+            </div>
+          )}
         </div>
       );
     }
@@ -233,7 +246,7 @@ export function ReauthModal({ approval, onComplete, onDismiss }: Props) {
       className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
       onClick={(e) => e.target === e.currentTarget && onDismiss()}
     >
-      <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
+      <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-3">
@@ -242,7 +255,12 @@ export function ReauthModal({ approval, onComplete, onDismiss }: Props) {
             </div>
             <div>
               <h2 className="font-semibold text-gray-900 text-base">Re-authenticate {providerLabel}</h2>
-              <p className="text-xs text-gray-500 mt-0.5">Agent: {approval.agentId}</p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Agent: {approval.agentId}
+                {approval.arguments.email && (
+                  <> &middot; {approval.arguments.email as string}</>
+                )}
+              </p>
             </div>
           </div>
           <button

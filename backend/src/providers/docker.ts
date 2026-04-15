@@ -24,6 +24,7 @@ export async function createLocalContainer(opts: {
   modelProvider?: string;
   modelName?: string;
   openaiApiKey?: string;
+  telegramGroups?: Array<{ chatId: string; name?: string; requireMention?: boolean; allowFrom?: string[]; topicPrompts?: Array<{ threadId: number; prompt: string }> }>;
   modelCredentials?: string;
   thinkingDefault?: string;
 }): Promise<{ containerId: string; containerName: string; port: number }> {
@@ -54,6 +55,7 @@ export async function createLocalContainer(opts: {
   if (opts.modelProvider) env.MODEL_PROVIDER = opts.modelProvider;
   if (opts.modelName) env.MODEL_NAME = opts.modelName;
   if (opts.openaiApiKey) env.OPENAI_API_KEY = opts.openaiApiKey;
+  if (opts.telegramGroups && opts.telegramGroups.length > 0) env.TELEGRAM_GROUPS_JSON = JSON.stringify(opts.telegramGroups);
   if (opts.modelCredentials) env.OPENAI_CODEX_TOKENS = opts.modelCredentials;
   env.THINKING_DEFAULT = opts.thinkingDefault ?? 'medium';
 
@@ -118,6 +120,7 @@ export async function updateLocalContainer(opts: {
   modelProvider?: string;
   modelName?: string;
   openaiApiKey?: string;
+  telegramGroups?: Array<{ chatId: string; name?: string; requireMention?: boolean; allowFrom?: string[]; topicPrompts?: Array<{ threadId: number; prompt: string }> }>;
   modelCredentials?: string;
 }): Promise<{ containerId: string; containerName: string; port: number }> {
   try {

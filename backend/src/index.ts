@@ -6,6 +6,7 @@ import { initializeNativeServers, shutdownNativeServers } from './mcp/init-serve
 import { startTokenRefreshLoop, stopTokenRefreshLoop } from './credentials/vault.js';
 import { startBackupLoop, stopBackupLoop } from './services/agent-backup.js';
 import { startTokenMonitor, stopTokenMonitor } from './services/token-monitor.js';
+import { telegramNotifier } from './notifications/telegram.js';
 
 const app = await buildApp();
 
@@ -55,6 +56,14 @@ app.log.info('Agent backup loop started (every 24 hours)');
 // Start Codex token expiry monitor
 startTokenMonitor();
 app.log.info('Token monitor started');
+
+// Initialize Telegram bot (non-fatal if not configured or fails)
+if (telegramNotifier.isConfigured()) {
+  telegramNotifier.init()
+    .then(() => telegramNotifier.setupWebhook())
+    .catch((err) => app.log.error('Telegram initialization failed:', err));
+  app.log.info('Telegram bot initialization started');
+}
 
 // Graceful shutdown
 const shutdown = async () => {

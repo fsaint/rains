@@ -281,6 +281,8 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
       resolvedBy: row.resolved_by as string | undefined,
       resolutionComment: row.resolution_comment as string | undefined,
       emailLastSentAt: row.email_last_sent_at ? new Date(row.email_last_sent_at as string) : undefined,
+      telegramChatId: row.telegram_chat_id as string | undefined,
+      telegramMessageId: row.telegram_message_id as string | undefined,
     };
   }
 }

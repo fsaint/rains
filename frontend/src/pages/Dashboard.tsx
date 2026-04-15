@@ -100,7 +100,7 @@ export default function Dashboard() {
   const pendingApprovals = (approvalsList as unknown[] || []).length;
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-8">
       <div className="mb-8">
         <h1 className="text-2xl font-semibold text-reins-navy">Dashboard</h1>
         <p className="text-gray-500 mt-1">Overview of your AI agent trust layer</p>

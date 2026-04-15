@@ -13,6 +13,9 @@ import {
   handleDeleteMessage,
   handleListLabels,
   handleListAccounts,
+  handleMarkRead,
+  handleArchive,
+  handleModifyLabels,
 } from './handlers.js';
 
 /**
@@ -289,6 +292,80 @@ export const listAccountsTool: ToolDefinition = {
 };
 
 /**
+ * Mark message as read or unread
+ */
+export const markReadTool: ToolDefinition = {
+  name: 'gmail_mark_read',
+  description: 'Mark an email as read or unread.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      ...accountProperty,
+      messageId: {
+        type: 'string',
+        description: 'The ID of the message to mark',
+      },
+      unread: {
+        type: 'boolean',
+        description: 'Set to true to mark as unread, false (default) to mark as read',
+      },
+    },
+    required: ['messageId'],
+  },
+  handler: handleMarkRead,
+};
+
+/**
+ * Archive a message (remove from inbox)
+ */
+export const archiveTool: ToolDefinition = {
+  name: 'gmail_archive',
+  description: 'Archive an email by removing it from the inbox. The message is not deleted.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      ...accountProperty,
+      messageId: {
+        type: 'string',
+        description: 'The ID of the message to archive',
+      },
+    },
+    required: ['messageId'],
+  },
+  handler: handleArchive,
+};
+
+/**
+ * Add or remove labels on a message
+ */
+export const modifyLabelsTool: ToolDefinition = {
+  name: 'gmail_modify_labels',
+  description: 'Add or remove labels on an email. Use gmail_list_labels to get available label IDs.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      ...accountProperty,
+      messageId: {
+        type: 'string',
+        description: 'The ID of the message to modify',
+      },
+      addLabelIds: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Label IDs to add (e.g., ["STARRED", "Label_123"])',
+      },
+      removeLabelIds: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Label IDs to remove (e.g., ["UNREAD", "INBOX"])',
+      },
+    },
+    required: ['messageId'],
+  },
+  handler: handleModifyLabels,
+};
+
+/**
  * All Gmail tools
  */
 export const gmailTools: ToolDefinition[] = [
@@ -301,4 +378,7 @@ export const gmailTools: ToolDefinition[] = [
   sendMessageTool,
   deleteMessageTool,
   listLabelsTool,
+  markReadTool,
+  archiveTool,
+  modifyLabelsTool,
 ];

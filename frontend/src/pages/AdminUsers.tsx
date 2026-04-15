@@ -91,16 +91,16 @@ export default function AdminUsers() {
 
   if (loading) {
     return (
-      <div className="p-8 flex items-center justify-center">
+      <div className="p-4 sm:p-8 flex items-center justify-center">
         <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-300 border-t-trust-blue" />
       </div>
     );
   }
 
   return (
-    <div className="p-8 max-w-5xl">
+    <div className="p-4 sm:p-8 max-w-5xl">
       {/* Header */}
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6 sm:mb-8">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-3">
             <UserCog className="w-7 h-7 text-trust-blue" />
@@ -112,7 +112,7 @@ export default function AdminUsers() {
         </div>
         <button
           onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 bg-trust-blue text-white px-4 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-600 transition-colors"
+          className="flex items-center gap-2 bg-trust-blue text-white px-4 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-600 transition-colors self-start sm:self-auto"
         >
           <Plus className="w-4 h-4" />
           Add User
@@ -246,14 +246,14 @@ export default function AdminUsers() {
       )}
 
       {/* Users table */}
-      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+      <div className="bg-white border border-gray-200 rounded-xl overflow-x-auto">
         <table className="w-full">
           <thead>
             <tr className="border-b border-gray-100 bg-gray-50/50">
               <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase">User</th>
               <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase">Role</th>
               <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase">Status</th>
-              <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase">Created</th>
+              <th className="hidden sm:table-cell text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase">Created</th>
               <th className="text-right px-6 py-3 text-xs font-semibold text-gray-500 uppercase">Actions</th>
             </tr>
           </thead>
@@ -283,7 +283,7 @@ export default function AdminUsers() {
                     {u.status}
                   </span>
                 </td>
-                <td className="px-6 py-4 text-sm text-gray-500">
+                <td className="hidden sm:table-cell px-6 py-4 text-sm text-gray-500">
                   {new Date(u.created_at).toLocaleDateString()}
                 </td>
                 <td className="px-6 py-4">

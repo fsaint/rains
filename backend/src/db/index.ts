@@ -434,6 +434,7 @@ export async function initializeDatabase() {
   await sql`
     DO $$ BEGIN
       ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS openai_api_key TEXT;
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS telegram_groups_json TEXT;
       ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS model_credentials TEXT;
       ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS mcp_config_json TEXT;
     EXCEPTION WHEN duplicate_column THEN NULL;
@@ -446,6 +447,35 @@ export async function initializeDatabase() {
       ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS is_manual INTEGER DEFAULT 0;
     EXCEPTION WHEN duplicate_column THEN NULL;
     END $$
+  `;
+
+  // Add Telegram notification columns
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id TEXT;
+      ALTER TABLE approvals ADD COLUMN IF NOT EXISTS telegram_chat_id TEXT;
+      ALTER TABLE approvals ADD COLUMN IF NOT EXISTS telegram_message_id TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
+
+  // Add webhook relay columns for per-agent bot group detection
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS openclaw_webhook_url TEXT;
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS webhook_relay_secret TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
+
+  // Create telegram_link_codes table
+  await sql`
+    CREATE TABLE IF NOT EXISTS telegram_link_codes (
+      code TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
   `;
 
   // Seed: create admin user if no users exist

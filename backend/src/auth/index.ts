@@ -15,6 +15,29 @@ export interface SessionPayload {
   iat: number;
 }
 
+// Magic link token — time-limited, scoped to a single approval, no password required
+export function createMagicLinkToken(userId: string, approvalId: string): string {
+  return jwt.sign({ userId, approvalId, type: 'magic_link' }, config.sessionSecret, {
+    expiresIn: '24h',
+  });
+}
+
+interface MagicLinkPayload {
+  userId: string;
+  approvalId: string;
+  type: 'magic_link';
+}
+
+export function verifyMagicLinkToken(token: string): MagicLinkPayload | null {
+  try {
+    const payload = jwt.verify(token, config.sessionSecret) as MagicLinkPayload;
+    if (payload.type !== 'magic_link') return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
 export function signSession(userId: string, email: string, role: 'admin' | 'user'): string {
   return jwt.sign({ userId, email, role } as Omit<SessionPayload, 'iat'>, config.sessionSecret, {
     expiresIn: TOKEN_EXPIRY,
@@ -103,7 +126,7 @@ export async function registerAuth(app: FastifyInstance) {
 
     // Fetch current user info
     const result = await client.execute({
-      sql: `SELECT id, email, name, role FROM users WHERE id = ? AND status = 'active'`,
+      sql: `SELECT id, email, name, role, telegram_chat_id FROM users WHERE id = ? AND status = 'active'`,
       args: [session.userId],
     });
 
@@ -120,9 +143,43 @@ export async function registerAuth(app: FastifyInstance) {
           email: user.email,
           name: user.name,
           role: user.role,
+          telegramLinked: !!user.telegram_chat_id,
         },
       },
     };
+  });
+
+  // Magic link — validates a time-limited token, sets a session cookie, redirects to the approval
+  app.get('/api/auth/magic', async (request, reply) => {
+    const { t } = request.query as { t?: string };
+    if (!t) return reply.code(400).send({ error: 'Missing token' });
+
+    const payload = verifyMagicLinkToken(t);
+    if (!payload) {
+      // Redirect to login instead of returning JSON so the browser lands somewhere useful
+      return reply.redirect(`${config.dashboardUrl}/`);
+    }
+
+    // Load the user to build a real session
+    const result = await client.execute({
+      sql: `SELECT id, email, role FROM users WHERE id = ? AND status = 'active'`,
+      args: [payload.userId],
+    });
+    if (result.rows.length === 0) {
+      return reply.redirect(`${config.dashboardUrl}/`);
+    }
+
+    const user = result.rows[0];
+    const token = signSession(user.id as string, user.email as string, user.role as 'admin' | 'user');
+    reply.setCookie(COOKIE_NAME, token, {
+      path: '/',
+      httpOnly: true,
+      secure: config.nodeEnv === 'production' || config.dashboardUrl.startsWith('https'),
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60,
+    });
+
+    return reply.redirect(`${config.dashboardUrl}/approvals?id=${payload.approvalId}`);
   });
 
   // --- Self-service profile ---
@@ -331,10 +388,12 @@ export async function registerAuth(app: FastifyInstance) {
       path === '/api/health' ||
       path.startsWith('/api/auth/') ||
       path.startsWith('/mcp/') ||
-      path.startsWith('/api/agents/register') // agent self-registration
+      path.startsWith('/api/agents/register') || // agent self-registration
+      path === '/api/webhooks/telegram' // Telegram webhook (authenticated via secret_token header)
     ) {
       return;
     }
+    // Magic links bypass auth — token is validated inside the handler
 
     // All other /api/* routes require auth
     if (path.startsWith('/api/')) {

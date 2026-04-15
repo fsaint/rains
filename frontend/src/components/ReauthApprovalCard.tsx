@@ -52,8 +52,8 @@ export function ReauthApprovalCard({ approval, onReauth }: Props) {
 
   return (
     <div className="bg-white rounded-xl p-6 shadow-sm border border-amber-100">
-      <div className="flex items-start justify-between">
-        <div className="flex-1">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        <div className="flex-1 min-w-0">
           <div className="flex items-center gap-3 mb-2">
             <div className="w-8 h-8 rounded-lg bg-amber-50 flex items-center justify-center shrink-0">
               <ShieldAlert className="w-4 h-4 text-amber-600" />
@@ -90,7 +90,7 @@ export function ReauthApprovalCard({ approval, onReauth }: Props) {
           )}
         </div>
 
-        <div className="flex flex-col items-end gap-3 ml-6 shrink-0">
+        <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-3 shrink-0">
           <div className="flex items-center gap-1 text-sm text-amber-600">
             <Clock className="w-4 h-4" />
             <span>{getTimeRemaining(approval.expiresAt)}</span>
@@ -98,7 +98,7 @@ export function ReauthApprovalCard({ approval, onReauth }: Props) {
 
           <button
             onClick={onReauth}
-            className="flex items-center gap-2 px-4 py-2 bg-trust-blue text-white rounded-lg hover:bg-blue-600 transition-colors text-sm font-medium"
+            className="flex items-center gap-2 px-4 py-2 bg-trust-blue text-white rounded-lg hover:bg-blue-600 transition-colors text-sm font-medium whitespace-nowrap"
           >
             <KeyRound className="w-4 h-4" />
             Re-authenticate

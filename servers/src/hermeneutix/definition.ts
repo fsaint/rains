@@ -23,10 +23,13 @@ export const definition: ServiceDefinitionWithTools = {
     read: [
       'hermeneutix_list_projects',
       'hermeneutix_list_meetings',
+      'hermeneutix_list_meeting_instances',
       'hermeneutix_get_meeting_instance',
+      'hermeneutix_list_sessions',
       'hermeneutix_list_speakers',
       'hermeneutix_get_conversation_preview',
       'hermeneutix_search_profiles',
+      'hermeneutix_search_instances',
     ],
     write: [],
     blocked: [],

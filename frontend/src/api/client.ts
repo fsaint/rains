@@ -41,6 +41,20 @@ async function request<T>(
   return data.data ?? data;
 }
 
+// Telegram group type (matches backend TelegramGroup)
+export interface TopicPrompt {
+  threadId: number;
+  prompt: string;
+}
+
+export interface TelegramGroup {
+  chatId: string;
+  name?: string;
+  requireMention?: boolean;
+  allowFrom?: string[];
+  topicPrompts?: TopicPrompt[];
+}
+
 // Deployment types
 export interface DeployConfig {
   telegramToken: string;
@@ -66,6 +80,8 @@ export interface DeploymentInfo {
   appName?: string;
   machineId?: string;
   isManual?: boolean;
+  openaiApiKey?: string | null;
+  telegramGroups?: TelegramGroup[];
   createdAt?: string;
   updatedAt?: string;
 }
@@ -100,6 +116,8 @@ export interface AgentDetail {
     gatewayToken: string;
     telegramToken: string | null;
     telegramUserId: string | null;
+    openaiApiKey: string | null;
+    telegramGroups: TelegramGroup[];
     soulMd: string | null;
     modelProvider: string | null;
     modelName: string | null;
@@ -202,6 +220,11 @@ export const agents = {
   getManagementUrl: (id: string) =>
     request<{ url: string }>(`/agents/${id}/management-url`),
   logsStreamUrl: (id: string) => `${API_BASE}/agents/${id}/logs/stream`,
+  updateSettings: (id: string, data: { telegramGroups?: TelegramGroup[]; openaiApiKey?: string | null }) =>
+    request<{ changed: boolean; restarted: boolean }>(`/agents/${id}/settings`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
 };
 
 // OpenAI Auth
@@ -271,19 +294,21 @@ export const credentials = {
 
 // OAuth
 export const oauth = {
-  initiateGoogle: (services?: string[], reconnectCredentialId?: string) => {
+  initiateGoogle: (services?: string[], reconnectCredentialId?: string, approvalId?: string) => {
     const params = new URLSearchParams();
     if (services?.length) params.set('services', services.join(','));
     if (reconnectCredentialId) params.set('reconnect', reconnectCredentialId);
+    if (approvalId) params.set('approvalId', approvalId);
     const qs = params.toString();
     return request<{ authUrl: string; state: string }>(
       `/oauth/google${qs ? `?${qs}` : ''}`
     );
   },
-  initiateMicrosoft: (services?: string[], reconnectCredentialId?: string) => {
+  initiateMicrosoft: (services?: string[], reconnectCredentialId?: string, approvalId?: string) => {
     const params = new URLSearchParams();
     if (services?.length) params.set('services', services.join(','));
     if (reconnectCredentialId) params.set('reconnect', reconnectCredentialId);
+    if (approvalId) params.set('approvalId', approvalId);
     const qs = params.toString();
     return request<{ authUrl: string; state: string }>(
       `/oauth/microsoft${qs ? `?${qs}` : ''}`
@@ -330,6 +355,7 @@ export interface User {
   email: string;
   name: string;
   role: 'admin' | 'user';
+  telegramLinked?: boolean;
 }
 
 export interface AuthResponse {
@@ -385,6 +411,14 @@ export const auth = {
       method: 'POST',
       body: JSON.stringify({ currentPassword, newPassword }),
     }),
+};
+
+// Telegram notification linking
+export const telegram = {
+  createLink: () =>
+    request<{ code: string; url: string; expiresAt: string }>('/telegram/link', { method: 'POST' }),
+  unlink: () =>
+    request<{ ok: boolean }>('/telegram/link', { method: 'DELETE' }),
 };
 
 // Admin types

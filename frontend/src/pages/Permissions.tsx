@@ -218,15 +218,15 @@ export default function Permissions() {
   );
 
   return (
-    <div className="p-8 max-w-6xl">
-      <div className="flex items-end justify-between mb-8">
+    <div className="p-4 sm:p-8 max-w-6xl">
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-6 sm:mb-8">
         <div>
           <h1 className="text-2xl font-semibold text-reins-navy tracking-tight">Agents</h1>
           <p className="text-gray-400 mt-1 text-sm">Manage AI agents, their services, and permissions</p>
         </div>
         <button
           onClick={() => navigate('/agents/new')}
-          className="flex items-center gap-2 bg-trust-blue text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition-all text-sm font-medium shadow-sm shadow-trust-blue/20"
+          className="flex items-center gap-2 bg-trust-blue text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition-all text-sm font-medium shadow-sm shadow-trust-blue/20 self-start sm:self-auto"
         >
           <Plus className="w-4 h-4" />
           Add Agent
@@ -261,7 +261,7 @@ export default function Permissions() {
                   </div>
                   <button
                     onClick={() => cancelPendingMutation.mutate(pending.id)}
-                    className="text-gray-300 hover:text-alert-red transition-colors opacity-0 group-hover:opacity-100 shrink-0 ml-2"
+                    className="text-gray-300 hover:text-alert-red transition-colors sm:opacity-0 sm:group-hover:opacity-100 shrink-0 ml-2"
                     title="Cancel"
                   >
                     <X className="w-4 h-4" />
@@ -282,7 +282,7 @@ export default function Permissions() {
       )}
 
       {/* Legend */}
-      <div className="flex gap-6 mb-6 text-sm">
+      <div className="flex flex-wrap gap-x-6 gap-y-2 mb-6 text-sm">
         <div className="flex items-center gap-2">
           <div className="w-4 h-4 rounded bg-safe-green/20 border border-safe-green/30"></div>
           <span className="text-gray-600">Active</span>
@@ -381,7 +381,7 @@ export default function Permissions() {
                   {agent.status === 'active' ? (
                     <button
                       onClick={(e) => { e.stopPropagation(); updateMutation.mutate({ id: agent.id, data: { status: 'suspended' } }); }}
-                      className="p-1.5 text-gray-300 hover:text-caution-amber transition-colors opacity-0 group-hover:opacity-100"
+                      className="p-1.5 text-gray-300 hover:text-caution-amber transition-colors sm:opacity-0 sm:group-hover:opacity-100"
                       title="Suspend"
                     >
                       <PowerOff className="w-4 h-4" />
@@ -389,7 +389,7 @@ export default function Permissions() {
                   ) : (
                     <button
                       onClick={(e) => { e.stopPropagation(); updateMutation.mutate({ id: agent.id, data: { status: 'active' } }); }}
-                      className="p-1.5 text-gray-300 hover:text-safe-green transition-colors opacity-0 group-hover:opacity-100"
+                      className="p-1.5 text-gray-300 hover:text-safe-green transition-colors sm:opacity-0 sm:group-hover:opacity-100"
                       title="Activate"
                     >
                       <Power className="w-4 h-4" />
@@ -399,7 +399,7 @@ export default function Permissions() {
                   <button
                     onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(agent.id); }}
                     disabled={deleteMutation.isPending && deleteMutation.variables === agent.id}
-                    className="p-1.5 text-gray-300 hover:text-alert-red transition-colors opacity-0 group-hover:opacity-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="p-1.5 text-gray-300 hover:text-alert-red transition-colors sm:opacity-0 sm:group-hover:opacity-100 disabled:opacity-50 disabled:cursor-not-allowed"
                     title="Delete"
                   >
                     {deleteMutation.isPending && deleteMutation.variables === agent.id ? (

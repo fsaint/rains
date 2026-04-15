@@ -149,6 +149,18 @@ describe('AuditLogger', () => {
       const call = vi.mocked(client.execute).mock.calls[0][0] as { args: unknown[] };
       expect(call.args[4]).toBe('error');
     });
+
+    it('should include error message in metadata for auth_failed', async () => {
+      vi.mocked(client.execute).mockResolvedValueOnce({
+        rows: [], rowsAffected: 1, lastInsertRowid: 16n, columns: [],
+      });
+
+      await logger.logAuth('agent-1', 'auth_failed', undefined, 'Invalid token');
+
+      const call = vi.mocked(client.execute).mock.calls[0][0] as { args: unknown[] };
+      const metadata = JSON.parse(call.args[6] as string);
+      expect(metadata.error).toBe('Invalid token');
+    });
   });
 
   describe('logAgentEvent', () => {

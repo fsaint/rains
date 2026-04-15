@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Rocket,
@@ -16,8 +16,12 @@ import {
   Copy,
   Check,
   Wrench,
+  Plus,
+  Settings,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
-import { agents, type DeployConfig } from '../api/client';
+import { agents, type DeployConfig, type TelegramGroup, type TopicPrompt } from '../api/client';
 import LogViewer from './LogViewer';
 import ChatModal from './ChatModal';
 
@@ -51,6 +55,11 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
   });
 
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [settingsGroups, setSettingsGroups] = useState<TelegramGroup[]>([]);
+  const [settingsOpenaiKey, setSettingsOpenaiKey] = useState<string>('');
+  const [settingsResult, setSettingsResult] = useState<string | null>(null);
+  const [expandedTopics, setExpandedTopics] = useState<Record<number, boolean>>({});
 
   const copyToClipboard = (text: string, key: string) => {
     navigator.clipboard.writeText(text);
@@ -117,6 +126,33 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
       queryClient.invalidateQueries({ queryKey: ['agents'] });
     },
   });
+
+  const settingsMutation = useMutation({
+    mutationFn: (payload: { telegramGroups: TelegramGroup[]; openaiApiKey: string | null | undefined }) =>
+      agents.updateSettings(agentId, {
+        telegramGroups: payload.telegramGroups,
+        openaiApiKey: payload.openaiApiKey,
+      }),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['deployment', agentId] });
+      if (!data?.changed) {
+        setSettingsResult('No changes detected.');
+      } else if (data?.restarted) {
+        setSettingsResult('Applied! Agent is restarting...');
+      } else {
+        setSettingsResult('Saved. Changes take effect on next redeploy.');
+      }
+    },
+  });
+
+  // Sync settings state when deployment data loads
+  const deploymentDetail = deploymentQuery.data;
+  useEffect(() => {
+    if (deploymentDetail) {
+      setSettingsGroups((deploymentDetail as unknown as { telegramGroups?: TelegramGroup[] }).telegramGroups ?? []);
+      setSettingsOpenaiKey((deploymentDetail as unknown as { openaiApiKey?: string | null }).openaiApiKey ?? '');
+    }
+  }, [deploymentDetail]);
 
   const isLoading =
     deployMutation.isPending ||
@@ -318,6 +354,198 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
                   <p className="text-gray-700 mt-0.5">
                     {new Date(deployment.createdAt).toLocaleDateString()}
                   </p>
+                </div>
+              )}
+            </div>
+
+            {/* Runtime Settings */}
+            <div className="border border-gray-100 rounded-xl overflow-hidden">
+              <button
+                type="button"
+                onClick={() => { setShowSettings(!showSettings); setSettingsResult(null); }}
+                className="flex items-center justify-between w-full px-4 py-3 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+              >
+                <span className="flex items-center gap-2">
+                  <Settings className="w-4 h-4 text-gray-400" />
+                  Runtime Settings
+                </span>
+                <span className="text-xs text-gray-400">{showSettings ? 'Hide' : 'Edit'}</span>
+              </button>
+
+              {showSettings && (
+                <div className="border-t border-gray-100 p-4 space-y-4 bg-gray-50">
+                  {/* Telegram Groups */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
+                      Telegram Groups
+                    </label>
+                    <p className="text-xs text-gray-400 mb-2">
+                      Add the bot to a group, then paste its numeric chat ID (e.g. <code className="bg-gray-100 px-1 rounded">-1001234567890</code>). Find it via <a href="https://t.me/RawDataBot" target="_blank" rel="noreferrer" className="text-trust-blue hover:underline">@RawDataBot</a>.
+                    </p>
+                    <div className="space-y-2">
+                      {settingsGroups.map((g, i) => (
+                        <div key={i} className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+                          <div className="flex items-center gap-2 p-2">
+                            <div className="flex-1 min-w-0">
+                              {g.name && (
+                                <div className="text-xs font-medium text-gray-700 truncate mb-0.5">{g.name}</div>
+                              )}
+                              <input
+                                type="text"
+                                value={g.chatId}
+                                onChange={(e) => {
+                                  const updated = [...settingsGroups];
+                                  updated[i] = { ...updated[i], chatId: e.target.value };
+                                  setSettingsGroups(updated);
+                                }}
+                                className="w-full text-sm font-mono border-none outline-none bg-transparent"
+                                placeholder="-1001234567890"
+                              />
+                            </div>
+                            <label className="flex items-center gap-1 text-xs text-gray-500 shrink-0">
+                              <input
+                                type="checkbox"
+                                checked={g.requireMention !== false}
+                                onChange={(e) => {
+                                  const updated = [...settingsGroups];
+                                  updated[i] = { ...updated[i], requireMention: e.target.checked };
+                                  setSettingsGroups(updated);
+                                }}
+                              />
+                              @mention
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => setExpandedTopics(prev => ({ ...prev, [i]: !prev[i] }))}
+                              className="flex items-center gap-0.5 text-xs text-gray-400 hover:text-trust-blue transition-colors shrink-0"
+                              title="Per-topic prompts"
+                            >
+                              {expandedTopics[i] ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                              <span>Topics{g.topicPrompts && g.topicPrompts.length > 0 ? ` (${g.topicPrompts.length})` : ''}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSettingsGroups(settingsGroups.filter((_, j) => j !== i))}
+                              className="text-gray-300 hover:text-red-500 transition-colors"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                          {expandedTopics[i] && (
+                            <div className="border-t border-gray-100 bg-gray-50 p-2 space-y-2">
+                              <p className="text-xs text-gray-400">
+                                Override the agent's system prompt for specific forum topics. Find a topic's thread ID: right-click a message in the topic → <em>Copy Link</em> — the number after the last <code className="bg-gray-100 px-0.5 rounded">/</code> is the thread ID.
+                              </p>
+                              {(g.topicPrompts ?? []).map((tp: TopicPrompt, ti: number) => (
+                                <div key={ti} className="space-y-1 bg-white border border-gray-200 rounded p-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs text-gray-400 shrink-0">Thread ID</span>
+                                    <input
+                                      type="number"
+                                      min={1}
+                                      value={tp.threadId || ''}
+                                      onChange={(e) => {
+                                        const updated = [...settingsGroups];
+                                        const prompts = [...(updated[i].topicPrompts ?? [])];
+                                        prompts[ti] = { ...prompts[ti], threadId: parseInt(e.target.value) || 0 };
+                                        updated[i] = { ...updated[i], topicPrompts: prompts };
+                                        setSettingsGroups(updated);
+                                      }}
+                                      className="w-28 text-sm font-mono border border-gray-200 rounded px-2 py-0.5 outline-none focus:border-trust-blue"
+                                      placeholder="42"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const updated = [...settingsGroups];
+                                        const prompts = (updated[i].topicPrompts ?? []).filter((_, j) => j !== ti);
+                                        updated[i] = { ...updated[i], topicPrompts: prompts };
+                                        setSettingsGroups(updated);
+                                      }}
+                                      className="ml-auto text-gray-300 hover:text-red-500 transition-colors"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                  <textarea
+                                    value={tp.prompt}
+                                    onChange={(e) => {
+                                      const updated = [...settingsGroups];
+                                      const prompts = [...(updated[i].topicPrompts ?? [])];
+                                      prompts[ti] = { ...prompts[ti], prompt: e.target.value };
+                                      updated[i] = { ...updated[i], topicPrompts: prompts };
+                                      setSettingsGroups(updated);
+                                    }}
+                                    rows={3}
+                                    className="w-full text-xs border border-gray-200 rounded px-2 py-1.5 outline-none focus:border-trust-blue resize-y font-mono"
+                                    placeholder="You are a billing specialist. Help users with invoices, payments, and subscription questions..."
+                                  />
+                                </div>
+                              ))}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const updated = [...settingsGroups];
+                                  updated[i] = {
+                                    ...updated[i],
+                                    topicPrompts: [...(updated[i].topicPrompts ?? []), { threadId: 0, prompt: '' }],
+                                  };
+                                  setSettingsGroups(updated);
+                                }}
+                                className="flex items-center gap-1 text-xs text-trust-blue hover:text-trust-blue/80 transition-colors"
+                              >
+                                <Plus className="w-3 h-3" /> Add topic prompt
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => setSettingsGroups([...settingsGroups, { chatId: '', requireMention: true }])}
+                        className="flex items-center gap-1 text-xs text-trust-blue hover:text-trust-blue/80 transition-colors"
+                      >
+                        <Plus className="w-3 h-3" /> Add group
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* OpenAI API Key */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
+                      OpenAI API Key <span className="normal-case font-normal text-gray-400">(Whisper speech-to-text)</span>
+                    </label>
+                    <input
+                      type="password"
+                      value={settingsOpenaiKey}
+                      onChange={(e) => setSettingsOpenaiKey(e.target.value)}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm bg-white focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
+                      placeholder={settingsOpenaiKey === '***' ? 'Key stored (enter new key to replace)' : 'sk-...'}
+                    />
+                    {settingsOpenaiKey === '***' && (
+                      <p className="text-xs text-gray-400 mt-1">A key is stored. Clear to remove it.</p>
+                    )}
+                  </div>
+
+                  {settingsResult && (
+                    <p className="text-xs text-emerald-600 font-medium">{settingsResult}</p>
+                  )}
+                  {settingsMutation.isError && (
+                    <p className="text-xs text-red-500">{(settingsMutation.error as Error).message}</p>
+                  )}
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      disabled={settingsMutation.isPending}
+                      onClick={() => settingsMutation.mutate({ telegramGroups: settingsGroups, openaiApiKey: settingsOpenaiKey === '***' ? undefined : (settingsOpenaiKey || null) })}
+                      className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-trust-blue hover:bg-trust-blue/90 rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      {settingsMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                      Save & apply
+                    </button>
+                    <p className="text-xs text-gray-400">Restarts agent (~30s downtime)</p>
+                  </div>
                 </div>
               )}
             </div>

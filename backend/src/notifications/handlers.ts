@@ -1,8 +1,9 @@
 /**
- * Wire up approval queue events to push notification service
+ * Wire up approval queue events to push notification services
  */
 import { approvalQueue } from '../approvals/queue.js';
 import { apnsService } from './apns.js';
+import { telegramNotifier } from './telegram.js';
 
 /**
  * Initialize notification handlers
@@ -14,7 +15,12 @@ export function initializeNotificationHandlers(): void {
     try {
       await apnsService.notifyApprovalRequest(approval);
     } catch (error) {
-      console.error('Failed to send approval request notification:', error);
+      console.error('Failed to send APNs approval request notification:', error);
+    }
+    try {
+      await telegramNotifier.notifyApprovalRequest(approval);
+    } catch (error) {
+      console.error('Failed to send Telegram approval request notification:', error);
     }
   });
 
@@ -23,7 +29,22 @@ export function initializeNotificationHandlers(): void {
     try {
       await apnsService.notifyApprovalResolved(approval);
     } catch (error) {
-      console.error('Failed to send approval resolved notification:', error);
+      console.error('Failed to send APNs approval resolved notification:', error);
+    }
+    try {
+      await telegramNotifier.notifyApprovalResolved(approval);
+    } catch (error) {
+      console.error('Failed to send Telegram approval resolved notification:', error);
+    }
+
+    // Apply Telegram group config when a group-join approval is approved
+    if (approval.tool === 'telegram_group' && approval.status === 'approved') {
+      try {
+        const { applyGroupConfig } = await import('../services/agent-bot-relay.js');
+        await applyGroupConfig(approval);
+      } catch (error) {
+        console.error('Failed to apply Telegram group config after approval:', error);
+      }
     }
   });
 

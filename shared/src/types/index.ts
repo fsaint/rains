@@ -131,6 +131,8 @@ export interface ApprovalRequest {
   resolvedBy?: string;
   resolutionComment?: string;
   emailLastSentAt?: Date;
+  telegramChatId?: string;
+  telegramMessageId?: string;
 }
 
 export interface ApprovalDecision {

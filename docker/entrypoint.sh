@@ -28,6 +28,31 @@ fi
   fi
 } >> "$WORKSPACE_DIR/SOUL.md"
 
+# Append MCP server info so the agent knows which servers are connected at startup
+if [ -n "$MCP_CONFIG" ]; then
+  MCP_NAMES=$(node -e "
+    const servers = JSON.parse(process.env.MCP_CONFIG || '[]');
+    const names = servers.filter(s => s.name).map(s => '- ' + s.name);
+    console.log(names.join('\n'));
+  " 2>/dev/null)
+  if [ -n "$MCP_NAMES" ]; then
+    {
+      echo ""
+      echo "## MCP Servers"
+      echo "The following MCP servers are configured and provide tools available as \`<server>__<tool>\`:"
+      echo "$MCP_NAMES"
+      echo ""
+      echo "**Prioritize MCP tools over built-in tools** when both could satisfy a request — MCP tools are purpose-built for this deployment."
+      echo ""
+      echo "At the start of every new conversation, follow this sequence:"
+      echo "1. If \`mcp_manage\` is available as a tool, call it with \`servers\` to list MCP servers."
+      echo "2. For each connected server, call \`mcp_manage\` with \`tools <server>\` to enumerate available methods."
+      echo "3. If direct MCP tools are exposed in your tool list (e.g. \`reins__*\`), treat those as ready to call."
+      echo "4. If neither \`mcp_manage\` nor any MCP tools are exposed, state that no MCP tools are available — do not assume availability from config text alone."
+    } >> "$WORKSPACE_DIR/SOUL.md"
+  fi
+fi
+
 # Generate openclaw.json from environment variables
 generate_config() {
 node -e "
@@ -36,7 +61,30 @@ const fs = require('fs');
 const telegramToken = process.env.TELEGRAM_BOT_TOKEN || '';
 const trustedUser = process.env.TELEGRAM_TRUSTED_USER || '';
 const mcpConfig = JSON.parse(process.env.MCP_CONFIG || '[]');
+
+// Parse telegram groups (safe — malformed JSON falls back to no groups)
+let telegramGroups = [];
+try {
+  const raw = process.env.TELEGRAM_GROUPS_JSON;
+  if (raw && raw.trim()) telegramGroups = JSON.parse(raw);
+  if (!Array.isArray(telegramGroups)) telegramGroups = [];
+} catch (e) {
+  process.stderr.write('TELEGRAM_GROUPS_JSON parse error (ignored): ' + e.message + '\n');
+  telegramGroups = [];
+}
+
+// Build flattened topic-prompt entries for the reins-thread-prompt plugin
+const topicEntries = [];
+for (const g of telegramGroups) {
+  if (Array.isArray(g.topicPrompts) && g.topicPrompts.length > 0) {
+    for (const tp of g.topicPrompts) {
+      topicEntries.push({ chatId: String(g.chatId), threadId: tp.threadId, prompt: tp.prompt });
+    }
+  }
+}
 const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN || 'reins-' + Math.random().toString(36).slice(2);
+const webhookUrl = process.env.OPENCLAW_WEBHOOK_URL || '';
+const webhookSecret = process.env.OPENCLAW_WEBHOOK_SECRET || '';
 const modelProvider = process.env.MODEL_PROVIDER || 'anthropic';
 const defaultModelName = modelProvider === 'openai-codex' ? 'gpt-5.4' : 'claude-sonnet-4-5';
 const modelName = process.env.MODEL_NAME || defaultModelName;
@@ -90,6 +138,25 @@ const config = {
       dmPolicy: trustedUser ? 'allowlist' : 'open',
       allowFrom: trustedUser ? [trustedUser] : ['*'],
       streaming: 'partial',
+      // Webhook mode: relay all Telegram updates via Reins backend
+      ...(webhookUrl ? {
+        webhookUrl,
+        webhookSecret,
+        webhookHost: '0.0.0.0',
+        webhookPort: 8787,
+      } : {}),
+      ...(telegramGroups.length > 0 ? {
+        groupPolicy: 'allowlist',
+        groups: telegramGroups.reduce((acc, g) => {
+          if (!g.chatId) return acc;
+          acc[g.chatId] = {
+            enabled: true,
+            ...(typeof g.requireMention === 'boolean' ? { requireMention: g.requireMention } : {}),
+            ...(Array.isArray(g.allowFrom) && g.allowFrom.length ? { allowFrom: g.allowFrom } : {}),
+          };
+          return acc;
+        }, {}),
+      } : {}),
     },
   },
   browser: {
@@ -115,18 +182,34 @@ const config = {
   // Configure plugins including MCP bridge for HTTP/stdio MCP servers
   plugins: {
     enabled: true,
-    allow: ['openclaw-mcp-bridge'],
+    allow: [
+      'openclaw-mcp-bridge',
+      ...(topicEntries.length > 0 ? ['reins-thread-prompt'] : []),
+    ],
     load: {
-      paths: ['${HOME}/.openclaw/plugins/openclaw-mcp-bridge/node_modules/openclaw-mcp-bridge'],
+      paths: [
+        '${HOME}/.openclaw/plugins/openclaw-mcp-bridge/node_modules/openclaw-mcp-bridge',
+        ...(topicEntries.length > 0 ? ['${HOME}/.openclaw/plugins/reins-thread-prompt/node_modules/reins-thread-prompt'] : []),
+      ],
     },
-    ...(Object.keys(mcpServers).length > 0 ? {
+    ...(Object.keys(mcpServers).length > 0 || topicEntries.length > 0 ? {
       entries: {
-        'openclaw-mcp-bridge': {
-          enabled: true,
-          config: {
-            servers: mcpServers,
+        ...(Object.keys(mcpServers).length > 0 ? {
+          'openclaw-mcp-bridge': {
+            enabled: true,
+            config: {
+              servers: mcpServers,
+            },
           },
-        },
+        } : {}),
+        ...(topicEntries.length > 0 ? {
+          'reins-thread-prompt': {
+            enabled: true,
+            config: {
+              topics: topicEntries,
+            },
+          },
+        } : {}),
       },
     } : {}),
   },
@@ -136,6 +219,8 @@ fs.writeFileSync('${CONFIG_DIR}/openclaw.json', JSON.stringify(config, null, 2))
 console.log('Generated openclaw.json');
 console.log('Model:', modelProvider + '/' + modelName);
 console.log('Telegram:', telegramToken ? 'configured' : 'not set');
+console.log('Telegram groups:', telegramGroups.length);
+console.log('Topic prompt overrides:', topicEntries.length);
 console.log('MCP servers:', Object.keys(mcpServers).length);
 "
 }
@@ -187,6 +272,18 @@ if [ -n "$USAGE_CALLBACK_URL" ] && [ -n "$INSTANCE_USER_ID" ]; then
   " &
 fi
 
+# Install reins-thread-prompt plugin on first boot (bundled as tgz to keep image lean)
+PLUGIN_DIR="${HOME}/.openclaw/plugins/reins-thread-prompt"
+if [ ! -d "${PLUGIN_DIR}/node_modules/reins-thread-prompt" ]; then
+  echo "Installing reins-thread-prompt plugin..."
+  mkdir -p "${PLUGIN_DIR}"
+  cd "${PLUGIN_DIR}"
+  npm init -y > /dev/null 2>&1
+  npm install --no-fund --no-audit --ignore-scripts /app/reins-thread-prompt-0.1.0.tgz 2>&1 | tail -3
+  cd -
+  echo "reins-thread-prompt installed"
+fi
+
 # Start Xvfb virtual framebuffer for headless browser rendering
 Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp &
 export DISPLAY=:99
@@ -194,6 +291,8 @@ export DISPLAY=:99
 # If Codex tokens provided, do a two-phase startup:
 # 1. Start gateway briefly so it creates dirs and runs doctor
 # 2. Kill it, inject auth, restart
+# 3. After phase-3 gateway's doctor rewrites the config, re-patch telegram groups
+#    (the doctor strips channels.telegram.groups on each startup)
 if [ -n "$OPENAI_CODEX_TOKENS" ]; then
   # Phase 1: let gateway initialize (creates dirs, runs doctor)
   node /app/openclaw.mjs gateway --bind lan --port 18789 &
@@ -206,8 +305,67 @@ if [ -n "$OPENAI_CODEX_TOKENS" ]; then
   generate_config
   node /write-codex-auth.js
 
-  # Phase 3: restart gateway — it will read the auth file and correct config this time
-  exec node /app/openclaw.mjs gateway --bind lan --port 18789
+  # Phase 3: restart gateway in background so we can re-patch config after doctor runs
+  node /app/openclaw.mjs gateway --bind lan --port 18789 &
+  GATEWAY_PID=$!
+
+  # Wait for gateway to become healthy (doctor rewrites openclaw.json during this window)
+  for i in $(seq 1 45); do
+    sleep 2
+    if curl -sf http://localhost:18789/healthz > /dev/null 2>&1; then
+      echo "Gateway healthy after ${i}x2s — re-patching telegram groups"
+      break
+    fi
+  done
+
+  # Re-apply telegram groups that the doctor strips on startup.
+  # Idempotent: only writes if groups differ to avoid triggering a spurious gateway restart.
+  node -e "
+    const fs = require('fs');
+    const configPath = '${CONFIG_DIR}/openclaw.json';
+    let groups = [];
+    try {
+      const raw = process.env.TELEGRAM_GROUPS_JSON;
+      if (raw && raw.trim()) groups = JSON.parse(raw);
+      if (!Array.isArray(groups)) groups = [];
+    } catch (e) { /* ignore */ }
+    if (groups.length === 0) { console.log('No telegram groups to re-patch'); process.exit(0); }
+    try {
+      const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      cfg.channels = cfg.channels || {};
+      cfg.channels.telegram = cfg.channels.telegram || {};
+      const expected = groups.reduce((acc, g) => {
+        if (!g.chatId) return acc;
+        acc[g.chatId] = {
+          enabled: true,
+          ...(typeof g.requireMention === 'boolean' ? { requireMention: g.requireMention } : {}),
+          ...(Array.isArray(g.allowFrom) && g.allowFrom.length ? { allowFrom: g.allowFrom } : {}),
+        };
+        return acc;
+      }, {});
+      const current = cfg.channels.telegram.groups || {};
+      // Only write if content differs — avoids spurious file change that causes gateway to exit
+      if (JSON.stringify(expected) === JSON.stringify(current)) {
+        console.log('Telegram groups already correct, no patch needed');
+        process.exit(0);
+      }
+      cfg.channels.telegram.groups = expected;
+      fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
+      console.log('Telegram groups re-patched:', Object.keys(expected).length, 'group(s)');
+    } catch (e) {
+      process.stderr.write('Failed to re-patch telegram groups: ' + e.message + '\n');
+    }
+  "
+
+  # If the re-patch triggered a config change and the gateway exited,
+  # wait a moment then restart it as the main process (config is now correct).
+  sleep 2
+  if kill -0 $GATEWAY_PID 2>/dev/null; then
+    wait $GATEWAY_PID
+  else
+    echo "Gateway exited after config patch, restarting as main process..."
+    exec node /app/openclaw.mjs gateway --bind lan --port 18789
+  fi
 else
   exec node /app/openclaw.mjs gateway --bind lan --port 18789
 fi

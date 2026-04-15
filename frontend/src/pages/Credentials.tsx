@@ -374,11 +374,11 @@ export default function Credentials() {
   };
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-8">
       {/* Notification Toast */}
       {notification && (
         <div
-          className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 ${
+          className={`fixed top-4 left-4 right-4 sm:left-auto sm:right-4 z-50 px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 ${
             notification.type === 'success'
               ? 'bg-safe-green text-white'
               : 'bg-alert-red text-white'
@@ -393,14 +393,14 @@ export default function Credentials() {
         </div>
       )}
 
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6 sm:mb-8">
         <div>
           <h1 className="text-2xl font-semibold text-reins-navy">Credentials</h1>
           <p className="text-gray-500 mt-1">Manage encrypted service credentials</p>
         </div>
         <button
           onClick={openCreateModal}
-          className="flex items-center gap-2 bg-trust-blue text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+          className="flex items-center gap-2 bg-trust-blue text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors self-start sm:self-auto"
         >
           <Plus className="w-5 h-5" />
           Add Credential
@@ -423,7 +423,7 @@ export default function Credentials() {
           </button>
         </div>
       ) : (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-x-auto">
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-100">
               <tr>
@@ -431,7 +431,7 @@ export default function Credentials() {
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Account</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Services</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
+                <th className="hidden sm:table-cell text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
                 <th className="text-right px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
@@ -511,7 +511,7 @@ export default function Credentials() {
                       )}
                     </div>
                   </td>
-                  <td className="px-6 py-4 text-sm text-gray-500">
+                  <td className="hidden sm:table-cell px-6 py-4 text-sm text-gray-500">
                     {new Date(cred.createdAt).toLocaleDateString()}
                   </td>
                   <td className="px-6 py-4 text-right">

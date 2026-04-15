@@ -15,6 +15,19 @@ export interface ProvisionResult {
   managementUrl: string;
 }
 
+export interface TopicPrompt {
+  threadId: number;
+  prompt: string;
+}
+
+export interface TelegramGroup {
+  chatId: string;
+  name?: string;
+  requireMention?: boolean;
+  allowFrom?: string[];
+  topicPrompts?: TopicPrompt[];
+}
+
 export interface ProvisionOpts {
   instanceId: string;
   telegramToken: string;
@@ -26,8 +39,10 @@ export interface ProvisionOpts {
   modelName?: string;
   region?: string;
   openaiApiKey?: string;
+  telegramGroups?: TelegramGroup[];
   modelCredentials?: string;
   thinkingDefault?: string;
+  webhookRelaySecret?: string;
 }
 
 export async function provision(opts: ProvisionOpts): Promise<ProvisionResult> {
@@ -97,6 +112,21 @@ export async function redeploy(
 
   await fly.updateMachine(appName, machineId, opts);
   return `https://${appName}.fly.dev/?token=${opts.gatewayToken}`;
+}
+
+/**
+ * Update env vars on a running machine without pulling a new image.
+ * Only supported for Fly-provisioned agents. Docker agents throw an error.
+ */
+export async function updateEnv(
+  appName: string,
+  machineId: string,
+  envUpdates: Record<string, string | undefined>
+): Promise<void> {
+  if (isLocal) {
+    throw Object.assign(new Error('live_edit_not_supported_for_docker'), { code: 'LIVE_EDIT_NOT_SUPPORTED' });
+  }
+  return fly.updateMachineEnv(appName, machineId, envUpdates);
 }
 
 export async function destroy(appName: string, machineId: string) {

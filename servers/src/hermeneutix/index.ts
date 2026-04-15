@@ -3,11 +3,14 @@
  *
  * Provides MCP tools for the Hermeneutix meeting transcription platform:
  * - hermeneutix_list_projects: List active projects
- * - hermeneutix_list_meetings: List meetings in a project
- * - hermeneutix_get_meeting_instance: Full instance detail with transcripts
+ * - hermeneutix_list_meetings: List meetings in a project (includes last 5 instance IDs per meeting)
+ * - hermeneutix_list_meeting_instances: Paginated list of instances for a meeting series
+ * - hermeneutix_get_meeting_instance: Full instance detail with transcripts and prev/next navigation
+ * - hermeneutix_list_sessions: List sessions (conversations) for a project or a specific instance
  * - hermeneutix_list_speakers: List project members / speakers
- * - hermeneutix_get_conversation_preview: Preview conversation transcript
- * - hermeneutix_search_profiles: Search speaker profiles
+ * - hermeneutix_get_conversation_preview: Full or capped conversation transcript
+ * - hermeneutix_search_profiles: Search speaker profiles by name or email
+ * - hermeneutix_search_instances: Search instances across a project by keyword or date range
  */
 
 import { BaseServer } from '../common/base-server.js';

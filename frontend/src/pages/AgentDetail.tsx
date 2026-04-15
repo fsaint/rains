@@ -101,7 +101,7 @@ export default function AgentDetail() {
 
   if (isLoading) {
     return (
-      <div className="p-8 flex items-center justify-center min-h-[50vh]">
+      <div className="p-4 sm:p-8 flex items-center justify-center min-h-[50vh]">
         <div className="flex items-center gap-3 text-gray-400">
           <div className="animate-spin rounded-full h-5 w-5 border-2 border-gray-300 border-t-trust-blue" />
           <span className="text-sm">Loading agent...</span>
@@ -112,7 +112,7 @@ export default function AgentDetail() {
 
   if (!agent) {
     return (
-      <div className="p-8">
+      <div className="p-4 sm:p-8">
         <p className="text-gray-500">Agent not found.</p>
         <Link to="/agents" className="text-trust-blue hover:underline text-sm mt-2 inline-block">
           Back to agents
@@ -133,7 +133,7 @@ export default function AgentDetail() {
   }
 
   return (
-    <div className="p-8 max-w-4xl">
+    <div className="p-4 sm:p-8 max-w-4xl">
       {/* Header */}
       <div className="flex items-start justify-between mb-8">
         <div className="flex items-center gap-4">
@@ -156,7 +156,7 @@ export default function AgentDetail() {
             {agent.description && (
               <p className="text-gray-400 text-sm mt-0.5">{agent.description}</p>
             )}
-            <div className="flex items-center gap-4 text-xs text-gray-400 mt-1">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-400 mt-1">
               {dep?.region && <span>Region: {dep.region}</span>}
               {dep?.telegramToken && <span>Telegram: {dep.telegramToken}</span>}
               {dep?.modelProvider && <span>Model: {dep.modelProvider}/{dep.modelName}</span>}

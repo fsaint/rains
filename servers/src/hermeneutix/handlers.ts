@@ -64,9 +64,10 @@ export async function handleListMeetings(
     return { success: false, error: `API error: ${response.status} ${response.statusText}` };
   }
   const raw = await response.json() as Record<string, unknown>[] | { results?: Record<string, unknown>[]; meetings?: Record<string, unknown>[] } & Record<string, unknown>;
-  const meetings: Record<string, unknown>[] = Array.isArray(raw)
+  const extracted = Array.isArray(raw)
     ? raw
     : ((raw as Record<string, unknown[]>).results ?? (raw as Record<string, unknown[]>).meetings ?? []);
+  const meetings: Record<string, unknown>[] = Array.isArray(extracted) ? extracted : [];
 
   // Fetch recent instances (last 5) for each meeting in parallel
   const meetingsWithInstances = await Promise.all(
@@ -74,7 +75,7 @@ export async function handleListMeetings(
       const meetingId = meeting.id as string;
       if (!meetingId) return meeting;
       try {
-        const instResp = await apiRequest(context, `/meetings/${meetingId}/instances/`, {
+        const instResp = await apiRequest(context, `/v1/meetings/${meetingId}/instances/`, {
           limit: 5,
           sort_order: 'desc',
         });
@@ -109,7 +110,7 @@ export async function handleListMeetingInstances(
   if (args.after !== undefined) params['after'] = args.after as string;
   params['sort_order'] = (args.sort_order as string | undefined) ?? 'desc';
 
-  const response = await apiRequest(context, `/meetings/${meetingId}/instances/`, params);
+  const response = await apiRequest(context, `/v1/meetings/${meetingId}/instances/`, params);
   if (!response.ok) {
     return { success: false, error: `API error: ${response.status} ${response.statusText}` };
   }
@@ -139,12 +140,12 @@ export async function handleGetMeetingInstance(
     try {
       // Fetch one before and one after by sequence number
       const [prevResp, nextResp] = await Promise.all([
-        apiRequest(context, `/meetings/${meetingId}/instances/`, {
+        apiRequest(context, `/v1/meetings/${meetingId}/instances/`, {
           limit: 1,
           sort_order: 'desc',
           before: instanceId,
         }),
-        apiRequest(context, `/meetings/${meetingId}/instances/`, {
+        apiRequest(context, `/v1/meetings/${meetingId}/instances/`, {
           limit: 1,
           sort_order: 'asc',
           after: instanceId,
@@ -258,6 +259,50 @@ export async function handleSearchProfiles(
 }
 
 /**
+ * List all sessions (conversations) in a project
+ */
+export async function handleListProjectSessions(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const projectId = args.project_id as string;
+  if (!projectId) return { success: false, error: 'project_id is required' };
+
+  const params: Record<string, string | number | undefined> = {};
+  if (args.page !== undefined) params['page'] = args.page as number;
+  if (args.page_size !== undefined) params['page_size'] = args.page_size as number;
+  if (args.include !== undefined) params['include'] = args.include as string;
+
+  const response = await apiRequest(context, `/v1/projects/${projectId}/sessions/`, params);
+  if (!response.ok) {
+    return { success: false, error: `API error: ${response.status} ${response.statusText}` };
+  }
+  const data = await response.json() as Record<string, unknown>;
+  return { success: true, data };
+}
+
+/**
+ * List all sessions (conversations) assigned to a meeting instance
+ */
+export async function handleListInstanceSessions(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const instanceId = args.instance_id as string;
+  if (!instanceId) return { success: false, error: 'instance_id is required' };
+
+  const params: Record<string, string | number | undefined> = {};
+  if (args.include !== undefined) params['include'] = args.include as string;
+
+  const response = await apiRequest(context, `/v1/instances/${instanceId}/sessions/`, params);
+  if (!response.ok) {
+    return { success: false, error: `API error: ${response.status} ${response.statusText}` };
+  }
+  const data = await response.json() as Record<string, unknown>;
+  return { success: true, data };
+}
+
+/**
  * Search across all instances in a project by keyword, date range, or topic
  */
 export async function handleSearchInstances(
@@ -274,7 +319,7 @@ export async function handleSearchInstances(
   if (args.limit !== undefined) params['limit'] = args.limit as number;
   if (args.offset !== undefined) params['offset'] = args.offset as number;
 
-  const response = await apiRequest(context, `/projects/${projectId}/instances/search/`, params);
+  const response = await apiRequest(context, `/v1/projects/${projectId}/instances/search/`, params);
   if (!response.ok) {
     return { success: false, error: `API error: ${response.status} ${response.statusText}` };
   }

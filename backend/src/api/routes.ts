@@ -9,6 +9,7 @@ import { auditLogger } from '../audit/logger.js';
 import { mcpProxy } from '../mcp/proxy.js';
 import { serverManager } from '../mcp/server-manager.js';
 import { apnsService } from '../notifications/apns.js';
+import { telegramNotifier } from '../notifications/telegram.js';
 import {
   discoverServicesForAgent,
   discoverToolsForAgent,
@@ -60,6 +61,7 @@ import { getSession, type SessionPayload } from '../auth/index.js';
 import { sendReauthEmail } from '../services/email.js';
 import { performBackup, listBackups, getBackup, restoreBackup } from '../services/agent-backup.js';
 import { isCodexTokenExpired } from '../services/token-monitor.js';
+import { forwardToOpenclaw, handleMyChatMember } from '../services/agent-bot-relay.js';
 import * as provider from '../providers/index.js';
 import { nanoid } from 'nanoid';
 import {
@@ -1743,7 +1745,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
 
     const userId = getUserId(request);
-    const query = request.query as { services?: string; reconnect?: string };
+    const query = request.query as { services?: string; reconnect?: string; approvalId?: string };
 
     // Build scopes from requested services
     let serviceScopes: string[] = [];
@@ -1792,6 +1794,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       userId,
       grantedServices: requestedServices,
       reconnectCredentialId: query.reconnect || undefined,
+      reauthApprovalId: query.approvalId || undefined,
     });
 
     // Build authorization URL
@@ -1900,6 +1903,15 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           // Reconnect: update existing credential with fresh tokens
           await credentialVault.update(pendingFlow.reconnectCredentialId, tokenData);
 
+          // Auto-resolve the reauth approval if one was associated with this OAuth flow
+          if (pendingFlow.reauthApprovalId) {
+            try {
+              await approvalQueue.approve(pendingFlow.reauthApprovalId, 'Re-authenticated via OAuth');
+            } catch (approvalErr) {
+              console.warn('[oauth] Could not auto-approve reauth approval:', approvalErr);
+            }
+          }
+
           return reply.redirect(
             `${dashboardUrl}/credentials?oauth_success=true&service=google&email=${encodeURIComponent(userInfo.email)}&reconnected=true`
           );
@@ -1948,7 +1960,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
 
     const userId = getUserId(request);
-    const query = request.query as { services?: string; reconnect?: string };
+    const query = request.query as { services?: string; reconnect?: string; approvalId?: string };
 
     // Build scopes from requested services
     let serviceScopes: string[] = [];
@@ -1999,6 +2011,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       userId,
       grantedServices: requestedServices,
       reconnectCredentialId: query.reconnect || undefined,
+      reauthApprovalId: query.approvalId || undefined,
     });
 
     const tenantId = config.microsoftTenantId || 'common';
@@ -2102,6 +2115,16 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
         if (pendingFlow.reconnectCredentialId) {
           await credentialVault.update(pendingFlow.reconnectCredentialId, tokenData);
+
+          // Auto-resolve the reauth approval if one was associated with this OAuth flow
+          if (pendingFlow.reauthApprovalId) {
+            try {
+              await approvalQueue.approve(pendingFlow.reauthApprovalId, 'Re-authenticated via OAuth');
+            } catch (approvalErr) {
+              console.warn('[oauth] Could not auto-approve reauth approval:', approvalErr);
+            }
+          }
+
           return reply.redirect(
             `${dashboardUrl}/credentials?oauth_success=true&service=microsoft&email=${encodeURIComponent(email)}&reconnected=true`
           );
@@ -2664,9 +2687,35 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       soulMd?: string;
       region?: string;
       openaiApiKey?: string;
+      telegramGroups?: provider.TelegramGroup[];
       modelCredentials?: string;
       mcpServers?: string;
     };
+
+    // Validate telegram group chat IDs (must be numeric) and topic prompts
+    if (body.telegramGroups) {
+      for (const g of body.telegramGroups) {
+        if (!/^-?\d+$/.test(g.chatId)) {
+          return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: `Invalid chatId "${g.chatId}": must be a numeric Telegram chat ID (e.g. -1001234567890)` } });
+        }
+        if (g.topicPrompts) {
+          if (g.topicPrompts.length > 50) {
+            return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: `Too many topic prompts for chat ${g.chatId}: max 50` } });
+          }
+          for (const tp of g.topicPrompts) {
+            if (!Number.isInteger(tp.threadId) || tp.threadId <= 0) {
+              return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: `Invalid threadId ${tp.threadId}: must be a positive integer` } });
+            }
+            if (!tp.prompt || tp.prompt.trim().length === 0) {
+              return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: `Topic prompt for threadId ${tp.threadId} must not be empty` } });
+            }
+            if (tp.prompt.length > 50000) {
+              return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: `Topic prompt for threadId ${tp.threadId} exceeds 50,000 character limit` } });
+            }
+          }
+        }
+      }
+    }
 
     if (!body?.name?.trim()) {
       return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'name is required' } });
@@ -2712,6 +2761,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const agentId = nanoid();
     const deploymentId = nanoid();
     const gatewayToken = nanoid(32);
+    const webhookRelaySecret = nanoid(32);
     const now = new Date().toISOString();
 
     // Resolve model name — ensure it matches the selected provider
@@ -2751,11 +2801,22 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         modelName: resolvedModelName,
         region: body.region,
         openaiApiKey: body.openaiApiKey,
+        telegramGroups: body.telegramGroups,
         modelCredentials: body.modelCredentials,
+        webhookRelaySecret,
       });
 
+      const telegramGroupsJson = body.telegramGroups && body.telegramGroups.length > 0
+        ? JSON.stringify(body.telegramGroups)
+        : null;
+
+      // OpenClaw's webhook server runs on port 8787; Fly exposes 8443→8787
+      const openclawWebhookUrl = result.appName
+        ? `https://${result.appName}.fly.dev:8443/telegram-webhook`
+        : null;
+
       await client.execute({
-        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openai_api_key, model_credentials, mcp_config_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openai_api_key, telegram_groups_json, model_credentials, mcp_config_json, openclaw_webhook_url, webhook_relay_secret, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           deploymentId, agentId,
           result.appName, result.machineId, 'running', result.managementUrl,
@@ -2763,8 +2824,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           body.soulMd ?? null,
           body.modelProvider ?? 'anthropic', resolvedModelName,
           body.region ?? 'iad', gatewayToken,
-          body.openaiApiKey ?? null, body.modelCredentials ?? null,
+          body.openaiApiKey ?? null, telegramGroupsJson,
+          body.modelCredentials ?? null,
           body.mcpServers ?? null,
+          openclawWebhookUrl, webhookRelaySecret,
           now, now,
         ],
       });
@@ -2854,6 +2917,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     const deploymentId = nanoid();
     const gatewayToken = nanoid(32);
+    const webhookRelaySecret = nanoid(32);
     const now = new Date().toISOString();
 
     // Build MCP config that routes through Reins proxy for policy enforcement.
@@ -2888,10 +2952,16 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         modelProvider: resolvedModelProvider,
         modelName: resolvedModelName,
         region: body.region,
+        webhookRelaySecret,
       });
 
+      // OpenClaw's webhook server runs on port 8787; Fly exposes 8443→8787
+      const openclawWebhookUrl = result.appName
+        ? `https://${result.appName}.fly.dev:8443/telegram-webhook`
+        : null;
+
       await client.execute({
-        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openclaw_webhook_url, webhook_relay_secret, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           deploymentId,
           id,
@@ -2906,6 +2976,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           resolvedModelName,
           body.region ?? 'iad',
           gatewayToken,
+          openclawWebhookUrl, webhookRelaySecret,
           now,
           now,
         ],
@@ -3049,6 +3120,17 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       maskedTelegram = t.length > 10 ? `${t.slice(0, 5)}...${t.slice(-3)}` : '***';
     }
 
+    // Mask OpenAI API key
+    const maskedOpenaiApiKey = deployment?.openai_api_key ? '***' : null;
+
+    // Parse telegram groups
+    let telegramGroups: provider.TelegramGroup[] | null = null;
+    if (deployment?.telegram_groups_json) {
+      try {
+        telegramGroups = JSON.parse(deployment.telegram_groups_json as string);
+      } catch { /* ignore */ }
+    }
+
     return {
       data: {
         id: agent.id,
@@ -3065,6 +3147,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           gatewayToken: deployment.gateway_token,
           telegramToken: maskedTelegram,
           telegramUserId: deployment.telegram_user_id,
+          openaiApiKey: maskedOpenaiApiKey,
+          telegramGroups: telegramGroups ?? [],
           soulMd: deployment.soul_md,
           modelProvider: deployment.model_provider,
           modelName: deployment.model_name,
@@ -3240,8 +3324,35 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       soulMd?: string;
       modelProvider?: string;
       modelName?: string;
+      openaiApiKey?: string | null;
+      telegramGroups?: provider.TelegramGroup[];
       modelCredentials?: string;
     };
+
+    // Validate telegram group chat IDs (must be numeric) and topic prompts
+    if (body.telegramGroups) {
+      for (const g of body.telegramGroups) {
+        if (!/^-?\d+$/.test(g.chatId)) {
+          return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: `Invalid chatId "${g.chatId}": must be a numeric Telegram chat ID` } });
+        }
+        if (g.topicPrompts) {
+          if (g.topicPrompts.length > 50) {
+            return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: `Too many topic prompts for chat ${g.chatId}: max 50` } });
+          }
+          for (const tp of g.topicPrompts) {
+            if (!Number.isInteger(tp.threadId) || tp.threadId <= 0) {
+              return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: `Invalid threadId ${tp.threadId}: must be a positive integer` } });
+            }
+            if (!tp.prompt || tp.prompt.trim().length === 0) {
+              return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: `Topic prompt for threadId ${tp.threadId} must not be empty` } });
+            }
+            if (tp.prompt.length > 50000) {
+              return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: `Topic prompt for threadId ${tp.threadId} exceeds 50,000 character limit` } });
+            }
+          }
+        }
+      }
+    }
 
     // Reject redeploy with an already-expired Codex token
     const redeployProvider = body?.modelProvider || deployment.model_provider as string;
@@ -3273,6 +3384,19 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     try {
       const newModelCredentials = body?.modelCredentials || deployment.model_credentials as string | undefined;
 
+      // Resolve openaiApiKey: body wins (including null to clear), else keep DB value
+      const newOpenaiApiKey = body && 'openaiApiKey' in body
+        ? body.openaiApiKey ?? null
+        : deployment.openai_api_key as string | null | undefined;
+
+      // Resolve telegramGroups: body wins (empty array = clear groups), else keep DB value
+      let newTelegramGroups: provider.TelegramGroup[] | null = null;
+      if (body && 'telegramGroups' in body && body.telegramGroups !== undefined) {
+        newTelegramGroups = body.telegramGroups ?? null;
+      } else if (deployment.telegram_groups_json) {
+        try { newTelegramGroups = JSON.parse(deployment.telegram_groups_json as string); } catch { /* ignore */ }
+      }
+
       const managementUrl = await provider.redeploy(
         deployment.fly_app_name as string,
         deployment.fly_machine_id as string,
@@ -3285,13 +3409,20 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           soulMd: body?.soulMd || deployment.soul_md as string | undefined,
           modelProvider: redeployModelProvider,
           modelName: redeployModelName,
+          openaiApiKey: newOpenaiApiKey ?? undefined,
+          telegramGroups: newTelegramGroups ?? undefined,
           modelCredentials: newModelCredentials,
+          webhookRelaySecret: deployment.webhook_relay_secret as string | undefined,
         }
       );
 
+      const newTelegramGroupsJson = newTelegramGroups && newTelegramGroups.length > 0
+        ? JSON.stringify(newTelegramGroups)
+        : null;
+
       const now = new Date().toISOString();
       await client.execute({
-        sql: `UPDATE deployed_agents SET status = 'running', management_url = ?, telegram_token = COALESCE(?, telegram_token), telegram_user_id = COALESCE(?, telegram_user_id), soul_md = COALESCE(?, soul_md), model_provider = ?, model_name = ?, model_credentials = COALESCE(?, model_credentials), updated_at = ? WHERE id = ?`,
+        sql: `UPDATE deployed_agents SET status = 'running', management_url = ?, telegram_token = COALESCE(?, telegram_token), telegram_user_id = COALESCE(?, telegram_user_id), soul_md = COALESCE(?, soul_md), model_provider = ?, model_name = ?, openai_api_key = CASE WHEN ? THEN ? ELSE openai_api_key END, telegram_groups_json = CASE WHEN ? THEN ? ELSE telegram_groups_json END, model_credentials = COALESCE(?, model_credentials), updated_at = ? WHERE id = ?`,
         args: [
           managementUrl,
           body?.telegramToken ?? null,
@@ -3299,6 +3430,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           body?.soulMd ?? null,
           redeployModelProvider,
           redeployModelName,
+          (body && 'openaiApiKey' in body) ? 1 : 0,
+          newOpenaiApiKey ?? null,
+          (body && 'telegramGroups' in body) ? 1 : 0,
+          newTelegramGroupsJson,
           body?.modelCredentials ?? null,
           now,
           deployment.id as string,
@@ -3312,6 +3447,143 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         error: { code: 'REDEPLOY_FAILED', message },
       });
     }
+  });
+
+  /**
+   * Live-edit runtime settings (telegram groups + OpenAI API key) without a full image redeploy.
+   * For Fly agents: updates DB + env vars, then triggers a container restart (~30s).
+   * For Docker agents: returns 409 (not supported).
+   *
+   * Body fields are all optional. Omitted fields = no change.
+   * openaiApiKey: null = clear the key. openaiApiKey: "***" = no change.
+   * telegramGroups: [] = clear all groups.
+   */
+  app.put<{ Params: { id: string } }>('/api/agents/:id/settings', async (request, reply) => {
+    const { id } = request.params;
+    const deployment = await getActiveDeployment(id);
+    if (!deployment) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No active deployment found' } });
+    }
+
+    const body = request.body as {
+      telegramGroups?: provider.TelegramGroup[];
+      openaiApiKey?: string | null;
+    };
+
+    // Validate telegram group chat IDs and topic prompts
+    if (body.telegramGroups) {
+      for (const g of body.telegramGroups) {
+        if (!/^-?\d+$/.test(g.chatId)) {
+          return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: `Invalid chatId "${g.chatId}": must be a numeric Telegram chat ID` } });
+        }
+        if (g.topicPrompts) {
+          if (g.topicPrompts.length > 50) {
+            return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: `Too many topic prompts for chat ${g.chatId}: max 50` } });
+          }
+          for (const tp of g.topicPrompts) {
+            if (!Number.isInteger(tp.threadId) || tp.threadId <= 0) {
+              return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: `Invalid threadId ${tp.threadId}: must be a positive integer` } });
+            }
+            if (!tp.prompt || tp.prompt.trim().length === 0) {
+              return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: `Topic prompt for threadId ${tp.threadId} must not be empty` } });
+            }
+            if (tp.prompt.length > 50000) {
+              return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: `Topic prompt for threadId ${tp.threadId} exceeds 50,000 character limit` } });
+            }
+          }
+        }
+      }
+    }
+
+    // Compute what actually changed
+    const hasGroupsUpdate = 'telegramGroups' in body;
+    const hasKeyUpdate = 'openaiApiKey' in body && body.openaiApiKey !== '***';
+
+    if (!hasGroupsUpdate && !hasKeyUpdate) {
+      return reply.code(200).send({ data: { changed: false } });
+    }
+
+    // Resolve new values
+    const newTelegramGroupsJson = hasGroupsUpdate
+      ? (body.telegramGroups && body.telegramGroups.length > 0 ? JSON.stringify(body.telegramGroups) : null)
+      : undefined;
+
+    const newOpenaiApiKey = hasKeyUpdate
+      ? (body.openaiApiKey ?? null)
+      : undefined;
+
+    // Check if the values are actually different from DB to avoid a no-op restart
+    const currentGroupsJson = (deployment.telegram_groups_json as string | null) ?? null;
+    const currentOpenaiApiKey = (deployment.openai_api_key as string | null) ?? null;
+
+    const groupsChanged = hasGroupsUpdate && newTelegramGroupsJson !== currentGroupsJson;
+    const keyChanged = hasKeyUpdate && newOpenaiApiKey !== currentOpenaiApiKey;
+
+    if (!groupsChanged && !keyChanged) {
+      return reply.code(200).send({ data: { changed: false } });
+    }
+
+    // Build DB update
+    const setClauses: string[] = ['updated_at = ?'];
+    const setArgs: (string | null)[] = [new Date().toISOString()];
+
+    if (groupsChanged) {
+      setClauses.unshift('telegram_groups_json = ?');
+      setArgs.unshift(newTelegramGroupsJson ?? null);
+    }
+    if (keyChanged) {
+      setClauses.unshift('openai_api_key = ?');
+      setArgs.unshift(newOpenaiApiKey ?? null);
+    }
+
+    await client.execute({
+      sql: `UPDATE deployed_agents SET ${setClauses.join(', ')} WHERE id = ?`,
+      args: [...setArgs, deployment.id as string],
+    });
+
+    // Trigger Fly env update + restart (if Fly agent)
+    if (deployment.fly_app_name && deployment.fly_machine_id) {
+      const envUpdates: Record<string, string | undefined> = {};
+      if (groupsChanged) {
+        envUpdates.TELEGRAM_GROUPS_JSON = newTelegramGroupsJson ?? undefined;
+      }
+      if (keyChanged) {
+        envUpdates.OPENAI_API_KEY = newOpenaiApiKey ?? undefined;
+      }
+
+      try {
+        await provider.updateEnv(
+          deployment.fly_app_name as string,
+          deployment.fly_machine_id as string,
+          envUpdates
+        );
+      } catch (err: unknown) {
+        // Roll back DB change on Fly failure
+        await client.execute({
+          sql: `UPDATE deployed_agents SET telegram_groups_json = ?, openai_api_key = ?, updated_at = ? WHERE id = ?`,
+          args: [currentGroupsJson, currentOpenaiApiKey, new Date().toISOString(), deployment.id as string],
+        });
+
+        const code = (err as { code?: string }).code;
+        if (code === 'LIVE_EDIT_NOT_SUPPORTED') {
+          return reply.code(409).send({
+            error: {
+              code: 'LIVE_EDIT_NOT_SUPPORTED_FOR_DOCKER',
+              message: 'Live settings edit is not supported for Docker-provisioned agents. Use redeploy instead.',
+              fallback: 'redeploy',
+            },
+          });
+        }
+
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        return reply.code(500).send({ error: { code: 'UPDATE_ENV_FAILED', message } });
+      }
+
+      return reply.code(200).send({ data: { changed: true, restarted: true } });
+    }
+
+    // No Fly machine — DB-only update (docker agent or manual)
+    return reply.code(200).send({ data: { changed: true, restarted: false } });
   });
 
   /**
@@ -3750,4 +4022,114 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       .header('Content-Disposition', `attachment; filename="backup-${id}.json"`)
       .send(JSON.stringify(backup, null, 2));
   });
+
+  // =========================================================================
+  // Telegram notification link/unlink
+  // =========================================================================
+
+  // Generate a one-time deep-link code so the user can connect their Telegram
+  app.post('/api/telegram/link', async (request, reply) => {
+    const session = getSession(request);
+    if (!session) return reply.status(401).send({ error: 'Unauthorized' });
+
+    if (!telegramNotifier.isConfigured()) {
+      return reply.status(503).send({ error: 'Telegram notifications are not configured on this server.' });
+    }
+
+    try {
+      const { code, url } = await telegramNotifier.createLinkCode(session.userId);
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+      return reply.send({ code, url, expiresAt });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.status(500).send({ error: message });
+    }
+  });
+
+  // Disconnect the current user's Telegram
+  app.delete('/api/telegram/link', async (request, reply) => {
+    const session = getSession(request);
+    if (!session) return reply.status(401).send({ error: 'Unauthorized' });
+
+    await telegramNotifier.unlinkUser(session.userId);
+    return reply.send({ ok: true });
+  });
+
+  // Telegram webhook — unauthenticated but gated by secret_token header
+  app.post('/api/webhooks/telegram', async (request, reply) => {
+    const expectedSecret = process.env.REINS_TELEGRAM_WEBHOOK_SECRET;
+    if (expectedSecret) {
+      const receivedSecret = request.headers['x-telegram-bot-api-secret-token'];
+      if (receivedSecret !== expectedSecret) {
+        return reply.status(401).send({ error: 'Invalid secret token' });
+      }
+    }
+
+    // Always return 200 — Telegram retries on non-2xx
+    try {
+      await telegramNotifier.handleUpdate(request.body as unknown as Parameters<typeof telegramNotifier.handleUpdate>[0]);
+    } catch (err) {
+      console.error('Telegram webhook handler error:', err);
+    }
+    return reply.send({ ok: true });
+  });
+
+  /**
+   * Per-agent bot relay webhook — receives Telegram updates for a deployed agent's bot,
+   * forwards them to OpenClaw, and intercepts my_chat_member events for group detection.
+   *
+   * Unauthenticated (Telegram cannot authenticate), secured by:
+   * - deploymentId in the path (nanoid, unguessable)
+   * - X-Telegram-Bot-Api-Secret-Token header matched against webhook_relay_secret in DB
+   */
+  app.post<{ Params: { deploymentId: string } }>(
+    '/api/webhooks/agent-bot/:deploymentId',
+    async (request, reply) => {
+      // Always return 200 immediately — Telegram retries on non-2xx
+      reply.send({ ok: true });
+
+      const { deploymentId } = request.params;
+
+      // Look up deployment
+      const depResult = await client.execute({
+        sql: `SELECT da.id, da.agent_id, da.openclaw_webhook_url, da.webhook_relay_secret
+              FROM deployed_agents da
+              WHERE da.id = ?`,
+        args: [deploymentId],
+      });
+      if (depResult.rows.length === 0) return;
+
+      const dep = depResult.rows[0];
+
+      // Verify secret token
+      const expectedSecret = dep.webhook_relay_secret as string | null;
+      if (expectedSecret) {
+        const receivedSecret = request.headers['x-telegram-bot-api-secret-token'];
+        if (receivedSecret !== expectedSecret) {
+          // Silently drop — don't log in case of scanner noise
+          return;
+        }
+      }
+
+      const agentId = dep.agent_id as string;
+      const openclawUrl = dep.openclaw_webhook_url as string | null;
+
+      const body = request.body as Record<string, unknown>;
+
+      // Intercept my_chat_member events before forwarding
+      if (body.my_chat_member) {
+        handleMyChatMember(deploymentId, agentId, body.my_chat_member as Parameters<typeof handleMyChatMember>[2]).catch((err) =>
+          console.error(`[webhook-relay] handleMyChatMember error for ${deploymentId}:`, err)
+        );
+      }
+
+      // Forward to OpenClaw (include the shared webhook secret so OpenClaw accepts the request)
+      if (openclawUrl) {
+        const relaySecret = dep.webhook_relay_secret as string | null;
+        forwardToOpenclaw(deploymentId, openclawUrl, body, relaySecret ?? undefined).catch((err) =>
+          console.error(`[webhook-relay] forwardToOpenclaw error for ${deploymentId}:`, err)
+        );
+      }
+    }
+  );
 };

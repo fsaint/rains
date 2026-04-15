@@ -210,7 +210,7 @@ export default function AgentNew() {
   const isLastStep = step === steps.length - 1;
 
   return (
-    <div className="p-8 max-w-2xl">
+    <div className="p-4 sm:p-8 max-w-2xl">
       {/* Header */}
       <div className="flex items-center gap-4 mb-8">
         <button
@@ -235,7 +235,7 @@ export default function AgentNew() {
       {!agentType && (
         <div className="space-y-4">
           <p className="text-sm text-gray-500">How do you want to run this agent?</p>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <button
               type="button"
               onClick={() => setAgentType('hosted')}
@@ -379,7 +379,7 @@ export default function AgentNew() {
       {agentType === 'hosted' && step === 1 && (
         <section className="bg-white rounded-xl border border-gray-100 p-6 space-y-4">
           <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Model Provider</h2>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <button
               type="button"
               onClick={() => update({ modelProvider: 'anthropic', modelName: 'claude-sonnet-4-5' })}
@@ -461,7 +461,7 @@ export default function AgentNew() {
               <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Personality</h2>
               <p className="text-xs text-gray-400 mt-1">Choose a pre-made agent or customize from scratch.</p>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {PRESET_AGENTS.map(({ id, icon: Icon, label, description, soul }) => {
                 const isSelected = form.soulMd === soul;
                 return (

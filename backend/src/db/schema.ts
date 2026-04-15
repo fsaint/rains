@@ -9,6 +9,7 @@ export const users = pgTable('users', {
   passwordHash: text('password_hash').notNull(),
   role: text('role').default('user').notNull(), // 'admin' | 'user'
   status: text('status').default('active').notNull(), // 'active' | 'suspended' | 'deleted'
+  telegramChatId: text('telegram_chat_id'), // Telegram chat ID for approval notifications
   createdAt: text('created_at').default(sql`now()`).notNull(),
   updatedAt: text('updated_at').default(sql`now()`).notNull(),
 });
@@ -85,6 +86,16 @@ export const approvals = pgTable('approvals', {
   resolvedAt: text('resolved_at'),
   resolvedBy: text('resolved_by'),
   resolutionComment: text('resolution_comment'),
+  telegramChatId: text('telegram_chat_id'), // Telegram chat ID where notification was sent
+  telegramMessageId: text('telegram_message_id'), // Telegram message ID for edit-in-place
+});
+
+// Telegram link codes — one-time codes for linking a Telegram chat to a Reins user
+export const telegramLinkCodes = pgTable('telegram_link_codes', {
+  code: text('code').primaryKey(),
+  userId: text('user_id').notNull(),
+  expiresAt: text('expires_at').notNull(),
+  createdAt: text('created_at').notNull(),
 });
 
 // Spend records table
@@ -196,6 +207,9 @@ export const deployedAgents = pgTable('deployed_agents', {
   region: text('region').default('iad'),
   gatewayToken: text('gateway_token').notNull(),
   openaiApiKey: text('openai_api_key'),
+  telegramGroupsJson: text('telegram_groups_json'),
+  openclawWebhookUrl: text('openclaw_webhook_url'),
+  webhookRelaySecret: text('webhook_relay_secret'),
   modelCredentials: text('model_credentials'),
   mcpConfigJson: text('mcp_config_json'),
   isManual: integer('is_manual').default(0),
