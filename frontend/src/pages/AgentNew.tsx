@@ -3,8 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import { ArrowLeft, Loader2, ChevronDown, ChevronUp, Mail, PenLine } from 'lucide-react';
 import { agents, type CreateAndDeployData } from '../api/client';
-import { CodexDeviceFlow } from '../components/CodexDeviceFlow';
-import { ClaudeSetupTokenFlow } from '../components/ClaudeSetupTokenFlow';
 
 const DEFAULT_SOUL = `You are a helpful AI assistant. Be concise, friendly, and thoughtful in your responses.`;
 
@@ -178,8 +176,11 @@ export default function AgentNew() {
       if (agentType === 'manual') return form.name.trim() !== '';
       return form.name.trim() !== '' && form.telegramToken.trim() !== '';
     }
-    // For hosted agents, step 1 is Model (requires credentials)
-    if (agentType !== 'manual' && step === 1) return !!form.modelCredentials;
+    if (agentType !== 'manual' && step === 1) {
+      if (form.modelProvider === 'minimax' || form.modelProvider === 'openai') return !!form.openaiApiKey?.trim();
+      if (form.modelProvider === 'openai-codex') return !!form.modelCredentials;
+      return true; // anthropic uses server-side key
+    }
     return true;
   };
 
@@ -412,6 +413,19 @@ export default function AgentNew() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <button
               type="button"
+              onClick={() => update({ modelProvider: 'minimax', modelName: 'MiniMax-M2.7', openaiApiKey: '' })}
+              className={`relative p-4 rounded-xl border-2 text-left transition-all ${
+                form.modelProvider === 'minimax'
+                  ? 'border-trust-blue bg-trust-blue/5'
+                  : 'border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              <span className="absolute top-2 right-2 text-[10px] font-semibold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full">Recommended</span>
+              <p className="font-medium text-reins-navy">MiniMax</p>
+              <p className="text-xs text-gray-400 mt-1">Affordable, fast API-key LLM. No subscription needed.</p>
+            </button>
+            <button
+              type="button"
               onClick={() => update({ modelProvider: 'anthropic', modelName: 'claude-sonnet-4-5' })}
               className={`p-4 rounded-xl border-2 text-left transition-all ${
                 form.modelProvider === 'anthropic'
@@ -420,58 +434,21 @@ export default function AgentNew() {
               }`}
             >
               <p className="font-medium text-reins-navy">Anthropic Claude</p>
-              <p className="text-xs text-gray-400 mt-1">Uses your Anthropic API key</p>
+              <p className="text-xs text-gray-400 mt-1">Uses the server's Anthropic API key</p>
             </button>
-            {form.runtime !== 'hermes' && (
             <button
               type="button"
-              onClick={() => update({ modelProvider: 'openai-codex', modelName: 'gpt-5.4' })}
+              onClick={() => update({ modelProvider: 'openai', modelName: 'gpt-4o', openaiApiKey: '' })}
               className={`p-4 rounded-xl border-2 text-left transition-all ${
-                form.modelProvider === 'openai-codex'
+                form.modelProvider === 'openai'
                   ? 'border-trust-blue bg-trust-blue/5'
                   : 'border-gray-200 hover:border-gray-300'
               }`}
             >
-              <p className="font-medium text-reins-navy">OpenAI (ChatGPT)</p>
-              <p className="text-xs text-gray-400 mt-1">Uses your ChatGPT subscription</p>
-            </button>
-            )}
-            <button
-              type="button"
-              onClick={() => update({ modelProvider: 'minimax', modelName: 'MiniMax-M2.7', openaiApiKey: '' })}
-              className={`p-4 rounded-xl border-2 text-left transition-all ${
-                form.modelProvider === 'minimax'
-                  ? 'border-trust-blue bg-trust-blue/5'
-                  : 'border-gray-200 hover:border-gray-300'
-              }`}
-            >
-              <p className="font-medium text-reins-navy">MiniMax</p>
-              <p className="text-xs text-gray-400 mt-1">Affordable API-key based LLM</p>
+              <p className="font-medium text-reins-navy">OpenAI</p>
+              <p className="text-xs text-gray-400 mt-1">Uses your OpenAI API key</p>
             </button>
           </div>
-
-          {form.modelProvider === 'openai-codex' && (
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
-                  Model
-                </label>
-                <select
-                  value={form.modelName || 'gpt-5.4'}
-                  onChange={(e) => update({ modelName: e.target.value })}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none bg-white"
-                >
-                  <option value="gpt-5.4">GPT-5.4 (default)</option>
-                  <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
-                  <option value="gpt-5.3-codex">GPT-5.3 Codex</option>
-                  <option value="gpt-5.3-codex-spark">GPT-5.3 Codex Spark</option>
-                  <option value="gpt-5-codex">GPT-5 Codex</option>
-                  <option value="gpt-5-codex-mini">GPT-5 Codex Mini</option>
-                </select>
-              </div>
-              {form.runtime !== 'hermes' && <CodexDeviceFlow onComplete={(tokens) => update({ modelCredentials: tokens })} />}
-            </div>
-          )}
 
           {form.modelProvider === 'anthropic' && (
             <div className="space-y-4">
@@ -489,11 +466,41 @@ export default function AgentNew() {
                   <option value="claude-haiku-4-5">Claude Haiku 4.5</option>
                 </select>
               </div>
-              {form.runtime !== 'hermes' && (
-                <ClaudeSetupTokenFlow
-                  onComplete={(token) => update({ modelCredentials: token })}
+            </div>
+          )}
+
+          {form.modelProvider === 'openai' && (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
+                  Model
+                </label>
+                <select
+                  value={form.modelName || 'gpt-4o'}
+                  onChange={(e) => update({ modelName: e.target.value })}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none bg-white"
+                >
+                  <option value="gpt-4o">GPT-4o (default)</option>
+                  <option value="gpt-4o-mini">GPT-4o Mini</option>
+                  <option value="gpt-4.1">GPT-4.1</option>
+                  <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
+                  <option value="o3">o3</option>
+                  <option value="o4-mini">o4-mini</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
+                  OpenAI API Key
+                </label>
+                <input
+                  type="password"
+                  value={form.openaiApiKey || ''}
+                  onChange={(e) => update({ openaiApiKey: e.target.value })}
+                  placeholder="sk-..."
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-mono focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
                 />
-              )}
+                <p className="text-xs text-gray-400 mt-1">Get your key at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" className="text-trust-blue hover:underline">platform.openai.com/api-keys</a></p>
+              </div>
             </div>
           )}
 
@@ -522,10 +529,15 @@ export default function AgentNew() {
                   type="password"
                   value={form.openaiApiKey || ''}
                   onChange={(e) => update({ openaiApiKey: e.target.value })}
-                  placeholder="Enter your MiniMax API key"
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
+                  placeholder="sk-cp-..."
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-mono focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
                 />
-                <p className="text-xs text-gray-400 mt-1">Get your API key at <a href="https://platform.minimax.io" target="_blank" rel="noreferrer" className="text-trust-blue hover:underline">platform.minimax.io</a></p>
+                <p className="text-xs text-gray-400 mt-1">
+                  Don't have an account?{' '}
+                  <a href="https://platform.minimax.io/user/register" target="_blank" rel="noreferrer" className="text-trust-blue hover:underline">Sign up at platform.minimax.io</a>
+                  {' '}· Then get your key at{' '}
+                  <a href="https://platform.minimax.io/user/keys" target="_blank" rel="noreferrer" className="text-trust-blue hover:underline">API Keys</a>
+                </p>
               </div>
             </div>
           )}

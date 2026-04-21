@@ -64,6 +64,7 @@ export interface DeployConfig {
   modelName?: string;
   region?: string;
   modelCredentials?: string;
+  openaiApiKey?: string;
   runtime?: 'openclaw' | 'hermes';
 }
 
@@ -94,7 +95,7 @@ export interface CreateAndDeployData {
   description?: string;
   telegramToken: string;
   telegramUserId?: string;
-  modelProvider?: 'anthropic' | 'openai-codex' | 'minimax';
+  modelProvider?: 'anthropic' | 'openai-codex' | 'openai' | 'minimax';
   modelName?: string;
   soulMd?: string;
   region?: string;

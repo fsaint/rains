@@ -2525,7 +2525,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // Provisioning error classification + reauth approvals
   // ============================================================================
 
-  type ReauthProvider = 'anthropic' | 'openai-codex' | 'minimax' | 'fly' | 'docker' | 'unknown';
+  type ReauthProvider = 'anthropic' | 'openai-codex' | 'openai' | 'minimax' | 'fly' | 'docker' | 'unknown';
 
   function classifyProvisionError(err: unknown, modelProvider?: string): {
     isAuth: boolean;
@@ -2543,8 +2543,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     let provider: ReauthProvider = 'unknown';
     if (isAuth) {
-      if (modelProvider === 'openai-codex' || /openai|codex/.test(msg)) {
+      if (modelProvider === 'openai-codex' || /codex/.test(msg)) {
         provider = 'openai-codex';
+      } else if (modelProvider === 'openai' || /openai/.test(msg)) {
+        provider = 'openai';
       } else if (modelProvider === 'minimax' || /minimax/.test(msg)) {
         provider = 'minimax';
       } else if (modelProvider === 'anthropic' || /anthropic|claude/.test(msg)) {
@@ -2563,6 +2565,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const hints: Record<ReauthProvider, string> = {
       'anthropic': 'Your Claude setup token may have expired. Run `claude setup-token` and reconnect.',
       'openai-codex': 'Your OpenAI credentials have expired. Reconnect via the OpenAI device flow.',
+      'openai': 'Your OpenAI API key may be invalid or expired. Please update your OpenAI API key.',
       'minimax': 'Your MiniMax API key may be invalid or expired. Please update your MiniMax API key.',
       'fly': 'Fly.io authentication failed. Check your FLY_API_TOKEN.',
       'docker': 'Docker provisioning failed. Ensure Docker/OrbStack is running and the image is available.',
@@ -2779,6 +2782,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       if (mp === 'minimax') {
         return mn || 'MiniMax-M2.7';
       }
+      if (mp === 'openai') {
+        return mn || 'gpt-4o';
+      }
       // Reject OpenAI model names for Anthropic provider
       return mn && mn.startsWith('claude-') ? mn : 'claude-sonnet-4-5';
     })();
@@ -2951,6 +2957,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       }
       if (mp === 'minimax') {
         return mn || 'MiniMax-M2.7';
+      }
+      if (mp === 'openai') {
+        return mn || 'gpt-4o';
       }
       return mn && mn.startsWith('claude-') ? mn : 'claude-sonnet-4-5';
     })();
@@ -3399,6 +3408,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       }
       if (mp === 'minimax') {
         return mn || 'MiniMax-M2.7';
+      }
+      if (mp === 'openai') {
+        return mn || 'gpt-4o';
       }
       return mn && mn.startsWith('claude-') ? mn : 'claude-sonnet-4-5';
     })();
