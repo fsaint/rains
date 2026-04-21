@@ -2783,7 +2783,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         return mn || 'MiniMax-M2.7';
       }
       if (mp === 'openai') {
-        return mn || 'gpt-4o';
+        return mn || 'gpt-4.1';
       }
       // Reject OpenAI model names for Anthropic provider
       return mn && mn.startsWith('claude-') ? mn : 'claude-sonnet-4-5';
@@ -2959,7 +2959,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         return mn || 'MiniMax-M2.7';
       }
       if (mp === 'openai') {
-        return mn || 'gpt-4o';
+        return mn || 'gpt-4.1';
       }
       return mn && mn.startsWith('claude-') ? mn : 'claude-sonnet-4-5';
     })();
@@ -3410,7 +3410,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         return mn || 'MiniMax-M2.7';
       }
       if (mp === 'openai') {
-        return mn || 'gpt-4o';
+        return mn || 'gpt-4.1';
       }
       return mn && mn.startsWith('claude-') ? mn : 'claude-sonnet-4-5';
     })();

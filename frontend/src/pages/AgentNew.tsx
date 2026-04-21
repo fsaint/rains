@@ -438,7 +438,7 @@ export default function AgentNew() {
             </button>
             <button
               type="button"
-              onClick={() => update({ modelProvider: 'openai', modelName: 'gpt-4o', openaiApiKey: '' })}
+              onClick={() => update({ modelProvider: 'openai', modelName: 'gpt-4.1', openaiApiKey: '' })}
               className={`p-4 rounded-xl border-2 text-left transition-all ${
                 form.modelProvider === 'openai'
                   ? 'border-trust-blue bg-trust-blue/5'
@@ -476,16 +476,28 @@ export default function AgentNew() {
                   Model
                 </label>
                 <select
-                  value={form.modelName || 'gpt-4o'}
+                  value={form.modelName || 'gpt-4.1'}
                   onChange={(e) => update({ modelName: e.target.value })}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none bg-white"
                 >
-                  <option value="gpt-4o">GPT-4o (default)</option>
-                  <option value="gpt-4o-mini">GPT-4o Mini</option>
-                  <option value="gpt-4.1">GPT-4.1</option>
-                  <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
-                  <option value="o3">o3</option>
-                  <option value="o4-mini">o4-mini</option>
+                  <optgroup label="Flagship">
+                    <option value="gpt-5.4">GPT-5.4</option>
+                    <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
+                    <option value="gpt-5">GPT-5</option>
+                  </optgroup>
+                  <optgroup label="GPT-4.1">
+                    <option value="gpt-4.1">GPT-4.1 (default)</option>
+                    <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
+                    <option value="gpt-4.1-nano">GPT-4.1 Nano</option>
+                  </optgroup>
+                  <optgroup label="GPT-4o">
+                    <option value="gpt-4o">GPT-4o</option>
+                    <option value="gpt-4o-mini">GPT-4o Mini</option>
+                  </optgroup>
+                  <optgroup label="Reasoning">
+                    <option value="o3">o3</option>
+                    <option value="o4-mini">o4-mini</option>
+                  </optgroup>
                 </select>
               </div>
               <div>
