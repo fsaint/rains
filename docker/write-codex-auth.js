@@ -34,3 +34,37 @@ const data = {
 
 fs.writeFileSync(authFile, JSON.stringify(data, null, 2));
 console.log("Codex auth-profiles.json written to " + authFile);
+
+// Also register the model in models.json so the gateway recognizes it.
+// The doctor creates models.json with an empty openai-codex provider because
+// OAuth tokens aren't available at Phase 1; we patch it here in Phase 2.
+const modelName = process.env.MODEL_NAME || "gpt-5.4";
+const modelsFile = authDir + "/models.json";
+let modelsData = { providers: {} };
+try {
+  modelsData = JSON.parse(fs.readFileSync(modelsFile, "utf8"));
+} catch (e) {
+  // file doesn't exist yet — start fresh
+}
+const provider = modelsData.providers["openai-codex"] || {
+  baseUrl: "https://chatgpt.com/backend-api/v1",
+  api: "openai-codex-responses",
+  models: [],
+};
+// Add model if not already present
+if (!provider.models.find((m) => m.id === modelName)) {
+  provider.models.push({
+    id: modelName,
+    name: modelName,
+    api: "openai-codex-responses",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200000,
+    maxTokens: 100000,
+    compat: { supportsReasoningEffort: true, supportsUsageInStreaming: true },
+  });
+}
+modelsData.providers["openai-codex"] = provider;
+fs.writeFileSync(modelsFile, JSON.stringify(modelsData, null, 2));
+console.log("models.json patched for openai-codex/" + modelName);

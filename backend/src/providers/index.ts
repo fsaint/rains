@@ -43,6 +43,7 @@ export interface ProvisionOpts {
   modelCredentials?: string;
   thinkingDefault?: string;
   webhookRelaySecret?: string;
+  runtime?: 'openclaw' | 'hermes';
 }
 
 export async function provision(opts: ProvisionOpts): Promise<ProvisionResult> {

@@ -2525,7 +2525,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // Provisioning error classification + reauth approvals
   // ============================================================================
 
-  type ReauthProvider = 'anthropic' | 'openai-codex' | 'fly' | 'docker' | 'unknown';
+  type ReauthProvider = 'anthropic' | 'openai-codex' | 'minimax' | 'fly' | 'docker' | 'unknown';
 
   function classifyProvisionError(err: unknown, modelProvider?: string): {
     isAuth: boolean;
@@ -2545,6 +2545,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (isAuth) {
       if (modelProvider === 'openai-codex' || /openai|codex/.test(msg)) {
         provider = 'openai-codex';
+      } else if (modelProvider === 'minimax' || /minimax/.test(msg)) {
+        provider = 'minimax';
       } else if (modelProvider === 'anthropic' || /anthropic|claude/.test(msg)) {
         provider = 'anthropic';
       } else if (/fly\.io|fly api/.test(msg)) {
@@ -2561,6 +2563,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const hints: Record<ReauthProvider, string> = {
       'anthropic': 'Your Claude setup token may have expired. Run `claude setup-token` and reconnect.',
       'openai-codex': 'Your OpenAI credentials have expired. Reconnect via the OpenAI device flow.',
+      'minimax': 'Your MiniMax API key may be invalid or expired. Please update your MiniMax API key.',
       'fly': 'Fly.io authentication failed. Check your FLY_API_TOKEN.',
       'docker': 'Docker provisioning failed. Ensure Docker/OrbStack is running and the image is available.',
       'unknown': 'Provisioning failed. Please re-authenticate and try again.',
@@ -2690,6 +2693,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       telegramGroups?: provider.TelegramGroup[];
       modelCredentials?: string;
       mcpServers?: string;
+      runtime?: 'openclaw' | 'hermes';
     };
 
     // Validate telegram group chat IDs (must be numeric) and topic prompts
@@ -2772,6 +2776,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         // Reject Claude model names for OpenAI provider
         return mn && !mn.startsWith('claude-') ? mn : 'gpt-5.4';
       }
+      if (mp === 'minimax') {
+        return mn || 'MiniMax-M2.7';
+      }
       // Reject OpenAI model names for Anthropic provider
       return mn && mn.startsWith('claude-') ? mn : 'claude-sonnet-4-5';
     })();
@@ -2804,6 +2811,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         telegramGroups: body.telegramGroups,
         modelCredentials: body.modelCredentials,
         webhookRelaySecret,
+        runtime: body.runtime ?? 'openclaw',
       });
 
       const telegramGroupsJson = body.telegramGroups && body.telegramGroups.length > 0
@@ -2816,7 +2824,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         : null;
 
       await client.execute({
-        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openai_api_key, telegram_groups_json, model_credentials, mcp_config_json, openclaw_webhook_url, webhook_relay_secret, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openai_api_key, telegram_groups_json, model_credentials, mcp_config_json, openclaw_webhook_url, webhook_relay_secret, runtime, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           deploymentId, agentId,
           result.appName, result.machineId, 'running', result.managementUrl,
@@ -2828,6 +2836,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           body.modelCredentials ?? null,
           body.mcpServers ?? null,
           openclawWebhookUrl, webhookRelaySecret,
+          body.runtime ?? 'openclaw',
           now, now,
         ],
       });
@@ -2843,6 +2852,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
             appName: result.appName,
             machineId: result.machineId,
             managementUrl: result.managementUrl,
+            runtime: body.runtime ?? 'openclaw',
           },
         },
       });
@@ -2907,6 +2917,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       modelProvider?: string;
       modelName?: string;
       region?: string;
+      runtime?: 'openclaw' | 'hermes';
     };
 
     if (!body?.telegramToken) {
@@ -2938,6 +2949,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       if (mp === 'openai-codex') {
         return mn && !mn.startsWith('claude-') ? mn : 'gpt-5.4';
       }
+      if (mp === 'minimax') {
+        return mn || 'MiniMax-M2.7';
+      }
       return mn && mn.startsWith('claude-') ? mn : 'claude-sonnet-4-5';
     })();
 
@@ -2953,6 +2967,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         modelName: resolvedModelName,
         region: body.region,
         webhookRelaySecret,
+        runtime: body.runtime ?? 'openclaw',
       });
 
       // OpenClaw's webhook server runs on port 8787; Fly exposes 8443→8787
@@ -2961,7 +2976,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         : null;
 
       await client.execute({
-        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openclaw_webhook_url, webhook_relay_secret, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openclaw_webhook_url, webhook_relay_secret, runtime, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           deploymentId,
           id,
@@ -2977,6 +2992,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           body.region ?? 'iad',
           gatewayToken,
           openclawWebhookUrl, webhookRelaySecret,
+          body.runtime ?? 'openclaw',
           now,
           now,
         ],
@@ -2996,6 +3012,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           appName: result.appName,
           machineId: result.machineId,
           managementUrl: result.managementUrl,
+          runtime: body.runtime ?? 'openclaw',
         },
       });
     } catch (err) {
@@ -3068,6 +3085,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         modelName: deployment.model_name,
         region: deployment.region,
         isManual: deployment.is_manual === 1 || deployment.is_manual === true,
+        runtime: deployment.runtime,
         createdAt: deployment.created_at,
         updatedAt: deployment.updated_at,
       },
@@ -3154,6 +3172,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           modelName: deployment.model_name,
           region: deployment.region,
           mcpConfigJson: deployment.mcp_config_json,
+          runtime: deployment.runtime,
           createdAt: deployment.created_at,
         } : null,
       },
@@ -3378,6 +3397,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       if (mp === 'openai-codex') {
         return mn && !mn.startsWith('claude-') ? mn : 'gpt-5.4';
       }
+      if (mp === 'minimax') {
+        return mn || 'MiniMax-M2.7';
+      }
       return mn && mn.startsWith('claude-') ? mn : 'claude-sonnet-4-5';
     })();
 
@@ -3413,6 +3435,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           telegramGroups: newTelegramGroups ?? undefined,
           modelCredentials: newModelCredentials,
           webhookRelaySecret: deployment.webhook_relay_secret as string | undefined,
+          runtime: ((deployment.runtime as string | undefined) ?? 'openclaw') as 'openclaw' | 'hermes',
         }
       );
 
@@ -3584,6 +3607,201 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     // No Fly machine — DB-only update (docker agent or manual)
     return reply.code(200).send({ data: { changed: true, restarted: false } });
+  });
+
+  // ─── Topic Prompts endpoints ──────────────────────────────────────────────
+
+  /**
+   * GET /api/agents/:id/topic-prompts
+   * Returns the full telegram_groups_json parsed as { groups: TelegramGroup[] }.
+   * Authenticates via session OR x-reins-agent-secret header matching deployment gateway_token.
+   */
+  app.get<{ Params: { id: string } }>('/api/agents/:id/topic-prompts', async (request, reply) => {
+    const { id } = request.params;
+
+    // Auth: session OR agent secret
+    const agentSecret = (request.headers as Record<string, string | undefined>)['x-reins-agent-secret'];
+    const session = getSession(request);
+
+    if (!session && !agentSecret) {
+      return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Not authenticated' } });
+    }
+
+    // Look up deployed agent — accept either agent_id or deployment id (INSTANCE_USER_ID)
+    let result = await client.execute({
+      sql: `SELECT id, telegram_groups_json, gateway_token FROM deployed_agents WHERE agent_id = ? AND status NOT IN ('destroyed', 'error') ORDER BY created_at DESC LIMIT 1`,
+      args: [id],
+    });
+    if (result.rows.length === 0) {
+      result = await client.execute({
+        sql: `SELECT id, telegram_groups_json, gateway_token FROM deployed_agents WHERE id = ? AND status NOT IN ('destroyed', 'error') LIMIT 1`,
+        args: [id],
+      });
+    }
+
+    if (result.rows.length === 0) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No active deployment found' } });
+    }
+
+    const deployment = result.rows[0];
+
+    // Validate agent secret if no session
+    if (!session) {
+      if (agentSecret !== (deployment.gateway_token as string)) {
+        return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Invalid agent secret' } });
+      }
+    }
+
+    let groups: provider.TelegramGroup[] = [];
+    if (deployment.telegram_groups_json) {
+      try {
+        groups = JSON.parse(deployment.telegram_groups_json as string) as provider.TelegramGroup[];
+      } catch {
+        groups = [];
+      }
+    }
+
+    return reply.code(200).send({ groups });
+  });
+
+  /**
+   * PUT /api/agents/:id/topic-prompts
+   * Upserts (or deletes) a topic prompt for a specific thread in a group.
+   * Body: { chatId: string, threadId: number, instruction: string }
+   * Empty instruction = delete the entry.
+   * Authenticates via session OR x-reins-agent-secret header matching deployment gateway_token.
+   */
+  app.put<{ Params: { id: string } }>('/api/agents/:id/topic-prompts', async (request, reply) => {
+    const { id } = request.params;
+
+    // Auth: session OR agent secret
+    const agentSecret = (request.headers as Record<string, string | undefined>)['x-reins-agent-secret'];
+    const session = getSession(request);
+
+    if (!session && !agentSecret) {
+      return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Not authenticated' } });
+    }
+
+    const body = request.body as { chatId?: string; threadId?: number; instruction?: string };
+
+    // Validate body
+    if (!body?.chatId || !/^-?\d+$/.test(body.chatId)) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'chatId must be a numeric Telegram chat ID' } });
+    }
+    if (!Number.isInteger(body.threadId) || (body.threadId as number) <= 0) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'threadId must be a positive integer' } });
+    }
+    if (typeof body.instruction !== 'string') {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'instruction must be a string' } });
+    }
+
+    const { chatId, threadId, instruction } = body as { chatId: string; threadId: number; instruction: string };
+
+    // Look up deployed agent
+    const result = await client.execute({
+      sql: `SELECT id, telegram_groups_json, gateway_token, fly_app_name, fly_machine_id FROM deployed_agents WHERE agent_id = ? AND status NOT IN ('destroyed', 'error') ORDER BY created_at DESC LIMIT 1`,
+      args: [id],
+    });
+
+    if (result.rows.length === 0) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No active deployment found' } });
+    }
+
+    const deployment = result.rows[0];
+
+    // Validate agent secret if no session
+    if (!session) {
+      if (agentSecret !== (deployment.gateway_token as string)) {
+        return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Invalid agent secret' } });
+      }
+    }
+
+    // Parse existing groups
+    let groups: provider.TelegramGroup[] = [];
+    if (deployment.telegram_groups_json) {
+      try {
+        groups = JSON.parse(deployment.telegram_groups_json as string) as provider.TelegramGroup[];
+      } catch {
+        groups = [];
+      }
+    }
+
+    // Find the group
+    const groupIdx = groups.findIndex((g) => g.chatId === chatId);
+    if (groupIdx === -1) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: `Group ${chatId} not found or not approved` } });
+    }
+
+    const group = { ...groups[groupIdx] };
+    const topicPrompts: (provider.TopicPrompt & { updatedAt?: string; updatedBy?: string })[] = (group.topicPrompts as (provider.TopicPrompt & { updatedAt?: string; updatedBy?: string })[]) ?? [];
+
+    const updatedBy = agentSecret && !session ? 'agent' : 'ui';
+    const updatedAt = new Date().toISOString();
+
+    if (instruction === '') {
+      // Delete the entry
+      group.topicPrompts = topicPrompts.filter((tp) => tp.threadId !== threadId) as provider.TopicPrompt[];
+    } else {
+      // Upsert
+      const existingIdx = topicPrompts.findIndex((tp) => tp.threadId === threadId);
+      if (existingIdx === -1) {
+        // Check max 50 limit before adding
+        if (topicPrompts.length >= 50) {
+          return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Maximum 50 topic prompts per group' } });
+        }
+        topicPrompts.push({ threadId, prompt: instruction, updatedAt, updatedBy });
+      } else {
+        topicPrompts[existingIdx] = { threadId, prompt: instruction, updatedAt, updatedBy };
+      }
+      group.topicPrompts = topicPrompts as provider.TopicPrompt[];
+    }
+
+    groups[groupIdx] = group;
+
+    const newGroupsJson = JSON.stringify(groups);
+    const currentGroupsJson = deployment.telegram_groups_json as string | null;
+
+    // Save back to DB
+    await client.execute({
+      sql: `UPDATE deployed_agents SET telegram_groups_json = ?, updated_at = ? WHERE id = ?`,
+      args: [newGroupsJson, updatedAt, deployment.id as string],
+    });
+
+    // Trigger Fly env update + restart (if Fly agent)
+    if (deployment.fly_app_name && deployment.fly_machine_id) {
+      try {
+        await provider.updateEnv(
+          deployment.fly_app_name as string,
+          deployment.fly_machine_id as string,
+          { TELEGRAM_GROUPS_JSON: newGroupsJson }
+        );
+      } catch (err: unknown) {
+        // Roll back DB change on Fly failure
+        await client.execute({
+          sql: `UPDATE deployed_agents SET telegram_groups_json = ?, updated_at = ? WHERE id = ?`,
+          args: [currentGroupsJson, updatedAt, deployment.id as string],
+        });
+
+        const code = (err as { code?: string }).code;
+        if (code === 'LIVE_EDIT_NOT_SUPPORTED') {
+          return reply.code(409).send({
+            error: {
+              code: 'LIVE_EDIT_NOT_SUPPORTED_FOR_DOCKER',
+              message: 'Live settings edit is not supported for Docker-provisioned agents. Use redeploy instead.',
+              fallback: 'redeploy',
+            },
+          });
+        }
+
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        return reply.code(500).send({ error: { code: 'UPDATE_ENV_FAILED', message } });
+      }
+
+      return reply.code(200).send({ ok: true, threadId, chatId, restarted: true });
+    }
+
+    // No Fly machine — DB-only update
+    return reply.code(200).send({ ok: true, threadId, chatId, restarted: false });
   });
 
   /**
@@ -4115,6 +4333,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const openclawUrl = dep.openclaw_webhook_url as string | null;
 
       const body = request.body as Record<string, unknown>;
+
+      // Debug: log update type
+      const updateKeys = Object.keys(body).filter(k => k !== 'update_id');
+      console.info(`[webhook-relay] Update received for ${deploymentId}: ${updateKeys.join(', ') || 'empty'}`);
 
       // Intercept my_chat_member events before forwarding
       if (body.my_chat_member) {

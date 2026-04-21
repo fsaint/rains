@@ -389,7 +389,9 @@ export async function registerAuth(app: FastifyInstance) {
       path.startsWith('/api/auth/') ||
       path.startsWith('/mcp/') ||
       path.startsWith('/api/agents/register') || // agent self-registration
-      path === '/api/webhooks/telegram' // Telegram webhook (authenticated via secret_token header)
+      path === '/api/webhooks/telegram' || // Telegram webhook (authenticated via secret_token header)
+      path.startsWith('/api/webhooks/agent-bot/') || // Agent bot relay (authenticated via secret_token header)
+      /^\/api\/agents\/[^/]+\/topic-prompts$/.test(path) // Topic prompts (authenticated via x-reins-agent-secret)
     ) {
       return;
     }

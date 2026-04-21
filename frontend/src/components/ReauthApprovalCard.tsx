@@ -3,6 +3,7 @@ import { Clock, KeyRound, ShieldAlert } from 'lucide-react';
 const PROVIDER_LABELS: Record<string, string> = {
   anthropic: 'Anthropic Claude',
   'openai-codex': 'OpenAI',
+  minimax: 'MiniMax',
   fly: 'Fly.io',
   docker: 'Docker',
   gmail: 'Gmail',

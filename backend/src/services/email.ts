@@ -51,6 +51,7 @@ export async function sendReauthEmail(opts: {
   const providerLabel: Record<string, string> = {
     'anthropic': 'Anthropic Claude',
     'openai-codex': 'OpenAI',
+    'minimax': 'MiniMax',
     'fly': 'Fly.io',
     'docker': 'Docker',
     'gmail': 'Gmail',

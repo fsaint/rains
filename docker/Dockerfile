@@ -1,4 +1,4 @@
-FROM ghcr.io/openclaw/openclaw:2026.3.13-1
+FROM ghcr.io/openclaw/openclaw:2026.4.14
 
 # Switch to root to install browser dependencies
 USER root
@@ -32,7 +32,7 @@ RUN mkdir -p /home/node/.openclaw/plugins/openclaw-mcp-bridge && \
 
 # Bundle reins-thread-prompt plugin — installed at runtime by entrypoint.sh to avoid
 # peer-dep resolution during image build (which bloats the image by ~300 MB).
-COPY reins-thread-prompt-0.1.0.tgz /app/reins-thread-prompt-0.1.0.tgz
+COPY reins-thread-prompt-0.3.1.tgz /app/reins-thread-prompt-0.3.1.tgz
 
 # Fix missing plugin runtime module (packaging gap in main image)
 RUN mkdir -p /app/dist/plugins/runtime

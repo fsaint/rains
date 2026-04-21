@@ -77,6 +77,12 @@ async function getOpenClawImage(): Promise<string> {
   throw new Error(`Cannot resolve OpenClaw image: no machines or releases found for app ${OPENCLAW_APP}. Set OPENCLAW_IMAGE explicitly.`);
 }
 
+function getHermesImage(): string {
+  const image = process.env.HERMES_IMAGE;
+  if (!image) throw new Error('HERMES_IMAGE environment variable is required for Hermes runtime');
+  return image;
+}
+
 async function flyFetch(path: string, options: RequestInit = {}) {
   const res = await fetch(`${FLY_API_BASE}${path}`, {
     ...options,
@@ -150,6 +156,7 @@ export interface CreateMachineOpts {
   modelCredentials?: string;
   thinkingDefault?: string;
   webhookRelaySecret?: string;
+  runtime?: string;
 }
 
 export interface TopicPrompt {
@@ -166,12 +173,13 @@ export interface TelegramGroup {
 }
 
 export async function createMachine(opts: CreateMachineOpts) {
+  const isHermes = opts.runtime === 'hermes';
   const res = await flyFetch(`/apps/${opts.appName}/machines`, {
     method: 'POST',
     body: JSON.stringify({
-      name: `openclaw-${opts.instanceId.slice(0, 8)}`,
+      name: `${isHermes ? 'hermes' : 'openclaw'}-${opts.instanceId.slice(0, 8)}`,
       region: opts.region || 'iad',
-      config: await buildMachineConfig(opts),
+      config: isHermes ? await buildHermesMachineConfig(opts) : await buildMachineConfig(opts),
     }),
   });
 
@@ -184,10 +192,11 @@ export async function updateMachine(
   machineId: string,
   opts: Omit<CreateMachineOpts, 'appName'>
 ) {
+  const isHermes = opts.runtime === 'hermes';
   const res = await flyFetch(`/apps/${appName}/machines/${machineId}`, {
     method: 'POST',
     body: JSON.stringify({
-      config: await buildMachineConfig({ ...opts, appName }),
+      config: isHermes ? await buildHermesMachineConfig({ ...opts, appName }) : await buildMachineConfig({ ...opts, appName }),
     }),
   });
   return res.json();
@@ -208,15 +217,19 @@ async function buildMachineConfig(opts: CreateMachineOpts) {
       MCP_CONFIG: JSON.stringify(opts.mcpConfigs),
       USAGE_CALLBACK_URL: `${reinsUrl}/api/webhooks/usage`,
       INSTANCE_USER_ID: opts.instanceId,
+      REINS_API_URL: reinsUrl,
       ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
       OPENCLAW_GATEWAY_TOKEN: opts.gatewayToken,
       OPENCLAW_NO_RESPAWN: '1',
       NODE_OPTIONS: '--max-old-space-size=3072 --dns-result-order=ipv4first',
       ...(opts.soulMd ? { SOUL_MD: opts.soulMd } : {}),
       ...(opts.telegramUserId ? { TELEGRAM_TRUSTED_USER: opts.telegramUserId } : {}),
-      ...(opts.modelProvider ? { MODEL_PROVIDER: opts.modelProvider } : {}),
       ...(opts.modelName ? { MODEL_NAME: opts.modelName } : {}),
-      ...(opts.openaiApiKey ? { OPENAI_API_KEY: opts.openaiApiKey } : {}),
+      // MiniMax via OpenAI-compatible API: translate to 'openai' provider + base URL
+      // (OpenClaw's native minimax extension uses /anthropic endpoint that doesn't support M2.7+)
+      ...(opts.modelProvider === 'minimax'
+        ? { MODEL_PROVIDER: 'openai', OPENAI_BASE_URL: 'https://api.minimax.io/v1', ...(opts.openaiApiKey ? { OPENAI_API_KEY: opts.openaiApiKey } : {}) }
+        : { ...(opts.modelProvider ? { MODEL_PROVIDER: opts.modelProvider } : {}), ...(opts.openaiApiKey ? { OPENAI_API_KEY: opts.openaiApiKey } : {}) }),
       ...(opts.telegramGroups && opts.telegramGroups.length > 0 ? { TELEGRAM_GROUPS_JSON: JSON.stringify(opts.telegramGroups) } : {}),
       ...(opts.modelCredentials ? { OPENAI_CODEX_TOKENS: opts.modelCredentials } : {}),
       THINKING_DEFAULT: opts.thinkingDefault ?? 'medium',
@@ -249,6 +262,66 @@ async function buildMachineConfig(opts: CreateMachineOpts) {
       },
       // Telegram webhook server — OpenClaw binds on 8787; Fly routes 8443 (TLS) → 8787
       // Telegram requires HTTPS on ports 443, 80, 88, or 8443; we use 8443.
+      ...(opts.webhookRelaySecret ? [{
+        ports: [{ port: 8443, handlers: ['tls', 'http'] }],
+        protocol: 'tcp',
+        internal_port: 8787,
+        autostart: true,
+        autostop: 'off',
+      }] : []),
+    ],
+  };
+}
+
+async function buildHermesMachineConfig(opts: CreateMachineOpts) {
+  const reinsUrl = process.env.REINS_PUBLIC_URL || process.env.REINS_DASHBOARD_URL || '';
+
+  return {
+    image: getHermesImage(),
+    guest: {
+      cpu_kind: 'shared',
+      cpus: 1,
+      memory_mb: 2048,
+    },
+    env: {
+      TELEGRAM_BOT_TOKEN: opts.telegramToken,
+      ...(opts.telegramUserId ? { TELEGRAM_ALLOWED_USERS: opts.telegramUserId } : {}),
+      ...(opts.webhookRelaySecret ? {
+        TELEGRAM_WEBHOOK_SECRET: opts.webhookRelaySecret,
+        TELEGRAM_WEBHOOK_URL: `${reinsUrl}/api/webhooks/agent-bot/${opts.instanceId}`,
+        TELEGRAM_WEBHOOK_PORT: '8787',
+      } : {}),
+      ...(opts.soulMd ? { HERMES_PERSONA: opts.soulMd } : {}),
+      ...(opts.modelProvider ? { MODEL_PROVIDER: opts.modelProvider } : {}),
+      ...(opts.modelName ? { MODEL_NAME: opts.modelName } : {}),
+      ...(opts.modelProvider === 'minimax' && opts.openaiApiKey ? { MINIMAX_API_KEY: opts.openaiApiKey } : {}),
+      ...(opts.modelProvider === 'openai' && opts.openaiApiKey ? { OPENAI_API_KEY: opts.openaiApiKey } : {}),
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
+      MCP_CONFIG: JSON.stringify(opts.mcpConfigs),
+      HERMES_GATEWAY_TOKEN: opts.gatewayToken,
+      REINS_API_URL: reinsUrl,
+      INSTANCE_USER_ID: opts.instanceId,
+      USAGE_CALLBACK_URL: `${reinsUrl}/api/webhooks/usage`,
+    },
+    services: [
+      {
+        ports: [{ port: 443, handlers: ['tls', 'http'] }],
+        protocol: 'tcp',
+        internal_port: 8000,
+        autostart: true,
+        autostop: 'off',
+        checks: [
+          {
+            type: 'http',
+            method: 'get',
+            path: '/',
+            port: 8000,
+            interval: '15s',
+            timeout: '5s',
+            grace_period: '45s',
+          },
+        ],
+      },
       ...(opts.webhookRelaySecret ? [{
         ports: [{ port: 8443, handlers: ['tls', 'http'] }],
         protocol: 'tcp',

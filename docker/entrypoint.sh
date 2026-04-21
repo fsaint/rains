@@ -82,12 +82,16 @@ for (const g of telegramGroups) {
     }
   }
 }
+// Enable thread-prompt plugin when API polling is available OR there are baked-in entries
+const useThreadPromptPlugin = topicEntries.length > 0 || !!(process.env.REINS_API_URL && process.env.INSTANCE_USER_ID && process.env.OPENCLAW_GATEWAY_TOKEN);
 const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN || 'reins-' + Math.random().toString(36).slice(2);
 const webhookUrl = process.env.OPENCLAW_WEBHOOK_URL || '';
 const webhookSecret = process.env.OPENCLAW_WEBHOOK_SECRET || '';
 const modelProvider = process.env.MODEL_PROVIDER || 'anthropic';
-const defaultModelName = modelProvider === 'openai-codex' ? 'gpt-5.4' : 'claude-sonnet-4-5';
+const defaultModelName = modelProvider === 'openai-codex' ? 'gpt-5.4' : modelProvider === 'minimax' ? 'MiniMax-M2.7' : 'claude-sonnet-4-5';
 const modelName = process.env.MODEL_NAME || defaultModelName;
+// MiniMax uses OpenAI-compatible API — map to 'openai' provider in openclaw config
+const openclawProvider = modelProvider === 'minimax' ? 'openai' : modelProvider;
 const thinkingDefault = process.env.THINKING_DEFAULT || 'medium';
 
 // Build MCP servers object from array
@@ -126,7 +130,7 @@ const config = {
     defaults: {
       workspace: '${WORKSPACE_DIR}',
       model: {
-        primary: modelProvider + '/' + modelName,
+        primary: openclawProvider + '/' + modelName,
       },
       thinkingDefault: thinkingDefault,
     },
@@ -167,7 +171,8 @@ const config = {
     noSandbox: true,
   },
   // Configure audio transcription (Whisper) when OPENAI_API_KEY is available
-  ...(process.env.OPENAI_API_KEY ? {
+  // Skip when using a custom base URL (e.g. MiniMax) — those endpoints don't support Whisper
+  ...(process.env.OPENAI_API_KEY && !process.env.OPENAI_BASE_URL ? {
     tools: {
       media: {
         audio: {
@@ -184,15 +189,15 @@ const config = {
     enabled: true,
     allow: [
       'openclaw-mcp-bridge',
-      ...(topicEntries.length > 0 ? ['reins-thread-prompt'] : []),
+      ...(useThreadPromptPlugin ? ['reins-thread-prompt'] : []),
     ],
     load: {
       paths: [
         '${HOME}/.openclaw/plugins/openclaw-mcp-bridge/node_modules/openclaw-mcp-bridge',
-        ...(topicEntries.length > 0 ? ['${HOME}/.openclaw/plugins/reins-thread-prompt/node_modules/reins-thread-prompt'] : []),
+        ...(useThreadPromptPlugin ? ['${HOME}/.openclaw/plugins/reins-thread-prompt/node_modules/reins-thread-prompt'] : []),
       ],
     },
-    ...(Object.keys(mcpServers).length > 0 || topicEntries.length > 0 ? {
+    ...(Object.keys(mcpServers).length > 0 || useThreadPromptPlugin ? {
       entries: {
         ...(Object.keys(mcpServers).length > 0 ? {
           'openclaw-mcp-bridge': {
@@ -202,7 +207,7 @@ const config = {
             },
           },
         } : {}),
-        ...(topicEntries.length > 0 ? {
+        ...(useThreadPromptPlugin ? {
           'reins-thread-prompt': {
             enabled: true,
             config: {
@@ -279,9 +284,41 @@ if [ ! -d "${PLUGIN_DIR}/node_modules/reins-thread-prompt" ]; then
   mkdir -p "${PLUGIN_DIR}"
   cd "${PLUGIN_DIR}"
   npm init -y > /dev/null 2>&1
-  npm install --no-fund --no-audit --ignore-scripts /app/reins-thread-prompt-0.1.0.tgz 2>&1 | tail -3
+  npm install --no-fund --no-audit --ignore-scripts /app/reins-thread-prompt-0.3.1.tgz 2>&1 | tail -3
   cd -
   echo "reins-thread-prompt installed"
+fi
+
+# Register custom model in models.json when using an OpenAI-compatible base URL
+# (e.g. MiniMax). OpenClaw validates model IDs against its built-in catalog; models
+# not in the catalog fail with "Unknown model". Writing to models.json bypasses this.
+if [ -n "$OPENAI_BASE_URL" ] && [ -n "$OPENAI_API_KEY" ] && [ -n "$MODEL_NAME" ]; then
+  node -e "
+    const fs = require('fs');
+    const modelsPath = (process.env.HOME || '/home/node') + '/.openclaw/agents/main/agent/models.json';
+    const modelName = process.env.MODEL_NAME;
+    const baseUrl = process.env.OPENAI_BASE_URL;
+    const apiKey = process.env.OPENAI_API_KEY;
+    let data = { providers: {} };
+    try { data = JSON.parse(fs.readFileSync(modelsPath, 'utf8')); } catch (e) {}
+    const provider = data.providers['openai'] || { models: [] };
+    if (!provider.models.find(m => m.id === modelName)) {
+      provider.models.push({
+        id: modelName, name: modelName,
+        api: 'openai-completions',
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1000000, maxTokens: 40000,
+        compat: {}
+      });
+    }
+    provider.baseUrl = baseUrl;
+    provider.apiKey = apiKey;
+    data.providers['openai'] = provider;
+    fs.mkdirSync(require('path').dirname(modelsPath), { recursive: true });
+    fs.writeFileSync(modelsPath, JSON.stringify(data, null, 2));
+    console.log('models.json: registered openai/' + modelName + ' at ' + baseUrl);
+  " 2>&1 || true
 fi
 
 # Start Xvfb virtual framebuffer for headless browser rendering
@@ -356,6 +393,36 @@ if [ -n "$OPENAI_CODEX_TOKENS" ]; then
       process.stderr.write('Failed to re-patch telegram groups: ' + e.message + '\n');
     }
   "
+
+  # Re-patch models.json if the doctor stripped the openai-codex model entries.
+  # Idempotent: only writes if the model is actually missing.
+  if [ -n "$OPENAI_CODEX_TOKENS" ] && [ -n "$MODEL_NAME" ]; then
+    node -e "
+      const fs = require('fs');
+      const modelsPath = (process.env.HOME || '/home/node') + '/.openclaw/agents/main/agent/models.json';
+      const modelName = process.env.MODEL_NAME;
+      let data = { providers: {} };
+      try { data = JSON.parse(fs.readFileSync(modelsPath, 'utf8')); } catch (e) {}
+      const provider = data.providers['openai-codex'] || {
+        baseUrl: 'https://chatgpt.com/backend-api/v1',
+        api: 'openai-codex-responses',
+        models: [],
+      };
+      if (provider.models.find(m => m.id === modelName)) {
+        console.log('openai-codex/' + modelName + ' already in models.json');
+        process.exit(0);
+      }
+      provider.models.push({
+        id: modelName, name: modelName, api: 'openai-codex-responses', reasoning: true,
+        input: ['text', 'image'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000, maxTokens: 100000,
+        compat: { supportsReasoningEffort: true, supportsUsageInStreaming: true },
+      });
+      data.providers['openai-codex'] = provider;
+      fs.writeFileSync(modelsPath, JSON.stringify(data, null, 2));
+      console.log('models.json re-patched for openai-codex/' + modelName);
+    " 2>&1 || true
+  fi
 
   # If the re-patch triggered a config change and the gateway exited,
   # wait a moment then restart it as the main process (config is now correct).

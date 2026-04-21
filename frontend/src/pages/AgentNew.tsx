@@ -131,6 +131,7 @@ export default function AgentNew() {
     openaiApiKey: '',
     modelCredentials: '',
     mcpServers: '',
+    runtime: 'openclaw',
   });
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState('');
@@ -379,6 +380,35 @@ export default function AgentNew() {
       {agentType === 'hosted' && step === 1 && (
         <section className="bg-white rounded-xl border border-gray-100 p-6 space-y-4">
           <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Model Provider</h2>
+          <div>
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Runtime</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+              <button
+                type="button"
+                onClick={() => update({ runtime: 'openclaw' })}
+                className={`p-4 rounded-xl border-2 text-left transition-all ${
+                  form.runtime !== 'hermes'
+                    ? 'border-trust-blue bg-trust-blue/5'
+                    : 'border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                <p className="font-medium text-reins-navy">OpenClaw</p>
+                <p className="text-xs text-gray-400 mt-1">Full-featured runtime with browser, plugins, and code execution.</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => update({ runtime: 'hermes', modelProvider: form.modelProvider === 'openai-codex' ? 'anthropic' : form.modelProvider })}
+                className={`p-4 rounded-xl border-2 text-left transition-all ${
+                  form.runtime === 'hermes'
+                    ? 'border-trust-blue bg-trust-blue/5'
+                    : 'border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                <p className="font-medium text-reins-navy">Hermes</p>
+                <p className="text-xs text-gray-400 mt-1">Lightweight Python agent with memory, skills, and 15+ messaging platforms.</p>
+              </button>
+            </div>
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <button
               type="button"
@@ -392,6 +422,7 @@ export default function AgentNew() {
               <p className="font-medium text-reins-navy">Anthropic Claude</p>
               <p className="text-xs text-gray-400 mt-1">Uses your Anthropic API key</p>
             </button>
+            {form.runtime !== 'hermes' && (
             <button
               type="button"
               onClick={() => update({ modelProvider: 'openai-codex', modelName: 'gpt-5.4' })}
@@ -403,6 +434,19 @@ export default function AgentNew() {
             >
               <p className="font-medium text-reins-navy">OpenAI (ChatGPT)</p>
               <p className="text-xs text-gray-400 mt-1">Uses your ChatGPT subscription</p>
+            </button>
+            )}
+            <button
+              type="button"
+              onClick={() => update({ modelProvider: 'minimax', modelName: 'MiniMax-M2.7', openaiApiKey: '' })}
+              className={`p-4 rounded-xl border-2 text-left transition-all ${
+                form.modelProvider === 'minimax'
+                  ? 'border-trust-blue bg-trust-blue/5'
+                  : 'border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              <p className="font-medium text-reins-navy">MiniMax</p>
+              <p className="text-xs text-gray-400 mt-1">Affordable API-key based LLM</p>
             </button>
           </div>
 
@@ -425,7 +469,7 @@ export default function AgentNew() {
                   <option value="gpt-5-codex-mini">GPT-5 Codex Mini</option>
                 </select>
               </div>
-              <CodexDeviceFlow onComplete={(tokens) => update({ modelCredentials: tokens })} />
+              {form.runtime !== 'hermes' && <CodexDeviceFlow onComplete={(tokens) => update({ modelCredentials: tokens })} />}
             </div>
           )}
 
@@ -445,9 +489,44 @@ export default function AgentNew() {
                   <option value="claude-haiku-4-5">Claude Haiku 4.5</option>
                 </select>
               </div>
-              <ClaudeSetupTokenFlow
-                onComplete={(token) => update({ modelCredentials: token })}
-              />
+              {form.runtime !== 'hermes' && (
+                <ClaudeSetupTokenFlow
+                  onComplete={(token) => update({ modelCredentials: token })}
+                />
+              )}
+            </div>
+          )}
+
+          {form.modelProvider === 'minimax' && (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
+                  Model
+                </label>
+                <select
+                  value={form.modelName || 'MiniMax-M2.7'}
+                  onChange={(e) => update({ modelName: e.target.value })}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none bg-white"
+                >
+                  <option value="MiniMax-M2.7">MiniMax M2.7 (default)</option>
+                  <option value="MiniMax-M2.7-highspeed">MiniMax M2.7 Highspeed</option>
+                  <option value="MiniMax-M2.5">MiniMax M2.5</option>
+                  <option value="MiniMax-M2.5-highspeed">MiniMax M2.5 Highspeed</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
+                  MiniMax API Key
+                </label>
+                <input
+                  type="password"
+                  value={form.openaiApiKey || ''}
+                  onChange={(e) => update({ openaiApiKey: e.target.value })}
+                  placeholder="Enter your MiniMax API key"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
+                />
+                <p className="text-xs text-gray-400 mt-1">Get your API key at <a href="https://platform.minimax.io" target="_blank" rel="noreferrer" className="text-trust-blue hover:underline">platform.minimax.io</a></p>
+              </div>
             </div>
           )}
         </section>

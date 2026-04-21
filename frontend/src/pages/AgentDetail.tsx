@@ -16,10 +16,227 @@ import {
   ScrollText,
   MessageSquare,
   RotateCcw,
+  Users,
+  ChevronDown,
+  ChevronRight,
+  Hash,
 } from 'lucide-react';
-import { agents, type AgentDetail as AgentDetailType } from '../api/client';
+import { agents, type AgentDetail as AgentDetailType, type TelegramGroup } from '../api/client';
 import LogViewer from '../components/LogViewer';
 import ChatModal from '../components/ChatModal';
+
+// ─── Telegram Groups Section ──────────────────────────────────────────────────
+
+function TelegramGroupsSection({
+  agentId,
+  groups,
+  onSaved,
+}: {
+  agentId: string;
+  groups: TelegramGroup[];
+  onSaved: () => void;
+}) {
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
+  const [editingTopic, setEditingTopic] = useState<{ chatId: string; threadId: number; prompt: string } | null>(null);
+  const [newThreadId, setNewThreadId] = useState('');
+  const [newPrompt, setNewPrompt] = useState('');
+
+  const updateSettings = useMutation({
+    mutationFn: (updated: TelegramGroup[]) =>
+      agents.updateSettings(agentId, { telegramGroups: updated }),
+    onSuccess: () => onSaved(),
+  });
+
+  const saveTopicPrompt = (chatId: string, threadId: number, prompt: string) => {
+    const updated = groups.map((g) => {
+      if (g.chatId !== chatId) return g;
+      const existing = (g.topicPrompts ?? []).filter((tp) => tp.threadId !== threadId);
+      const newPrompts = prompt.trim() ? [...existing, { threadId, prompt }] : existing;
+      return { ...g, topicPrompts: newPrompts };
+    });
+    updateSettings.mutate(updated);
+    setEditingTopic(null);
+  };
+
+  const removeTopicPrompt = (chatId: string, threadId: number) => {
+    saveTopicPrompt(chatId, threadId, '');
+  };
+
+  const toggleRequireMention = (chatId: string, current: boolean) => {
+    const updated = groups.map((g) =>
+      g.chatId === chatId ? { ...g, requireMention: !current } : g
+    );
+    updateSettings.mutate(updated);
+  };
+
+  if (groups.length === 0) {
+    return (
+      <div className="bg-white rounded-xl border border-gray-100 p-5">
+        <div className="flex items-center gap-2 mb-1">
+          <Users className="w-4 h-4 text-gray-400" />
+          <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Telegram Groups</h2>
+        </div>
+        <p className="text-sm text-gray-400 mt-2">
+          No groups configured yet. Add the bot to a Telegram group to configure it.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-100 p-5 space-y-4">
+      <div className="flex items-center gap-2">
+        <Users className="w-4 h-4 text-gray-400" />
+        <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">
+          Telegram Groups ({groups.length})
+        </h2>
+      </div>
+
+      <div className="space-y-2">
+        {groups.map((group) => {
+          const isExpanded = expandedGroup === group.chatId;
+          const topics = group.topicPrompts ?? [];
+
+          return (
+            <div key={group.chatId} className="border border-gray-100 rounded-lg overflow-hidden">
+              {/* Group header */}
+              <div className="flex items-center gap-3 px-4 py-3 bg-gray-50">
+                <button
+                  onClick={() => setExpandedGroup(isExpanded ? null : group.chatId)}
+                  className="flex items-center gap-2 flex-1 min-w-0 text-left"
+                >
+                  {isExpanded ? (
+                    <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" />
+                  ) : (
+                    <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" />
+                  )}
+                  <div className="min-w-0">
+                    <span className="text-sm font-medium text-reins-navy">
+                      {group.name ?? group.chatId}
+                    </span>
+                    <span className="ml-2 text-xs text-gray-400 font-mono">{group.chatId}</span>
+                  </div>
+                </button>
+                <button
+                  onClick={() => toggleRequireMention(group.chatId, group.requireMention ?? true)}
+                  disabled={updateSettings.isPending}
+                  className={`text-xs px-2.5 py-1 rounded-full font-medium transition-colors ${
+                    group.requireMention === false
+                      ? 'bg-emerald-100 text-emerald-700'
+                      : 'bg-gray-100 text-gray-500'
+                  }`}
+                  title="Toggle: respond to all messages vs @mention only"
+                >
+                  {group.requireMention === false ? '💬 All msgs' : '@mention only'}
+                </button>
+                {topics.length > 0 && (
+                  <span className="text-xs text-gray-400">{topics.length} topic{topics.length > 1 ? 's' : ''}</span>
+                )}
+              </div>
+
+              {/* Topics */}
+              {isExpanded && (
+                <div className="p-4 space-y-3">
+                  {topics.length === 0 && (
+                    <p className="text-xs text-gray-400">No topic-specific instructions yet.</p>
+                  )}
+                  {topics.map((tp) => (
+                    <div key={tp.threadId} className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
+                      <Hash className="w-3.5 h-3.5 text-gray-400 mt-0.5 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <span className="text-xs font-mono text-gray-500">Thread {tp.threadId}</span>
+                        {editingTopic?.chatId === group.chatId && editingTopic.threadId === tp.threadId ? (
+                          <div className="mt-1 space-y-2">
+                            <textarea
+                              value={editingTopic.prompt}
+                              onChange={(e) => setEditingTopic({ ...editingTopic, prompt: e.target.value })}
+                              className="w-full text-xs border border-gray-200 rounded px-2 py-1.5 focus:ring-1 focus:ring-trust-blue/30 focus:border-trust-blue outline-none resize-none"
+                              rows={3}
+                            />
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => saveTopicPrompt(group.chatId, tp.threadId, editingTopic.prompt)}
+                                disabled={updateSettings.isPending}
+                                className="text-xs px-2.5 py-1 bg-trust-blue text-white rounded font-medium disabled:opacity-50"
+                              >
+                                Save
+                              </button>
+                              <button
+                                onClick={() => setEditingTopic(null)}
+                                className="text-xs px-2.5 py-1 text-gray-500 hover:bg-gray-100 rounded"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="mt-1 flex items-start gap-2">
+                            <p className="text-xs text-gray-600 flex-1 whitespace-pre-wrap line-clamp-2">{tp.prompt}</p>
+                            <div className="flex gap-1 shrink-0">
+                              <button
+                                onClick={() => setEditingTopic({ chatId: group.chatId, threadId: tp.threadId, prompt: tp.prompt })}
+                                className="text-xs text-trust-blue hover:underline"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                onClick={() => removeTopicPrompt(group.chatId, tp.threadId)}
+                                className="text-xs text-red-400 hover:underline"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Add new topic prompt */}
+                  <div className="pt-2 border-t border-gray-100">
+                    <p className="text-xs font-medium text-gray-500 mb-2">Add topic instruction</p>
+                    <div className="flex gap-2 items-start">
+                      <input
+                        type="number"
+                        placeholder="Thread ID"
+                        value={newThreadId}
+                        onChange={(e) => setNewThreadId(e.target.value)}
+                        className="w-24 text-xs border border-gray-200 rounded px-2 py-1.5 focus:ring-1 focus:ring-trust-blue/30 focus:border-trust-blue outline-none"
+                      />
+                      <textarea
+                        placeholder="System prompt for this topic..."
+                        value={newPrompt}
+                        onChange={(e) => setNewPrompt(e.target.value)}
+                        className="flex-1 text-xs border border-gray-200 rounded px-2 py-1.5 focus:ring-1 focus:ring-trust-blue/30 focus:border-trust-blue outline-none resize-none"
+                        rows={2}
+                      />
+                      <button
+                        onClick={() => {
+                          const tid = parseInt(newThreadId, 10);
+                          if (!isNaN(tid) && newPrompt.trim()) {
+                            saveTopicPrompt(group.chatId, tid, newPrompt.trim());
+                            setNewThreadId('');
+                            setNewPrompt('');
+                          }
+                        }}
+                        disabled={!newThreadId || !newPrompt.trim() || updateSettings.isPending}
+                        className="text-xs px-3 py-1.5 bg-trust-blue text-white rounded font-medium disabled:opacity-40"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Main component ───────────────────────────────────────────────────────────
 
 const STATUS_COLORS: Record<string, { bg: string; text: string; dot: string }> = {
   running: { bg: 'bg-emerald-50', text: 'text-emerald-700', dot: 'bg-emerald-500' },
@@ -360,6 +577,15 @@ export default function AgentDetail() {
               ))}
             </div>
           </div>
+        )}
+
+        {/* Telegram Groups */}
+        {dep && (
+          <TelegramGroupsSection
+            agentId={id!}
+            groups={agent.deployment?.telegramGroups ?? []}
+            onSaved={() => queryClient.invalidateQueries({ queryKey: ['agent-detail', id] })}
+          />
         )}
       </div>
     </div>

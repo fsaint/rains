@@ -64,6 +64,7 @@ export interface DeployConfig {
   modelName?: string;
   region?: string;
   modelCredentials?: string;
+  runtime?: 'openclaw' | 'hermes';
 }
 
 export interface DeploymentInfo {
@@ -84,6 +85,7 @@ export interface DeploymentInfo {
   telegramGroups?: TelegramGroup[];
   createdAt?: string;
   updatedAt?: string;
+  runtime?: string;
 }
 
 // Create & Deploy types
@@ -92,13 +94,14 @@ export interface CreateAndDeployData {
   description?: string;
   telegramToken: string;
   telegramUserId?: string;
-  modelProvider?: 'anthropic' | 'openai-codex';
+  modelProvider?: 'anthropic' | 'openai-codex' | 'minimax';
   modelName?: string;
   soulMd?: string;
   region?: string;
   openaiApiKey?: string;
   modelCredentials?: string;
   mcpServers?: string;
+  runtime?: 'openclaw' | 'hermes';
 }
 
 export interface AgentDetail {
@@ -123,6 +126,7 @@ export interface AgentDetail {
     modelName: string | null;
     region: string | null;
     mcpConfigJson: string | null;
+    runtime?: string | null;
     createdAt: string;
   } | null;
 }
