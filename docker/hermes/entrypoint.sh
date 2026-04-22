@@ -19,7 +19,31 @@ mkdir -p ~/.hermes
 PROVIDER="${MODEL_PROVIDER:-anthropic}"
 MODEL_ID="${MODEL_NAME:-claude-sonnet-4-5}"
 
-cat > ~/.hermes/config.yaml <<YAML
+# OpenAI requires the 'custom' provider (Hermes has no plain 'openai' provider).
+# Reasoning must be disabled so standard GPT models work without org verification.
+if [ "$MODEL_PROVIDER" = "openai" ] && [ -n "$OPENAI_API_KEY" ]; then
+  PROVIDER="custom"
+  cat > ~/.hermes/config.yaml <<YAML
+model:
+  provider: "custom"
+  default: "${MODEL_ID}"
+  base_url: "https://api.openai.com/v1"
+  api_key: "${OPENAI_API_KEY}"
+
+terminal:
+  backend: "local"
+  timeout: 180
+
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+
+agent:
+  max_turns: 60
+  reasoning_effort: "none"
+YAML
+else
+  cat > ~/.hermes/config.yaml <<YAML
 model:
   provider: "${PROVIDER}"
   default: "${MODEL_ID}"
@@ -35,6 +59,7 @@ memory:
 agent:
   max_turns: 60
 YAML
+fi
 
 # ── MCP servers ─────────────────────────────────────────────────────────────────
 if [ -n "$MCP_CONFIG" ]; then
