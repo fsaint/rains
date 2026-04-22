@@ -90,8 +90,12 @@ const webhookSecret = process.env.OPENCLAW_WEBHOOK_SECRET || '';
 const modelProvider = process.env.MODEL_PROVIDER || 'anthropic';
 const defaultModelName = modelProvider === 'openai-codex' ? 'gpt-5.4' : modelProvider === 'minimax' ? 'MiniMax-M2.7' : 'claude-sonnet-4-5';
 const modelName = process.env.MODEL_NAME || defaultModelName;
-// MiniMax uses OpenAI-compatible API — map to 'openai' provider in openclaw config
+// For custom OpenAI-compatible base URLs (e.g. MiniMax), use bare model name — no provider
+// prefix — so OpenClaw resolves it via OPENAI_BASE_URL + OPENAI_API_KEY env vars directly
+// rather than requiring models.json registration which gets overwritten by the doctor phase.
 const openclawProvider = modelProvider === 'minimax' ? 'openai' : modelProvider;
+const isCustomBaseUrl = !!(process.env.OPENAI_BASE_URL);
+const primaryModel = isCustomBaseUrl ? modelName : (openclawProvider + '/' + modelName);
 const thinkingDefault = process.env.THINKING_DEFAULT || 'medium';
 
 // Build MCP servers object from array
@@ -130,7 +134,7 @@ const config = {
     defaults: {
       workspace: '${WORKSPACE_DIR}',
       model: {
-        primary: openclawProvider + '/' + modelName,
+        primary: primaryModel,
       },
       thinkingDefault: thinkingDefault,
     },
@@ -222,7 +226,7 @@ const config = {
 
 fs.writeFileSync('${CONFIG_DIR}/openclaw.json', JSON.stringify(config, null, 2));
 console.log('Generated openclaw.json');
-console.log('Model:', modelProvider + '/' + modelName);
+console.log('Model:', primaryModel);
 console.log('Telegram:', telegramToken ? 'configured' : 'not set');
 console.log('Telegram groups:', telegramGroups.length);
 console.log('Topic prompt overrides:', topicEntries.length);
