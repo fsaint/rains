@@ -238,7 +238,7 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
     const existing = await client.execute({
       sql: `SELECT id, email_last_sent_at FROM approvals
             WHERE status = 'pending' AND tool = 'reauth' AND agent_id = ?
-              AND json_extract(arguments_json, '$.provider') = ?
+              AND arguments_json::jsonb->>'provider' = ?
             LIMIT 1`,
       args: [agentId, provider],
     });

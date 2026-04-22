@@ -127,7 +127,7 @@ async function handleBotAddedToGroup(
   const pending = await client.execute({
     sql: `SELECT id FROM approvals
           WHERE status = 'pending' AND tool = 'telegram_group' AND agent_id = ?
-            AND json_extract(arguments_json, '$.chatId') = ?
+            AND arguments_json::jsonb->>'chatId' = ?
           LIMIT 1`,
     args: [agentId, chatId],
   });
@@ -196,7 +196,7 @@ async function handleBotRemovedFromGroup(
   await client.execute({
     sql: `UPDATE approvals SET status = 'expired', resolved_at = ?, resolved_by = ?
           WHERE status = 'pending' AND tool = 'telegram_group' AND agent_id = ?
-            AND json_extract(arguments_json, '$.chatId') = ?`,
+            AND arguments_json::jsonb->>'chatId' = ?`,
     args: [new Date().toISOString(), 'system:bot_removed', agentId, chatId],
   });
 
