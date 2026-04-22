@@ -210,6 +210,11 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
       clearTimeout(waiter.timeout);
       waiter.resolve(decision);
       this.pendingWaiters.delete(id);
+    } else {
+      // No in-memory waiter — the agent's HTTP connection timed out before the
+      // user resolved the approval. The approval is stored in the DB but the
+      // tool call will not execute (the agent already received a timeout error).
+      console.warn(`[approvals] notifyWaiter: no waiter for ${id} — agent connection likely timed out`);
     }
   }
 
@@ -233,7 +238,7 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
     const existing = await client.execute({
       sql: `SELECT id, email_last_sent_at FROM approvals
             WHERE status = 'pending' AND tool = 'reauth' AND agent_id = ?
-              AND arguments_json::jsonb->>'provider' = ?
+              AND json_extract(arguments_json, '$.provider') = ?
             LIMIT 1`,
       args: [agentId, provider],
     });

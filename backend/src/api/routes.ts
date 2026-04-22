@@ -2474,10 +2474,37 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         });
       }
 
-      // Handle the MCP request
-      const response = await handleMCPRequest(agentId, body);
+      // For tools/call, use SSE (text/event-stream) so periodic keep-alive
+      // comments prevent Cloudflare's 100s proxy timeout from killing the
+      // connection while the user resolves an approval (up to 5 minutes).
+      // The MCP Streamable HTTP spec allows SSE responses to POST requests;
+      // the official MCP SDK client handles both content-types.
+      if (body.method === 'tools/call') {
+        reply.raw.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          'X-Accel-Buffering': 'no', // disable nginx/Cloudflare response buffering
+        });
 
-      // JSON-RPC always returns 200 - errors are in the response body
+        // Send keep-alive SSE comments every 25s (well under Cloudflare's 100s limit)
+        const keepAlive = setInterval(() => {
+          reply.raw.write(': keep-alive\n\n');
+        }, 25000);
+
+        try {
+          const response = await handleMCPRequest(agentId, body);
+          // MCP Streamable HTTP SSE format: event name + data line
+          reply.raw.write(`event: message\ndata: ${JSON.stringify(response)}\n\n`);
+        } finally {
+          clearInterval(keepAlive);
+          reply.raw.end();
+        }
+        return;
+      }
+
+      // All other MCP methods (initialize, tools/list, ping, etc.) — plain JSON
+      const response = await handleMCPRequest(agentId, body);
       return response;
     }
   );
