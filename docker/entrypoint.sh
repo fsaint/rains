@@ -289,37 +289,9 @@ if [ ! -d "${PLUGIN_DIR}/node_modules/reins-thread-prompt" ]; then
   echo "reins-thread-prompt installed"
 fi
 
-# Register custom model in models.json when using an OpenAI-compatible base URL
-# (e.g. MiniMax). OpenClaw validates model IDs against its built-in catalog; models
-# not in the catalog fail with "Unknown model". Writing to models.json bypasses this.
-if [ -n "$OPENAI_BASE_URL" ] && [ -n "$OPENAI_API_KEY" ] && [ -n "$MODEL_NAME" ]; then
-  node -e "
-    const fs = require('fs');
-    const modelsPath = (process.env.HOME || '/home/node') + '/.openclaw/agents/main/agent/models.json';
-    const modelName = process.env.MODEL_NAME;
-    const baseUrl = process.env.OPENAI_BASE_URL;
-    const apiKey = process.env.OPENAI_API_KEY;
-    let data = { providers: {} };
-    try { data = JSON.parse(fs.readFileSync(modelsPath, 'utf8')); } catch (e) {}
-    const provider = data.providers['openai'] || { models: [] };
-    if (!provider.models.find(m => m.id === modelName)) {
-      provider.models.push({
-        id: modelName, name: modelName,
-        api: 'openai-completions',
-        input: ['text'],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 1000000, maxTokens: 40000,
-        compat: {}
-      });
-    }
-    provider.baseUrl = baseUrl;
-    provider.apiKey = apiKey;
-    data.providers['openai'] = provider;
-    fs.mkdirSync(require('path').dirname(modelsPath), { recursive: true });
-    fs.writeFileSync(modelsPath, JSON.stringify(data, null, 2));
-    console.log('models.json: registered openai/' + modelName + ' at ' + baseUrl);
-  " 2>&1 || true
-fi
+# Note: custom model registration for OpenAI-compatible base URLs (e.g. MiniMax) is done
+# AFTER the gateway initializes, because the gateway's doctor phase overwrites models.json
+# on first boot. See the background poller in the startup section below.
 
 # Start Xvfb virtual framebuffer for headless browser rendering
 Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp &
@@ -434,5 +406,43 @@ if [ -n "$OPENAI_CODEX_TOKENS" ]; then
     exec node /app/openclaw.mjs gateway --bind lan --port 18789
   fi
 else
+  # For OpenAI-compatible base URLs (e.g. MiniMax), register the custom model in
+  # models.json AFTER the gateway is healthy — the doctor phase overwrites it on first boot.
+  if [ -n "$OPENAI_BASE_URL" ] && [ -n "$OPENAI_API_KEY" ] && [ -n "$MODEL_NAME" ]; then
+    (
+      for i in $(seq 1 30); do
+        sleep 2
+        if curl -sf http://localhost:18789/healthz > /dev/null 2>&1; then
+          node -e "
+            const fs = require('fs');
+            const modelsPath = (process.env.HOME || '/home/node') + '/.openclaw/agents/main/agent/models.json';
+            const modelName = process.env.MODEL_NAME;
+            const baseUrl = process.env.OPENAI_BASE_URL;
+            const apiKey = process.env.OPENAI_API_KEY;
+            let data = { providers: {} };
+            try { data = JSON.parse(fs.readFileSync(modelsPath, 'utf8')); } catch (e) {}
+            const provider = data.providers['openai'] || { models: [] };
+            if (!provider.models.find(m => m.id === modelName)) {
+              provider.models.push({
+                id: modelName, name: modelName,
+                api: 'openai-completions',
+                input: ['text'],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1000000, maxTokens: 40000,
+                compat: {}
+              });
+            }
+            provider.baseUrl = baseUrl;
+            provider.apiKey = apiKey;
+            data.providers['openai'] = provider;
+            fs.mkdirSync(require('path').dirname(modelsPath), { recursive: true });
+            fs.writeFileSync(modelsPath, JSON.stringify(data, null, 2));
+            console.log('[entrypoint] models.json: registered openai/' + modelName + ' at ' + baseUrl);
+          " 2>&1 || true
+          break
+        fi
+      done
+    ) &
+  fi
   exec node /app/openclaw.mjs gateway --bind lan --port 18789
 fi

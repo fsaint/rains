@@ -395,6 +395,14 @@ REINS_LOG_LEVEL=info
 VITE_API_URL=http://localhost:3000
 ```
 
+## Project Skills
+
+| Skill | Trigger | Description |
+|-------|---------|-------------|
+| `/integration-test` | "run integration tests", "test all combinations", "verify bots work" | Full 6-combination runtime×provider e2e test via Playwright UI + Telethon |
+| `/redeploy-agent` | "redeploy", "update the container", "upgrade the image" | Safely roll a Fly agent to latest image with backup/restore |
+| `/new-mcp-server` | "add a server", "create an MCP server", "scaffold a server" | Scaffold a new native MCP server in the servers package |
+
 ## Getting Help
 
 - Architecture questions → Architecture agent

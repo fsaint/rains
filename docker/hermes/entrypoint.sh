@@ -107,6 +107,21 @@ if [ -n "$USAGE_CALLBACK_URL" ] && [ -n "$INSTANCE_USER_ID" ]; then
   ) &
 fi
 
+# ── Health check server (background) ───────────────────────────────────────────
+# Fly.io machines require an HTTP health check endpoint. hermes gateway run does
+# not expose HTTP, so we start a minimal server on port 8000 that always returns 200.
+python3 -c "
+import http.server, socketserver
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b'ok')
+    def log_message(self, *args): pass
+with socketserver.TCPServer(('0.0.0.0', 8000), H) as s:
+    s.serve_forever()
+" &
+
 echo "[hermes] config.yaml:"
 cat ~/.hermes/config.yaml
 echo ""
