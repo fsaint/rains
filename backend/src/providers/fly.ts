@@ -254,9 +254,9 @@ async function buildMachineConfig(opts: CreateMachineOpts) {
             port: 18789,
             interval: '15s',
             timeout: '5s',
-            // Allow 30s for 2-phase openai-codex init (phase1: 8s sleep + kill,
-            // phase2: auth injection, phase3: gateway restart)
-            grace_period: '30s',
+            // Allow 120s: reins-thread-prompt npm install on cold boot (~60-70s)
+            // + gateway startup (~7s) + buffer. openai-codex 2-phase init fits within this too.
+            grace_period: '120s',
           },
         ],
       },
