@@ -377,39 +377,40 @@ export default function AgentNew() {
         </section>
       )}
 
-      {/* Step 2: Model (hosted only) */}
+      {/* Step 2: Engine + Model (hosted only) */}
       {agentType === 'hosted' && step === 1 && (
+        <>
+        <section className="bg-white rounded-xl border border-gray-100 p-6 space-y-4">
+          <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Agent Engine</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => update({ runtime: 'openclaw' })}
+              className={`p-4 rounded-xl border-2 text-left transition-all ${
+                form.runtime !== 'hermes'
+                  ? 'border-trust-blue bg-trust-blue/5'
+                  : 'border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              <p className="font-medium text-reins-navy">OpenClaw</p>
+              <p className="text-xs text-gray-400 mt-1">Full-featured runtime with browser, plugins, and code execution.</p>
+            </button>
+            <button
+              type="button"
+              onClick={() => update({ runtime: 'hermes', modelProvider: form.modelProvider === 'openai-codex' ? 'anthropic' : form.modelProvider })}
+              className={`p-4 rounded-xl border-2 text-left transition-all ${
+                form.runtime === 'hermes'
+                  ? 'border-trust-blue bg-trust-blue/5'
+                  : 'border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              <p className="font-medium text-reins-navy">Hermes</p>
+              <p className="text-xs text-gray-400 mt-1">Lightweight Python agent with memory, skills, and 15+ messaging platforms.</p>
+            </button>
+          </div>
+        </section>
         <section className="bg-white rounded-xl border border-gray-100 p-6 space-y-4">
           <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Model Provider</h2>
-          <div>
-            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Runtime</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-              <button
-                type="button"
-                onClick={() => update({ runtime: 'openclaw' })}
-                className={`p-4 rounded-xl border-2 text-left transition-all ${
-                  form.runtime !== 'hermes'
-                    ? 'border-trust-blue bg-trust-blue/5'
-                    : 'border-gray-200 hover:border-gray-300'
-                }`}
-              >
-                <p className="font-medium text-reins-navy">OpenClaw</p>
-                <p className="text-xs text-gray-400 mt-1">Full-featured runtime with browser, plugins, and code execution.</p>
-              </button>
-              <button
-                type="button"
-                onClick={() => update({ runtime: 'hermes', modelProvider: form.modelProvider === 'openai-codex' ? 'anthropic' : form.modelProvider })}
-                className={`p-4 rounded-xl border-2 text-left transition-all ${
-                  form.runtime === 'hermes'
-                    ? 'border-trust-blue bg-trust-blue/5'
-                    : 'border-gray-200 hover:border-gray-300'
-                }`}
-              >
-                <p className="font-medium text-reins-navy">Hermes</p>
-                <p className="text-xs text-gray-400 mt-1">Lightweight Python agent with memory, skills, and 15+ messaging platforms.</p>
-              </button>
-            </div>
-          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <button
               type="button"
@@ -554,6 +555,7 @@ export default function AgentNew() {
             </div>
           )}
         </section>
+        </>
       )}
 
       {/* Step 3: Personality (hosted step 2, manual step 1) */}

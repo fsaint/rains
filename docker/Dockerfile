@@ -30,10 +30,6 @@ RUN mkdir -p /home/node/.openclaw/plugins/openclaw-mcp-bridge && \
     npm install /tmp/openclaw-mcp-bridge-0.3.5.tgz && \
     chown -R node:node /home/node/.openclaw
 
-# Bundle reins-thread-prompt plugin — installed at runtime by entrypoint.sh to avoid
-# peer-dep resolution during image build (which bloats the image by ~300 MB).
-COPY reins-thread-prompt-0.3.1.tgz /app/reins-thread-prompt-0.3.1.tgz
-
 # Fix missing plugin runtime module (packaging gap in main image)
 RUN mkdir -p /app/dist/plugins/runtime
 COPY plugin-runtime-shim.mjs /app/dist/plugins/runtime/index.js
