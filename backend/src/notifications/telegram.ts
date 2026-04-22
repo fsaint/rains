@@ -102,10 +102,16 @@ export class TelegramNotifier {
   // -------------------------------------------------------------------------
 
   async notifyApprovalRequest(approval: ApprovalRequest): Promise<void> {
-    if (!this.isConfigured()) return;
+    if (!this.isConfigured()) {
+      console.warn(`[telegram] notifyApprovalRequest: bot not configured (REINS_TELEGRAM_BOT_TOKEN missing)`);
+      return;
+    }
 
     const owner = await this.getOwner(approval.agentId);
-    if (!owner) return;
+    if (!owner) {
+      console.warn(`[telegram] notifyApprovalRequest: no owner found for agent ${approval.agentId} — user may not have linked their Telegram account`);
+      return;
+    }
 
     try {
       const magicLinkUrl = approval.tool === 'reauth'
@@ -560,10 +566,16 @@ export class TelegramNotifier {
       sql: `SELECT u.telegram_chat_id, u.id as user_id FROM users u JOIN agents a ON a.user_id = u.id WHERE a.id = ?`,
       args: [agentId],
     });
-    if (result.rows.length === 0) return null;
+    if (result.rows.length === 0) {
+      console.warn(`[telegram] getOwner: no user found for agent ${agentId}`);
+      return null;
+    }
     const row = result.rows[0];
     const chatId = row.telegram_chat_id as string | null;
-    if (!chatId) return null;
+    if (!chatId) {
+      console.warn(`[telegram] getOwner: user ${row.user_id} has no telegram_chat_id — they need to link their account via Settings → Connect Telegram`);
+      return null;
+    }
     return { chatId, userId: row.user_id as string };
   }
 

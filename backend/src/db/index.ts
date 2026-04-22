@@ -26,10 +26,16 @@ interface LibSQLResult {
 }
 
 function toResult(rows: postgres.Row[]): LibSQLResult {
+  // postgres.js attaches a `count` property (number of affected rows) to the
+  // result array for INSERT/UPDATE/DELETE statements. For SELECT the count
+  // equals rows.length, so using it is safe in all cases.
+  const rowsAffected = typeof (rows as any).count === 'number'
+    ? (rows as any).count
+    : rows.length;
   return {
     rows: rows as Record<string, unknown>[],
     columns: rows.length > 0 ? Object.keys(rows[0]) : [],
-    rowsAffected: rows.length,
+    rowsAffected,
     lastInsertRowid: rows.length > 0 && 'id' in rows[0] && typeof rows[0].id === 'number' ? BigInt(rows[0].id) : 0n,
   };
 }
@@ -464,6 +470,14 @@ export async function initializeDatabase() {
     DO $$ BEGIN
       ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS openclaw_webhook_url TEXT;
       ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS webhook_relay_secret TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
+
+  // Add runtime column for agent runtime selection (openclaw or hermes)
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS runtime TEXT DEFAULT 'openclaw';
     EXCEPTION WHEN duplicate_column THEN NULL;
     END $$
   `;

@@ -366,6 +366,12 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
                   </p>
                 </div>
               )}
+              {deployment.runtime && deployment.runtime !== 'openclaw' && (
+                <div className="flex items-center justify-between py-2 border-b border-gray-50">
+                  <span className="text-xs text-gray-400 uppercase tracking-wide">Runtime</span>
+                  <span className="text-xs font-medium bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full capitalize">{deployment.runtime}</span>
+                </div>
+              )}
               {deployment.createdAt && (
                 <div>
                   <span className="text-gray-400 text-xs uppercase tracking-wider">Deployed</span>
@@ -528,17 +534,20 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
                     </div>
                   </div>
 
-                  {/* OpenAI API Key */}
+                  {/* LLM / Whisper API Key */}
                   <div>
                     <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
-                      OpenAI API Key <span className="normal-case font-normal text-gray-400">(Whisper speech-to-text)</span>
+                      {deployment?.modelProvider === 'minimax'
+                        ? 'MiniMax API Key'
+                        : <>OpenAI API Key <span className="normal-case font-normal text-gray-400">(Whisper speech-to-text)</span></>
+                      }
                     </label>
                     <input
                       type="password"
                       value={settingsOpenaiKey}
                       onChange={(e) => setSettingsOpenaiKey(e.target.value)}
                       className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm bg-white focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
-                      placeholder={settingsOpenaiKey === '***' ? 'Key stored (enter new key to replace)' : 'sk-...'}
+                      placeholder={settingsOpenaiKey === '***' ? 'Key stored (enter new key to replace)' : (deployment?.modelProvider === 'minimax' ? 'Enter MiniMax API key' : 'sk-...')}
                     />
                     {settingsOpenaiKey === '***' && (
                       <p className="text-xs text-gray-400 mt-1">A key is stored. Clear to remove it.</p>
@@ -671,13 +680,14 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
                   value={config.modelProvider}
                   onChange={(e) => {
                     const provider = e.target.value;
-                    const defaultModel = provider === 'openai-codex' ? 'gpt-5.4' : 'claude-sonnet-4-5';
+                    const defaultModel = provider === 'openai-codex' ? 'gpt-5.4' : provider === 'minimax' ? 'MiniMax-M2.7' : 'claude-sonnet-4-5';
                     setConfig({ ...config, modelProvider: provider, modelName: defaultModel });
                   }}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none bg-white"
                 >
                   <option value="anthropic">Anthropic</option>
                   <option value="openai-codex">OpenAI (ChatGPT)</option>
+                  <option value="minimax">MiniMax</option>
                 </select>
               </div>
               <div>
@@ -697,6 +707,13 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
                       <option value="gpt-5.3-codex-spark">GPT-5.3 Codex Spark</option>
                       <option value="gpt-5-codex">GPT-5 Codex</option>
                       <option value="gpt-5-codex-mini">GPT-5 Codex Mini</option>
+                    </>
+                  ) : config.modelProvider === 'minimax' ? (
+                    <>
+                      <option value="MiniMax-M2.7">MiniMax M2.7 (default)</option>
+                      <option value="MiniMax-M2.7-highspeed">MiniMax M2.7 Highspeed</option>
+                      <option value="MiniMax-M2.5">MiniMax M2.5</option>
+                      <option value="MiniMax-M2.5-highspeed">MiniMax M2.5 Highspeed</option>
                     </>
                   ) : (
                     <>

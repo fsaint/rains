@@ -8,6 +8,7 @@ import { approvals, agents, credentials, oauth } from '../api/client';
 const PROVIDER_LABELS: Record<string, string> = {
   anthropic: 'Anthropic Claude',
   'openai-codex': 'OpenAI',
+  minimax: 'MiniMax',
   fly: 'Fly.io',
   docker: 'Docker',
   gmail: 'Gmail',
@@ -163,6 +164,43 @@ export function ReauthModal({ approval, onComplete, onDismiss }: Props) {
         <CodexDeviceFlow
           onComplete={handleLLMComplete}
         />
+      );
+    }
+
+    if (provider === 'minimax') {
+      return (
+        <div className="space-y-3">
+          <p className="text-sm text-gray-600">
+            Enter your MiniMax API key to reconnect your agent.
+          </p>
+          <input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder="Enter MiniMax API key"
+            className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue outline-none"
+          />
+          <button
+            onClick={async () => {
+              if (!apiKey.trim()) return;
+              setStatus('working');
+              try {
+                await agents.redeployAgent(approval.agentId, { openaiApiKey: apiKey.trim() });
+                await closeApproval();
+                setStatus('done');
+              } catch (err) {
+                setStatus('error');
+                setErrorMsg(err instanceof Error ? err.message : 'Redeploy failed');
+              }
+            }}
+            disabled={status === 'working' || !apiKey.trim()}
+            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-reins-navy text-white rounded-xl hover:bg-reins-navy/90 transition-colors text-sm font-medium disabled:opacity-50"
+          >
+            {status === 'working' ? <Loader className="w-4 h-4 animate-spin" /> : <KeyRound className="w-4 h-4" />}
+            {status === 'working' ? 'Reconnecting…' : 'Save & Redeploy'}
+          </button>
+          {status === 'error' && <p className="text-xs text-red-500">{errorMsg}</p>}
+        </div>
       );
     }
 

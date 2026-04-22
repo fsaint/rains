@@ -38,7 +38,9 @@ export function initializeNotificationHandlers(): void {
     }
 
     // Apply Telegram group config when a group-join approval is approved
+    console.info(`[notifications] resolved event: tool=${approval.tool} status=${approval.status} id=${approval.id}`);
     if (approval.tool === 'telegram_group' && approval.status === 'approved') {
+      console.info(`[notifications] calling applyGroupConfig for approval ${approval.id}`);
       try {
         const { applyGroupConfig } = await import('../services/agent-bot-relay.js');
         await applyGroupConfig(approval);

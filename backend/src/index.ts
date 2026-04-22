@@ -7,6 +7,7 @@ import { startTokenRefreshLoop, stopTokenRefreshLoop } from './credentials/vault
 import { startBackupLoop, stopBackupLoop } from './services/agent-backup.js';
 import { startTokenMonitor, stopTokenMonitor } from './services/token-monitor.js';
 import { telegramNotifier } from './notifications/telegram.js';
+import { initializeNotificationHandlers } from './notifications/handlers.js';
 
 const app = await buildApp();
 
@@ -56,6 +57,9 @@ app.log.info('Agent backup loop started (every 24 hours)');
 // Start Codex token expiry monitor
 startTokenMonitor();
 app.log.info('Token monitor started');
+
+// Wire approval queue events to notification services
+initializeNotificationHandlers();
 
 // Initialize Telegram bot (non-fatal if not configured or fails)
 if (telegramNotifier.isConfigured()) {
