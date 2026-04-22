@@ -20,10 +20,12 @@ import {
   Settings,
   ChevronDown,
   ChevronRight,
+  KeyRound,
 } from 'lucide-react';
 import { agents, type DeployConfig, type TelegramGroup, type TopicPrompt } from '../api/client';
 import LogViewer from './LogViewer';
 import ChatModal from './ChatModal';
+import { CodexDeviceFlow } from './CodexDeviceFlow';
 
 interface DeploymentPanelProps {
   agentId: string;
@@ -60,6 +62,9 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
   const [settingsOpenaiKey, setSettingsOpenaiKey] = useState<string>('');
   const [settingsResult, setSettingsResult] = useState<string | null>(null);
   const [expandedTopics, setExpandedTopics] = useState<Record<number, boolean>>({});
+  const [showReauth, setShowReauth] = useState(false);
+  const [reauthStatus, setReauthStatus] = useState<'idle' | 'working' | 'done' | 'error'>('idle');
+  const [reauthError, setReauthError] = useState('');
 
   const copyToClipboard = (text: string, key: string) => {
     navigator.clipboard.writeText(text);
@@ -118,6 +123,19 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
     mutationFn: () => agents.redeployAgent(agentId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['deployment', agentId] }),
   });
+
+  const handleReauthComplete = async (tokensJson: string) => {
+    setReauthStatus('working');
+    try {
+      await agents.redeployAgent(agentId, { modelCredentials: tokensJson });
+      setReauthStatus('done');
+      queryClient.invalidateQueries({ queryKey: ['deployment', agentId] });
+      setTimeout(() => setShowReauth(false), 2000);
+    } catch (err) {
+      setReauthStatus('error');
+      setReauthError(err instanceof Error ? err.message : 'Redeploy failed');
+    }
+  };
 
   const destroyMutation = useMutation({
     mutationFn: () => agents.destroyDeployment(agentId),
@@ -590,6 +608,16 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
                 {redeployMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                 Redeploy
               </button>
+              {deployment.modelProvider === 'openai-codex' && (
+                <button
+                  onClick={() => { setReauthStatus('idle'); setReauthError(''); setShowReauth(true); }}
+                  disabled={isLoading}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  <KeyRound className="w-4 h-4" />
+                  Re-auth OpenAI
+                </button>
+              )}
               <div className="flex-1" />
               <button
                 onClick={() => {
@@ -762,6 +790,53 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
             agentName={agentName}
             onClose={() => setShowChat(false)}
           />
+        )}
+        {showReauth && (
+          <div
+            className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+            onClick={(e) => e.target === e.currentTarget && setShowReauth(false)}
+          >
+            <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
+              <div className="flex items-center justify-between mb-5">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-trust-blue/10 flex items-center justify-center">
+                    <KeyRound className="w-4 h-4 text-trust-blue" />
+                  </div>
+                  <div>
+                    <h2 className="font-semibold text-gray-900 text-base">Re-authenticate OpenAI</h2>
+                    <p className="text-xs text-gray-500 mt-0.5">{agentName}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowReauth(false)}
+                  className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              {reauthStatus === 'done' ? (
+                <div className="flex items-center gap-3 p-4 bg-emerald-50 border border-emerald-100 rounded-xl">
+                  <Check className="w-5 h-5 text-emerald-600 shrink-0" />
+                  <div>
+                    <p className="font-medium text-emerald-800 text-sm">Re-authentication successful</p>
+                    <p className="text-xs text-emerald-600 mt-0.5">Agent is redeploying with new credentials.</p>
+                  </div>
+                </div>
+              ) : reauthStatus === 'working' ? (
+                <div className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-100 rounded-xl">
+                  <Loader2 className="w-5 h-5 text-blue-500 animate-spin shrink-0" />
+                  <p className="text-sm text-blue-700">Redeploying with new credentials…</p>
+                </div>
+              ) : (
+                <CodexDeviceFlow onComplete={handleReauthComplete} />
+              )}
+              {reauthStatus === 'error' && (
+                <div className="mt-3 p-3 bg-red-50 border border-red-100 rounded-lg">
+                  <p className="text-xs text-red-700">{reauthError}</p>
+                </div>
+              )}
+            </div>
+          </div>
         )}
       </div>
     </div>
