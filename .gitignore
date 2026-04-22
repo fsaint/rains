@@ -28,6 +28,19 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 
+# Screenshots and debug artifacts
+*.png
+*.tgz
+
+# Playwright MCP session files
+.playwright-mcp/
+
+# tmuxp workspace files (local dev only)
+tmuxp.*.yaml
+
+# MCP config (local dev)
+.mcp.json
+
 # Test coverage
 coverage/
 
