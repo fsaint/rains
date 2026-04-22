@@ -1,0 +1,15 @@
+- generic [ref=e102]:
+  - generic [ref=e103]:
+    - img [ref=e104]
+    - generic [ref=e106]: Reins
+  - generic [ref=e107]:
+    - generic [ref=e108]:
+      - heading "Sign in" [level=1] [ref=e109]
+      - paragraph [ref=e110]: Enter your credentials to continue
+    - generic [ref=e112]:
+      - textbox "Email" [active] [ref=e114]
+      - textbox "Password" [ref=e116]
+      - button "Continue" [disabled] [ref=e117]:
+        - text: Continue
+        - img [ref=e118]
+  - paragraph [ref=e120]: The trust layer for AI agents

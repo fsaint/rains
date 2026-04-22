@@ -1,0 +1,674 @@
+- generic [ref=e1]:
+  - img [ref=e2]
+  - generic [ref=e4]:
+    - generic [ref=e7]:
+      - generic [ref=e8]:
+        - button [ref=e11] [cursor=pointer]
+        - generic:
+          - textbox:
+            - /placeholder: " "
+          - generic: 
+          - generic: Search
+      - generic [ref=e15]:
+        - generic [ref=e17]:
+          - generic [ref=e1009] [cursor=pointer]:
+            - button "" [ref=e1011]:
+              - generic: 
+            - generic:
+              - generic:
+                - generic: Add your birthday! 🎂
+            - generic:
+              - generic: Let your contacts know when you’re celebrating.
+          - list [ref=e27]:
+            - generic [ref=e28] [cursor=pointer]:
+              - generic:
+                - generic:
+                  - generic: 
+              - generic:
+                - generic: Archived Chats
+              - generic:
+                - generic: Deleted Account, Deleted Account, Deleted Account, Deleted Account, Crypto Capitin Call ..., The BotFather
+                - generic: "1"
+            - 'link "Caller: Neda from Urban Theatre. Reason: Confirming booking for tonight. Contact number: 510-714-090...  FamGPT 09/13/2025 F" [ref=e30] [cursor=pointer]':
+              - /url: "#7506388125"
+              - generic:
+                - generic:
+                  - generic: "Caller: Neda from Urban Theatre. Reason: Confirming booking for tonight. Contact number: 510-714-090..."
+                - generic: 
+              - generic:
+                - generic:
+                  - generic: FamGPT
+                - generic:
+                  - generic: 09/13/2025
+              - generic: F
+            - 'link "You: /mybots Fam  03:11 PM F" [ref=e1384] [cursor=pointer]':
+              - /url: "#-3974445671"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "You:"
+                  - generic: /mybots
+              - generic:
+                - generic:
+                  - generic: Fam
+                - generic:
+                  - generic:
+                    - generic: 
+                  - generic: 03:11 PM
+              - generic: F
+            - 'link "Draft: @Telmanfsj_bot I did that. Action 02:26 PM A" [ref=e32] [cursor=pointer]':
+              - /url: "#-5074227703"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "Draft:"
+                  - generic: "@Telmanfsj_bot I did that."
+              - generic:
+                - generic:
+                  - generic: Action
+                - generic:
+                  - generic: 02:26 PM
+              - generic: A
+            - link "✅ Bot will respond to all messages in \"Real Test Group\" reins_dev_bot 01:09 PM r" [ref=e34] [cursor=pointer]:
+              - /url: "#8641616936"
+              - generic:
+                - generic:
+                  - generic: ✅ Bot will respond to all messages in "Real Test Group"
+              - generic:
+                - generic:
+                  - generic: reins_dev_bot
+                - generic:
+                  - generic: 01:09 PM
+              - generic: r
+            - link "Privacy mode is disabled for reins_dev_bot @reins_dev_bot. BotFather 12:07 PM" [ref=e659] [cursor=pointer]:
+              - /url: "#93372553"
+              - generic:
+                - generic:
+                  - generic: Privacy mode is disabled for reins_dev_bot @reins_dev_bot.
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: BotFather
+                    - generic:
+                      - img
+                - generic:
+                  - generic: 12:07 PM
+              - generic:
+                - img
+            - 'link "EmailAndCalendar: hey fsaint 👋 1 fsaint and EmailAndCalendar 11:43 AM fE 1" [ref=e283] [cursor=pointer]':
+              - /url: "#-3736535424"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "EmailAndCalendar:"
+                  - generic: hey fsaint 👋
+                - generic: "1"
+              - generic:
+                - generic:
+                  - generic: fsaint and EmailAndCalendar
+                - generic:
+                  - generic: 11:43 AM
+              - generic: fE
+              - generic: "1"
+            - link "hey — hi 👋 EmailAndCalendar 11:43 AM E" [ref=e40] [cursor=pointer]:
+              - /url: "#8345585236"
+              - generic:
+                - generic:
+                  - generic: hey — hi 👋
+              - generic:
+                - generic:
+                  - generic: EmailAndCalendar
+                - generic:
+                  - generic: 11:43 AM
+              - generic: E
+            - link "Dale 1 Alan Weiss Tue AW 1" [ref=e284] [cursor=pointer]:
+              - /url: "#8664382941"
+              - generic:
+                - generic:
+                  - generic: Dale
+                - generic: "1"
+              - generic:
+                - generic:
+                  - generic: Alan Weiss
+                - generic:
+                  - generic: Tue
+              - generic: AW
+              - generic: "1"
+            - 'link "Done ✅ Replied and closed #1738. Telman Tue T" [ref=e44] [cursor=pointer]':
+              - /url: "#8326726800"
+              - generic:
+                - generic:
+                  - generic: "Done ✅ Replied and closed #1738."
+              - generic:
+                - generic:
+                  - generic: Telman
+                - generic:
+                  - generic: Tue
+              - generic: T
+            - link "What’s up? Kyravelenna ✂️❌Grass Tue" [ref=e46] [cursor=pointer]:
+              - /url: "#8603590705"
+              - generic:
+                - generic:
+                  - generic: What’s up?
+              - generic:
+                - generic:
+                  - generic: Kyravelenna ✂️❌Grass
+                - generic:
+                  - generic: Tue
+              - generic:
+                - img
+            - 'link "🔑 Re-authentication Required Service: Gmail Agent: agxTDFwG6t0lz44LaiCKM Reason: Credentials requir... ReinsVerification Tue R" [ref=e48] [cursor=pointer]':
+              - /url: "#8345752400"
+              - generic:
+                - generic:
+                  - generic: "🔑 Re-authentication Required Service: Gmail Agent: agxTDFwG6t0lz44LaiCKM Reason: Credentials requir..."
+              - generic:
+                - generic:
+                  - generic: ReinsVerification
+                - generic:
+                  - generic: Tue
+              - generic: R
+            - 'link "You: Contactando la oficia de Europa. Cómo estamos hoy para JPM? Yo tengo un plan de montar infraestructu... fsaint & Hermeneutix  Tue fH" [ref=e50] [cursor=pointer]':
+              - /url: "#-4829932571"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "You:"
+                  - generic: Contactando la oficia de Europa. Cómo estamos hoy para JPM? Yo tengo un plan de montar infraestructu...
+              - generic:
+                - generic:
+                  - generic: fsaint & Hermeneutix
+                - generic:
+                  - generic:
+                    - generic: 
+                  - generic: Tue
+              - generic: fH
+        - button " " [ref=e54] [cursor=pointer]:
+          - generic: 
+          - generic: 
+        - generic [ref=e58] [cursor=pointer]: UPDATE
+      - generic [ref=e285]:
+        - generic [ref=e286]:
+          - button "" [ref=e287] [cursor=pointer]:
+            - generic: 
+          - generic [ref=e288]:
+            - generic [ref=e289]: Fam
+            - generic [ref=e290]: 2 members
+          - button "" [ref=e291] [cursor=pointer]:
+            - generic: 
+          - button "" [ref=e524] [cursor=pointer]:
+            - generic: 
+        - list [ref=e297]:
+          - 'link "You: /mybots General  03:11 PM" [ref=e1385] [cursor=pointer]':
+            - /url: "#-3974445671"
+            - generic:
+              - generic:
+                - generic:
+                  - generic: "You:"
+                - generic: /mybots
+            - generic:
+              - generic:
+                - generic:
+                  - generic: General
+              - generic:
+                - generic:
+                  - generic: 
+                - generic: 03:11 PM
+          - 'link "You: Hello M Morning email  Apr 9" [ref=e298] [cursor=pointer]':
+            - /url: "#-3974445671"
+            - generic:
+              - generic:
+                - generic:
+                  - generic: "You:"
+                - generic: Hello
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - img
+                    - generic: M
+                  - generic: Morning email
+              - generic:
+                - generic:
+                  - generic: 
+                - generic: Apr 9
+    - generic [ref=e61]:
+      - generic [ref=e62]:
+        - generic [ref=e527] [cursor=pointer]:
+          - generic [ref=e532]:
+            - generic [ref=e535]: General
+            - generic [ref=e538]: In Fam
+          - generic [ref=e539]:
+            - text: "#"
+            - button "" [ref=e540]:
+              - generic: 
+            - button "" [ref=e542]:
+              - generic: 
+        - generic [ref=e546]:
+          - generic [ref=e547]:
+            - generic [ref=e610]: April 9
+            - generic [ref=e551]:
+              - generic [ref=e555]:
+                - text: Hey
+                - generic "9 April 2026, 15:04:58" [ref=e556] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e557]: 03:04 PM
+              - generic [ref=e561]:
+                - link "@EmailAndCalendar_bot" [ref=e562] [cursor=pointer]:
+                  - /url: https://t.me/EmailAndCalendar_bot
+                - text: hello
+                - generic "9 April 2026, 15:05:05" [ref=e563] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e564]: 03:05 PM
+              - generic [ref=e568]:
+                - text: Hey
+                - generic "9 April 2026, 15:06:10" [ref=e569] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e570]: 03:06 PM
+              - generic [ref=e573]:
+                - generic [ref=e574]:
+                  - link "@EmailAndCalendar_bot" [ref=e575] [cursor=pointer]:
+                    - /url: https://t.me/EmailAndCalendar_bot
+                  - text: ruso
+                  - generic "9 April 2026, 15:06:16" [ref=e576] [cursor=pointer]:
+                    - generic: 
+                    - generic [ref=e577]: 03:06 PM
+                - img [ref=e578]
+          - generic [ref=e580]:
+            - generic [ref=e613] [cursor=pointer]: Today
+            - generic [ref=e589]: fsaint added AgentX
+            - generic [ref=e614]:
+              - generic [ref=e618]:
+                - text: Hello, can you introduce yourself?
+                - generic "15 April 2026, 14:52:30" [ref=e619] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e620]: 02:52 PM
+              - generic [ref=e628]:
+                - text: Hello, can you introduce yourself?
+                - generic "15 April 2026, 14:54:12" [ref=e629] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e630]: 02:54 PM
+              - generic [ref=e637]:
+                - generic [ref=e638]:
+                  - text: Hello, can you introduce yourself?
+                  - generic "15 April 2026, 14:55:47" [ref=e639] [cursor=pointer]:
+                    - generic: 
+                    - generic [ref=e640]: 02:55 PM
+                - img [ref=e641]
+            - generic [ref=e645]:
+              - generic [ref=e649]:
+                - text: Hello bot, are you there?
+                - generic "15 April 2026, 14:58:07" [ref=e650] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e651]: 02:58 PM
+              - generic [ref=e985]:
+                - generic [ref=e986]:
+                  - link "/mybots" [ref=e987] [cursor=pointer]:
+                    - /url: tg://bot_command?command=mybots
+                  - generic "15 April 2026, 14:59:44" [ref=e988] [cursor=pointer]:
+                    - generic: 
+                    - generic [ref=e989]: 02:59 PM
+                - img [ref=e990]
+            - generic [ref=e992]:
+              - generic [ref=e993] [cursor=pointer]: A
+              - generic [ref=e996]:
+                - generic [ref=e997]: AgentX
+                - generic [ref=e998]:
+                  - generic [ref=e999]:
+                    - text: "⚠️ Agent failed before reply: No API key found for provider \"anthropic\". Auth store:"
+                    - link "/home" [ref=e1000] [cursor=pointer]:
+                      - /url: tg://bot_command?command=home
+                    - link "/node" [ref=e1001] [cursor=pointer]:
+                      - /url: tg://bot_command?command=node
+                    - text: "/.openclaw/agents/main/agent/auth-profiles.json (agentDir:"
+                    - link "/home" [ref=e1002] [cursor=pointer]:
+                      - /url: tg://bot_command?command=home
+                    - link "/node" [ref=e1003] [cursor=pointer]:
+                      - /url: tg://bot_command?command=node
+                    - text: "/.openclaw/agents/main/agent). Configure auth for this agent (openclaw agents add <id>) or copy auth-profiles.json from the main agentDir. Logs: openclaw logs --follow"
+                  - generic "15 April 2026, 14:59:45" [ref=e1004] [cursor=pointer]:
+                    - generic [ref=e1005]: 02:59 PM
+                - img [ref=e1006]
+            - generic [ref=e1017]:
+              - generic [ref=e1021]:
+                - text: Hello, can you introduce yourself?
+                - generic "15 April 2026, 15:02:26" [ref=e1022] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e1023]: 03:02 PM
+              - generic [ref=e1030]:
+                - generic [ref=e1031]:
+                  - text: Hello, can you introduce yourself?
+                  - generic "15 April 2026, 15:04:04" [ref=e1032] [cursor=pointer]:
+                    - generic: 
+                    - generic [ref=e1033]: 03:04 PM
+                - img [ref=e1034]
+            - generic [ref=e1041]:
+              - generic [ref=e1042]:
+                - text: Hello, can you introduce yourself?
+                - generic "15 April 2026, 15:06:37" [ref=e1043] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e1044]: 03:06 PM
+              - img [ref=e1045]
+            - generic [ref=e1049]:
+              - generic [ref=e1053]:
+                - text: Hello! Please introduce yourself briefly.
+                - generic "15 April 2026, 15:10:15" [ref=e1054] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e1055]: 03:10 PM
+              - generic [ref=e1388]:
+                - generic [ref=e1389]:
+                  - link "/mybots" [ref=e1390] [cursor=pointer]:
+                    - /url: tg://bot_command?command=mybots
+                  - generic "15 April 2026, 15:11:17" [ref=e1391] [cursor=pointer]:
+                    - generic: 
+                    - generic [ref=e1392]: 03:11 PM
+                - img [ref=e1393]
+        - generic [ref=e591]:
+          - generic [ref=e593]:
+            - img [ref=e594]
+            - generic:
+              - button
+              - button "":
+                - generic: 
+            - generic [ref=e596]:
+              - button "" [ref=e597] [cursor=pointer]:
+                - generic: 
+              - generic [ref=e598]:
+                - generic: Message
+              - generic [ref=e600] [cursor=pointer]:
+                - generic: 
+          - generic [ref=e602]:
+            - generic:
+              - generic: 
+              - generic: NaN
+            - button "    " [ref=e603] [cursor=pointer]:
+              - generic: 
+              - generic: 
+              - generic: 
+              - generic: 
+              - generic: 
+      - generic [ref=e1058]:
+        - generic [ref=e1067] [cursor=pointer]:
+          - button "" [ref=e1068]:
+            - generic: 
+          - generic [ref=e1070]:
+            - img [ref=e1072]
+            - generic [ref=e1073]:
+              - generic [ref=e1076]:
+                - generic [ref=e1077]: BotFather
+                - img [ref=e1079]
+              - generic [ref=e1083]: 8 022 935 users
+          - generic [ref=e1084]:
+            - text: "#"
+            - button "" [ref=e1085]:
+              - generic: 
+            - button "" [ref=e1087]:
+              - generic: 
+        - generic [ref=e1089]:
+          - generic [ref=e1090]:
+            - generic [ref=e1093] [cursor=pointer]: April 10
+            - generic [ref=e1097]:
+              - generic [ref=e1098]:
+                - text: "Good. Now let's choose a username for your bot. It must end in `bot`. Like this, for example: TetrisBot or tetris_bot."
+                - generic "10 April 2026, 14:47:00" [ref=e1099] [cursor=pointer]:
+                  - generic [ref=e1100]: 02:47 PM
+              - img [ref=e1101]
+            - generic [ref=e1106]:
+              - generic [ref=e1107]:
+                - text: ReinsVerification_bot
+                - generic "10 April 2026, 14:47:06" [ref=e1108] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e1109]: 02:47 PM
+              - img [ref=e1110]
+            - generic [ref=e1115]:
+              - generic [ref=e1116]:
+                - generic [ref=e1117]:
+                  - text: Done! Congratulations on your new bot. You will find it at
+                  - link "t.me/ReinsVerification_bot" [ref=e1118] [cursor=pointer]:
+                    - /url: https://t.me/ReinsVerification_bot
+                  - text: . You can now add a description, about section and profile picture for your bot, see
+                  - link "/help" [ref=e1119] [cursor=pointer]:
+                    - /url: tg://bot_command?command=help
+                  - text: "for a list of commands. By the way, when you've finished creating your cool bot, ping our Bot Support if you want a better username for it. Just make sure the bot is fully operational before you do this. Use this token to access the HTTP API:"
+                  - code [ref=e1120] [cursor=pointer]: 8345752400:AAHmfIVKVc77XgWAF4rv08GmOWYVl9J2s8A
+                  - text: Keep your token
+                  - strong [ref=e1121]: secure
+                  - text: and
+                  - strong [ref=e1122]: store it safely
+                  - text: ", it can be used by anyone to control your bot. For a description of the Bot API, see this page:"
+                  - link "https://core.telegram.org/bots/api" [ref=e1123] [cursor=pointer]:
+                    - /url: https://core.telegram.org/bots/api
+                - generic "10 April 2026, 14:47:06" [ref=e1124] [cursor=pointer]:
+                  - generic [ref=e1125]: 02:47 PM
+              - img [ref=e1126]
+          - generic [ref=e1128]:
+            - generic [ref=e1131] [cursor=pointer]: April 13
+            - generic [ref=e1135]:
+              - generic [ref=e1136]:
+                - link "/newbot" [ref=e1137] [cursor=pointer]:
+                  - /url: tg://bot_command?command=newbot
+                - generic "13 April 2026, 21:48:11" [ref=e1138] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e1139]: 09:48 PM
+              - img [ref=e1140]
+            - generic [ref=e1145]:
+              - generic [ref=e1146]:
+                - text: Alright, a new bot. How are we going to call it? Please choose a name for your bot.
+                - generic "13 April 2026, 21:48:11" [ref=e1147] [cursor=pointer]:
+                  - generic [ref=e1148]: 09:48 PM
+              - img [ref=e1149]
+            - generic [ref=e1154]:
+              - generic [ref=e1155]:
+                - text: my_claude_bot
+                - generic "13 April 2026, 21:48:16" [ref=e1156] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e1157]: 09:48 PM
+              - img [ref=e1158]
+            - generic [ref=e1163]:
+              - generic [ref=e1164]:
+                - text: "Good. Now let's choose a username for your bot. It must end in `bot`. Like this, for example: TetrisBot or tetris_bot."
+                - generic "13 April 2026, 21:48:17" [ref=e1165] [cursor=pointer]:
+                  - generic [ref=e1166]: 09:48 PM
+              - img [ref=e1167]
+            - generic [ref=e1172]:
+              - generic [ref=e1173]:
+                - text: my_claude_bot
+                - generic "13 April 2026, 21:48:26" [ref=e1174] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e1175]: 09:48 PM
+              - img [ref=e1176]
+            - generic [ref=e1181]:
+              - generic [ref=e1182]:
+                - text: Sorry, this username is already taken. Please try something different.
+                - generic "13 April 2026, 21:48:26" [ref=e1183] [cursor=pointer]:
+                  - generic [ref=e1184]: 09:48 PM
+              - img [ref=e1185]
+            - generic [ref=e1190]:
+              - generic [ref=e1191]:
+                - text: claude_fsj_bot
+                - generic "13 April 2026, 21:48:37" [ref=e1192] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e1193]: 09:48 PM
+              - img [ref=e1194]
+            - generic [ref=e1199]:
+              - generic [ref=e1200]:
+                - generic [ref=e1201]:
+                  - text: Done! Congratulations on your new bot. You will find it at
+                  - link "t.me/claude_fsj_bot" [ref=e1202] [cursor=pointer]:
+                    - /url: https://t.me/claude_fsj_bot
+                  - text: . You can now add a description, about section and profile picture for your bot, see
+                  - link "/help" [ref=e1203] [cursor=pointer]:
+                    - /url: tg://bot_command?command=help
+                  - text: "for a list of commands. By the way, when you've finished creating your cool bot, ping our Bot Support if you want a better username for it. Just make sure the bot is fully operational before you do this. Use this token to access the HTTP API:"
+                  - code [ref=e1204] [cursor=pointer]: 8742874792:AAFW27qyz3qU315c1LbZUpGvLQ0rtADjL4Q
+                  - text: Keep your token
+                  - strong [ref=e1205]: secure
+                  - text: and
+                  - strong [ref=e1206]: store it safely
+                  - text: ", it can be used by anyone to control your bot. For a description of the Bot API, see this page:"
+                  - link "https://core.telegram.org/bots/api" [ref=e1207] [cursor=pointer]:
+                    - /url: https://core.telegram.org/bots/api
+                - generic "13 April 2026, 21:48:38" [ref=e1208] [cursor=pointer]:
+                  - generic [ref=e1209]: 09:48 PM
+              - img [ref=e1210]
+          - generic [ref=e1212]:
+            - generic [ref=e1215] [cursor=pointer]: April 14
+            - generic [ref=e1219]:
+              - generic [ref=e1220]:
+                - link "/mybots" [ref=e1221] [cursor=pointer]:
+                  - /url: tg://bot_command?command=mybots
+                - generic "14 April 2026, 22:10:01" [ref=e1222] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e1223]: 10:10 PM
+              - img [ref=e1224]
+            - generic [ref=e1228]:
+              - generic [ref=e1229]:
+                - generic [ref=e1230]:
+                  - generic [ref=e1231]:
+                    - text: Settings for
+                    - link "@EmailAndCalendar_bot" [ref=e1232] [cursor=pointer]:
+                      - /url: https://t.me/EmailAndCalendar_bot
+                    - text: .
+                  - generic "14 April 2026, 22:10:01" [ref=e1233] [cursor=pointer]:
+                    - generic [ref=e1234]: 10:10 PM
+                - img [ref=e1235]
+              - generic [ref=e1237]:
+                - button "Inline Mode" [ref=e1239] [cursor=pointer]:
+                  - generic: Inline Mode
+                - button "Business Mode" [ref=e1242] [cursor=pointer]:
+                  - generic: Business Mode
+                - generic [ref=e1244]:
+                  - button "Allow Groups?" [ref=e1245] [cursor=pointer]:
+                    - generic: Allow Groups?
+                  - button "Group Privacy" [ref=e1247] [cursor=pointer]:
+                    - generic: Group Privacy
+                - generic [ref=e1249]:
+                  - button "Group Admin Rights" [ref=e1250] [cursor=pointer]:
+                    - generic: Group Admin Rights
+                  - button "Channel Admin Rights" [ref=e1252] [cursor=pointer]:
+                    - generic: Channel Admin Rights
+                - generic [ref=e1254]:
+                  - button "Payments" [ref=e1255] [cursor=pointer]:
+                    - generic: Payments
+                  - button "Domain" [ref=e1257] [cursor=pointer]:
+                    - generic: Domain
+                - button "Menu Button" [ref=e1260] [cursor=pointer]:
+                  - generic: Menu Button
+                - button "Configure Mini App" [ref=e1263] [cursor=pointer]:
+                  - generic: Configure Mini App
+                - button "Paid Broadcast" [ref=e1266] [cursor=pointer]:
+                  - generic: Paid Broadcast
+                - button "« Back to Bot" [ref=e1269] [cursor=pointer]:
+                  - generic: « Back to Bot
+          - generic [ref=e1271]:
+            - generic [ref=e1274]: Today
+            - generic [ref=e1278]:
+              - generic [ref=e1279]:
+                - link "/newbot" [ref=e1280] [cursor=pointer]:
+                  - /url: tg://bot_command?command=newbot
+                - generic "15 April 2026, 11:40:43" [ref=e1281] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e1282]: 11:40 AM
+              - img [ref=e1283]
+            - generic [ref=e1288]:
+              - generic [ref=e1289]:
+                - text: Alright, a new bot. How are we going to call it? Please choose a name for your bot.
+                - generic "15 April 2026, 11:40:43" [ref=e1290] [cursor=pointer]:
+                  - generic [ref=e1291]: 11:40 AM
+              - img [ref=e1292]
+            - generic [ref=e1297]:
+              - generic [ref=e1298]:
+                - text: reins_dev_bot
+                - generic "15 April 2026, 12:05:39" [ref=e1299] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e1300]: 12:05 PM
+              - img [ref=e1301]
+            - generic [ref=e1306]:
+              - generic [ref=e1307]:
+                - text: "Good. Now let's choose a username for your bot. It must end in `bot`. Like this, for example: TetrisBot or tetris_bot."
+                - generic "15 April 2026, 12:05:39" [ref=e1308] [cursor=pointer]:
+                  - generic [ref=e1309]: 12:05 PM
+              - img [ref=e1310]
+            - generic [ref=e1315]:
+              - generic [ref=e1316]:
+                - text: reins_dev_bot
+                - generic "15 April 2026, 12:05:46" [ref=e1317] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e1318]: 12:05 PM
+              - img [ref=e1319]
+            - generic [ref=e1324]:
+              - generic [ref=e1325]:
+                - generic [ref=e1326]:
+                  - text: Done! Congratulations on your new bot. You will find it at
+                  - link "t.me/reins_dev_bot" [ref=e1327] [cursor=pointer]:
+                    - /url: https://t.me/reins_dev_bot
+                  - text: . You can now add a description, about section and profile picture for your bot, see
+                  - link "/help" [ref=e1328] [cursor=pointer]:
+                    - /url: tg://bot_command?command=help
+                  - text: "for a list of commands. By the way, when you've finished creating your cool bot, ping our Bot Support if you want a better username for it. Just make sure the bot is fully operational before you do this. Use this token to access the HTTP API:"
+                  - code [ref=e1329] [cursor=pointer]: 8641616936:AAFcx_Sx7noqR5ksF8cpaT_kviNeRl3KQvs
+                  - text: Keep your token
+                  - strong [ref=e1330]: secure
+                  - text: and
+                  - strong [ref=e1331]: store it safely
+                  - text: ", it can be used by anyone to control your bot. For a description of the Bot API, see this page:"
+                  - link "https://core.telegram.org/bots/api" [ref=e1332] [cursor=pointer]:
+                    - /url: https://core.telegram.org/bots/api
+                - generic "15 April 2026, 12:05:46" [ref=e1333] [cursor=pointer]:
+                  - generic [ref=e1334]: 12:05 PM
+              - img [ref=e1335]
+            - generic [ref=e1340]:
+              - generic [ref=e1341]:
+                - link "/mybots" [ref=e1342] [cursor=pointer]:
+                  - /url: tg://bot_command?command=mybots
+                - generic "15 April 2026, 12:07:04" [ref=e1343] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e1344]: 12:07 PM
+              - img [ref=e1345]
+            - generic [ref=e1349]:
+              - generic [ref=e1350]:
+                - generic [ref=e1351]:
+                  - generic [ref=e1352]:
+                    - link "Privacy mode" [ref=e1353] [cursor=pointer]:
+                      - /url: https://core.telegram.org/bots/features#privacy-mode
+                    - text: is
+                    - strong [ref=e1354]: disabled
+                    - text: for reins_dev_bot
+                    - link "@reins_dev_bot" [ref=e1355] [cursor=pointer]:
+                      - /url: https://t.me/reins_dev_bot
+                    - text: .
+                  - generic "15 April 2026, 12:07:04" [ref=e1356] [cursor=pointer]:
+                    - generic [ref=e1357]: 12:07 PM
+                - img [ref=e1358]
+              - generic [ref=e1360]:
+                - button "Turn on" [ref=e1362] [cursor=pointer]:
+                  - generic: Turn on
+                - button "« Back to Settings" [ref=e1365] [cursor=pointer]:
+                  - generic: « Back to Settings
+        - generic [ref=e1368]:
+          - generic [ref=e1370]:
+            - img [ref=e1371]
+            - generic:
+              - button
+              - button "":
+                - generic: 
+            - generic [ref=e1373]:
+              - generic [ref=e1374] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e1375]: Open
+              - button "" [ref=e1376] [cursor=pointer]:
+                - generic: 
+              - generic [ref=e1377]:
+                - generic: Message
+              - generic [ref=e1379] [cursor=pointer]:
+                - generic: 
+          - generic [ref=e1381]:
+            - generic:
+              - generic: 
+              - generic: NaN
+            - button "    " [ref=e1382] [cursor=pointer]:
+              - generic: 
+              - generic: 
+              - generic: 
+              - generic: 
+              - generic: 

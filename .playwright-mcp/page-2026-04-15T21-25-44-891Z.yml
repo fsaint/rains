@@ -1,0 +1,543 @@
+- generic [active] [ref=e1]:
+  - img [ref=e2]
+  - generic [ref=e4]:
+    - generic [ref=e7]:
+      - generic [ref=e8]:
+        - button [ref=e11] [cursor=pointer]
+        - generic [ref=e13]:
+          - textbox [ref=e14]:
+            - /placeholder: " "
+          - generic: 
+          - generic: Search
+      - generic [ref=e15]:
+        - generic [ref=e17]:
+          - generic [ref=e20] [cursor=pointer]:
+            - button "" [ref=e22]:
+              - generic: 
+            - generic:
+              - generic: Add your birthday!
+            - generic:
+              - generic: Let your contacts know when you’re celebrating.
+          - list [ref=e27]:
+            - link "✅ Bot will respond to all messages in \"Real Test Group\" reins_dev_bot 01:09 PM r" [ref=e256] [cursor=pointer]:
+              - /url: "#8641616936"
+              - generic:
+                - generic:
+                  - generic: ✅ Bot will respond to all messages in "Real Test Group"
+              - generic:
+                - generic:
+                  - generic: reins_dev_bot
+                - generic:
+                  - generic: 01:09 PM
+              - generic: r
+            - link "Privacy mode is disabled for reins_dev_bot @reins_dev_bot. 1 BotFather 12:07 PM" [ref=e258] [cursor=pointer]:
+              - /url: "#93372553"
+              - generic:
+                - generic:
+                  - generic: Privacy mode is disabled for reins_dev_bot @reins_dev_bot.
+                - generic: "1"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: BotFather
+                    - generic:
+                      - img
+                - generic:
+                  - generic: 12:07 PM
+              - generic:
+                - img
+            - 'link "EmailAndCalendar: hey fsaint 👋 1 fsaint and EmailAndCalendar 11:43 AM fE" [ref=e260] [cursor=pointer]':
+              - /url: "#-3736535424"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "EmailAndCalendar:"
+                  - generic: hey fsaint 👋
+                - generic: "1"
+              - generic:
+                - generic:
+                  - generic: fsaint and EmailAndCalendar
+                - generic:
+                  - generic: 11:43 AM
+              - generic: fE
+            - link "hey — hi 👋 EmailAndCalendar 11:43 AM E" [ref=e262] [cursor=pointer]:
+              - /url: "#8345585236"
+              - generic:
+                - generic:
+                  - generic: hey — hi 👋
+              - generic:
+                - generic:
+                  - generic: EmailAndCalendar
+                - generic:
+                  - generic: 11:43 AM
+              - generic: E
+            - link "Dale 1 Alan Weiss Tue AW" [ref=e264] [cursor=pointer]:
+              - /url: "#8664382941"
+              - generic:
+                - generic:
+                  - generic: Dale
+                - generic: "1"
+              - generic:
+                - generic:
+                  - generic: Alan Weiss
+                - generic:
+                  - generic: Tue
+              - generic: AW
+            - 'link "Done ✅ Replied and closed #1738. Telman Tue T" [ref=e266] [cursor=pointer]':
+              - /url: "#8326726800"
+              - generic:
+                - generic:
+                  - generic: "Done ✅ Replied and closed #1738."
+              - generic:
+                - generic:
+                  - generic: Telman
+                - generic:
+                  - generic: Tue
+              - generic: T
+            - link "What’s up? Kyravelenna ✂️❌Grass Tue" [ref=e268] [cursor=pointer]:
+              - /url: "#8603590705"
+              - generic:
+                - generic:
+                  - generic: What’s up?
+              - generic:
+                - generic:
+                  - generic: Kyravelenna ✂️❌Grass
+                - generic:
+                  - generic: Tue
+              - generic:
+                - img
+            - 'link "🔑 Re-authentication Required Service: Gmail Agent: agxTDFwG6t0lz44LaiCKM Reason: Credentials requir... ReinsVerification Tue R" [ref=e270] [cursor=pointer]':
+              - /url: "#8345752400"
+              - generic:
+                - generic:
+                  - generic: "🔑 Re-authentication Required Service: Gmail Agent: agxTDFwG6t0lz44LaiCKM Reason: Credentials requir..."
+              - generic:
+                - generic:
+                  - generic: ReinsVerification
+                - generic:
+                  - generic: Tue
+              - generic: R
+            - 'link "You: Contactando la oficia de Europa. Cómo estamos hoy para JPM? Yo tengo un plan de montar infraestructu... fsaint & Hermeneutix  Tue fH" [ref=e272] [cursor=pointer]':
+              - /url: "#-4829932571"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "You:"
+                  - generic: Contactando la oficia de Europa. Cómo estamos hoy para JPM? Yo tengo un plan de montar infraestructu...
+              - generic:
+                - generic:
+                  - generic: fsaint & Hermeneutix
+                - generic:
+                  - generic:
+                    - generic: 
+                  - generic: Tue
+              - generic: fH
+            - link "1MCPserverneedsauth ·/mcp my_claude_bot Tue m" [ref=e274] [cursor=pointer]:
+              - /url: "#8742874792"
+              - generic:
+                - generic:
+                  - generic: 1MCPserverneedsauth ·/mcp
+              - generic:
+                - generic:
+                  - generic: my_claude_bot
+                - generic:
+                  - generic: Tue
+              - generic: m
+            - link "Good morning, how are you feeling today? Del Mon" [ref=e276] [cursor=pointer]:
+              - /url: "#8045368419"
+              - generic:
+                - generic:
+                  - generic: Good morning, how are you feeling today?
+              - generic:
+                - generic:
+                  - generic: Del
+                - generic:
+                  - generic: Mon
+              - generic:
+                - img
+            - link "Martin Cammarata joined Telegram 1 Martin Cammarata Apr 11 MC" [ref=e773] [cursor=pointer]:
+              - /url: "#8540638156"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic: Martin Cammarata joined Telegram
+                - generic: "1"
+              - generic:
+                - generic:
+                  - generic: Martin Cammarata
+                - generic:
+                  - generic: Apr 11
+              - generic: MC
+            - 'link "You: Hello Fam  Apr 9 F" [ref=e775] [cursor=pointer]':
+              - /url: "#-3974445671"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "You:"
+                  - generic: Hello
+              - generic:
+                - generic:
+                  - generic: Fam
+                - generic:
+                  - generic:
+                    - generic: 
+                  - generic: Apr 9
+              - generic: F
+            - link "Are you Spencer? Yashwant Singh Apr 7 YS" [ref=e777] [cursor=pointer]:
+              - /url: "#7076092356"
+              - generic:
+                - generic:
+                  - generic: Are you Spencer?
+              - generic:
+                - generic:
+                  - generic: Yashwant Singh
+                - generic:
+                  - generic: Apr 7
+              - generic: YS
+            - link "te contesta tu agente? Carola Saint-Jean  Apr 7 CS" [ref=e779] [cursor=pointer]:
+              - /url: "#8451368612"
+              - generic:
+                - generic:
+                  - generic: te contesta tu agente?
+              - generic:
+                - generic:
+                  - generic: Carola Saint-Jean
+                - generic:
+                  - generic:
+                    - generic: 
+                  - generic: Apr 7
+              - generic: CS
+            - 'link "You: https://t.me/userinfobot AI  Apr 7 A" [ref=e781] [cursor=pointer]':
+              - /url: "#-5151676375"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "You:"
+                  - generic:
+                    - generic:
+                      - img
+                  - generic: https://t.me/userinfobot
+              - generic:
+                - generic:
+                  - generic: AI
+                - generic:
+                  - generic:
+                    - generic: 
+                  - generic: Apr 7
+              - generic: A
+            - link "Hello Lily 🌻 Hall Apr 5" [ref=e783] [cursor=pointer]:
+              - /url: "#7510668560"
+              - generic:
+                - generic:
+                  - generic: Hello
+              - generic:
+                - generic:
+                  - generic: Lily 🌻 Hall
+                - generic:
+                  - generic: Apr 5
+              - generic:
+                - img
+        - button " " [ref=e54] [cursor=pointer]:
+          - generic: 
+          - generic: 
+        - generic [ref=e58] [cursor=pointer]: UPDATE
+    - generic [ref=e62]:
+      - generic [ref=e71] [cursor=pointer]:
+        - generic [ref=e73]:
+          - generic [ref=e785]: fH
+          - generic [ref=e75]:
+            - generic [ref=e786]: fsaint & Hermeneutix
+            - generic [ref=e80]: 3 members
+        - generic [ref=e81]:
+          - text: "#"
+          - button "" [ref=e787]:
+            - generic: 
+          - button "" [ref=e82]:
+            - generic: 
+          - button "" [ref=e84]:
+            - generic: 
+      - generic [ref=e789]:
+        - generic [ref=e790]:
+          - generic [ref=e793]: April 9
+          - generic [ref=e794]:
+            - generic [ref=e798]:
+              - text: Eso. Que tienes en mente?
+              - generic "9 April 2026, 21:31:31" [ref=e799] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e800]: 09:31 PM
+            - generic [ref=e803]:
+              - generic [ref=e804]:
+                - text: BTW cuéntame si violeta anda OK. Creo que justo arreglé el entuerto antes del onboard de JPM. 😥
+                - generic "9 April 2026, 21:32:26" [ref=e805] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e806]: 09:32 PM
+              - img [ref=e807]
+          - generic [ref=e809]:
+            - generic [ref=e810] [cursor=pointer]: GW
+            - generic [ref=e813]:
+              - generic [ref=e814]: Guillermo Liam Wechsler
+              - generic [ref=e815]:
+                - text: Hablar sobre hoy, ver próximo steps
+                - generic "9 April 2026, 21:32:48" [ref=e816] [cursor=pointer]:
+                  - generic [ref=e817]: 09:32 PM
+            - generic [ref=e820]:
+              - generic [ref=e822]:
+                - text: Forwarded from
+                - generic [ref=e823] [cursor=pointer]: "@"
+                - text: "@violeta_bot"
+              - generic [ref=e824]:
+                - generic [ref=e825]:
+                  - text: "Visible Gmail accounts in the MCP server: •"
+                  - link "guillermo.wechsler@gmail.com" [ref=e826] [cursor=pointer]:
+                    - /url: mailto:guillermo.wechsler@gmail.com
+                  - text: — default •
+                  - link "gwechsler@sensework.ai" [ref=e827] [cursor=pointer]:
+                    - /url: mailto:gwechsler@sensework.ai
+                  - text: •
+                  - link "g2@gxwechsler.com" [ref=e828] [cursor=pointer]:
+                    - /url: mailto:g2@gxwechsler.com
+                - 'generic "9 April 2026, 21:33:40 Original: 9 April 2026, 18:08:34" [ref=e829] [cursor=pointer]':
+                  - generic [ref=e830]: 09:33 PM
+              - img [ref=e831]
+          - generic [ref=e833]:
+            - generic [ref=e837]:
+              - text: Ok! Eso está bien.
+              - generic "9 April 2026, 21:33:56" [ref=e838] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e839]: 09:33 PM
+            - generic [ref=e843]:
+              - text: Estoy agotado! Avancé harto hoy
+              - generic [ref=e844]:
+                - generic [ref=e845] [cursor=pointer]:
+                  - generic:
+                    - img
+                  - generic [ref=e848]: GW
+                - generic "9 April 2026, 21:34:49" [ref=e849] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e850]: 09:34 PM
+            - generic [ref=e853]:
+              - generic [ref=e854]:
+                - text: Y hablemos del task manager también
+                - generic [ref=e855]:
+                  - generic [ref=e856] [cursor=pointer]:
+                    - generic:
+                      - img
+                    - generic [ref=e859]: GW
+                  - generic "9 April 2026, 21:35:10" [ref=e860] [cursor=pointer]:
+                    - generic: 
+                    - generic [ref=e861]: 09:35 PM
+              - img [ref=e862]
+          - generic [ref=e864]:
+            - generic [ref=e865] [cursor=pointer]: GW
+            - generic [ref=e868]:
+              - generic [ref=e869]: Guillermo Liam Wechsler
+              - generic [ref=e870]:
+                - text: Where should I activate voice recognition?
+                - generic "9 April 2026, 21:42:52" [ref=e871] [cursor=pointer]:
+                  - generic [ref=e872]: 09:42 PM
+            - generic [ref=e875]:
+              - generic [ref=e876]:
+                - text: For Violeta?
+                - generic "9 April 2026, 21:43:16" [ref=e877] [cursor=pointer]:
+                  - generic [ref=e878]: 09:43 PM
+              - img [ref=e879]
+          - generic [ref=e884]:
+            - generic [ref=e885]:
+              - text: Claro … deja ver
+              - generic "9 April 2026, 21:49:33" [ref=e886] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e887]: 09:49 PM
+            - img [ref=e888]
+          - generic [ref=e890]:
+            - generic [ref=e894]:
+              - text: Para text to speech ... vas a ser el guinea pig.
+              - generic "9 April 2026, 23:07:05" [ref=e895] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e896]: 11:07 PM
+            - generic [ref=e900]:
+              - text: Anda a tu agente, Apreta el boton que dice "Deploy" (verde). Luego Runtime Settings y le puedes poner el OPENAI API KEY.
+              - generic "9 April 2026, 23:08:03" [ref=e901] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e902]: 11:08 PM
+            - generic [ref=e905]:
+              - generic [ref=e906]:
+                - text: Me voy a dormir
+                - generic "9 April 2026, 23:08:09" [ref=e907] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e908]: 11:08 PM
+              - img [ref=e909]
+        - generic [ref=e911]:
+          - generic [ref=e914]: April 10
+          - generic [ref=e915]:
+            - generic [ref=e919]:
+              - text: Tenemos que off-load la creación de participantes
+              - link "https://studio.curl-newton.ts.net/conversations/b4ad5b7c-1257-47ef-a9ce-e90e6802bbd7/" [ref=e920] [cursor=pointer]:
+                - /url: https://studio.curl-newton.ts.net/conversations/b4ad5b7c-1257-47ef-a9ce-e90e6802bbd7/
+              - generic "10 April 2026, 10:26:31" [ref=e921] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e922]: 10:26 AM
+            - generic [ref=e925]:
+              - generic [ref=e926]:
+                - text: Mena subió un recording ...
+                - generic "10 April 2026, 10:26:49" [ref=e927] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e928]: 10:26 AM
+              - img [ref=e929]
+          - generic [ref=e931]:
+            - generic [ref=e932] [cursor=pointer]: GW
+            - generic [ref=e935]:
+              - generic [ref=e936]: Guillermo Liam Wechsler
+              - generic [ref=e937]:
+                - text: Estoy en zoom
+                - generic "10 April 2026, 10:41:03" [ref=e938] [cursor=pointer]:
+                  - generic [ref=e939]: 10:41 AM
+              - img [ref=e940]
+        - generic [ref=e942]:
+          - generic [ref=e945] [cursor=pointer]: April 13
+          - generic [ref=e946]:
+            - generic [ref=e947] [cursor=pointer]: GW
+            - generic [ref=e950]:
+              - generic [ref=e951]: Guillermo Liam Wechsler
+              - generic [ref=e952]:
+                - link "https://youtu.be/NvHz_esnSJc?si=Jj5mpRDm5pV04DqZ" [ref=e954] [cursor=pointer]:
+                  - /url: https://youtu.be/NvHz_esnSJc?si=Jj5mpRDm5pV04DqZ
+                - 'link "YouTube AI & Coding: Interview with Vahrun K. Mohran of Google DeepMind Armando Solar-Lezama, Distinguished Professor of Computing at MIT, interviews Vahrun K. Mohan, a Google DeepMind engineer and former co-founder and C..." [ref=e955] [cursor=pointer]':
+                  - /url: https://youtu.be/NvHz_esnSJc?si=Jj5mpRDm5pV04DqZ
+                  - generic [ref=e958]:
+                    - strong [ref=e960]:
+                      - link "YouTube" [ref=e961]:
+                        - /url: https://youtu.be/NvHz_esnSJc?si=Jj5mpRDm5pV04DqZ
+                    - strong [ref=e963]: "AI & Coding: Interview with Vahrun K. Mohran of Google DeepMind"
+                    - generic [ref=e964]: Armando Solar-Lezama, Distinguished Professor of Computing at MIT, interviews Vahrun K. Mohan, a Google DeepMind engineer and former co-founder and C...
+                    - generic [ref=e967]:
+                      - img [ref=e969]
+                      - img [ref=e971]
+                      - img [ref=e975]
+                - generic "13 April 2026, 19:13:57" [ref=e980] [cursor=pointer]:
+                  - generic [ref=e981]: 07:13 PM
+            - generic [ref=e984]:
+              - generic [ref=e985]:
+                - text: Are u familiar with Antigravity?
+                - generic "13 April 2026, 19:14:53" [ref=e986] [cursor=pointer]:
+                  - generic [ref=e987]: 07:14 PM
+              - img [ref=e988]
+          - generic [ref=e993]:
+            - generic [ref=e994]:
+              - text: Está en el radar … no lo he probado
+              - generic "13 April 2026, 19:16:19" [ref=e995] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e996]: 07:16 PM
+            - img [ref=e997]
+        - generic [ref=e999]:
+          - generic [ref=e1002] [cursor=pointer]: April 14
+          - generic [ref=e1006]:
+            - generic [ref=e1007]:
+              - text: Contactando la oficia de Europa. Cómo estamos hoy para JPM? Yo tengo un plan de montar infraestructura para server local con el
+              - generic "14 April 2026, 09:40:08" [ref=e1008] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e1009]: 09:40 AM
+            - img [ref=e1010]
+      - generic [ref=e203]:
+        - generic [ref=e205]:
+          - img [ref=e206]
+          - generic:
+            - button
+            - button "":
+              - generic: 
+          - generic [ref=e208]:
+            - button "" [ref=e209] [cursor=pointer]:
+              - generic: 
+            - generic [ref=e210]:
+              - generic: Message
+            - generic [ref=e212] [cursor=pointer]:
+              - generic: 
+        - generic [ref=e214]:
+          - generic:
+            - generic: 
+            - generic: NaN
+          - button "    " [ref=e215] [cursor=pointer]:
+            - generic: 
+            - generic: 
+            - generic: 
+            - generic: 
+            - generic: 
+    - generic [ref=e1012]:
+      - generic:
+        - button [ref=e1013] [cursor=pointer]
+        - generic:
+          - generic:
+            - generic: Group Info
+            - button "" [ref=e1014] [cursor=pointer]:
+              - generic: 
+      - generic [ref=e1016]:
+        - generic [ref=e1018]:
+          - generic [ref=e1019] [cursor=pointer]:
+            - generic [ref=e1022]: fH
+            - generic:
+              - generic:
+                - generic: fsaint & Hermeneutix
+              - generic:
+                - generic:
+                  - generic: 3 members
+            - generic [ref=e1024]:
+              - generic:
+                - generic: 
+                - generic: 
+          - generic [ref=e1028]:
+            - generic [ref=e1029] [cursor=pointer]:
+              - generic: t.me/+XuTgEic122o2MjEx
+              - generic: Link
+              - generic: 
+            - generic [ref=e1031] [cursor=pointer]:
+              - generic [ref=e1033]:
+                - generic: Notifications
+                - generic:
+                  - generic:
+                    - checkbox "Notifications " [checked]
+              - generic: 
+          - generic [ref=e1034]:
+            - navigation [ref=e1037]:
+              - generic [ref=e1038] [cursor=pointer]:
+                - generic:
+                  - generic: Members
+              - generic [ref=e1040] [cursor=pointer]:
+                - generic:
+                  - generic: Media
+              - generic [ref=e1042] [cursor=pointer]:
+                - generic:
+                  - generic: Files
+              - generic [ref=e1044] [cursor=pointer]:
+                - generic:
+                  - generic: Links
+              - generic [ref=e1046] [cursor=pointer]:
+                - generic:
+                  - generic: Music
+            - list [ref=e1051]:
+              - generic [ref=e1052] [cursor=pointer]:
+                - generic:
+                  - generic: online
+                - generic:
+                  - generic:
+                    - generic: fsaint
+                  - generic:
+                    - generic: owner
+                - generic:
+                  - img
+              - generic [ref=e1053] [cursor=pointer]:
+                - generic:
+                  - generic: last seen 13 hours ago
+                - generic:
+                  - generic:
+                    - generic: Guillermo Liam Wechsler
+                - generic: GW
+              - generic [ref=e1054] [cursor=pointer]:
+                - generic:
+                  - generic: bot
+                - generic:
+                  - generic:
+                    - generic: Hermeneutix
+                - generic:
+                  - img
+        - button "" [ref=e1055] [cursor=pointer]:
+          - generic: 

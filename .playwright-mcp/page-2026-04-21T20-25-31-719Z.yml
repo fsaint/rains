@@ -1,0 +1,430 @@
+- generic [active] [ref=e1]:
+  - img [ref=e2]
+  - generic [ref=e4]:
+    - generic [ref=e7]:
+      - generic [ref=e8]:
+        - button [ref=e11] [cursor=pointer]
+        - generic [ref=e13]:
+          - textbox [ref=e14]:
+            - /placeholder: " "
+          - generic: 
+          - generic: Search
+      - generic [ref=e15]:
+        - generic [ref=e17]:
+          - generic [ref=e20] [cursor=pointer]:
+            - button "" [ref=e22]:
+              - generic: 
+            - generic:
+              - generic:
+                - generic: Add your birthday! 🎂
+            - generic:
+              - generic: Let your contacts know when you’re celebrating.
+          - list [ref=e27]:
+            - generic [ref=e28] [cursor=pointer]:
+              - generic:
+                - generic:
+                  - generic: 
+              - generic:
+                - generic: Archived Chats
+              - generic:
+                - generic: Deleted Account, Deleted Account, Deleted Account, Deleted Account, Crypto Capitin Call ..., The BotFather
+                - generic: "1"
+            - link "Hello  FamGPT  Apr 15 F" [ref=e30] [cursor=pointer]:
+              - /url: "#7506388125"
+              - generic:
+                - generic:
+                  - generic: Hello
+                - generic: 
+              - generic:
+                - generic:
+                  - generic: FamGPT
+                - generic:
+                  - generic:
+                    - generic: 
+                  - generic: Apr 15
+              - generic: F
+            - 'link "LLM request rejected: You''re out of extra usage. Add more at claude.ai/settings/usage and keep going. 30 Telman 01:00 PM T" [ref=e32] [cursor=pointer]':
+              - /url: "#8326726800"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - img
+                  - generic: "LLM request rejected: You're out of extra usage. Add more at claude.ai/settings/usage and keep going."
+                - generic: "30"
+              - generic:
+                - generic:
+                  - generic: Telman
+                - generic:
+                  - generic: 01:00 PM
+              - generic: T
+            - 'link "⚠️ Agent failed before reply: Unknown model: minimax/MiniMax-M2.7. Logs: openclaw logs --follow EmailAndCalendar 11:57 AM E" [ref=e34] [cursor=pointer]':
+              - /url: "#8345585236"
+              - generic:
+                - generic:
+                  - generic: "⚠️ Agent failed before reply: Unknown model: minimax/MiniMax-M2.7. Logs: openclaw logs --follow"
+              - generic:
+                - generic:
+                  - generic: EmailAndCalendar
+                - generic:
+                  - generic: 11:57 AM
+              - generic: E
+            - link "viernes 15 hrs Alan Weiss 11:09 AM AW" [ref=e69] [cursor=pointer]:
+              - /url: "#8664382941"
+              - generic:
+                - generic:
+                  - generic: viernes 15 hrs
+              - generic:
+                - generic:
+                  - generic: Alan Weiss
+                - generic:
+                  - generic: 11:09 AM
+              - generic: AW
+            - 'link "You: Está es la opción creo yo https://platform.minimax.io/subscribe/token-plan fsaint & Hermeneutix  Mon fH" [ref=e38] [cursor=pointer]':
+              - /url: "#-4829932571"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "You:"
+                  - generic:
+                    - generic:
+                      - img
+                  - generic: Está es la opción creo yo https://platform.minimax.io/subscribe/token-plan
+              - generic:
+                - generic:
+                  - generic: fsaint & Hermeneutix
+                - generic:
+                  - generic:
+                    - generic: 
+                  - generic: Mon
+              - generic: fH
+            - link "Mañana vamos a probar este tool que esta bueno. https://wisprflow.ai/r?FELIPE1231 lo estoy usando ha... Juan Pablo  Mon JP" [ref=e40] [cursor=pointer]:
+              - /url: "#8780225380"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - img
+                  - generic: Mañana vamos a probar este tool que esta bueno. https://wisprflow.ai/r?FELIPE1231 lo estoy usando ha...
+              - generic:
+                - generic:
+                  - generic: Juan Pablo
+                - generic:
+                  - generic:
+                    - generic: 
+                  - generic: Mon
+              - generic: JP
+            - 'link "You: Hi are you there? fsaint and EmailAndCalendar  Apr 17 fE" [ref=e42] [cursor=pointer]':
+              - /url: "#-3736535424"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "You:"
+                  - generic: Hi are you there?
+              - generic:
+                - generic:
+                  - generic: fsaint and EmailAndCalendar
+                - generic:
+                  - generic:
+                    - generic: 
+                  - generic: Apr 17
+              - generic: fE
+            - 'link "You: @EmailAndCalendar_bot hello Fam  Apr 16 F" [ref=e44] [cursor=pointer]':
+              - /url: "#-3974445671"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "You:"
+                  - generic: "@EmailAndCalendar_bot hello"
+              - generic:
+                - generic:
+                  - generic: Fam
+                - generic:
+                  - generic:
+                    - generic: 
+                  - generic: Apr 16
+              - generic: F
+            - link "Hey! Still here. 👋 Did you get a chance to run those commands (openclaw status and openclaw logs)?... AgentX Apr 16 A" [ref=e46] [cursor=pointer]:
+              - /url: "#8693656584"
+              - generic:
+                - generic:
+                  - generic: Hey! Still here. 👋 Did you get a chance to run those commands (openclaw status and openclaw logs)?...
+              - generic:
+                - generic:
+                  - generic: AgentX
+                - generic:
+                  - generic: Apr 16
+              - generic: A
+            - link "Privacy mode is disabled for AgentX @xatent_bot. BotFather Apr 15" [ref=e48] [cursor=pointer]:
+              - /url: "#93372553"
+              - generic:
+                - generic:
+                  - generic: Privacy mode is disabled for AgentX @xatent_bot.
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: BotFather
+                    - generic:
+                      - img
+                - generic:
+                  - generic: Apr 15
+              - generic:
+                - img
+            - 'link "Draft: @Telmanfsj_bot I did that. Action Apr 15 A" [ref=e50] [cursor=pointer]':
+              - /url: "#-5074227703"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "Draft:"
+                  - generic: "@Telmanfsj_bot I did that."
+              - generic:
+                - generic:
+                  - generic: Action
+                - generic:
+                  - generic: Apr 15
+              - generic: A
+            - link "✅ Bot will respond to all messages in \"Real Test Group\" reins_dev_bot Apr 15 r" [ref=e52] [cursor=pointer]:
+              - /url: "#8641616936"
+              - generic:
+                - generic:
+                  - generic: ✅ Bot will respond to all messages in "Real Test Group"
+              - generic:
+                - generic:
+                  - generic: reins_dev_bot
+                - generic:
+                  - generic: Apr 15
+              - generic: r
+        - button " " [ref=e54] [cursor=pointer]:
+          - generic: 
+          - generic: 
+        - generic [ref=e58] [cursor=pointer]: UPDATE
+    - generic [ref=e62]:
+      - generic [ref=e71] [cursor=pointer]:
+        - generic [ref=e73]:
+          - generic [ref=e74]: AW
+          - generic [ref=e75]:
+            - generic [ref=e78]: Alan Weiss
+            - generic [ref=e80]: last seen 2 hours ago
+        - generic [ref=e81]:
+          - text: "#"
+          - button "" [ref=e82]:
+            - generic: 
+          - button "" [ref=e84]:
+            - generic: 
+          - button "" [ref=e86]:
+            - generic: 
+      - generic [ref=e90]:
+        - generic [ref=e91]:
+          - generic [ref=e94] [cursor=pointer]: April 11
+          - generic [ref=e95]:
+            - generic [ref=e99]:
+              - text: Hola! Voy a ver el tema del calendario. Le di una pasada, pero no quedo andando.
+              - generic "11 April 2026, 08:04:23" [ref=e100] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e101]: 08:04 AM
+            - generic [ref=e104]:
+              - generic [ref=e105]:
+                - text: El martes te muestro como pasar contexto! Pero no los chats
+                - generic "11 April 2026, 08:05:00" [ref=e106] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e107]: 08:05 AM
+              - img [ref=e108]
+        - generic [ref=e110]:
+          - generic [ref=e113] [cursor=pointer]: April 12
+          - generic [ref=e117]:
+            - generic [ref=e118]:
+              - text: Dale!! Nos vemos
+              - generic [ref=e119]:
+                - generic [ref=e120] [cursor=pointer]:
+                  - generic:
+                    - img
+                  - img [ref=e124]
+                - generic "12 April 2026, 16:04:58" [ref=e125] [cursor=pointer]:
+                  - generic [ref=e126]: 04:04 PM
+            - img [ref=e127]
+        - generic [ref=e129]:
+          - generic [ref=e132] [cursor=pointer]: April 14
+          - generic [ref=e136]:
+            - generic [ref=e137]:
+              - text: Tengo que llevar un enano al doc! Voy a tener que cancelar hoy. A ver si podemos agendar el jueves?
+              - generic [ref=e138]:
+                - generic [ref=e139] [cursor=pointer]:
+                  - generic:
+                    - img
+                  - generic [ref=e142]: AW
+                - generic "14 April 2026, 07:36:28" [ref=e143] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e144]: 07:36 AM
+            - img [ref=e145]
+          - generic [ref=e150]:
+            - generic [ref=e151]:
+              - text: Háblale a este bot para que te envíe verificaciones
+              - link "https://t.me/ReinsVerification_bot" [ref=e152] [cursor=pointer]:
+                - /url: https://t.me/ReinsVerification_bot
+              - generic "14 April 2026, 11:31:13" [ref=e153] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e154]: 11:31 AM
+            - img [ref=e155]
+          - generic [ref=e157]:
+            - generic [ref=e161]:
+              - text: Hola Feli
+              - generic "14 April 2026, 11:37:06" [ref=e162] [cursor=pointer]:
+                - generic [ref=e163]: 11:37 AM
+            - generic [ref=e166]:
+              - generic [ref=e167] [cursor=pointer]:
+                - generic:
+                  - generic: fsaint
+                  - generic: Háblale a este bot para que te envíe verificaciones https://t.me/ReinsVerification_bot
+              - generic [ref=e169]:
+                - text: "? Verificaciones para que? Cómo le pregunto?"
+                - generic "14 April 2026, 11:38:17" [ref=e170] [cursor=pointer]:
+                  - generic [ref=e171]: 11:38 AM
+              - img [ref=e172]
+          - generic [ref=e174]:
+            - generic [ref=e178]:
+              - text: Si dos cosas. Hay operaciones que necesitan permiso
+              - generic "14 April 2026, 11:42:28" [ref=e179] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e180]: 11:42 AM
+            - generic [ref=e183]:
+              - generic [ref=e184]:
+                - text: Y a veces hay que reautenticar los Servicios
+                - generic "14 April 2026, 11:42:54" [ref=e185] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e186]: 11:42 AM
+              - img [ref=e187]
+          - generic [ref=e192]:
+            - generic [ref=e193]:
+              - text: Le hablé pero no cacho como pedirle
+              - generic "14 April 2026, 14:03:35" [ref=e194] [cursor=pointer]:
+                - generic [ref=e195]: 02:03 PM
+            - img [ref=e196]
+          - generic [ref=e201]:
+            - generic [ref=e202]:
+              - text: Te va a mandar mensajes cuando sea necesario hacer algo
+              - generic "14 April 2026, 14:54:07" [ref=e203] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e204]: 02:54 PM
+            - img [ref=e205]
+          - generic [ref=e210]:
+            - generic [ref=e211]:
+              - text: Dale
+              - generic "14 April 2026, 15:07:08" [ref=e212] [cursor=pointer]:
+                - generic [ref=e213]: 03:07 PM
+            - img [ref=e214]
+        - generic [ref=e216]:
+          - generic [ref=e219]: April 20
+          - generic [ref=e223]:
+            - generic [ref=e224]:
+              - text: Mañana vamos ausar este tool
+              - link "https://wisprflow.ai/r?FELIPE1231" [ref=e225] [cursor=pointer]:
+                - /url: https://wisprflow.ai/r?FELIPE1231
+              - link "wisprflow.ai You have been invited to Flow | Wispr Flow Flow makes writing quick and clear with seamless voice dictation. It is the fastest, smartest way to type with your voice." [ref=e226] [cursor=pointer]:
+                - /url: https://wisprflow.ai/r?FELIPE1231
+                - generic [ref=e229]:
+                  - strong [ref=e231]:
+                    - link "wisprflow.ai" [ref=e232]:
+                      - /url: https://wisprflow.ai/r?FELIPE1231
+                  - strong [ref=e234]: You have been invited to Flow | Wispr Flow
+                  - generic [ref=e235]: Flow makes writing quick and clear with seamless voice dictation. It is the fastest, smartest way to type with your voice.
+                  - img [ref=e238]
+              - generic "20 April 2026, 09:52:42" [ref=e239] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e240]: 09:52 AM
+            - img [ref=e241]
+          - generic [ref=e246]:
+            - generic [ref=e247]:
+              - text: Gracias Felipe
+              - generic "20 April 2026, 11:05:08" [ref=e248] [cursor=pointer]:
+                - generic [ref=e249]: 11:05 AM
+            - img [ref=e250]
+        - generic [ref=e252]:
+          - generic [ref=e255] [cursor=pointer]: Today
+          - generic [ref=e259]:
+            - generic [ref=e260]:
+              - text: Me sumo en 2 minutos
+              - generic "21 April 2026, 10:02:42" [ref=e261] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e262]: 10:02 AM
+            - img [ref=e263]
+          - generic [ref=e268]:
+            - generic [ref=e269]:
+              - text: Dale
+              - generic "21 April 2026, 11:03:31" [ref=e270] [cursor=pointer]:
+                - generic [ref=e271]: 11:03 AM
+            - img [ref=e272]
+          - generic [ref=e277]:
+            - generic [ref=e278]:
+              - text: Oye, yo lo tenía agendado para hace una hora! Que hora tienes? Me disculpo por la falta de claridad
+              - generic "21 April 2026, 11:04:38" [ref=e279] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e280]: 11:04 AM
+            - img [ref=e281]
+          - generic [ref=e283]:
+            - generic [ref=e287]:
+              - text: 2 pm
+              - generic "21 April 2026, 11:05:04" [ref=e288] [cursor=pointer]:
+                - generic [ref=e289]: 11:05 AM
+            - generic [ref=e292]:
+              - generic [ref=e293]:
+                - text: igual q la semana pasada
+                - generic "21 April 2026, 11:05:18" [ref=e294] [cursor=pointer]:
+                  - generic [ref=e295]: 11:05 AM
+              - img [ref=e296]
+          - generic [ref=e301]:
+            - generic [ref=e302]:
+              - text: Ok. Yo me equivoqué. Sorry. Voy a darle más atención al horario. Te funciona si hacemos jueves o viernes a las 2pm?
+              - generic "21 April 2026, 11:06:35" [ref=e303] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e304]: 11:06 AM
+            - img [ref=e305]
+          - generic [ref=e307]:
+            - generic [ref=e311]:
+              - text: este jueves y viernes tengo la agenda ocupada
+              - generic "21 April 2026, 11:07:57" [ref=e312] [cursor=pointer]:
+                - generic [ref=e313]: 11:07 AM
+            - generic [ref=e314]:
+              - text: Unread Messages
+              - generic [ref=e316]:
+                - generic [ref=e317]:
+                  - text: en ese horario
+                  - generic "21 April 2026, 11:08:09" [ref=e318] [cursor=pointer]:
+                    - generic [ref=e319]: 11:08 AM
+                - img [ref=e320]
+          - generic [ref=e325]:
+            - generic [ref=e326]:
+              - text: Otra hora?
+              - generic "21 April 2026, 11:08:52" [ref=e327] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e328]: 11:08 AM
+            - img [ref=e329]
+          - generic [ref=e334]:
+            - generic [ref=e335]:
+              - text: viernes 15 hrs
+              - generic "21 April 2026, 11:09:26" [ref=e336] [cursor=pointer]:
+                - generic [ref=e337]: 11:09 AM
+            - img [ref=e338]
+      - generic [ref=e341]:
+        - generic [ref=e343]:
+          - img [ref=e344]
+          - generic:
+            - button
+            - button "":
+              - generic: 
+          - generic [ref=e346]:
+            - button "" [ref=e347] [cursor=pointer]:
+              - generic: 
+            - generic [ref=e348]:
+              - generic: Message
+            - generic [ref=e350] [cursor=pointer]:
+              - generic: 
+        - generic [ref=e352]:
+          - generic:
+            - generic: 
+            - generic: NaN
+          - button "    " [ref=e353] [cursor=pointer]:
+            - generic: 
+            - generic: 
+            - generic: 
+            - generic: 
+            - generic: 

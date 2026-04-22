@@ -1,0 +1,312 @@
+- generic [active] [ref=e1]:
+  - img [ref=e2]
+  - generic [ref=e4]:
+    - generic [ref=e7]:
+      - generic [ref=e8]:
+        - button [ref=e11] [cursor=pointer]
+        - generic [ref=e13]:
+          - textbox [ref=e14]:
+            - /placeholder: " "
+          - generic: 
+          - generic: Search
+      - generic [ref=e15]:
+        - generic [ref=e17]:
+          - generic [ref=e20] [cursor=pointer]:
+            - button "" [ref=e22]:
+              - generic: 
+            - generic:
+              - generic: Add your birthday!
+            - generic:
+              - generic: Let your contacts know when you’re celebrating.
+          - list [ref=e27]:
+            - generic [ref=e28] [cursor=pointer]:
+              - generic:
+                - generic:
+                  - generic: 
+              - generic:
+                - generic: Archived Chats
+              - generic:
+                - generic: Deleted Account, Deleted Account, Deleted Account, Deleted Account, Crypto Capitin Call ..., The BotFather
+                - generic: "1"
+            - 'link "Caller: Neda from Urban Theatre. Reason: Confirming booking for tonight. Contact number: 510-714-090...  FamGPT 09/13/2025 F" [ref=e30] [cursor=pointer]':
+              - /url: "#7506388125"
+              - generic:
+                - generic:
+                  - generic: "Caller: Neda from Urban Theatre. Reason: Confirming booking for tonight. Contact number: 510-714-090..."
+                - generic: 
+              - generic:
+                - generic:
+                  - generic: FamGPT
+                - generic:
+                  - generic: 09/13/2025
+              - generic: F
+            - 'link "📋 Group Configuration Your bot was added to the supergroup \"Real Test Group\" Added by: @fsaint Agen... reins_dev_bot 01:09 PM r" [ref=e69] [cursor=pointer]':
+              - /url: "#8641616936"
+              - generic:
+                - generic:
+                  - generic: "📋 Group Configuration Your bot was added to the supergroup \"Real Test Group\" Added by: @fsaint Agen..."
+              - generic:
+                - generic:
+                  - generic: reins_dev_bot
+                - generic:
+                  - generic: 01:09 PM
+              - generic: r
+            - link "Privacy mode is disabled for reins_dev_bot @reins_dev_bot. 1 BotFather 12:07 PM" [ref=e34] [cursor=pointer]:
+              - /url: "#93372553"
+              - generic:
+                - generic:
+                  - generic: Privacy mode is disabled for reins_dev_bot @reins_dev_bot.
+                - generic: "1"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: BotFather
+                    - generic:
+                      - img
+                - generic:
+                  - generic: 12:07 PM
+              - generic:
+                - img
+            - 'link "EmailAndCalendar: hey fsaint 👋 1 fsaint and EmailAndCalendar 11:43 AM fE" [ref=e36] [cursor=pointer]':
+              - /url: "#-3736535424"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "EmailAndCalendar:"
+                  - generic: hey fsaint 👋
+                - generic: "1"
+              - generic:
+                - generic:
+                  - generic: fsaint and EmailAndCalendar
+                - generic:
+                  - generic: 11:43 AM
+              - generic: fE
+            - link "hey — hi 👋 EmailAndCalendar 11:43 AM E" [ref=e38] [cursor=pointer]:
+              - /url: "#8345585236"
+              - generic:
+                - generic:
+                  - generic: hey — hi 👋
+              - generic:
+                - generic:
+                  - generic: EmailAndCalendar
+                - generic:
+                  - generic: 11:43 AM
+              - generic: E
+            - link "Dale 1 Alan Weiss Tue AW" [ref=e40] [cursor=pointer]:
+              - /url: "#8664382941"
+              - generic:
+                - generic:
+                  - generic: Dale
+                - generic: "1"
+              - generic:
+                - generic:
+                  - generic: Alan Weiss
+                - generic:
+                  - generic: Tue
+              - generic: AW
+            - 'link "Done ✅ Replied and closed #1738. Telman Tue T" [ref=e42] [cursor=pointer]':
+              - /url: "#8326726800"
+              - generic:
+                - generic:
+                  - generic: "Done ✅ Replied and closed #1738."
+              - generic:
+                - generic:
+                  - generic: Telman
+                - generic:
+                  - generic: Tue
+              - generic: T
+            - link "What’s up? Kyravelenna ✂️❌Grass Tue" [ref=e44] [cursor=pointer]:
+              - /url: "#8603590705"
+              - generic:
+                - generic:
+                  - generic: What’s up?
+              - generic:
+                - generic:
+                  - generic: Kyravelenna ✂️❌Grass
+                - generic:
+                  - generic: Tue
+              - generic:
+                - img
+            - 'link "🔑 Re-authentication Required Service: Gmail Agent: agxTDFwG6t0lz44LaiCKM Reason: Credentials requir... ReinsVerification Tue R" [ref=e46] [cursor=pointer]':
+              - /url: "#8345752400"
+              - generic:
+                - generic:
+                  - generic: "🔑 Re-authentication Required Service: Gmail Agent: agxTDFwG6t0lz44LaiCKM Reason: Credentials requir..."
+              - generic:
+                - generic:
+                  - generic: ReinsVerification
+                - generic:
+                  - generic: Tue
+              - generic: R
+            - 'link "You: Contactando la oficia de Europa. Cómo estamos hoy para JPM? Yo tengo un plan de montar infraestructu... fsaint & Hermeneutix  Tue fH" [ref=e48] [cursor=pointer]':
+              - /url: "#-4829932571"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "You:"
+                  - generic: Contactando la oficia de Europa. Cómo estamos hoy para JPM? Yo tengo un plan de montar infraestructu...
+              - generic:
+                - generic:
+                  - generic: fsaint & Hermeneutix
+                - generic:
+                  - generic:
+                    - generic: 
+                  - generic: Tue
+              - generic: fH
+            - link "1MCPserverneedsauth ·/mcp my_claude_bot Tue m" [ref=e50] [cursor=pointer]:
+              - /url: "#8742874792"
+              - generic:
+                - generic:
+                  - generic: 1MCPserverneedsauth ·/mcp
+              - generic:
+                - generic:
+                  - generic: my_claude_bot
+                - generic:
+                  - generic: Tue
+              - generic: m
+            - link "Good morning, how are you feeling today? Del Mon" [ref=e52] [cursor=pointer]:
+              - /url: "#8045368419"
+              - generic:
+                - generic:
+                  - generic: Good morning, how are you feeling today?
+              - generic:
+                - generic:
+                  - generic: Del
+                - generic:
+                  - generic: Mon
+              - generic:
+                - img
+        - button " " [ref=e54] [cursor=pointer]:
+          - generic: 
+          - generic: 
+        - generic [ref=e58] [cursor=pointer]: UPDATE
+    - generic [ref=e62]:
+      - generic [ref=e71] [cursor=pointer]:
+        - generic [ref=e73]:
+          - generic [ref=e74]: r
+          - generic [ref=e75]:
+            - generic [ref=e78]: reins_dev_bot
+            - generic [ref=e80]: bot
+        - generic [ref=e81]:
+          - text: "#"
+          - button "" [ref=e82]:
+            - generic: 
+          - button "" [ref=e84]:
+            - generic: 
+      - generic [ref=e89]:
+        - generic [ref=e92] [cursor=pointer]: Today
+        - generic [ref=e96]:
+          - generic [ref=e97]:
+            - link "/start" [ref=e98] [cursor=pointer]:
+              - /url: tg://bot_command?command=start
+            - generic "15 April 2026, 12:10:21" [ref=e99] [cursor=pointer]:
+              - generic: 
+              - generic [ref=e100]: 12:10 PM
+          - img [ref=e101]
+        - generic [ref=e106]:
+          - generic [ref=e107]:
+            - generic [ref=e108]:
+              - text: Connected to Reins as
+              - link "admin@reins.local" [ref=e109] [cursor=pointer]:
+                - /url: mailto:admin@reins.local
+                - strong [ref=e110]: admin@reins.local
+              - text: . You'll now receive approval requests here with inline Approve / Deny buttons.
+            - generic "15 April 2026, 12:10:22" [ref=e111] [cursor=pointer]:
+              - generic [ref=e112]: 12:10 PM
+          - img [ref=e113]
+        - generic [ref=e118]:
+          - generic [ref=e119]:
+            - link "/start" [ref=e120] [cursor=pointer]:
+              - /url: tg://bot_command?command=start
+            - generic "15 April 2026, 12:10:29" [ref=e121] [cursor=pointer]:
+              - generic: 
+              - generic [ref=e122]: 12:10 PM
+          - img [ref=e123]
+        - generic [ref=e128]:
+          - generic [ref=e129]:
+            - text: That link has expired or is invalid. Generate a new one from the Reins dashboard.
+            - generic "15 April 2026, 12:10:30" [ref=e130] [cursor=pointer]:
+              - generic [ref=e131]: 12:10 PM
+          - img [ref=e132]
+        - generic [ref=e137]:
+          - generic [ref=e138]:
+            - generic [ref=e139]: ✅ Reins dev is connected! Approval DMs will appear here.
+            - generic "15 April 2026, 12:12:36" [ref=e140] [cursor=pointer]:
+              - generic [ref=e141]: 12:12 PM
+          - img [ref=e142]
+        - generic [ref=e147]:
+          - generic [ref=e148]:
+            - generic [ref=e149]:
+              - text: ✅
+              - strong [ref=e150]: Bot will respond to all messages
+              - text: in "Test Group Alpha"
+            - generic "15 April 2026, 12:40:10" [ref=e151] [cursor=pointer]:
+              - generic [ref=e152]: 12:40 PM
+          - img [ref=e153]
+        - generic [ref=e158]:
+          - generic [ref=e159]:
+            - generic [ref=e160]:
+              - text: ✅
+              - strong [ref=e161]: Bot will respond to all messages
+              - text: in "Dev Team Hub"
+            - generic "15 April 2026, 12:49:14" [ref=e162] [cursor=pointer]:
+              - generic [ref=e163]: 12:49 PM
+          - img [ref=e164]
+        - generic [ref=e169]:
+          - generic [ref=e170]:
+            - generic [ref=e171]:
+              - text: ✅
+              - strong [ref=e172]: Bot will respond to all messages
+              - text: in "Product Feedback"
+            - generic "15 April 2026, 12:54:58" [ref=e173] [cursor=pointer]:
+              - generic [ref=e174]: 12:54 PM
+          - img [ref=e175]
+        - generic [ref=e179]:
+          - generic [ref=e180]:
+            - generic [ref=e181]:
+              - generic [ref=e182]:
+                - text: 📋
+                - strong [ref=e183]: Group Configuration
+                - text: Your bot was added to the supergroup
+                - strong [ref=e184]: "\"Real Test Group\""
+                - strong [ref=e185]: "Added by:"
+                - link "@fsaint" [ref=e186] [cursor=pointer]:
+                  - /url: https://t.me/fsaint
+                - strong [ref=e187]: "Agent:"
+                - code [ref=e188] [cursor=pointer]: cVmDJxrh8MhiDa5f8cWcP
+                - text: How should the bot behave in this group?
+              - generic "15 April 2026, 13:09:19" [ref=e189] [cursor=pointer]:
+                - generic [ref=e190]: 01:09 PM
+            - img [ref=e191]
+          - generic [ref=e193]:
+            - generic [ref=e194]:
+              - button "💬 All messages" [ref=e195] [cursor=pointer]:
+                - generic: 💬 All messages
+              - button "@Mention only" [ref=e197] [cursor=pointer]:
+                - generic: "@Mention only"
+            - button "🚫 Ignore group" [ref=e200] [cursor=pointer]:
+              - generic: 🚫 Ignore group
+      - generic [ref=e203]:
+        - generic [ref=e205]:
+          - img [ref=e206]
+          - generic:
+            - button
+            - button "":
+              - generic: 
+          - generic [ref=e208]:
+            - button "" [ref=e209] [cursor=pointer]:
+              - generic: 
+            - generic [ref=e210]:
+              - generic: Message
+            - generic [ref=e212] [cursor=pointer]:
+              - generic: 
+        - generic [ref=e214]:
+          - generic:
+            - generic: 
+            - generic: NaN
+          - button "    " [ref=e215] [cursor=pointer]:
+            - generic: 
+            - generic: 
+            - generic: 
+            - generic: 
+            - generic: 

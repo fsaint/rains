@@ -1,0 +1,548 @@
+- generic [ref=e1]:
+  - img [ref=e2]
+  - generic [ref=e4]:
+    - generic [ref=e7]:
+      - generic [ref=e8]:
+        - button [ref=e11] [cursor=pointer]
+        - generic:
+          - textbox:
+            - /placeholder: " "
+          - generic: 
+          - generic: Search
+      - generic [ref=e15]:
+        - generic [ref=e17]:
+          - generic [ref=e20] [cursor=pointer]:
+            - button "" [ref=e22]:
+              - generic: 
+            - generic:
+              - generic: Add your birthday!
+            - generic:
+              - generic: Let your contacts know when you’re celebrating.
+          - list [ref=e27]:
+            - link "hey — hi 👋 EmailAndCalendar 11:43 AM E" [ref=e262] [cursor=pointer]:
+              - /url: "#8345585236"
+              - generic:
+                - generic:
+                  - generic: hey — hi 👋
+              - generic:
+                - generic:
+                  - generic: EmailAndCalendar
+                - generic:
+                  - generic: 11:43 AM
+              - generic: E
+            - link "Dale 1 Alan Weiss Tue AW 1" [ref=e1424] [cursor=pointer]:
+              - /url: "#8664382941"
+              - generic:
+                - generic:
+                  - generic: Dale
+                - generic: "1"
+              - generic:
+                - generic:
+                  - generic: Alan Weiss
+                - generic:
+                  - generic: Tue
+              - generic: AW
+              - generic: "1"
+            - 'link "Done ✅ Replied and closed #1738. Telman Tue T" [ref=e266] [cursor=pointer]':
+              - /url: "#8326726800"
+              - generic:
+                - generic:
+                  - generic: "Done ✅ Replied and closed #1738."
+              - generic:
+                - generic:
+                  - generic: Telman
+                - generic:
+                  - generic: Tue
+              - generic: T
+            - link "What’s up? Kyravelenna ✂️❌Grass Tue" [ref=e268] [cursor=pointer]:
+              - /url: "#8603590705"
+              - generic:
+                - generic:
+                  - generic: What’s up?
+              - generic:
+                - generic:
+                  - generic: Kyravelenna ✂️❌Grass
+                - generic:
+                  - generic: Tue
+              - generic:
+                - img
+            - 'link "🔑 Re-authentication Required Service: Gmail Agent: agxTDFwG6t0lz44LaiCKM Reason: Credentials requir... ReinsVerification Tue R" [ref=e270] [cursor=pointer]':
+              - /url: "#8345752400"
+              - generic:
+                - generic:
+                  - generic: "🔑 Re-authentication Required Service: Gmail Agent: agxTDFwG6t0lz44LaiCKM Reason: Credentials requir..."
+              - generic:
+                - generic:
+                  - generic: ReinsVerification
+                - generic:
+                  - generic: Tue
+              - generic: R
+            - 'link "You: Contactando la oficia de Europa. Cómo estamos hoy para JPM? Yo tengo un plan de montar infraestructu... fsaint & Hermeneutix  Tue fH" [ref=e272] [cursor=pointer]':
+              - /url: "#-4829932571"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "You:"
+                  - generic: Contactando la oficia de Europa. Cómo estamos hoy para JPM? Yo tengo un plan de montar infraestructu...
+              - generic:
+                - generic:
+                  - generic: fsaint & Hermeneutix
+                - generic:
+                  - generic:
+                    - generic: 
+                  - generic: Tue
+              - generic: fH
+            - link "1MCPserverneedsauth ·/mcp my_claude_bot Tue m" [ref=e274] [cursor=pointer]:
+              - /url: "#8742874792"
+              - generic:
+                - generic:
+                  - generic: 1MCPserverneedsauth ·/mcp
+              - generic:
+                - generic:
+                  - generic: my_claude_bot
+                - generic:
+                  - generic: Tue
+              - generic: m
+            - link "Good morning, how are you feeling today? Del Mon" [ref=e276] [cursor=pointer]:
+              - /url: "#8045368419"
+              - generic:
+                - generic:
+                  - generic: Good morning, how are you feeling today?
+              - generic:
+                - generic:
+                  - generic: Del
+                - generic:
+                  - generic: Mon
+              - generic:
+                - img
+            - link "Martin Cammarata joined Telegram 1 Martin Cammarata Apr 11 MC 1" [ref=e1425] [cursor=pointer]:
+              - /url: "#8540638156"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic: Martin Cammarata joined Telegram
+                - generic: "1"
+              - generic:
+                - generic:
+                  - generic: Martin Cammarata
+                - generic:
+                  - generic: Apr 11
+              - generic: MC
+              - generic: "1"
+            - link "Are you Spencer? Yashwant Singh Apr 7 YS" [ref=e777] [cursor=pointer]:
+              - /url: "#7076092356"
+              - generic:
+                - generic:
+                  - generic: Are you Spencer?
+              - generic:
+                - generic:
+                  - generic: Yashwant Singh
+                - generic:
+                  - generic: Apr 7
+              - generic: YS
+            - link "te contesta tu agente? Carola Saint-Jean  Apr 7 CS" [ref=e779] [cursor=pointer]:
+              - /url: "#8451368612"
+              - generic:
+                - generic:
+                  - generic: te contesta tu agente?
+              - generic:
+                - generic:
+                  - generic: Carola Saint-Jean
+                - generic:
+                  - generic:
+                    - generic: 
+                  - generic: Apr 7
+              - generic: CS
+            - 'link "You: https://t.me/userinfobot AI  Apr 7 A" [ref=e781] [cursor=pointer]':
+              - /url: "#-5151676375"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "You:"
+                  - generic:
+                    - generic:
+                      - img
+                  - generic: https://t.me/userinfobot
+              - generic:
+                - generic:
+                  - generic: AI
+                - generic:
+                  - generic:
+                    - generic: 
+                  - generic: Apr 7
+              - generic: A
+            - link "Hello Lily 🌻 Hall Apr 5" [ref=e783] [cursor=pointer]:
+              - /url: "#7510668560"
+              - generic:
+                - generic:
+                  - generic: Hello
+              - generic:
+                - generic:
+                  - generic: Lily 🌻 Hall
+                - generic:
+                  - generic: Apr 5
+              - generic:
+                - img
+            - link "I did both. Browser • I have browser tooling, but the actual browser launch failed on this host. •... AgentX Apr 4 A" [ref=e1058] [cursor=pointer]:
+              - /url: "#8693656584"
+              - generic:
+                - generic:
+                  - generic: I did both. Browser • I have browser tooling, but the actual browser launch failed on this host. •...
+              - generic:
+                - generic:
+                  - generic: AgentX
+                - generic:
+                  - generic: Apr 4
+              - generic: A
+            - link "are you there frozone  Apr 2 f" [ref=e1060] [cursor=pointer]:
+              - /url: "#7606070991"
+              - generic:
+                - generic:
+                  - generic: are you there
+              - generic:
+                - generic:
+                  - generic: frozone
+                - generic:
+                  - generic:
+                    - generic: 
+                  - generic: Apr 2
+              - generic: f
+            - link " 🎯 KILL CAM - next-gen PNL videos 🎯 - Live replay of your favorite trades with buys/sells on the ch... 3 BONKbot Mar 25 3" [ref=e1426] [cursor=pointer]:
+              - /url: "#6376176715"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic: 
+                      - img
+                  - generic: 🎯 KILL CAM - next-gen PNL videos 🎯 - Live replay of your favorite trades with buys/sells on the ch...
+                - generic: "3"
+              - generic:
+                - generic:
+                  - generic: BONKbot
+                - generic:
+                  - generic: Mar 25
+              - generic:
+                - img
+              - generic: "3"
+            - link "Hello, how was your day? Deleted Account Mar 23 " [ref=e1064] [cursor=pointer]:
+              - /url: "#8120504864"
+              - generic:
+                - generic:
+                  - generic: Hello, how was your day?
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: Deleted Account
+                - generic:
+                  - generic: Mar 23
+              - generic:
+                - generic: 
+        - button " " [ref=e54] [cursor=pointer]:
+          - generic: 
+          - generic: 
+        - generic [ref=e58] [cursor=pointer]: UPDATE
+      - generic [ref=e1427]:
+        - generic [ref=e1428]:
+          - button "" [ref=e1429] [cursor=pointer]:
+            - generic: 
+          - generic [ref=e1430]:
+            - generic [ref=e1431]: Fam
+            - generic [ref=e1432]: 2 members
+          - button "" [ref=e1433] [cursor=pointer]:
+            - generic: 
+          - button "" [ref=e1435] [cursor=pointer]:
+            - generic: 
+        - list [ref=e1439]:
+          - 'link "You: Intercept test message - raw update capture General  04:00 PM" [ref=e3150] [cursor=pointer]':
+            - /url: "#-3974445671"
+            - generic:
+              - generic:
+                - generic:
+                  - generic: "You:"
+                - generic: Intercept test message - raw update capture
+            - generic:
+              - generic:
+                - generic:
+                  - generic: General
+              - generic:
+                - generic:
+                  - generic: 
+                - generic: 04:00 PM
+          - 'link "You: Hello M Morning email  Apr 9" [ref=e1440] [cursor=pointer]':
+            - /url: "#-3974445671"
+            - generic:
+              - generic:
+                - generic:
+                  - generic: "You:"
+                - generic: Hello
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - img
+                    - generic: M
+                  - generic: Morning email
+              - generic:
+                - generic:
+                  - generic: 
+                - generic: Apr 9
+    - generic [ref=e62]:
+      - generic [ref=e71] [cursor=pointer]:
+        - generic [ref=e75]:
+          - generic [ref=e2891]: General
+          - generic [ref=e2892]: In Fam
+        - generic [ref=e81]:
+          - text: "#"
+          - button "" [ref=e82]:
+            - generic: 
+          - button "" [ref=e84]:
+            - generic: 
+      - generic [ref=e2894]:
+        - generic [ref=e2897]: Today
+        - generic [ref=e2901]:
+          - generic [ref=e2902]:
+            - link "/mybots" [ref=e2903] [cursor=pointer]:
+              - /url: tg://bot_command?command=mybots
+            - generic "15 April 2026, 14:59:44" [ref=e2904] [cursor=pointer]:
+              - generic: 
+              - generic [ref=e2905]: 02:59 PM
+          - img [ref=e2906]
+        - generic [ref=e2908]:
+          - generic [ref=e2909] [cursor=pointer]: A
+          - generic [ref=e2912]:
+            - generic [ref=e2913]: AgentX
+            - generic [ref=e2914]:
+              - generic [ref=e2915]:
+                - text: "⚠️ Agent failed before reply: No API key found for provider \"anthropic\". Auth store:"
+                - link "/home" [ref=e2916] [cursor=pointer]:
+                  - /url: tg://bot_command?command=home
+                - link "/node" [ref=e2917] [cursor=pointer]:
+                  - /url: tg://bot_command?command=node
+                - text: "/.openclaw/agents/main/agent/auth-profiles.json (agentDir:"
+                - link "/home" [ref=e2918] [cursor=pointer]:
+                  - /url: tg://bot_command?command=home
+                - link "/node" [ref=e2919] [cursor=pointer]:
+                  - /url: tg://bot_command?command=node
+                - text: "/.openclaw/agents/main/agent). Configure auth for this agent (openclaw agents add <id>) or copy auth-profiles.json from the main agentDir. Logs: openclaw logs --follow"
+              - generic "15 April 2026, 14:59:45" [ref=e2920] [cursor=pointer]:
+                - generic [ref=e2921]: 02:59 PM
+            - img [ref=e2922]
+        - generic [ref=e2924]:
+          - generic [ref=e2928]:
+            - text: Hello, can you introduce yourself?
+            - generic "15 April 2026, 15:02:26" [ref=e2929] [cursor=pointer]:
+              - generic: 
+              - generic [ref=e2930]: 03:02 PM
+          - generic [ref=e2933]:
+            - generic [ref=e2934]:
+              - text: Hello, can you introduce yourself?
+              - generic "15 April 2026, 15:04:04" [ref=e2935] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e2936]: 03:04 PM
+            - img [ref=e2937]
+        - generic [ref=e2942]:
+          - generic [ref=e2943]:
+            - text: Hello, can you introduce yourself?
+            - generic "15 April 2026, 15:06:37" [ref=e2944] [cursor=pointer]:
+              - generic: 
+              - generic [ref=e2945]: 03:06 PM
+          - img [ref=e2946]
+        - generic [ref=e2948]:
+          - generic [ref=e2952]:
+            - text: Hello! Please introduce yourself briefly.
+            - generic "15 April 2026, 15:10:15" [ref=e2953] [cursor=pointer]:
+              - generic: 
+              - generic [ref=e2954]: 03:10 PM
+          - generic [ref=e2957]:
+            - generic [ref=e2958]:
+              - link "/mybots" [ref=e2959] [cursor=pointer]:
+                - /url: tg://bot_command?command=mybots
+              - generic "15 April 2026, 15:11:17" [ref=e2960] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e2961]: 03:11 PM
+            - img [ref=e2962]
+        - generic [ref=e2964]:
+          - generic [ref=e2965] [cursor=pointer]: A
+          - generic [ref=e2968]:
+            - generic [ref=e2969]: AgentX
+            - generic [ref=e2970]:
+              - generic [ref=e2971]: "⚠️ Agent failed before reply: EACCES: permission denied, open '/home/node/.openclaw/agents/main/agent/auth-profiles.json'. Logs: openclaw logs --follow"
+              - generic "15 April 2026, 15:11:27" [ref=e2972] [cursor=pointer]:
+                - generic [ref=e2973]: 03:11 PM
+            - img [ref=e2974]
+        - generic [ref=e2979]:
+          - generic [ref=e2980]:
+            - text: Hello ROBOTICUS, can you introduce yourself?
+            - generic "15 April 2026, 15:14:18" [ref=e2981] [cursor=pointer]:
+              - generic: 
+              - generic [ref=e2982]: 03:14 PM
+          - img [ref=e2983]
+        - generic [ref=e2988]:
+          - generic [ref=e2989]:
+            - text: Hey, what is your name?
+            - generic "15 April 2026, 15:17:13" [ref=e2990] [cursor=pointer]:
+              - generic: 
+              - generic [ref=e2991]: 03:17 PM
+          - img [ref=e2992]
+        - generic [ref=e2994]:
+          - generic [ref=e2998]:
+            - text: Hello! Please introduce yourself.
+            - generic "15 April 2026, 15:21:24" [ref=e2999] [cursor=pointer]:
+              - generic: 
+              - generic [ref=e3000]: 03:21 PM
+          - generic [ref=e3004]:
+            - text: Debug test 123
+            - generic "15 April 2026, 15:22:56" [ref=e3005] [cursor=pointer]:
+              - generic: 
+              - generic [ref=e3006]: 03:22 PM
+          - generic [ref=e3010]:
+            - text: Hello bot, respond please!
+            - generic "15 April 2026, 15:24:03" [ref=e3011] [cursor=pointer]:
+              - generic: 
+              - generic [ref=e3012]: 03:24 PM
+          - generic [ref=e3016]:
+            - text: Raw update test
+            - generic "15 April 2026, 15:25:52" [ref=e3017] [cursor=pointer]:
+              - generic: 
+              - generic [ref=e3018]: 03:25 PM
+          - generic [ref=e3022]:
+            - text: Raw update test 2
+            - generic "15 April 2026, 15:26:25" [ref=e3023] [cursor=pointer]:
+              - generic: 
+              - generic [ref=e3024]: 03:26 PM
+          - generic [ref=e3027]:
+            - generic [ref=e3028]:
+              - text: Hi there!
+              - generic "15 April 2026, 15:27:51" [ref=e3029] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e3030]: 03:27 PM
+            - img [ref=e3031]
+        - generic [ref=e3036]:
+          - generic [ref=e3037]:
+            - text: Hello! Who are you?
+            - generic "15 April 2026, 15:31:29" [ref=e3038] [cursor=pointer]:
+              - generic: 
+              - generic [ref=e3039]: 03:31 PM
+          - img [ref=e3040]
+        - generic [ref=e3042]:
+          - generic [ref=e3046]:
+            - text: Hello bot DM test
+            - generic "15 April 2026, 15:34:45" [ref=e3047] [cursor=pointer]:
+              - generic: 
+              - generic [ref=e3048]: 03:34 PM
+          - generic [ref=e3052]:
+            - text: CAPTURE TEST
+            - generic "15 April 2026, 15:36:05" [ref=e3053] [cursor=pointer]:
+              - generic: 
+              - generic [ref=e3054]: 03:36 PM
+          - generic [ref=e3057]:
+            - generic [ref=e3058]:
+              - link "/mybots" [ref=e3059] [cursor=pointer]:
+                - /url: tg://bot_command?command=mybots
+              - generic "15 April 2026, 15:37:35" [ref=e3060] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e3061]: 03:37 PM
+            - img [ref=e3062]
+        - generic [ref=e3064]:
+          - generic [ref=e3065] [cursor=pointer]: A
+          - generic [ref=e3068]:
+            - generic [ref=e3069]: AgentX
+            - generic [ref=e3070]:
+              - text: Hello AgentX! Can you introduce yourself? Sign off as ROBOTICUS.
+              - generic "15 April 2026, 15:49:12" [ref=e3071] [cursor=pointer]:
+                - generic [ref=e3072]: 03:49 PM
+            - img [ref=e3073]
+        - generic [ref=e3100]:
+          - generic [ref=e3104]:
+            - text: Hello! Please introduce yourself briefly.
+            - generic "15 April 2026, 15:50:49" [ref=e3105] [cursor=pointer]:
+              - generic: 
+              - generic [ref=e3106]: 03:50 PM
+          - generic [ref=e3112]:
+            - generic [ref=e3113]:
+              - text: Test 999 - bot please respond!
+              - generic "15 April 2026, 15:52:50" [ref=e3114] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e3115]: 03:52 PM
+            - img [ref=e3116]
+        - generic [ref=e3122]:
+          - generic [ref=e3123]:
+            - text: Hello bot, please respond! This is a fresh start test.
+            - generic "15 April 2026, 15:58:49" [ref=e3124] [cursor=pointer]:
+              - generic: 
+              - generic [ref=e3125]: 03:58 PM
+          - img [ref=e3126]
+        - generic [ref=e3129]:
+          - generic [ref=e3130] [cursor=pointer]: A
+          - generic [ref=e3133]:
+            - generic [ref=e3134]: AgentX
+            - generic [ref=e3135]:
+              - text: Bot test ping
+              - generic "15 April 2026, 15:59:38" [ref=e3136] [cursor=pointer]:
+                - generic [ref=e3137]: 03:59 PM
+            - img [ref=e3138]
+        - generic [ref=e3141]:
+          - generic [ref=e3145]:
+            - text: PING test - are you there?
+            - generic "15 April 2026, 16:00:00" [ref=e3146] [cursor=pointer]:
+              - generic: 
+              - generic [ref=e3147]: 04:00 PM
+          - generic [ref=e3153]:
+            - generic [ref=e3154]:
+              - text: Intercept test message - raw update capture
+              - generic "15 April 2026, 16:00:55" [ref=e3155] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e3156]: 04:00 PM
+            - img [ref=e3157]
+      - generic [ref=e203]:
+        - generic [ref=e205]:
+          - img [ref=e206]
+          - generic:
+            - button
+            - button "":
+              - generic: 
+          - generic [ref=e208]:
+            - button "" [ref=e209] [cursor=pointer]:
+              - generic: 
+            - generic [ref=e210]:
+              - generic: Message
+            - generic [ref=e212] [cursor=pointer]:
+              - generic: 
+        - generic [ref=e214]:
+          - generic:
+            - generic: 
+            - generic: NaN
+          - button "    " [ref=e215] [cursor=pointer]:
+            - generic: 
+            - generic: 
+            - generic: 
+            - generic: 
+            - generic: 
+    - generic [ref=e3075]:
+      - generic:
+        - button [ref=e3076] [cursor=pointer]
+        - generic:
+          - generic:
+            - generic: Topic Info
+            - button "" [ref=e3077] [cursor=pointer]:
+              - generic: 
+      - generic [ref=e3079]:
+        - generic [ref=e3084]:
+          - generic [ref=e3088]: General
+          - generic [ref=e3091] [cursor=pointer]:
+            - generic: Fam
+          - generic [ref=e3092] [cursor=pointer]:
+            - generic: t.me/c/3974445671/1
+            - generic: Link
+            - generic: 
+          - generic [ref=e3094] [cursor=pointer]:
+            - generic [ref=e3096]:
+              - generic: Notifications
+              - generic:
+                - generic:
+                  - checkbox "Notifications " [checked]
+            - generic: 
+        - button "" [ref=e3097] [cursor=pointer]:
+          - generic: 

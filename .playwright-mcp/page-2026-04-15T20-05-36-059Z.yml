@@ -1,0 +1,100 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - link "Reins The trust layer for AI agents" [ref=e6] [cursor=pointer]:
+      - /url: /
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - text: Reins
+        - paragraph [ref=e10]: The trust layer for AI agents
+    - navigation [ref=e11]:
+      - list [ref=e12]:
+        - listitem [ref=e13]:
+          - link "Dashboard" [ref=e14] [cursor=pointer]:
+            - /url: /
+            - img [ref=e15]
+            - generic [ref=e17]: Dashboard
+        - listitem [ref=e18]:
+          - link "Agents" [ref=e19] [cursor=pointer]:
+            - /url: /agents
+            - img [ref=e20]
+            - generic [ref=e25]: Agents
+        - listitem [ref=e26]:
+          - link "Credentials" [ref=e27] [cursor=pointer]:
+            - /url: /credentials
+            - img [ref=e28]
+            - generic [ref=e32]: Credentials
+        - listitem [ref=e33]:
+          - link "Approvals" [ref=e34] [cursor=pointer]:
+            - /url: /approvals
+            - img [ref=e35]
+            - generic [ref=e38]: Approvals
+        - listitem [ref=e39]:
+          - link "Audit Log" [ref=e40] [cursor=pointer]:
+            - /url: /audit
+            - img [ref=e41]
+            - generic [ref=e43]: Audit Log
+        - listitem [ref=e44]:
+          - link "Backups" [ref=e45] [cursor=pointer]:
+            - /url: /backups
+            - img [ref=e46]
+            - generic [ref=e50]: Backups
+        - listitem [ref=e51]:
+          - link "Notifications" [ref=e52] [cursor=pointer]:
+            - /url: /notifications
+            - img [ref=e53]
+            - generic [ref=e56]: Notifications
+      - generic [ref=e57]: Admin
+      - list [ref=e58]:
+        - listitem [ref=e59]:
+          - link "Users" [ref=e60] [cursor=pointer]:
+            - /url: /admin/users
+            - img [ref=e61]
+            - generic [ref=e73]: Users
+    - generic [ref=e74]:
+      - generic [ref=e75]:
+        - img [ref=e76]
+        - generic [ref=e82]: System Status
+        - generic [ref=e85]: Online
+      - generic [ref=e86]:
+        - img [ref=e87]
+        - generic [ref=e90]: fsaint
+        - generic [ref=e91]: Admin
+      - button "Sign out" [ref=e92] [cursor=pointer]:
+        - img [ref=e93]
+        - text: Sign out
+  - main [ref=e97]:
+    - generic [ref=e149]:
+      - generic [ref=e150]:
+        - generic [ref=e151]:
+          - heading "Agents" [level=1] [ref=e152]
+          - paragraph [ref=e153]: Manage AI agents, their services, and permissions
+        - button "Add Agent" [ref=e154] [cursor=pointer]:
+          - img [ref=e155]
+          - text: Add Agent
+      - generic [ref=e156]:
+        - generic [ref=e159]: Active
+        - generic [ref=e162]: Needs Credential
+        - generic [ref=e165]: Expired
+        - generic [ref=e168]: Disabled
+      - generic [ref=e170]:
+        - generic [ref=e171]:
+          - button "AGENT5 active No services" [active] [ref=e172] [cursor=pointer]:
+            - img [ref=e196]
+            - generic [ref=e175]:
+              - generic [ref=e176]:
+                - generic [ref=e177]: AGENT5
+                - generic [ref=e178]: active
+              - generic [ref=e179]: No services
+          - generic [ref=e180]:
+            - button "Deploy" [ref=e181] [cursor=pointer]:
+              - img [ref=e182]
+              - text: Deploy
+            - button "Suspend" [ref=e187] [cursor=pointer]:
+              - img [ref=e188]
+            - button "Delete" [ref=e192] [cursor=pointer]:
+              - img [ref=e193]
+        - generic [ref=e198]:
+          - paragraph [ref=e199]: No services added yet. Click "Add Service" to get started.
+          - button "Add Service" [ref=e200] [cursor=pointer]:
+            - img [ref=e201]
+            - text: Add Service

@@ -1,0 +1,183 @@
+- generic [ref=e1]:
+  - img [ref=e2]
+  - generic [ref=e7]:
+    - generic [ref=e13]:
+      - textbox [active] [ref=e14]:
+        - /placeholder: " "
+      - generic: 
+      - generic [ref=e197]:
+        - generic:
+          - generic: F
+          - generic:
+            - generic: 
+        - generic: Fam
+    - generic [ref=e15]:
+      - generic [ref=e70]:
+        - navigation [ref=e73]:
+          - generic [ref=e74] [cursor=pointer]:
+            - generic:
+              - generic: Chats
+          - generic [ref=e76] [cursor=pointer]:
+            - generic:
+              - generic: Channels
+          - generic [ref=e78] [cursor=pointer]:
+            - generic:
+              - generic: Apps
+          - generic [ref=e80] [cursor=pointer]:
+            - generic:
+              - generic: Posts
+          - generic [ref=e82] [cursor=pointer]:
+            - generic:
+              - generic: Media
+          - generic [ref=e84] [cursor=pointer]:
+            - generic:
+              - generic: Links
+          - generic [ref=e86] [cursor=pointer]:
+            - generic:
+              - generic: Files
+          - generic [ref=e88] [cursor=pointer]:
+            - generic:
+              - generic: Music
+          - generic [ref=e90] [cursor=pointer]:
+            - generic:
+              - generic: Voice
+        - generic [ref=e125]:
+          - generic [ref=e127]: Messages
+          - list [ref=e130]:
+            - 'link "You: Hello Fam Apr 9 F" [ref=e198] [cursor=pointer]':
+              - /url: "#-3974445671"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "You:"
+                  - generic: Hello
+              - generic:
+                - generic:
+                  - generic: Fam
+                - generic:
+                  - generic: Apr 9
+              - generic: F
+            - 'link "You: @EmailAndCalendar_bot ruso Fam Apr 9 F" [ref=e200] [cursor=pointer]':
+              - /url: "#-3974445671"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "You:"
+                  - generic: "@EmailAndCalendar_bot ruso"
+              - generic:
+                - generic:
+                  - generic: Fam
+                - generic:
+                  - generic: Apr 9
+              - generic: F
+            - 'link "You: Hey Fam Apr 9 F" [ref=e202] [cursor=pointer]':
+              - /url: "#-3974445671"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "You:"
+                  - generic: Hey
+              - generic:
+                - generic:
+                  - generic: Fam
+                - generic:
+                  - generic: Apr 9
+              - generic: F
+            - 'link "You: @EmailAndCalendar_bot hello Fam Apr 9 F" [ref=e204] [cursor=pointer]':
+              - /url: "#-3974445671"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "You:"
+                  - generic: "@EmailAndCalendar_bot hello"
+              - generic:
+                - generic:
+                  - generic: Fam
+                - generic:
+                  - generic: Apr 9
+              - generic: F
+            - 'link "You: Hey Fam Apr 9 F" [ref=e206] [cursor=pointer]':
+              - /url: "#-3974445671"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "You:"
+                  - generic: Hey
+              - generic:
+                - generic:
+                  - generic: Fam
+                - generic:
+                  - generic: Apr 9
+              - generic: F
+            - link "M Morning email was created Fam Apr 9 F" [ref=e208] [cursor=pointer]:
+              - /url: "#-3974445671"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - img
+                            - generic: M
+                          - text: Morning email
+                        - text: was created
+              - generic:
+                - generic:
+                  - generic: Fam
+                - generic:
+                  - generic: Apr 9
+              - generic: F
+            - link "This group was upgraded to a supergroup Fam Apr 9 F" [ref=e210] [cursor=pointer]:
+              - /url: "#-3974445671"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: This group was upgraded to a supergroup
+              - generic:
+                - generic:
+                  - generic: Fam
+                - generic:
+                  - generic: Apr 9
+              - generic: F
+            - link "[messageActionChatMigrateTo] Fam Apr 9 F" [ref=e212] [cursor=pointer]:
+              - /url: "#-3974445671"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "[messageActionChatMigrateTo]"
+              - generic:
+                - generic:
+                  - generic: Fam
+                - generic:
+                  - generic: Apr 9
+              - generic: F
+            - 'link "You: Hello Fam Apr 9 F" [ref=e214] [cursor=pointer]':
+              - /url: "#-3974445671"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "You:"
+                  - generic: Hello
+              - generic:
+                - generic:
+                  - generic: Fam
+                - generic:
+                  - generic: Apr 9
+              - generic: F
+            - link "You created the group Fam Apr 9 F" [ref=e216] [cursor=pointer]:
+              - /url: "#-3974445671"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: You created the group
+              - generic:
+                - generic:
+                  - generic: Fam
+                - generic:
+                  - generic: Apr 9
+              - generic: F
+      - button " " [ref=e54] [cursor=pointer]:
+        - generic: 
+        - generic: 
+      - generic [ref=e58] [cursor=pointer]: UPDATE

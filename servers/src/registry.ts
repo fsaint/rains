@@ -19,9 +19,15 @@ import { definition as outlookCalendar } from './outlook-calendar/definition.js'
 import { definition as notion } from './notion/definition.js';
 import { definition as hermeneutix } from './hermeneutix/definition.js';
 import { definition as zendesk } from './zendesk/definition.js';
+import { definition as devSandbox } from './dev-sandbox/definition.js';
 
 // Re-export the type from its canonical location
 export type { ServiceDefinitionWithTools } from './common/types.js';
+
+// Dev Sandbox is only available outside production so fake tools never
+// appear in real deployments.
+const devOnlyServices: ServiceDefinitionWithTools[] =
+  process.env.NODE_ENV !== 'production' ? [devSandbox] : [];
 
 export const serviceDefinitions: ServiceDefinitionWithTools[] = [
   gmail,
@@ -36,6 +42,7 @@ export const serviceDefinitions: ServiceDefinitionWithTools[] = [
   notion,
   hermeneutix,
   zendesk,
+  ...devOnlyServices,
 ];
 
 /** Lookup map by service type */

@@ -1,0 +1,127 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - link "Reins The trust layer for AI agents" [ref=e6] [cursor=pointer]:
+      - /url: /
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - text: Reins
+        - paragraph [ref=e10]: The trust layer for AI agents
+    - navigation [ref=e11]:
+      - list [ref=e12]:
+        - listitem [ref=e13]:
+          - link "Dashboard" [ref=e14] [cursor=pointer]:
+            - /url: /
+            - img [ref=e15]
+            - generic [ref=e17]: Dashboard
+        - listitem [ref=e18]:
+          - link "Agents" [ref=e19] [cursor=pointer]:
+            - /url: /agents
+            - img [ref=e20]
+            - generic [ref=e25]: Agents
+        - listitem [ref=e26]:
+          - link "Credentials" [ref=e27] [cursor=pointer]:
+            - /url: /credentials
+            - img [ref=e28]
+            - generic [ref=e32]: Credentials
+        - listitem [ref=e33]:
+          - link "Approvals" [ref=e34] [cursor=pointer]:
+            - /url: /approvals
+            - img [ref=e35]
+            - generic [ref=e38]: Approvals
+        - listitem [ref=e39]:
+          - link "Audit Log" [ref=e40] [cursor=pointer]:
+            - /url: /audit
+            - img [ref=e41]
+            - generic [ref=e43]: Audit Log
+        - listitem [ref=e44]:
+          - link "Backups" [ref=e45] [cursor=pointer]:
+            - /url: /backups
+            - img [ref=e46]
+            - generic [ref=e50]: Backups
+        - listitem [ref=e51]:
+          - link "Notifications" [ref=e52] [cursor=pointer]:
+            - /url: /notifications
+            - img [ref=e53]
+            - generic [ref=e56]: Notifications
+      - generic [ref=e57]: Admin
+      - list [ref=e58]:
+        - listitem [ref=e59]:
+          - link "Users" [ref=e60] [cursor=pointer]:
+            - /url: /admin/users
+            - img [ref=e61]
+            - generic [ref=e73]: Users
+    - generic [ref=e74]:
+      - generic [ref=e75]:
+        - img [ref=e76]
+        - generic [ref=e82]: System Status
+        - generic [ref=e85]: Online
+      - generic [ref=e86]:
+        - img [ref=e87]
+        - generic [ref=e90]: fsaint
+        - generic [ref=e91]: Admin
+      - button "Sign out" [ref=e92] [cursor=pointer]:
+        - img [ref=e93]
+        - text: Sign out
+  - main [ref=e97]:
+    - generic [ref=e98]:
+      - generic [ref=e100]:
+        - button [ref=e101] [cursor=pointer]:
+          - img [ref=e102]
+        - generic [ref=e104]:
+          - generic [ref=e105]:
+            - heading "AGENT5" [level=1] [ref=e106]
+            - generic [ref=e109]: running
+          - generic [ref=e110]:
+            - generic [ref=e111]: "Region: iad"
+            - generic [ref=e112]: "Telegram: 87979...6Ws"
+            - generic [ref=e113]: "Model: anthropic/claude-sonnet-4-6"
+      - generic [ref=e114]:
+        - generic [ref=e116]:
+          - button "Stop" [ref=e117] [cursor=pointer]:
+            - img [ref=e118]
+            - text: Stop
+          - button "Restart" [ref=e120] [cursor=pointer]:
+            - img [ref=e121]
+            - text: Restart
+          - button "Redeploy" [ref=e124] [cursor=pointer]:
+            - img [ref=e125]
+            - text: Redeploy
+          - button "Logs" [ref=e130] [cursor=pointer]:
+            - img [ref=e131]
+            - text: Logs
+          - button "Chat" [ref=e134] [cursor=pointer]:
+            - img [ref=e135]
+            - text: Chat
+          - button "Destroy" [ref=e137] [cursor=pointer]:
+            - img [ref=e138]
+            - text: Destroy
+        - generic [ref=e141]:
+          - heading "Management" [level=2] [ref=e142]
+          - generic [ref=e144]:
+            - text: Gateway Token
+            - generic [ref=e145]:
+              - code [ref=e146]: testgate...n123
+              - button "Copy" [ref=e147] [cursor=pointer]:
+                - img [ref=e148]
+                - text: Copy
+        - generic [ref=e151]:
+          - heading "Soul MD" [level=2] [ref=e153]
+          - textbox "Agent personality and instructions..." [ref=e154]
+        - generic [ref=e155]:
+          - generic [ref=e156]:
+            - img [ref=e157]
+            - heading "Telegram Groups (1)" [level=2] [ref=e162]
+          - generic [ref=e164]:
+            - generic [ref=e165]:
+              - button "Test Group Alpha-1001234567001" [active] [ref=e166] [cursor=pointer]:
+                - img [ref=e171]
+                - generic [ref=e169]: Test Group Alpha-1001234567001
+              - button "💬 All msgs" [ref=e170] [cursor=pointer]
+            - generic [ref=e173]:
+              - paragraph [ref=e174]: No topic-specific instructions yet.
+              - generic [ref=e175]:
+                - paragraph [ref=e176]: Add topic instruction
+                - generic [ref=e177]:
+                  - spinbutton [ref=e178]
+                  - textbox "System prompt for this topic..." [ref=e179]
+                  - button "Add" [disabled] [ref=e180]

@@ -1,0 +1,117 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - link "Reins The trust layer for AI agents" [ref=e6] [cursor=pointer]:
+      - /url: /
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - text: Reins
+        - paragraph [ref=e10]: The trust layer for AI agents
+    - navigation [ref=e11]:
+      - list [ref=e12]:
+        - listitem [ref=e13]:
+          - link "Dashboard" [ref=e14] [cursor=pointer]:
+            - /url: /
+            - img [ref=e15]
+            - generic [ref=e17]: Dashboard
+        - listitem [ref=e18]:
+          - link "Agents" [ref=e19] [cursor=pointer]:
+            - /url: /agents
+            - img [ref=e20]
+            - generic [ref=e25]: Agents
+        - listitem [ref=e26]:
+          - link "Credentials" [ref=e27] [cursor=pointer]:
+            - /url: /credentials
+            - img [ref=e28]
+            - generic [ref=e32]: Credentials
+        - listitem [ref=e33]:
+          - link "Approvals" [ref=e34] [cursor=pointer]:
+            - /url: /approvals
+            - img [ref=e35]
+            - generic [ref=e38]: Approvals
+        - listitem [ref=e39]:
+          - link "Audit Log" [ref=e40] [cursor=pointer]:
+            - /url: /audit
+            - img [ref=e41]
+            - generic [ref=e43]: Audit Log
+        - listitem [ref=e44]:
+          - link "Backups" [ref=e45] [cursor=pointer]:
+            - /url: /backups
+            - img [ref=e46]
+            - generic [ref=e50]: Backups
+        - listitem [ref=e51]:
+          - link "Notifications" [ref=e52] [cursor=pointer]:
+            - /url: /notifications
+            - img [ref=e53]
+            - generic [ref=e56]: Notifications
+      - generic [ref=e57]: Admin
+      - list [ref=e58]:
+        - listitem [ref=e59]:
+          - link "Users" [ref=e60] [cursor=pointer]:
+            - /url: /admin/users
+            - img [ref=e61]
+            - generic [ref=e73]: Users
+    - generic [ref=e74]:
+      - generic [ref=e75]:
+        - img [ref=e76]
+        - generic [ref=e82]: System Status
+        - generic [ref=e85]: Online
+      - generic [ref=e86]:
+        - img [ref=e87]
+        - generic [ref=e90]: fsaint
+        - generic [ref=e91]: Admin
+      - button "Sign out" [ref=e92] [cursor=pointer]:
+        - img [ref=e93]
+        - text: Sign out
+  - main [ref=e97]:
+    - generic [ref=e98]:
+      - generic [ref=e99]:
+        - heading "Pending Approvals" [level=1] [ref=e100]
+        - paragraph [ref=e101]: Review and approve agent tool requests
+      - generic [ref=e102]:
+        - generic [ref=e104]:
+          - generic [ref=e105]:
+            - generic [ref=e106]:
+              - img [ref=e108]
+              - generic [ref=e110]:
+                - heading "Re-authenticate OpenAI" [level=3] [ref=e111]
+                - paragraph [ref=e112]: Token expired — agent is unable to start
+            - generic [ref=e113]:
+              - generic [ref=e114]:
+                - paragraph [ref=e115]: Agent
+                - paragraph [ref=e116]: cVmDJxrh8MhiDa5f8cWcP
+              - generic [ref=e117]:
+                - paragraph [ref=e118]: Requested
+                - paragraph [ref=e119]: 4/15/2026, 11:51:58 AM
+            - paragraph [ref=e121]: OpenAI Codex token for agent "AGENT5" expired at 2026-04-13T05:13:11.000Z. The agent cannot start until re-authenticated.
+          - generic [ref=e122]:
+            - generic [ref=e123]:
+              - img [ref=e124]
+              - generic [ref=e127]: 6d remaining
+            - button "Re-authenticate" [ref=e128] [cursor=pointer]:
+              - img [ref=e129]
+              - text: Re-authenticate
+        - generic [ref=e133]:
+          - generic [ref=e134]:
+            - generic [ref=e135]:
+              - img [ref=e137]
+              - generic [ref=e142]:
+                - heading "Group Configuration" [level=3] [ref=e143]
+                - paragraph [ref=e144]:
+                  - text: Your bot was added to
+                  - generic [ref=e145]: "\"Real Test Group\""
+            - generic [ref=e146]:
+              - generic [ref=e147]:
+                - paragraph [ref=e148]: Agent
+                - paragraph [ref=e149]: cVmDJxrh8MhiDa5f8cWcP
+              - generic [ref=e150]:
+                - paragraph [ref=e151]: Added by
+                - paragraph [ref=e152]: "@fsaint"
+            - paragraph [ref=e153]: How should the bot behave in this group?
+          - generic [ref=e154]:
+            - generic [ref=e155]:
+              - img [ref=e156]
+              - generic [ref=e159]: 167h 59m remaining
+            - generic [ref=e160]:
+              - button "All messages" [ref=e161] [cursor=pointer]
+              - button "@Mention only" [ref=e162] [cursor=pointer]
+              - button "Ignore group" [ref=e163] [cursor=pointer]

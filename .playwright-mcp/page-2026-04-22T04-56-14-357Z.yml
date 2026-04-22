@@ -1,0 +1,124 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - link "Reins The trust layer for AI agents" [ref=e6] [cursor=pointer]:
+      - /url: /
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - text: Reins
+        - paragraph [ref=e10]: The trust layer for AI agents
+    - navigation [ref=e11]:
+      - list [ref=e12]:
+        - listitem [ref=e13]:
+          - link "Dashboard" [ref=e14] [cursor=pointer]:
+            - /url: /
+            - img [ref=e15]
+            - generic [ref=e17]: Dashboard
+        - listitem [ref=e18]:
+          - link "Agents" [ref=e19] [cursor=pointer]:
+            - /url: /agents
+            - img [ref=e20]
+            - generic [ref=e25]: Agents
+        - listitem [ref=e26]:
+          - link "Credentials" [ref=e27] [cursor=pointer]:
+            - /url: /credentials
+            - img [ref=e28]
+            - generic [ref=e32]: Credentials
+        - listitem [ref=e33]:
+          - link "Approvals" [ref=e34] [cursor=pointer]:
+            - /url: /approvals
+            - img [ref=e35]
+            - generic [ref=e38]: Approvals
+        - listitem [ref=e39]:
+          - link "Audit Log" [ref=e40] [cursor=pointer]:
+            - /url: /audit
+            - img [ref=e41]
+            - generic [ref=e43]: Audit Log
+        - listitem [ref=e44]:
+          - link "Backups" [ref=e45] [cursor=pointer]:
+            - /url: /backups
+            - img [ref=e46]
+            - generic [ref=e50]: Backups
+        - listitem [ref=e51]:
+          - link "Notifications" [ref=e52] [cursor=pointer]:
+            - /url: /notifications
+            - img [ref=e53]
+            - generic [ref=e56]: Notifications
+      - generic [ref=e57]: Admin
+      - list [ref=e58]:
+        - listitem [ref=e59]:
+          - link "Users" [ref=e60] [cursor=pointer]:
+            - /url: /admin/users
+            - img [ref=e61]
+            - generic [ref=e73]: Users
+    - generic [ref=e74]:
+      - generic [ref=e75]:
+        - img [ref=e76]
+        - generic [ref=e82]: System Status
+        - generic [ref=e85]: Online
+      - generic [ref=e86]:
+        - img [ref=e87]
+        - generic [ref=e90]: fsaint
+        - generic [ref=e91]: Admin
+      - button "Sign out" [ref=e92] [cursor=pointer]:
+        - img [ref=e93]
+        - text: Sign out
+  - main [ref=e97]:
+    - generic [ref=e229]:
+      - generic [ref=e231]:
+        - button [ref=e232] [cursor=pointer]:
+          - img [ref=e233]
+        - generic [ref=e235]:
+          - generic [ref=e236]:
+            - 'heading "Test: OpenClaw + MiniMax" [level=1] [ref=e237]'
+            - generic [ref=e240]: running
+          - generic [ref=e241]:
+            - generic [ref=e242]: "Region: iad"
+            - generic [ref=e243]: "Telegram: 83455...UuM"
+            - generic [ref=e244]: "Model: minimax/MiniMax-M2.7"
+      - generic [ref=e245]:
+        - generic [ref=e247]:
+          - button "Stop" [ref=e248] [cursor=pointer]:
+            - img [ref=e249]
+            - text: Stop
+          - button "Restart" [ref=e251] [cursor=pointer]:
+            - img [ref=e252]
+            - text: Restart
+          - button "Redeploy" [ref=e255] [cursor=pointer]:
+            - img [ref=e256]
+            - text: Redeploy
+          - button "Logs" [ref=e261] [cursor=pointer]:
+            - img [ref=e262]
+            - text: Logs
+          - button "Chat" [ref=e265] [cursor=pointer]:
+            - img [ref=e266]
+            - text: Chat
+          - button "Destroy" [ref=e268] [cursor=pointer]:
+            - img [ref=e269]
+            - text: Destroy
+        - generic [ref=e272]:
+          - heading "Management" [level=2] [ref=e273]
+          - generic [ref=e274]:
+            - generic [ref=e275]:
+              - text: Console
+              - link "Open Console" [ref=e276] [cursor=pointer]:
+                - /url: http://localhost:32780/?token=Di1uMAeU0RCRClmwomsbpuOkAPyC1s7Z
+                - img [ref=e277]
+                - text: Open Console
+            - generic [ref=e281]:
+              - text: App Name
+              - paragraph [ref=e282]: reins-BSSfpbapFmC5
+            - generic [ref=e283]:
+              - text: Gateway Token
+              - generic [ref=e284]:
+                - code [ref=e285]: Di1uMAeU...1s7Z
+                - button "Copy" [ref=e286] [cursor=pointer]:
+                  - img [ref=e287]
+                  - text: Copy
+        - generic [ref=e290]:
+          - heading "Soul MD" [level=2] [ref=e292]
+          - textbox "Agent personality and instructions..." [ref=e293]: You are a helpful AI assistant. Be concise, friendly, and thoughtful in your responses.
+        - generic [ref=e294]:
+          - generic [ref=e295]:
+            - img [ref=e296]
+            - heading "Telegram Groups" [level=2] [ref=e301]
+          - paragraph [ref=e302]: No groups configured yet. Add the bot to a Telegram group to configure it.

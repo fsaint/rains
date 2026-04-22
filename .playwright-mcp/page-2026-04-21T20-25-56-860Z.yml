@@ -1,0 +1,414 @@
+- generic [ref=e1]:
+  - img [ref=e2]
+  - generic [ref=e4]:
+    - generic [ref=e7]:
+      - generic [ref=e8]:
+        - button [ref=e11] [cursor=pointer]
+        - generic [ref=e13]:
+          - textbox [ref=e14]:
+            - /placeholder: " "
+          - generic: 
+          - generic: Search
+      - generic [ref=e15]:
+        - generic [ref=e17]:
+          - generic [ref=e20] [cursor=pointer]:
+            - button "" [ref=e22]:
+              - generic: 
+            - generic:
+              - generic:
+                - generic: Add your birthday! 🎂
+            - generic:
+              - generic: Let your contacts know when you’re celebrating.
+          - list [ref=e27]:
+            - generic [ref=e28] [cursor=pointer]:
+              - generic:
+                - generic:
+                  - generic: 
+              - generic:
+                - generic: Archived Chats
+              - generic:
+                - generic: Deleted Account, Deleted Account, Deleted Account, Deleted Account, Crypto Capitin Call ..., The BotFather
+                - generic: "1"
+            - link "Hello  FamGPT  Apr 15 F" [ref=e30] [cursor=pointer]:
+              - /url: "#7506388125"
+              - generic:
+                - generic:
+                  - generic: Hello
+                - generic: 
+              - generic:
+                - generic:
+                  - generic: FamGPT
+                - generic:
+                  - generic:
+                    - generic: 
+                  - generic: Apr 15
+              - generic: F
+            - 'link "Draft: . EmailAndCalendar 01:25 PM E" [ref=e572] [cursor=pointer]':
+              - /url: "#8345585236"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "Draft:"
+                  - generic: .
+              - generic:
+                - generic:
+                  - generic: EmailAndCalendar
+                - generic:
+                  - generic: 01:25 PM
+              - generic: E
+            - 'link "Draft: Ok, perfecto Alan Weiss 01:25 PM AW" [ref=e355] [cursor=pointer]':
+              - /url: "#8664382941"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "Draft:"
+                  - generic: Ok, perfecto
+              - generic:
+                - generic:
+                  - generic: Alan Weiss
+                - generic:
+                  - generic: 01:25 PM
+              - generic: AW
+            - 'link "LLM request rejected: You''re out of extra usage. Add more at claude.ai/settings/usage and keep going. 30 Telman 01:00 PM T" [ref=e32] [cursor=pointer]':
+              - /url: "#8326726800"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - img
+                  - generic: "LLM request rejected: You're out of extra usage. Add more at claude.ai/settings/usage and keep going."
+                - generic: "30"
+              - generic:
+                - generic:
+                  - generic: Telman
+                - generic:
+                  - generic: 01:00 PM
+              - generic: T
+            - 'link "You: Está es la opción creo yo https://platform.minimax.io/subscribe/token-plan fsaint & Hermeneutix  Mon fH" [ref=e38] [cursor=pointer]':
+              - /url: "#-4829932571"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "You:"
+                  - generic:
+                    - generic:
+                      - img
+                  - generic: Está es la opción creo yo https://platform.minimax.io/subscribe/token-plan
+              - generic:
+                - generic:
+                  - generic: fsaint & Hermeneutix
+                - generic:
+                  - generic:
+                    - generic: 
+                  - generic: Mon
+              - generic: fH
+            - link "Mañana vamos a probar este tool que esta bueno. https://wisprflow.ai/r?FELIPE1231 lo estoy usando ha... Juan Pablo  Mon JP" [ref=e40] [cursor=pointer]:
+              - /url: "#8780225380"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - img
+                  - generic: Mañana vamos a probar este tool que esta bueno. https://wisprflow.ai/r?FELIPE1231 lo estoy usando ha...
+              - generic:
+                - generic:
+                  - generic: Juan Pablo
+                - generic:
+                  - generic:
+                    - generic: 
+                  - generic: Mon
+              - generic: JP
+            - 'link "You: Hi are you there? fsaint and EmailAndCalendar  Apr 17 fE" [ref=e42] [cursor=pointer]':
+              - /url: "#-3736535424"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "You:"
+                  - generic: Hi are you there?
+              - generic:
+                - generic:
+                  - generic: fsaint and EmailAndCalendar
+                - generic:
+                  - generic:
+                    - generic: 
+                  - generic: Apr 17
+              - generic: fE
+            - 'link "You: @EmailAndCalendar_bot hello Fam  Apr 16 F" [ref=e44] [cursor=pointer]':
+              - /url: "#-3974445671"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "You:"
+                  - generic: "@EmailAndCalendar_bot hello"
+              - generic:
+                - generic:
+                  - generic: Fam
+                - generic:
+                  - generic:
+                    - generic: 
+                  - generic: Apr 16
+              - generic: F
+            - link "Hey! Still here. 👋 Did you get a chance to run those commands (openclaw status and openclaw logs)?... AgentX Apr 16 A" [ref=e46] [cursor=pointer]:
+              - /url: "#8693656584"
+              - generic:
+                - generic:
+                  - generic: Hey! Still here. 👋 Did you get a chance to run those commands (openclaw status and openclaw logs)?...
+              - generic:
+                - generic:
+                  - generic: AgentX
+                - generic:
+                  - generic: Apr 16
+              - generic: A
+            - link "Privacy mode is disabled for AgentX @xatent_bot. BotFather Apr 15" [ref=e48] [cursor=pointer]:
+              - /url: "#93372553"
+              - generic:
+                - generic:
+                  - generic: Privacy mode is disabled for AgentX @xatent_bot.
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: BotFather
+                    - generic:
+                      - img
+                - generic:
+                  - generic: Apr 15
+              - generic:
+                - img
+            - 'link "Draft: @Telmanfsj_bot I did that. Action Apr 15 A" [ref=e50] [cursor=pointer]':
+              - /url: "#-5074227703"
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: "Draft:"
+                  - generic: "@Telmanfsj_bot I did that."
+              - generic:
+                - generic:
+                  - generic: Action
+                - generic:
+                  - generic: Apr 15
+              - generic: A
+            - link "✅ Bot will respond to all messages in \"Real Test Group\" reins_dev_bot Apr 15 r" [ref=e52] [cursor=pointer]:
+              - /url: "#8641616936"
+              - generic:
+                - generic:
+                  - generic: ✅ Bot will respond to all messages in "Real Test Group"
+              - generic:
+                - generic:
+                  - generic: reins_dev_bot
+                - generic:
+                  - generic: Apr 15
+              - generic: r
+        - button " " [ref=e54] [cursor=pointer]:
+          - generic: 
+          - generic: 
+        - generic [ref=e58] [cursor=pointer]: UPDATE
+    - generic [ref=e62]:
+      - generic [ref=e71] [cursor=pointer]:
+        - generic [ref=e73]:
+          - generic [ref=e356]: E
+          - generic [ref=e75]:
+            - generic [ref=e357]: EmailAndCalendar
+            - generic [ref=e80]: bot
+        - generic [ref=e81]:
+          - text: "#"
+          - button "" [ref=e84]:
+            - generic: 
+          - button "" [ref=e86]:
+            - generic: 
+      - generic [ref=e358]:
+        - generic [ref=e359]:
+          - generic [ref=e362] [cursor=pointer]: April 18
+          - generic [ref=e363]:
+            - generic [ref=e367]:
+              - text: "?"
+              - generic "18 April 2026, 17:18:19" [ref=e368] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e369]: 05:18 PM
+            - generic [ref=e373]:
+              - text: Help
+              - generic "18 April 2026, 17:18:30" [ref=e374] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e375]: 05:18 PM
+            - generic [ref=e378]:
+              - generic [ref=e379]:
+                - text: Hello
+                - generic "18 April 2026, 17:20:29" [ref=e380] [cursor=pointer]:
+                  - generic: 
+                  - generic [ref=e381]: 05:20 PM
+              - img [ref=e382]
+          - generic [ref=e387]:
+            - generic [ref=e388] [cursor=pointer]:
+              - generic:
+                - generic: fsaint
+                - generic: Hello
+            - generic [ref=e390]:
+              - text: "Y"
+              - generic "18 April 2026, 18:32:24" [ref=e391] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e392]: 06:32 PM
+            - img [ref=e393]
+        - generic [ref=e395]:
+          - generic [ref=e398] [cursor=pointer]: April 19
+          - generic [ref=e402]:
+            - generic [ref=e403]:
+              - text: Hi
+              - generic "19 April 2026, 13:54:53" [ref=e404] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e405]: 01:54 PM
+            - img [ref=e406]
+          - generic [ref=e411]:
+            - generic [ref=e412]:
+              - text: hi
+              - generic "19 April 2026, 18:14:50" [ref=e413] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e414]: 06:14 PM
+            - img [ref=e415]
+        - generic [ref=e417]:
+          - generic [ref=e420]: Today
+          - generic [ref=e424]:
+            - generic [ref=e425]:
+              - text: hekllo
+              - generic "21 April 2026, 11:48:10" [ref=e426] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e427]: 11:48 AM
+            - img [ref=e428]
+          - generic [ref=e430]:
+            - generic [ref=e434]:
+              - generic [ref=e435]:
+                - text: 📬 No home channel is set for Telegram. A home channel is where Hermes delivers cron job results and cross-platform messages. Type
+                - link "/sethome" [ref=e436] [cursor=pointer]:
+                  - /url: tg://bot_command?command=sethome
+                - text: to make this chat your home channel, or ignore to skip.
+              - generic "21 April 2026, 11:48:11" [ref=e437] [cursor=pointer]:
+                - generic [ref=e438]: 11:48 AM
+            - generic [ref=e441]:
+              - generic [ref=e442] [cursor=pointer]:
+                - generic:
+                  - generic: fsaint
+                  - generic: hekllo
+              - generic [ref=e444]:
+                - generic [ref=e445]:
+                  - text: Hey! I'm Hermes, your AI assistant. Type
+                  - code [ref=e446] [cursor=pointer]: /help
+                  - text: to see available commands.
+                - generic "21 April 2026, 11:48:18" [ref=e447] [cursor=pointer]:
+                  - generic [ref=e448]: 11:48 AM
+              - img [ref=e449]
+          - generic [ref=e454]:
+            - generic [ref=e455]:
+              - text: Hwllo
+              - generic "21 April 2026, 11:48:25" [ref=e456] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e457]: 11:48 AM
+            - img [ref=e458]
+          - generic [ref=e463]:
+            - generic [ref=e464] [cursor=pointer]:
+              - generic:
+                - generic: fsaint
+                - generic: Hwllo
+            - generic [ref=e466]:
+              - generic [ref=e467]: Hello! 👋 How can I help you today?
+              - generic "21 April 2026, 11:48:29" [ref=e468] [cursor=pointer]:
+                - generic [ref=e469]: 11:48 AM
+            - img [ref=e470]
+          - generic [ref=e475]:
+            - generic [ref=e476]:
+              - text: What is 2+2? Tell me what model and provider you are using.
+              - generic "21 April 2026, 11:50:06" [ref=e477] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e478]: 11:50 AM
+            - img [ref=e479]
+          - generic [ref=e484]:
+            - generic [ref=e485] [cursor=pointer]:
+              - generic:
+                - generic: fsaint
+                - generic: What is 2+2? Tell me what model and provider you are using.
+            - generic [ref=e487]:
+              - generic [ref=e488]:
+                - strong [ref=e489]: 2 + 2 = 4
+                - text: "I'm running on: -"
+                - strong [ref=e490]: "Model:"
+                - text: MiniMax-M2.7 -
+                - strong [ref=e491]: "Provider:"
+                - text: minimax
+              - generic "21 April 2026, 11:50:11" [ref=e492] [cursor=pointer]:
+                - generic [ref=e493]: 11:50 AM
+            - img [ref=e494]
+          - generic [ref=e499]:
+            - generic [ref=e500]:
+              - text: What is 3+3? Tell me what model and provider you are using.
+              - generic "21 April 2026, 11:51:17" [ref=e501] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e502]: 11:51 AM
+            - img [ref=e503]
+          - generic [ref=e508]:
+            - generic [ref=e509]:
+              - generic [ref=e510]: "⚠️ Agent failed before reply: Unknown model: minimax/MiniMax-M2.7. Logs: openclaw logs --follow"
+              - generic "21 April 2026, 11:51:19" [ref=e511] [cursor=pointer]:
+                - generic [ref=e512]: 11:51 AM
+            - img [ref=e513]
+          - generic [ref=e518]:
+            - generic [ref=e519]:
+              - text: What is 3+3? Tell me what model and provider you are using.
+              - generic "21 April 2026, 11:52:51" [ref=e520] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e521]: 11:52 AM
+            - img [ref=e522]
+          - generic [ref=e527]:
+            - generic [ref=e528]:
+              - generic [ref=e529]: "⚠️ Agent failed before reply: Unknown model: minimax/MiniMax-M2.7. Logs: openclaw logs --follow"
+              - generic "21 April 2026, 11:52:53" [ref=e530] [cursor=pointer]:
+                - generic [ref=e531]: 11:52 AM
+            - img [ref=e532]
+          - generic [ref=e537]:
+            - generic [ref=e538]:
+              - text: What is 7x8? Tell me what model and provider you are using.
+              - generic "21 April 2026, 11:54:34" [ref=e539] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e540]: 11:54 AM
+            - img [ref=e541]
+          - generic [ref=e546]:
+            - generic [ref=e547]:
+              - generic [ref=e548]: "⚠️ Agent failed before reply: Unknown model: openai/MiniMax-M2.7. Logs: openclaw logs --follow"
+              - generic "21 April 2026, 11:54:36" [ref=e549] [cursor=pointer]:
+                - generic [ref=e550]: 11:54 AM
+            - img [ref=e551]
+          - generic [ref=e556]:
+            - generic [ref=e557]:
+              - text: What is 9x9? Tell me your model and provider.
+              - generic "21 April 2026, 11:57:08" [ref=e558] [cursor=pointer]:
+                - generic: 
+                - generic [ref=e559]: 11:57 AM
+            - img [ref=e560]
+          - generic [ref=e565]:
+            - generic [ref=e566]:
+              - generic [ref=e567]: "⚠️ Agent failed before reply: Unknown model: minimax/MiniMax-M2.7. Logs: openclaw logs --follow"
+              - generic "21 April 2026, 11:57:10" [ref=e568] [cursor=pointer]:
+                - generic [ref=e569]: 11:57 AM
+            - img [ref=e570]
+      - generic [ref=e341]:
+        - generic [ref=e343]:
+          - img [ref=e344]
+          - generic:
+            - button
+            - button "":
+              - generic: 
+          - generic [ref=e346]:
+            - button "" [ref=e347] [cursor=pointer]:
+              - generic: 
+            - generic [ref=e348]:
+              - generic [active] [ref=e349]: .
+              - generic: Message
+              - generic: .
+            - generic [ref=e350] [cursor=pointer]:
+              - generic: 
+        - generic [ref=e352]:
+          - generic:
+            - generic: 
+            - generic: NaN
+          - button "    " [ref=e353] [cursor=pointer]:
+            - generic: 
+            - generic: 
+            - generic: 
+            - generic: 
+            - generic: 

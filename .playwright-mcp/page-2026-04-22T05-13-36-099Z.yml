@@ -1,0 +1,131 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - link "Reins The trust layer for AI agents" [ref=e6] [cursor=pointer]:
+      - /url: /
+      - img [ref=e7]
+      - generic [ref=e9]:
+        - text: Reins
+        - paragraph [ref=e10]: The trust layer for AI agents
+    - navigation [ref=e11]:
+      - list [ref=e12]:
+        - listitem [ref=e13]:
+          - link "Dashboard" [ref=e14] [cursor=pointer]:
+            - /url: /
+            - img [ref=e15]
+            - generic [ref=e17]: Dashboard
+        - listitem [ref=e18]:
+          - link "Agents" [ref=e19] [cursor=pointer]:
+            - /url: /agents
+            - img [ref=e20]
+            - generic [ref=e25]: Agents
+        - listitem [ref=e26]:
+          - link "Credentials" [ref=e27] [cursor=pointer]:
+            - /url: /credentials
+            - img [ref=e28]
+            - generic [ref=e32]: Credentials
+        - listitem [ref=e33]:
+          - link "Approvals" [ref=e34] [cursor=pointer]:
+            - /url: /approvals
+            - img [ref=e35]
+            - generic [ref=e38]: Approvals
+        - listitem [ref=e39]:
+          - link "Audit Log" [ref=e40] [cursor=pointer]:
+            - /url: /audit
+            - img [ref=e41]
+            - generic [ref=e43]: Audit Log
+        - listitem [ref=e44]:
+          - link "Backups" [ref=e45] [cursor=pointer]:
+            - /url: /backups
+            - img [ref=e46]
+            - generic [ref=e50]: Backups
+        - listitem [ref=e51]:
+          - link "Notifications" [ref=e52] [cursor=pointer]:
+            - /url: /notifications
+            - img [ref=e53]
+            - generic [ref=e56]: Notifications
+      - generic [ref=e57]: Admin
+      - list [ref=e58]:
+        - listitem [ref=e59]:
+          - link "Users" [ref=e60] [cursor=pointer]:
+            - /url: /admin/users
+            - img [ref=e61]
+            - generic [ref=e73]: Users
+    - generic [ref=e74]:
+      - generic [ref=e75]:
+        - img [ref=e76]
+        - generic [ref=e82]: System Status
+        - generic [ref=e85]: Online
+      - generic [ref=e86]:
+        - img [ref=e87]
+        - generic [ref=e90]: fsaint
+        - generic [ref=e91]: Admin
+      - button "Sign out" [ref=e92] [cursor=pointer]:
+        - img [ref=e93]
+        - text: Sign out
+  - main [ref=e97]:
+    - generic [ref=e98]:
+      - generic [ref=e99]:
+        - button [ref=e100] [cursor=pointer]:
+          - img [ref=e101]
+        - generic [ref=e103]:
+          - heading "Create Agent" [level=1] [ref=e104]
+          - paragraph [ref=e105]: Configure and deploy a new AI agent
+      - generic [ref=e117]:
+        - generic [ref=e119]:
+          - generic [ref=e120]: ✓
+          - generic [ref=e121]: Basics
+        - generic [ref=e124]:
+          - generic [ref=e125]: "2"
+          - generic [ref=e126]: Model
+        - generic [ref=e129]:
+          - generic [ref=e130]: "3"
+          - generic [ref=e131]: Personality
+        - generic [ref=e134]:
+          - generic [ref=e135]: "4"
+          - generic [ref=e136]: Deploy
+      - generic [ref=e158]:
+        - heading "Model Provider" [level=2] [ref=e159]
+        - generic [ref=e160]:
+          - heading "Runtime" [level=3] [ref=e161]
+          - generic [ref=e162]:
+            - button "OpenClaw Full-featured runtime with browser, plugins, and code execution." [ref=e163] [cursor=pointer]:
+              - paragraph [ref=e164]: OpenClaw
+              - paragraph [ref=e165]: Full-featured runtime with browser, plugins, and code execution.
+            - button "Hermes Lightweight Python agent with memory, skills, and 15+ messaging platforms." [ref=e166] [cursor=pointer]:
+              - paragraph [ref=e167]: Hermes
+              - paragraph [ref=e168]: Lightweight Python agent with memory, skills, and 15+ messaging platforms.
+        - generic [ref=e169]:
+          - button "Recommended MiniMax Affordable, fast API-key LLM. No subscription needed." [ref=e170] [cursor=pointer]:
+            - generic [ref=e171]: Recommended
+            - paragraph [ref=e172]: MiniMax
+            - paragraph [ref=e173]: Affordable, fast API-key LLM. No subscription needed.
+          - button "Anthropic Claude Uses the server's Anthropic API key" [ref=e174] [cursor=pointer]:
+            - paragraph [ref=e175]: Anthropic Claude
+            - paragraph [ref=e176]: Uses the server's Anthropic API key
+          - button "OpenAI Uses your OpenAI API key" [active] [ref=e177] [cursor=pointer]:
+            - paragraph [ref=e178]: OpenAI
+            - paragraph [ref=e179]: Uses your OpenAI API key
+        - generic [ref=e186]:
+          - generic [ref=e187]:
+            - generic [ref=e188]: Model
+            - combobox [ref=e189]:
+              - option "GPT-5.4"
+              - option "GPT-5.4 Mini"
+              - option "GPT-5"
+              - option "GPT-4.1 (default)" [selected]
+              - option "GPT-4.1 Mini"
+              - option "GPT-4.1 Nano"
+              - option "GPT-4o"
+              - option "GPT-4o Mini"
+              - option "o3"
+              - option "o4-mini"
+          - generic [ref=e190]:
+            - generic [ref=e191]: OpenAI API Key
+            - textbox "sk-..." [ref=e192]
+            - paragraph [ref=e193]:
+              - text: Get your key at
+              - link "platform.openai.com/api-keys" [ref=e194] [cursor=pointer]:
+                - /url: https://platform.openai.com/api-keys
+      - generic [ref=e155]:
+        - button "Back" [ref=e184] [cursor=pointer]
+        - button "Next (2/4)" [disabled] [ref=e185]

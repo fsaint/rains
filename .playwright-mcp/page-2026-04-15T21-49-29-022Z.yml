@@ -1,0 +1,231 @@
+- generic [active] [ref=e1]:
+  - img [ref=e2]
+  - generic [ref=e7]:
+    - generic [ref=e8]:
+      - button [ref=e11] [cursor=pointer]
+      - generic:
+        - textbox:
+          - /placeholder: " "
+        - generic: 
+        - generic: Search
+    - generic [ref=e15]:
+      - generic [ref=e17]:
+        - generic [ref=e20] [cursor=pointer]:
+          - button "" [ref=e22]:
+            - generic: 
+          - generic:
+            - generic:
+              - generic: Never miss a message! 🔔
+          - generic:
+            - generic: Enable notifications to stay updated.
+        - list [ref=e27]:
+          - generic [ref=e28] [cursor=pointer]:
+            - generic:
+              - generic:
+                - generic: 
+            - generic:
+              - generic: Archived Chats
+            - generic:
+              - generic: Deleted Account, Deleted Account, Deleted Account, Deleted Account, Crypto Capitin Call ..., The BotFather
+              - generic: "1"
+          - 'link "Caller: Neda from Urban Theatre. Reason: Confirming booking for tonight. Contact number: 510-714-090...  FamGPT 09/13/2025 F" [ref=e30] [cursor=pointer]':
+            - /url: "#7506388125"
+            - generic:
+              - generic:
+                - generic: "Caller: Neda from Urban Theatre. Reason: Confirming booking for tonight. Contact number: 510-714-090..."
+              - generic: 
+            - generic:
+              - generic:
+                - generic: FamGPT
+              - generic:
+                - generic: 09/13/2025
+            - generic: F
+          - 'link "Draft: @Telmanfsj_bot I did that. Action 02:26 PM A" [ref=e32] [cursor=pointer]':
+            - /url: "#-5074227703"
+            - generic:
+              - generic:
+                - generic:
+                  - generic: "Draft:"
+                - generic: "@Telmanfsj_bot I did that."
+            - generic:
+              - generic:
+                - generic: Action
+              - generic:
+                - generic: 02:26 PM
+            - generic: A
+          - link "✅ Bot will respond to all messages in \"Real Test Group\" reins_dev_bot 01:09 PM r" [ref=e34] [cursor=pointer]:
+            - /url: "#8641616936"
+            - generic:
+              - generic:
+                - generic: ✅ Bot will respond to all messages in "Real Test Group"
+            - generic:
+              - generic:
+                - generic: reins_dev_bot
+              - generic:
+                - generic: 01:09 PM
+            - generic: r
+          - link "Privacy mode is disabled for reins_dev_bot @reins_dev_bot. 1 BotFather 12:07 PM 1" [ref=e282] [cursor=pointer]:
+            - /url: "#93372553"
+            - generic:
+              - generic:
+                - generic: Privacy mode is disabled for reins_dev_bot @reins_dev_bot.
+              - generic: "1"
+            - generic:
+              - generic:
+                - generic:
+                  - generic: BotFather
+                  - generic:
+                    - img
+              - generic:
+                - generic: 12:07 PM
+            - generic:
+              - img
+            - generic: "1"
+          - 'link "EmailAndCalendar: hey fsaint 👋 1 fsaint and EmailAndCalendar 11:43 AM fE 1" [ref=e283] [cursor=pointer]':
+            - /url: "#-3736535424"
+            - generic:
+              - generic:
+                - generic:
+                  - generic: "EmailAndCalendar:"
+                - generic: hey fsaint 👋
+              - generic: "1"
+            - generic:
+              - generic:
+                - generic: fsaint and EmailAndCalendar
+              - generic:
+                - generic: 11:43 AM
+            - generic: fE
+            - generic: "1"
+          - link "hey — hi 👋 EmailAndCalendar 11:43 AM E" [ref=e40] [cursor=pointer]:
+            - /url: "#8345585236"
+            - generic:
+              - generic:
+                - generic: hey — hi 👋
+            - generic:
+              - generic:
+                - generic: EmailAndCalendar
+              - generic:
+                - generic: 11:43 AM
+            - generic: E
+          - link "Dale 1 Alan Weiss Tue AW 1" [ref=e284] [cursor=pointer]:
+            - /url: "#8664382941"
+            - generic:
+              - generic:
+                - generic: Dale
+              - generic: "1"
+            - generic:
+              - generic:
+                - generic: Alan Weiss
+              - generic:
+                - generic: Tue
+            - generic: AW
+            - generic: "1"
+          - 'link "Done ✅ Replied and closed #1738. Telman Tue T" [ref=e44] [cursor=pointer]':
+            - /url: "#8326726800"
+            - generic:
+              - generic:
+                - generic: "Done ✅ Replied and closed #1738."
+            - generic:
+              - generic:
+                - generic: Telman
+              - generic:
+                - generic: Tue
+            - generic: T
+          - link "What’s up? Kyravelenna ✂️❌Grass Tue" [ref=e46] [cursor=pointer]:
+            - /url: "#8603590705"
+            - generic:
+              - generic:
+                - generic: What’s up?
+            - generic:
+              - generic:
+                - generic: Kyravelenna ✂️❌Grass
+              - generic:
+                - generic: Tue
+            - generic:
+              - img
+          - 'link "🔑 Re-authentication Required Service: Gmail Agent: agxTDFwG6t0lz44LaiCKM Reason: Credentials requir... ReinsVerification Tue R" [ref=e48] [cursor=pointer]':
+            - /url: "#8345752400"
+            - generic:
+              - generic:
+                - generic: "🔑 Re-authentication Required Service: Gmail Agent: agxTDFwG6t0lz44LaiCKM Reason: Credentials requir..."
+            - generic:
+              - generic:
+                - generic: ReinsVerification
+              - generic:
+                - generic: Tue
+            - generic: R
+          - 'link "You: Contactando la oficia de Europa. Cómo estamos hoy para JPM? Yo tengo un plan de montar infraestructu... fsaint & Hermeneutix  Tue fH" [ref=e50] [cursor=pointer]':
+            - /url: "#-4829932571"
+            - generic:
+              - generic:
+                - generic:
+                  - generic: "You:"
+                - generic: Contactando la oficia de Europa. Cómo estamos hoy para JPM? Yo tengo un plan de montar infraestructu...
+            - generic:
+              - generic:
+                - generic: fsaint & Hermeneutix
+              - generic:
+                - generic:
+                  - generic: 
+                - generic: Tue
+            - generic: fH
+          - link "1MCPserverneedsauth ·/mcp my_claude_bot Tue m" [ref=e52] [cursor=pointer]:
+            - /url: "#8742874792"
+            - generic:
+              - generic:
+                - generic: 1MCPserverneedsauth ·/mcp
+            - generic:
+              - generic:
+                - generic: my_claude_bot
+              - generic:
+                - generic: Tue
+            - generic: m
+      - button " " [ref=e54] [cursor=pointer]:
+        - generic: 
+        - generic: 
+      - generic [ref=e58] [cursor=pointer]: UPDATE
+    - generic [ref=e285]:
+      - generic [ref=e286]:
+        - button "" [ref=e287] [cursor=pointer]:
+          - generic: 
+        - generic [ref=e288]:
+          - generic [ref=e289]: Fam
+          - generic [ref=e290]: 2 members
+        - button "" [ref=e291] [cursor=pointer]:
+          - generic: 
+        - button "" [ref=e293] [cursor=pointer]:
+          - generic: 
+      - list [ref=e297]:
+        - 'link "You: Hello M Morning email  Apr 9" [ref=e298] [cursor=pointer]':
+          - /url: "#-3974445671"
+          - generic:
+            - generic:
+              - generic:
+                - generic: "You:"
+              - generic: Hello
+          - generic:
+            - generic:
+              - generic:
+                - generic:
+                  - img
+                  - generic: M
+                - generic: Morning email
+            - generic:
+              - generic:
+                - generic: 
+              - generic: Apr 9
+        - 'link "You: @EmailAndCalendar_bot ruso General  Apr 9" [ref=e300] [cursor=pointer]':
+          - /url: "#-3974445671"
+          - generic:
+            - generic:
+              - generic:
+                - generic: "You:"
+              - generic: "@EmailAndCalendar_bot ruso"
+          - generic:
+            - generic:
+              - generic:
+                - generic: General
+            - generic:
+              - generic:
+                - generic: 
+              - generic: Apr 9
