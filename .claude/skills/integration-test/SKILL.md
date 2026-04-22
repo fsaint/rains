@@ -49,6 +49,12 @@ The `ANTHROPIC_API_KEY` must also be in the root `.env` file (OpenClaw reads it 
 ANTHROPIC_API_KEY=sk-ant-api03-...
 ```
 
+**Critical:** `REINS_PUBLIC_URL` in root `.env` must be `http://host.docker.internal:5001` (not the external domain) so local Docker containers can reach the backend for MCP calls:
+
+```
+REINS_PUBLIC_URL=http://host.docker.internal:5001
+```
+
 ### Telethon session
 
 On first use, create the Telethon session file (one-time interactive login):
@@ -59,14 +65,46 @@ python3 /tmp/tg_login.py
 
 This writes `~/.reins_test_telethon.session`. After that the session is reused without prompts.
 
-The helper script at `/tmp/tg_send_and_wait.py` sends a message as your real Telegram account and captures the first bot reply:
+Two Telethon helper scripts are used:
+
+**`/tmp/tg_send_and_wait_filtered.py`** — sends a message and waits for the first non-progress reply. Skips `🐍`, `⚡`, `📬`, `⚙️` prefixes (Hermes progress/welcome). Handles OpenClaw's streaming responses by listening to MessageEdited events with a 3-second settle timer. Use for the basic ping test:
 
 ```bash
 source tests/integration/.env.test
 TELEGRAM_API_ID=$TELEGRAM_API_ID \
 TELEGRAM_API_HASH=$TELEGRAM_API_HASH \
 TELEGRAM_PHONE=$TELEGRAM_PHONE \
-python3 /tmp/tg_send_and_wait.py <bot_username> "<message>" [timeout_secs]
+python3 /tmp/tg_send_and_wait_filtered.py <bot_username> "<message>" [timeout_secs]
+```
+
+**`/tmp/tg_mcp_tool_test.py`** — sends a message, optionally polls Reins API for an approval and approves/rejects it, then returns the final bot reply. Handles streaming via MessageEdited events + settle timer. Uses `curl` for Reins API calls (not Python urllib, which breaks with localhost cookies). Use for the dev-sandbox permission tests:
+
+```bash
+source tests/integration/.env.test
+TELEGRAM_API_ID=$TELEGRAM_API_ID \
+TELEGRAM_API_HASH=$TELEGRAM_API_HASH \
+TELEGRAM_PHONE=$TELEGRAM_PHONE \
+REINS_URL=$REINS_URL \
+REINS_ADMIN_EMAIL=$REINS_ADMIN_EMAIL \
+REINS_ADMIN_PASSWORD=$REINS_ADMIN_PASSWORD \
+python3 /tmp/tg_mcp_tool_test.py <bot_username> <agent_id> "<message>" <action> [timeout_secs]
+# action: "none" | "approve" | "reject"
+```
+
+**`/tmp/run_sandbox_tests.sh`** — orchestrates all 4 sandbox permission tests for a given agent. Handles container restart (needed so OpenClaw picks up newly-enabled dev-sandbox tools), approval polling, and result checking:
+
+```bash
+source /tmp/run_sandbox_tests.sh
+sandbox_tests <bot_username> <agent_id>
+```
+
+The cookie file `/tmp/reins_test_cookies.txt` must contain a valid admin session (created automatically by `run_sandbox_tests.sh`, or manually):
+
+```bash
+source tests/integration/.env.test
+curl -s -c /tmp/reins_test_cookies.txt -X POST http://localhost:5001/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d "{\"email\":\"$REINS_ADMIN_EMAIL\",\"password\":\"$REINS_ADMIN_PASSWORD\"}"
 ```
 
 ### Local services running
@@ -128,6 +166,8 @@ Navigate to `http://localhost:6173/agents/new` and click **Hosted Agent**.
 
 **Step 4/4 — Deploy:** click **Create & Deploy**.
 
+Note the agent ID from the URL (e.g. `/agents/uhfcEbkGWF9XjE3BsQ-ZM` → `uhfcEbkGWF9XjE3BsQ-ZM`).
+
 ### Step 2 — Wait for container
 
 ```bash
@@ -136,9 +176,11 @@ docker ps --format "{{.Names}}\t{{.Status}}" | grep "reins-"
 ```
 
 - **OpenClaw**: wait for `(healthy)` — typically 20–60 s
-- **Hermes**: container shows `Up N seconds` with no health annotation; the gateway is ready once it connects to Telegram (~10 s after start)
+- **Hermes**: container shows `Up N seconds` with no health annotation; the gateway is ready once it connects to Telegram (~10–15 s after start)
 
-### Step 3 — Verify via Telethon
+The container name is `reins-` + first 12 chars of the `deployed_agents` instance ID (not the agent ID). The UI shows the container name under Management → App Name.
+
+### Step 3 — Basic ping test via Telethon
 
 The bot username is shown in the UI (or look it up via `@BotFather`). For the test bot `@EmailAndCalendar_bot`:
 
@@ -147,17 +189,65 @@ source tests/integration/.env.test
 TELEGRAM_API_ID=$TELEGRAM_API_ID \
 TELEGRAM_API_HASH=$TELEGRAM_API_HASH \
 TELEGRAM_PHONE=$TELEGRAM_PHONE \
-python3 /tmp/tg_send_and_wait.py EmailAndCalendar_bot \
+python3 /tmp/tg_send_and_wait_filtered.py EmailAndCalendar_bot \
   "What is 7+8? Reply with ONLY the number, nothing else." 90
 ```
 
 **Expected output:** `15`
 
 **Hermes quirks:**
-- First message to a new Hermes bot triggers a welcome message (`📬 No home channel...`). Resend the question.
-- Hermes sometimes sends tool-use progress lines (`🐍 execute_code: ...`) before the final answer. If you capture one of these, wait ~15 s and resend.
+- First message to a new Hermes bot triggers a welcome message (`📬 No home channel...`). Use `tg_send_and_wait_filtered.py` — it automatically skips those.
+- Hermes may send tool-use progress lines (`🐍`, `⚙️`). The filtered script skips those too.
+- After the welcome message, the bot may reply "⚡ Interrupting..." — send once more.
 
-### Step 4 — Tear down
+**OpenClaw + MiniMax quirk:** If the ping returns an error about "Unknown model: openai/MiniMax-M2.7", the models.json poller hasn't run yet. Apply the manual patch (see Known Issues) and resend.
+
+### Step 4 — Dev Sandbox permission tests
+
+Run the orchestration script after the ping passes:
+
+```bash
+source /tmp/run_sandbox_tests.sh
+sandbox_tests EmailAndCalendar_bot <agent_id>
+```
+
+This script:
+1. Enables dev-sandbox on the agent via API (access=true, level=full)
+2. **Restarts the container** so OpenClaw picks up the new tools (OpenClaw caches tools at startup)
+3. Waits 15 s for Telegram reconnect
+4. Runs 4 scenarios in sequence:
+   - **ALLOWED** (`sandbox_echo`) — expects immediate echo of "ping-allowed"
+   - **APPROVE** (`sandbox_send_message`) — script polls approval queue and approves; expects delivery confirmation
+   - **DENY** (`sandbox_send_message`) — script rejects the pending approval; expects denial message
+   - **BLOCKED** (`sandbox_delete_item`) — tool is not in tools/list; expects bot to report it's unavailable
+
+**Expected:** `4/4 passed, 0/4 failed`
+
+**Manual step-by-step** (if you need to run scenarios individually):
+
+```bash
+AGENT_ID=<id>
+source tests/integration/.env.test
+TENV="TELEGRAM_API_ID=$TELEGRAM_API_ID TELEGRAM_API_HASH=$TELEGRAM_API_HASH TELEGRAM_PHONE=$TELEGRAM_PHONE REINS_URL=$REINS_URL REINS_ADMIN_EMAIL=$REINS_ADMIN_EMAIL REINS_ADMIN_PASSWORD=$REINS_ADMIN_PASSWORD"
+
+# ALLOWED
+eval "$TENV python3 /tmp/tg_mcp_tool_test.py EmailAndCalendar_bot $AGENT_ID \
+  'Call the sandbox_echo tool with message ping-allowed. Report the tool result.' none 90"
+
+# APPROVE
+eval "$TENV python3 /tmp/tg_mcp_tool_test.py EmailAndCalendar_bot $AGENT_ID \
+  'Call sandbox_send_message: to=ops@reins.io, subject=approve-test, body=please approve. Report result.' approve 120"
+
+# DENY
+eval "$TENV python3 /tmp/tg_mcp_tool_test.py EmailAndCalendar_bot $AGENT_ID \
+  'Call sandbox_send_message: to=ops@reins.io, subject=deny-test, body=denied. Report what happened.' reject 120"
+
+# BLOCKED
+eval "$TENV python3 /tmp/tg_mcp_tool_test.py EmailAndCalendar_bot $AGENT_ID \
+  'Call ONLY the sandbox_delete_item tool to delete item-1. Do NOT call any other tool. If sandbox_delete_item is not in your toolset, say so explicitly.' none 90"
+```
+
+### Step 5 — Tear down
 
 ```bash
 docker stop <container-name> && docker rm <container-name>
@@ -168,6 +258,16 @@ Or delete via the Reins UI (Agents → Delete).
 ---
 
 ## Known issues and workarounds
+
+### REINS_PUBLIC_URL must be host.docker.internal
+
+If local Docker containers point to the external server URL (e.g. `https://reins-dev.btv.pw`), MCP tool calls go to the wrong server, approvals never appear locally, and all sandbox tests fail silently.
+
+**Fix:** Set in root `.env`:
+```
+REINS_PUBLIC_URL=http://host.docker.internal:5001
+```
+Then restart the backend. All new containers will embed the correct URL.
 
 ### OpenClaw + MiniMax: "Unknown model: openai/MiniMax-M2.7"
 
@@ -198,9 +298,44 @@ docker exec <container> node -e "
 # Then resend the Telethon message — no container restart needed
 ```
 
+### OpenClaw streams responses via message edits
+
+OpenClaw sends an initial (often incomplete) Telegram message then progressively edits it. `tg_send_and_wait_filtered.py` and `tg_mcp_tool_test.py` both listen to `MessageEdited` events and use a 3-second settle timer after the last edit. Do not use the older `tg_send_and_wait.py` (no edit support).
+
+### Container restart required after enabling dev-sandbox
+
+OpenClaw caches the MCP tool list at startup. After enabling dev-sandbox via API, you must restart the container for the new tools to appear. The `run_sandbox_tests.sh` script does this automatically.
+
 ### Hermes + OpenAI: org-verification / encrypted-content errors
 
 Handled automatically by the Hermes entrypoint (`entrypoint.sh`) which maps `MODEL_PROVIDER=openai` to the `custom` provider with `reasoning_effort: none`. No manual intervention needed as long as the image is current.
+
+### Hermes progress prefixes to skip
+
+Hermes emits several progress-indicator prefixes that are not final replies. All scripts skip: `🐍` (code execution), `⚡` (interrupting), `📬` (no home channel), `⚙️` (MCP tool calls). If you capture one of these as the reply, ensure your scripts have the updated `SKIP_PREFIXES` tuple.
+
+### Hermes + MiniMax BLOCKED test: model chooses substitute tool
+
+MiniMax, when asked to "delete" something and `sandbox_delete_item` isn't in its tools list, may attempt `sandbox_update_item` as a substitute. This creates a pending approval in the queue and the bot goes silent waiting for it.
+
+**Fix:** Use the explicit prompt in the BLOCKED scenario:
+```
+"Call ONLY the sandbox_delete_item tool to delete item-1. Do NOT call any other tool. If sandbox_delete_item is not in your toolset, say so explicitly."
+```
+
+If the bot is stuck, reject all pending approvals:
+```bash
+curl -s -b /tmp/reins_test_cookies.txt "http://localhost:5001/api/approvals?agentId=$AGENT_ID" | \
+  python3 -c "import sys,json; [print(a['id']) for a in json.load(sys.stdin)['data'] if a['status']=='pending']" | \
+  while read id; do
+    curl -s -b /tmp/reins_test_cookies.txt -X POST "http://localhost:5001/api/approvals/$id/reject" \
+      -H "Content-Type: application/json" -d '{}'
+  done
+```
+
+### GET /api/approvals admin visibility
+
+The `GET /api/approvals` endpoint was fixed to allow admin users to see approvals for any agent regardless of ownership. If you're testing with `admin@reins.local` and agents were created by another user, the admin bypass ensures approvals are returned correctly.
 
 ### Bot token conflict (409 Conflict)
 
@@ -212,8 +347,6 @@ docker stop <old-container>
 ```
 
 Then retry the Telethon message (the new container will take over polling within seconds).
-
----
 
 ---
 
@@ -251,16 +384,20 @@ The OpenClaw image is resolved automatically from the `OPENCLAW_APP` Fly app —
 ```
 [ ] tests/integration/.env.test exists and has all keys
 [ ] ANTHROPIC_API_KEY is in root .env (for OpenClaw Anthropic)
+[ ] REINS_PUBLIC_URL=http://host.docker.internal:5001 in root .env
 [ ] Backend running (npm run dev:backend)
 [ ] Frontend running (npm run dev:frontend)
 [ ] Docker images built (reins-openclaw:latest, reins-hermes:latest)
 [ ] Telethon session exists (~/.reins_test_telethon.session)
 [ ] No orphan containers from previous runs (docker ps | grep reins-)
+[ ] /tmp/run_sandbox_tests.sh, /tmp/tg_mcp_tool_test.py, /tmp/tg_send_and_wait_filtered.py all present
 
-Test 1: OpenClaw + Anthropic  [ ] PASS / [ ] FAIL
-Test 2: OpenClaw + OpenAI     [ ] PASS / [ ] FAIL
-Test 3: OpenClaw + MiniMax    [ ] PASS / [ ] FAIL
-Test 4: Hermes + Anthropic    [ ] PASS / [ ] FAIL
-Test 5: Hermes + OpenAI       [ ] PASS / [ ] FAIL
-Test 6: Hermes + MiniMax      [ ] PASS / [ ] FAIL
+Test 1: OpenClaw + Anthropic  [ ] ping [ ] allowed [ ] approve [ ] reject [ ] blocked
+Test 2: OpenClaw + OpenAI     [ ] ping [ ] allowed [ ] approve [ ] reject [ ] blocked
+Test 3: OpenClaw + MiniMax    [ ] ping* [ ] allowed [ ] approve [ ] reject [ ] blocked
+Test 4: Hermes + Anthropic    [ ] ping [ ] allowed [ ] approve [ ] reject [ ] blocked
+Test 5: Hermes + OpenAI       [ ] ping [ ] allowed [ ] approve [ ] reject [ ] blocked
+Test 6: Hermes + MiniMax      [ ] ping [ ] allowed [ ] approve [ ] reject [ ] blocked
+
+* Test 3: may need models.json patch if ping fails with "Unknown model" error
 ```

@@ -2161,7 +2161,19 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
   app.get('/api/approvals', async (request) => {
     const query = request.query as { agentId?: string };
-    const userId = getUserId(request);
+    const session = getSession(request);
+    const userId = session?.userId ?? '';
+    const isAdmin = session?.role === 'admin';
+
+    // Admins can see all approvals regardless of ownership
+    if (isAdmin) {
+      if (query.agentId) {
+        const approvals = await approvalQueue.listPending(query.agentId);
+        return { data: approvals };
+      }
+      const allApprovals = await approvalQueue.listPending();
+      return { data: allApprovals };
+    }
 
     // Get user's agents to filter approvals
     const userAgents = await client.execute({
