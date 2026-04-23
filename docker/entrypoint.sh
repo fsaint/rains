@@ -53,6 +53,16 @@ if [ -n "$MCP_CONFIG" ]; then
   fi
 fi
 
+# Detect the Chromium executable path from Playwright's own registry.
+# This survives Playwright version bumps (chromium-1208 → chromium-1217, etc.)
+# without requiring a manual update to this file.
+CHROMIUM_PATH=$(node -e "const { chromium } = require('/app/node_modules/playwright-core'); console.log(chromium.executablePath())" 2>/dev/null)
+if [ -z "$CHROMIUM_PATH" ] || [ ! -f "$CHROMIUM_PATH" ]; then
+  # Fallback: glob for any installed chromium binary
+  CHROMIUM_PATH=$(ls /home/node/.cache/ms-playwright/chromium-*/chrome-linux*/chrome 2>/dev/null | head -1)
+fi
+echo "Chromium: ${CHROMIUM_PATH:-not found}"
+
 # Generate openclaw.json from environment variables
 generate_config() {
 node -e "
@@ -171,7 +181,7 @@ const config = {
     enabled: true,
     headless: true,
     defaultProfile: 'openclaw',
-    executablePath: '/home/node/.cache/ms-playwright/chromium-1208/chrome-linux/chrome',
+    executablePath: '${CHROMIUM_PATH}',
     noSandbox: true,
   },
   // Configure audio transcription (Whisper) when OPENAI_API_KEY is available

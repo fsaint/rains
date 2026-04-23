@@ -17,6 +17,7 @@ export default function LogViewer({ agentId: _agentId, agentName, streamUrl, onC
   const autoScrollRef = useRef(true);
 
   useEffect(() => {
+    setLines([]);
     const es = new EventSource(streamUrl, { withCredentials: true });
 
     es.onopen = () => { setConnected(true); setError(null); };
