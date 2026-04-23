@@ -399,44 +399,51 @@ if [ -n "$OPENAI_CODEX_TOKENS" ]; then
     echo "Gateway exited after config patch, restarting as main process..."
     exec node /app/openclaw.mjs gateway --bind lan --port 18789
   fi
+elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$OPENAI_API_KEY" ] && [ -n "$MODEL_NAME" ]; then
+  # For custom OpenAI-compatible base URLs (e.g. MiniMax), use a 2-phase startup.
+  # The gateway loads models.json into memory at boot and never re-reads it, so we must
+  # inject the custom model BEFORE the final gateway start. Let doctor run first to create
+  # the workspace and write its default models.json, then patch it, then do the real start.
+
+  # Phase 1: start briefly so doctor creates workspace + default models.json
+  node /app/openclaw.mjs gateway --bind lan --port 18789 &
+  GATEWAY_PID=$!
+  sleep 8
+  kill $GATEWAY_PID 2>/dev/null
+  wait $GATEWAY_PID 2>/dev/null || true
+
+  # Re-generate openclaw.json (doctor may have overwritten it during phase 1)
+  generate_config
+
+  # Inject custom model into models.json before final startup
+  node -e "
+    const fs = require('fs'), path = require('path');
+    const modelsPath = (process.env.HOME || '/home/node') + '/.openclaw/agents/main/agent/models.json';
+    const modelName = process.env.MODEL_NAME;
+    const baseUrl = process.env.OPENAI_BASE_URL;
+    const apiKey = process.env.OPENAI_API_KEY;
+    let data = { providers: {} };
+    try { data = JSON.parse(fs.readFileSync(modelsPath, 'utf8')); } catch (e) {}
+    const provider = data.providers['openai'] || { models: [] };
+    if (!provider.models.find(m => m.id === modelName)) {
+      provider.models.push({
+        id: modelName, name: modelName,
+        api: 'openai-completions',
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1000000, maxTokens: 40000,
+        compat: {}
+      });
+    }
+    provider.baseUrl = baseUrl;
+    provider.apiKey = apiKey;
+    data.providers['openai'] = provider;
+    fs.mkdirSync(path.dirname(modelsPath), { recursive: true });
+    fs.writeFileSync(modelsPath, JSON.stringify(data, null, 2));
+    console.log('[entrypoint] models.json: registered openai/' + modelName + ' at ' + baseUrl);
+  " 2>&1 || true
+
+  exec node /app/openclaw.mjs gateway --bind lan --port 18789
 else
-  # For OpenAI-compatible base URLs (e.g. MiniMax), register the custom model in
-  # models.json AFTER the gateway is healthy — the doctor phase overwrites it on first boot.
-  if [ -n "$OPENAI_BASE_URL" ] && [ -n "$OPENAI_API_KEY" ] && [ -n "$MODEL_NAME" ]; then
-    (
-      for i in $(seq 1 30); do
-        sleep 2
-        if curl -sf http://localhost:18789/healthz > /dev/null 2>&1; then
-          node -e "
-            const fs = require('fs');
-            const modelsPath = (process.env.HOME || '/home/node') + '/.openclaw/agents/main/agent/models.json';
-            const modelName = process.env.MODEL_NAME;
-            const baseUrl = process.env.OPENAI_BASE_URL;
-            const apiKey = process.env.OPENAI_API_KEY;
-            let data = { providers: {} };
-            try { data = JSON.parse(fs.readFileSync(modelsPath, 'utf8')); } catch (e) {}
-            const provider = data.providers['openai'] || { models: [] };
-            if (!provider.models.find(m => m.id === modelName)) {
-              provider.models.push({
-                id: modelName, name: modelName,
-                api: 'openai-completions',
-                input: ['text'],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1000000, maxTokens: 40000,
-                compat: {}
-              });
-            }
-            provider.baseUrl = baseUrl;
-            provider.apiKey = apiKey;
-            data.providers['openai'] = provider;
-            fs.mkdirSync(require('path').dirname(modelsPath), { recursive: true });
-            fs.writeFileSync(modelsPath, JSON.stringify(data, null, 2));
-            console.log('[entrypoint] models.json: registered openai/' + modelName + ' at ' + baseUrl);
-          " 2>&1 || true
-          break
-        fi
-      done
-    ) &
-  fi
   exec node /app/openclaw.mjs gateway --bind lan --port 18789
 fi
