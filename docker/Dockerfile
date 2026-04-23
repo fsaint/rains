@@ -32,17 +32,11 @@ RUN mkdir -p /home/node/.openclaw/plugins/openclaw-mcp-bridge && \
 
 # Pre-install reins-thread-prompt at build time to avoid the 4-minute cold-boot
 # npm install that was causing health check failures and restart loops.
-# The package ships only TypeScript source on GitHub, so we must install devDeps
-# and build dist/ explicitly — it is never committed to the repo.
+COPY reins-thread-prompt-0.3.1.tgz /tmp/reins-thread-prompt-0.3.1.tgz
 RUN mkdir -p /home/node/.openclaw/plugins/reins-thread-prompt && \
     cd /home/node/.openclaw/plugins/reins-thread-prompt && \
     npm init -y > /dev/null 2>&1 && \
-    npm install --no-fund --no-audit github:fsaint/reins-thread-prompt && \
-    cd node_modules/reins-thread-prompt && \
-    npm install --no-fund --no-audit --include=dev && \
-    npm run build && \
-    npm prune --production && \
-    cd /home/node/.openclaw && \
+    npm install --no-fund --no-audit /tmp/reins-thread-prompt-0.3.1.tgz && \
     chown -R node:node /home/node/.openclaw
 
 # Fix missing plugin runtime module (packaging gap in main image)
