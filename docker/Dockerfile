@@ -30,6 +30,14 @@ RUN mkdir -p /home/node/.openclaw/plugins/openclaw-mcp-bridge && \
     npm install /tmp/openclaw-mcp-bridge-0.3.5.tgz && \
     chown -R node:node /home/node/.openclaw
 
+# Pre-install reins-thread-prompt at build time to avoid the 4-minute cold-boot
+# npm install that was causing health check failures and restart loops.
+RUN mkdir -p /home/node/.openclaw/plugins/reins-thread-prompt && \
+    cd /home/node/.openclaw/plugins/reins-thread-prompt && \
+    npm init -y > /dev/null 2>&1 && \
+    npm install --no-fund --no-audit --ignore-scripts github:fsaint/reins-thread-prompt && \
+    chown -R node:node /home/node/.openclaw
+
 # Fix missing plugin runtime module (packaging gap in main image)
 RUN mkdir -p /app/dist/plugins/runtime
 COPY plugin-runtime-shim.mjs /app/dist/plugins/runtime/index.js

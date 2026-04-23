@@ -281,17 +281,7 @@ if [ -n "$USAGE_CALLBACK_URL" ] && [ -n "$INSTANCE_USER_ID" ]; then
   " &
 fi
 
-# Install reins-thread-prompt plugin on first boot (installed from GitHub)
-PLUGIN_DIR="${HOME}/.openclaw/plugins/reins-thread-prompt"
-if [ ! -d "${PLUGIN_DIR}/node_modules/reins-thread-prompt" ]; then
-  echo "Installing reins-thread-prompt plugin..."
-  mkdir -p "${PLUGIN_DIR}"
-  cd "${PLUGIN_DIR}"
-  npm init -y > /dev/null 2>&1
-  npm install --no-fund --no-audit --ignore-scripts github:fsaint/reins-thread-prompt 2>&1 | tail -3
-  cd -
-  echo "reins-thread-prompt installed"
-fi
+# reins-thread-prompt is pre-installed in the Docker image at build time.
 
 # Note: custom model registration for OpenAI-compatible base URLs (e.g. MiniMax) is done
 # AFTER the gateway initializes, because the gateway's doctor phase overwrites models.json
