@@ -92,6 +92,15 @@ fi
 # ── Persona (SOUL.md) ──────────────────────────────────────────────────────────
 if [ -n "$HERMES_PERSONA" ]; then
   printf '%s' "$HERMES_PERSONA" > ~/.hermes/SOUL.md
+else
+  : > ~/.hermes/SOUL.md
+fi
+
+# Append Reins platform knowledge so the agent can answer configuration and
+# best-practice questions regardless of whether a persona was provided.
+if [ -f /knowledge.md ]; then
+  printf '\n\n' >> ~/.hermes/SOUL.md
+  cat /knowledge.md >> ~/.hermes/SOUL.md
 fi
 
 # ── Usage reporter (background) ────────────────────────────────────────────────

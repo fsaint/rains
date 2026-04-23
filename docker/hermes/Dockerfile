@@ -14,6 +14,7 @@ WORKDIR /hermes
 RUN uv pip install --system -e ".[all]"
 
 COPY entrypoint.sh /entrypoint.sh
+COPY knowledge.md /knowledge.md
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 8000
