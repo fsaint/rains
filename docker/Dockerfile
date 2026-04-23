@@ -51,7 +51,7 @@ COPY workspace/ /workspace-template/
 # Bundle Reins knowledge skill so agents can answer platform questions on demand
 RUN mkdir -p /app/skills/reins
 COPY skills/reins/SKILL.md /app/skills/reins/SKILL.md
-RUN chmod +x /entrypoint.sh && chown -R node:node /workspace-template
+RUN chmod +x /entrypoint.sh && chown -R node:node /workspace-template /app/skills/reins
 
 # Ensure Xvfb socket directory is writable by node user
 RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
