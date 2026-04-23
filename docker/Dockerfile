@@ -47,6 +47,10 @@ COPY plugin-runtime-shim.mjs /app/dist/plugins/runtime/index.js
 COPY entrypoint.sh /entrypoint.sh
 COPY write-codex-auth.js /write-codex-auth.js
 COPY workspace/ /workspace-template/
+
+# Bundle Reins knowledge skill so agents can answer platform questions on demand
+RUN mkdir -p /app/skills/reins
+COPY skills/reins/SKILL.md /app/skills/reins/SKILL.md
 RUN chmod +x /entrypoint.sh && chown -R node:node /workspace-template
 
 # Ensure Xvfb socket directory is writable by node user
