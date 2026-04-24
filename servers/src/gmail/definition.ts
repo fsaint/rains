@@ -19,7 +19,7 @@ export const definition: ServiceDefinitionWithTools = {
   },
   tools: gmailTools,
   permissions: {
-    read: ['gmail_list_accounts', 'gmail_list_messages', 'gmail_get_message', 'gmail_search', 'gmail_list_labels'],
+    read: ['gmail_list_accounts', 'gmail_list_messages', 'gmail_get_message', 'gmail_get_attachment', 'gmail_search', 'gmail_list_labels'],
     write: ['gmail_create_draft', 'gmail_send_draft'],
     blocked: ['gmail_send_message', 'gmail_delete_message'],
   },

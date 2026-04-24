@@ -6,6 +6,7 @@ import type { ToolDefinition } from '../common/base-server.js';
 import {
   handleListMessages,
   handleGetMessage,
+  handleGetAttachment,
   handleSearch,
   handleCreateDraft,
   handleSendDraft,
@@ -86,6 +87,31 @@ export const getMessageTool: ToolDefinition = {
     required: ['messageId'],
   },
   handler: handleGetMessage,
+};
+
+/**
+ * Download an attachment
+ */
+export const getAttachmentTool: ToolDefinition = {
+  name: 'gmail_get_attachment',
+  description:
+    'Download an email attachment by its attachment ID. Returns the attachment content as base64url-encoded data. Use gmail_get_message first to get attachment IDs.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      ...accountProperty,
+      messageId: {
+        type: 'string',
+        description: 'The ID of the message containing the attachment',
+      },
+      attachmentId: {
+        type: 'string',
+        description: 'The attachment ID from gmail_get_message attachments list',
+      },
+    },
+    required: ['messageId', 'attachmentId'],
+  },
+  handler: handleGetAttachment,
 };
 
 /**
@@ -372,6 +398,7 @@ export const gmailTools: ToolDefinition[] = [
   listAccountsTool,
   listMessagesTool,
   getMessageTool,
+  getAttachmentTool,
   searchTool,
   createDraftTool,
   sendDraftTool,

@@ -198,13 +198,14 @@ export async function handleGetMessage(
     : {};
 
   // Extract attachment metadata
-  const attachments: { filename: string; mimeType: string; size: number }[] = [];
+  const attachments: { filename: string; mimeType: string; size: number; attachmentId: string }[] = [];
   const extractAttachments = (part: gmail_v1.Schema$MessagePart) => {
     if (part.filename && part.body?.attachmentId) {
       attachments.push({
         filename: part.filename,
         mimeType: part.mimeType ?? 'application/octet-stream',
         size: part.body.size ?? 0,
+        attachmentId: part.body.attachmentId,
       });
     }
     if (part.parts) {
@@ -230,6 +231,39 @@ export async function handleGetMessage(
       body: content.text ?? content.html,
       isHtml: !!content.html && !content.text,
       attachments,
+    },
+  };
+}
+
+/**
+ * Get attachment handler
+ */
+export async function handleGetAttachment(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const gmail = getGmailClient(context);
+
+  const messageId = args.messageId as string;
+  const attachmentId = args.attachmentId as string;
+
+  const response = await gmail.users.messages.attachments.get({
+    userId: 'me',
+    messageId,
+    id: attachmentId,
+  });
+
+  const data = response.data.data ?? '';
+  const size = response.data.size ?? 0;
+
+  return {
+    success: true,
+    data: {
+      attachmentId,
+      messageId,
+      size,
+      encoding: 'base64url',
+      data,
     },
   };
 }
