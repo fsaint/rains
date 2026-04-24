@@ -368,4 +368,18 @@ describe('ApprovalQueue', () => {
       expect(expired).toEqual([]);
     });
   });
+
+  describe('storeResult', () => {
+    it('storeResult should update result_json in DB', async () => {
+      vi.mocked(client.execute).mockResolvedValueOnce({
+        rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [],
+      });
+      await queue.storeResult('test-approval-id', { message: 'done' });
+      expect(vi.mocked(client.execute)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sql: expect.stringContaining('result_json'),
+        })
+      );
+    });
+  });
 });

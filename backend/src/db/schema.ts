@@ -88,6 +88,7 @@ export const approvals = pgTable('approvals', {
   resolutionComment: text('resolution_comment'),
   telegramChatId: text('telegram_chat_id'), // Telegram chat ID where notification was sent
   telegramMessageId: text('telegram_message_id'), // Telegram message ID for edit-in-place
+  resultJson: text('result_json'),      // stored after executor runs
 });
 
 // Telegram link codes — one-time codes for linking a Telegram chat to a Reins user

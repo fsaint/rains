@@ -272,6 +272,16 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
     });
   }
 
+  /**
+   * Store the result of an auto-executed tool call for later retrieval.
+   */
+  async storeResult(id: string, result: unknown): Promise<void> {
+    await client.execute({
+      sql: `UPDATE approvals SET result_json = ? WHERE id = ?`,
+      args: [JSON.stringify(result), id],
+    });
+  }
+
   private mapToRequest(row: Record<string, unknown>): ApprovalRequest {
     return {
       id: row.id as string,

@@ -465,6 +465,14 @@ export async function initializeDatabase() {
     END $$
   `;
 
+  // Add result_json for async deferred tool execution results
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE approvals ADD COLUMN IF NOT EXISTS result_json TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
+
   // Add webhook relay columns for per-agent bot group detection
   await sql`
     DO $$ BEGIN
