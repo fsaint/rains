@@ -17,6 +17,16 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
     timeout: NodeJS.Timeout;
   }> = new Map();
 
+  private pendingExecutors: Map<string, () => Promise<unknown>> = new Map();
+
+  /**
+   * Register an async function to auto-execute when approval is granted.
+   * The result will be stored in result_json for later retrieval.
+   */
+  registerExecutor(id: string, executor: () => Promise<unknown>): void {
+    this.pendingExecutors.set(id, executor);
+  }
+
   /**
    * Submit a new approval request
    */
@@ -103,6 +113,20 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
         this.emit('resolved', request);
         this.notifyWaiter(id, { approved: true, approver, comment });
       }
+
+      // Auto-execute deferred tool if an executor was registered
+      const executor = this.pendingExecutors.get(id);
+      if (executor) {
+        this.pendingExecutors.delete(id);
+        try {
+          const execResult = await executor();
+          await this.storeResult(id, execResult);
+        } catch (err) {
+          await this.storeResult(id, { error: String(err) });
+          console.error(`[approvals] executor failed for ${id}:`, err);
+        }
+      }
+
       return true;
     }
 

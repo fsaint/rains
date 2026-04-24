@@ -382,4 +382,79 @@ describe('ApprovalQueue', () => {
       );
     });
   });
+
+  describe('registerExecutor + auto-execution on approve', () => {
+    it('runs the executor when approve() is called and stores result', async () => {
+      // Mock: submit insert, get (after submit), then update for approve, then get (after approve), then storeResult update
+      const mockApprovalRow = {
+        id: 'test-approval-id',
+        agent_id: 'agent-1',
+        tool: 'gmail_send_email',
+        arguments_json: '{}',
+        context: null,
+        status: 'pending',
+        requested_at: '2024-06-15T12:00:00.000Z',
+        expires_at: '2024-06-15T13:00:00.000Z',
+        resolved_at: null,
+        resolved_by: null,
+        resolution_comment: null,
+        email_last_sent_at: null,
+        telegram_chat_id: null,
+        telegram_message_id: null,
+        result_json: null,
+      };
+      // submit: insert
+      vi.mocked(client.execute)
+        .mockResolvedValueOnce({ rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [] })
+        // submit: get
+        .mockResolvedValueOnce({ rows: [mockApprovalRow], rowsAffected: 0, lastInsertRowid: 0n, columns: [] })
+        // approve: update
+        .mockResolvedValueOnce({ rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [] })
+        // approve: get (after update)
+        .mockResolvedValueOnce({ rows: [{ ...mockApprovalRow, status: 'approved', resolved_by: 'alice@example.com' }], rowsAffected: 0, lastInsertRowid: 0n, columns: [] })
+        // storeResult: update
+        .mockResolvedValueOnce({ rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [] });
+
+      const executorFn = vi.fn().mockResolvedValue({ message: 'email sent' });
+      await queue.submit('agent-1', 'gmail_send_email', {}, 'context');
+      queue.registerExecutor('test-approval-id', executorFn);
+      await queue.approve('test-approval-id', 'alice@example.com', 'looks good');
+
+      expect(executorFn).toHaveBeenCalledOnce();
+      // storeResult should have been called with the executor's result
+      const calls = vi.mocked(client.execute).mock.calls;
+      const storeCall = calls.find(([arg]) =>
+        typeof arg === 'object' && 'sql' in arg && (arg as any).sql.includes('result_json')
+      );
+      expect(storeCall).toBeDefined();
+      expect((storeCall![0] as any).args[0]).toBe(JSON.stringify({ message: 'email sent' }));
+    });
+
+    it('does not fail approve() if no executor is registered', async () => {
+      const mockApprovalRow = {
+        id: 'test-approval-id',
+        agent_id: 'agent-1',
+        tool: 'gmail_send_email',
+        arguments_json: '{}',
+        context: null,
+        status: 'pending',
+        requested_at: '2024-06-15T12:00:00.000Z',
+        expires_at: '2024-06-15T13:00:00.000Z',
+        resolved_at: null,
+        resolved_by: null,
+        resolution_comment: null,
+        email_last_sent_at: null,
+        telegram_chat_id: null,
+        telegram_message_id: null,
+        result_json: null,
+      };
+      vi.mocked(client.execute)
+        .mockResolvedValueOnce({ rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [] })
+        .mockResolvedValueOnce({ rows: [mockApprovalRow], rowsAffected: 0, lastInsertRowid: 0n, columns: [] })
+        .mockResolvedValueOnce({ rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [] })
+        .mockResolvedValueOnce({ rows: [{ ...mockApprovalRow, status: 'approved' }], rowsAffected: 0, lastInsertRowid: 0n, columns: [] });
+      // No registerExecutor call
+      await expect(queue.approve('test-approval-id', 'alice@example.com')).resolves.not.toThrow();
+    });
+  });
 });
