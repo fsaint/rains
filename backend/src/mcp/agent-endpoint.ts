@@ -833,9 +833,13 @@ async function handleCallTool(
         content: [{
           type: 'text',
           text: JSON.stringify({
-            deferred: true,
+            status: 'pending_approval',
             jobId: approvalId,
-            message: 'This action requires approval. Use reins_get_result to check when complete.',
+            next_step: `Call reins_get_result with jobId="${approvalId}" to poll for the result. ` +
+              `If status is "pending", wait a moment and call reins_get_result again. ` +
+              `If status is "completed", report the result to the user. ` +
+              `If status is "rejected", inform the user the action was denied. ` +
+              `Do not proceed until you have polled reins_get_result.`,
           }),
         }],
       },

@@ -332,9 +332,10 @@ describe('handleMCPRequest', () => {
       expect(result.content[0].type).toBe('text');
 
       const parsed = JSON.parse(result.content[0].text);
-      expect(parsed.deferred).toBe(true);
+      expect(parsed.status).toBe('pending_approval');
       expect(typeof parsed.jobId).toBe('string');
       expect(parsed.jobId.length).toBeGreaterThan(0);
+      expect(parsed.next_step).toContain('reins_get_result');
 
       // registerExecutor must have been called with the jobId
       expect(approvalQueue.registerExecutor).toHaveBeenCalledWith(
