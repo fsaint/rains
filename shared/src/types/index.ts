@@ -133,6 +133,7 @@ export interface ApprovalRequest {
   emailLastSentAt?: Date;
   telegramChatId?: string;
   telegramMessageId?: string;
+  resultJson?: string;   // populated after deferred execution completes
 }
 
 export interface ApprovalDecision {

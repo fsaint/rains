@@ -298,6 +298,7 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
       emailLastSentAt: row.email_last_sent_at ? new Date(row.email_last_sent_at as string) : undefined,
       telegramChatId: row.telegram_chat_id as string | undefined,
       telegramMessageId: row.telegram_message_id as string | undefined,
+      resultJson: row.result_json as string | undefined,
     };
   }
 }
