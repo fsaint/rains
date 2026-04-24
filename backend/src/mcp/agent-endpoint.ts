@@ -652,12 +652,23 @@ async function handleCallTool(
 
   // Built-in tool: reins_get_result — poll for deferred approval job status
   if (toolName === 'reins_get_result') {
-    const { jobId } = args as { jobId?: string };
+    let { jobId } = args as { jobId?: string };
+
+    // Fallback: if no jobId supplied (some LLMs call the tool without arguments),
+    // look up the most recent deferred approval for this agent.
     if (!jobId || typeof jobId !== 'string') {
-      return {
-        jsonrpc: '2.0', id: requestId,
-        error: { code: MCP_ERROR_CODES.INVALID_PARAMS, message: 'jobId is required', data: {} },
-      };
+      const latest = await approvalQueue.getLatestDeferred(agentId);
+      if (latest) {
+        jobId = latest.id;
+      } else {
+        return {
+          jsonrpc: '2.0', id: requestId,
+          result: {
+            content: [{ type: 'text', text: 'No pending deferred job found for this agent.' }],
+            isError: true,
+          },
+        };
+      }
     }
 
     const approval = await approvalQueue.get(jobId);
@@ -833,13 +844,16 @@ async function handleCallTool(
         content: [{
           type: 'text',
           text: JSON.stringify({
-            status: 'pending_approval',
+            status: 'APPROVAL_PENDING',
             jobId: approvalId,
-            next_step: `Call reins_get_result with jobId="${approvalId}" to poll for the result. ` +
-              `If status is "pending", wait a moment and call reins_get_result again. ` +
-              `If status is "completed", report the result to the user. ` +
-              `If status is "rejected", inform the user the action was denied. ` +
-              `Do not proceed until you have polled reins_get_result.`,
+            instruction: 'Do NOT respond to the user. Call the reins_get_result tool immediately.',
+            required_tool_call: {
+              tool: 'reins_get_result',
+              arguments: { jobId: approvalId },
+            },
+            on_pending: 'Call reins_get_result again with the same jobId after a few seconds.',
+            on_completed: 'Report the result to the user.',
+            on_rejected: 'Tell the user the request was denied.',
           }),
         }],
       },

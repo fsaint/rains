@@ -80,6 +80,20 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
   }
 
   /**
+   * Get the most recently submitted deferred approval for an agent.
+   * Used as a fallback when the LLM calls reins_get_result without a jobId.
+   */
+  async getLatestDeferred(agentId: string): Promise<ApprovalRequest | null> {
+    const result = await client.execute({
+      sql: `SELECT * FROM approvals WHERE agent_id = ?
+            ORDER BY requested_at DESC LIMIT 1`,
+      args: [agentId],
+    });
+    if (result.rows.length === 0) return null;
+    return this.mapToRequest(result.rows[0]);
+  }
+
+  /**
    * List pending approvals
    */
   async listPending(agentId?: string): Promise<ApprovalRequest[]> {
