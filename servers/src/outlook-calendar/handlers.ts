@@ -133,9 +133,15 @@ export async function handleSearchEvents(
   const query = args.query as string;
   const top = Math.min((args.maxResults as number) || 20, 100);
 
+  // Graph API does not support $search on Events (returns 501).
+  // Use $filter with contains() on subject instead.
+  const escaped = query.replace(/'/g, "''");
+  const filter = `contains(subject,'${escaped}')`;
+
   const params = new URLSearchParams({
-    $search: `"${query}"`,
+    $filter: filter,
     $top: String(top),
+    $orderby: 'start/dateTime asc',
   });
 
   const response = await graphRequest(context, `/me/events?${params}`);
