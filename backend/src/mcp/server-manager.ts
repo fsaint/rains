@@ -10,6 +10,7 @@ import { policyEngine } from '../policy/engine.js';
 import { approvalQueue } from '../approvals/queue.js';
 import { auditLogger } from '../audit/logger.js';
 import { credentialVault } from '../credentials/vault.js';
+import { getDrivePathConfig } from '../services/permissions.js';
 import type { ParsedPolicy, CredentialType, CredentialData } from '@reins/shared';
 
 /**
@@ -38,6 +39,10 @@ export interface ToolContext {
     data: CredentialData;
   };
   linkedAccounts?: Array<{ email: string; name?: string; isDefault: boolean }>;
+  /** Default Drive permission level (injected for drive tools) */
+  driveDefaultLevel?: 'read' | 'write' | 'blocked';
+  /** Per-folder Drive path rules (injected for drive tools) */
+  drivePathRules?: Array<{ folderId: string; label?: string; permission: 'read' | 'write' | 'blocked' }>;
 }
 
 /**
@@ -273,6 +278,13 @@ export class ServerManager extends EventEmitter<ServerManagerEvents> {
         const data = credential.data as { accessToken?: string };
         context.accessToken = data.accessToken;
       }
+    }
+
+    // Inject Drive path rules for drive tools
+    if (serverType === 'drive') {
+      const driveConfig = await getDrivePathConfig(agentId);
+      context.driveDefaultLevel = driveConfig.defaultLevel;
+      context.drivePathRules = driveConfig.rules;
     }
 
     // Call the tool

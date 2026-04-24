@@ -138,6 +138,7 @@ export const agentServiceAccess = pgTable('agent_service_access', {
   serviceType: text('service_type').notNull(),
   enabled: boolean('enabled').default(false).notNull(),
   credentialId: text('credential_id'),
+  pathRules: text('path_rules'), // JSON: DrivePathRule[] for path-based permission overrides
   createdAt: text('created_at').default(sql`now()`).notNull(),
   updatedAt: text('updated_at').default(sql`now()`).notNull(),
 });

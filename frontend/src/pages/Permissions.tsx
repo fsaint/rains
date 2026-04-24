@@ -9,6 +9,8 @@ import {
   type ToolPermission,
   type PermissionLevel,
   type PendingRegistration,
+  type DrivePathConfig,
+  type DrivePathRule,
 } from '../api/client';
 import {
   Mail,
@@ -1021,6 +1023,11 @@ function InstanceConfigModal({ instanceId, onClose, onUpdate }: InstanceConfigMo
               </div>
             )}
 
+            {/* Drive: Path-Based Permissions */}
+            {config.serviceType === 'drive' && currentLevel !== 'none' && (
+              <DrivePathEditor agentId={config.agentId} />
+            )}
+
             {/* Remove Instance */}
             <div className="pt-2">
               <button
@@ -1048,6 +1055,165 @@ function InstanceConfigModal({ instanceId, onClose, onUpdate }: InstanceConfigMo
           >
             Close
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// Drive Path-Based Permissions Editor
+// ============================================================================
+
+interface DrivePathEditorProps {
+  agentId: string;
+}
+
+function DrivePathEditor({ agentId }: DrivePathEditorProps) {
+  const queryClient = useQueryClient();
+  const [newFolderId, setNewFolderId] = useState('');
+  const [newLabel, setNewLabel] = useState('');
+  const [newPermission, setNewPermission] = useState<'read' | 'write' | 'blocked'>('write');
+
+  const { data: config, isLoading } = useQuery({
+    queryKey: ['permissions', agentId, 'drive-path-config'],
+    queryFn: () => permissions.getDrivePathConfig(agentId),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: (updated: DrivePathConfig) => permissions.setDrivePathConfig(agentId, updated),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['permissions', agentId, 'drive-path-config'] });
+    },
+  });
+
+  const setDefault = (level: 'read' | 'write' | 'blocked') => {
+    updateMutation.mutate({ defaultLevel: level, rules: config?.rules ?? [] });
+  };
+
+  const addRule = () => {
+    if (!newFolderId.trim()) return;
+    const rules = [...(config?.rules ?? []), { folderId: newFolderId.trim(), label: newLabel.trim() || undefined, permission: newPermission }];
+    updateMutation.mutate({ defaultLevel: config?.defaultLevel ?? 'write', rules });
+    setNewFolderId('');
+    setNewLabel('');
+    setNewPermission('write');
+  };
+
+  const removeRule = (folderId: string) => {
+    const rules = (config?.rules ?? []).filter((r) => r.folderId !== folderId);
+    updateMutation.mutate({ defaultLevel: config?.defaultLevel ?? 'write', rules });
+  };
+
+  if (isLoading) return null;
+
+  const defaultLevel = config?.defaultLevel ?? 'write';
+  const rules = config?.rules ?? [];
+
+  const levelColors: Record<string, string> = {
+    read: 'bg-trust-blue/10 text-trust-blue',
+    write: 'bg-safe-green/10 text-safe-green',
+    blocked: 'bg-alert-red/10 text-alert-red',
+  };
+
+  return (
+    <div className="border border-gray-200 rounded-lg overflow-hidden">
+      <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex items-center gap-2">
+        <HardDrive className="w-4 h-4 text-gray-400" />
+        <span className="text-sm font-medium text-gray-700">Folder Permissions</span>
+      </div>
+
+      <div className="p-4 space-y-4">
+        {/* Default Level */}
+        <div>
+          <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Default (all folders)</div>
+          <div className="flex gap-2">
+            {(['read', 'write', 'blocked'] as const).map((level) => (
+              <button
+                key={level}
+                onClick={() => setDefault(level)}
+                disabled={updateMutation.isPending}
+                className={`flex-1 py-1.5 text-xs font-medium rounded-lg border-2 transition-all capitalize ${
+                  defaultLevel === level
+                    ? `${levelColors[level]} border-current`
+                    : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                {level}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Folder Rules */}
+        {rules.length > 0 && (
+          <div>
+            <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Folder overrides</div>
+            <div className="space-y-2">
+              {rules.map((rule: DrivePathRule) => (
+                <div key={rule.folderId} className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-reins-navy truncate">
+                      {rule.label || rule.folderId}
+                    </div>
+                    {rule.label && (
+                      <div className="text-xs text-gray-400 truncate">{rule.folderId}</div>
+                    )}
+                  </div>
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded ${levelColors[rule.permission]} capitalize`}>
+                    {rule.permission}
+                  </span>
+                  <button
+                    onClick={() => removeRule(rule.folderId)}
+                    disabled={updateMutation.isPending}
+                    className="text-gray-300 hover:text-alert-red transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Add Rule */}
+        <div>
+          <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Add folder override</div>
+          <div className="space-y-2">
+            <input
+              type="text"
+              placeholder="Folder ID (from Drive URL)"
+              value={newFolderId}
+              onChange={(e) => setNewFolderId(e.target.value)}
+              className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-trust-blue/30 focus:border-trust-blue"
+            />
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="Label (optional, e.g. /my_folder)"
+                value={newLabel}
+                onChange={(e) => setNewLabel(e.target.value)}
+                className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-trust-blue/30 focus:border-trust-blue"
+              />
+              <select
+                value={newPermission}
+                onChange={(e) => setNewPermission(e.target.value as 'read' | 'write' | 'blocked')}
+                className="text-sm border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-trust-blue/30"
+              >
+                <option value="read">Read</option>
+                <option value="write">Write</option>
+                <option value="blocked">Blocked</option>
+              </select>
+              <button
+                onClick={addRule}
+                disabled={!newFolderId.trim() || updateMutation.isPending}
+                className="flex items-center gap-1 bg-trust-blue text-white px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-blue-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Add
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

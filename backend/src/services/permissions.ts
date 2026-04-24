@@ -1388,6 +1388,71 @@ async function getInstancePermissionSummary(
 /**
  * Get all agents with their instances (new response shape)
  */
+// ============================================================================
+// Drive Path-Based Permissions
+// ============================================================================
+
+export interface DrivePathRuleEntry {
+  folderId: string;
+  label?: string;
+  permission: 'read' | 'write' | 'blocked';
+}
+
+export interface DrivePathConfig {
+  defaultLevel: 'read' | 'write' | 'blocked';
+  rules: DrivePathRuleEntry[];
+}
+
+/**
+ * Get the Drive path-based permission config for an agent.
+ */
+export async function getDrivePathConfig(agentId: string): Promise<DrivePathConfig> {
+  const rows = await db
+    .select({ pathRules: agentServiceAccess.pathRules })
+    .from(agentServiceAccess)
+    .where(and(eq(agentServiceAccess.agentId, agentId), eq(agentServiceAccess.serviceType, 'drive')));
+
+  const raw = rows[0]?.pathRules;
+  if (!raw) {
+    return { defaultLevel: 'write', rules: [] };
+  }
+
+  try {
+    return JSON.parse(raw) as DrivePathConfig;
+  } catch {
+    return { defaultLevel: 'write', rules: [] };
+  }
+}
+
+/**
+ * Set the Drive path-based permission config for an agent.
+ * Creates the access row if it doesn't exist.
+ */
+export async function setDrivePathConfig(agentId: string, config: DrivePathConfig): Promise<void> {
+  const json = JSON.stringify(config);
+  const existing = await db
+    .select({ id: agentServiceAccess.id })
+    .from(agentServiceAccess)
+    .where(and(eq(agentServiceAccess.agentId, agentId), eq(agentServiceAccess.serviceType, 'drive')));
+
+  if (existing.length > 0) {
+    await db
+      .update(agentServiceAccess)
+      .set({ pathRules: json, updatedAt: new Date().toISOString() })
+      .where(and(eq(agentServiceAccess.agentId, agentId), eq(agentServiceAccess.serviceType, 'drive')));
+  } else {
+    await db.insert(agentServiceAccess).values({
+      id: nanoid(),
+      agentId,
+      serviceType: 'drive',
+      enabled: true,
+      pathRules: json,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+}
+
 export async function getAgentPermissions(userId?: string): Promise<AgentPermissionsResponse> {
   const registry = await getRegistry();
   const allAgents = userId

@@ -41,8 +41,11 @@ import {
   setInstancePermissionLevel,
   setInstanceToolPermission,
   resetInstanceToolPermission,
+  getDrivePathConfig,
+  setDrivePathConfig,
   type ToolPermission,
   type PermissionLevel,
+  type DrivePathConfig,
 } from '../services/permissions.js';
 import {
   registerAgent,
@@ -702,6 +705,41 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return { data: [] };
     }
   });
+
+  // ========================================================================
+  // Drive Path-Based Permissions
+  // ========================================================================
+
+  /**
+   * GET /api/permissions/:agentId/drive/path-config
+   * Returns the Drive default level + path rules for an agent.
+   */
+  app.get<{ Params: { agentId: string } }>(
+    '/api/permissions/:agentId/drive/path-config',
+    async (request, _reply) => {
+      const { agentId } = request.params;
+      const data = await getDrivePathConfig(agentId);
+      return { data };
+    }
+  );
+
+  /**
+   * PUT /api/permissions/:agentId/drive/path-config
+   * Saves the Drive default level + path rules for an agent.
+   */
+  app.put<{ Params: { agentId: string }; Body: DrivePathConfig }>(
+    '/api/permissions/:agentId/drive/path-config',
+    async (request, reply) => {
+      const { agentId } = request.params;
+      const { defaultLevel, rules } = request.body;
+      if (!defaultLevel || !['read', 'write', 'blocked'].includes(defaultLevel)) {
+        return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'defaultLevel must be read, write, or blocked' } });
+      }
+      await setDrivePathConfig(agentId, { defaultLevel, rules: rules ?? [] });
+      const data = await getDrivePathConfig(agentId);
+      return { data };
+    }
+  );
 
   // ========================================================================
   // Permission Instances (new instance-based API)

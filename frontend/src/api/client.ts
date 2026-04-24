@@ -552,6 +552,17 @@ export interface AgentPermissionsResponse {
   availableServices: Array<{ type: string; name: string; icon: string }>;
 }
 
+export interface DrivePathRule {
+  folderId: string;
+  label?: string;
+  permission: 'read' | 'write' | 'blocked';
+}
+
+export interface DrivePathConfig {
+  defaultLevel: 'read' | 'write' | 'blocked';
+  rules: DrivePathRule[];
+}
+
 // Permissions
 export const permissions = {
   getMatrix: () => request<PermissionMatrix>('/permissions/matrix'),
@@ -673,5 +684,15 @@ export const permissions = {
   resetInstanceToolPermission: (instanceId: string, toolName: string) =>
     request<InstanceConfig>(`/permissions/instances/${instanceId}/tools/${toolName}`, {
       method: 'DELETE',
+    }),
+
+  // Drive path-based permissions
+  getDrivePathConfig: (agentId: string) =>
+    request<DrivePathConfig>(`/permissions/${agentId}/drive/path-config`),
+
+  setDrivePathConfig: (agentId: string, config: DrivePathConfig) =>
+    request<DrivePathConfig>(`/permissions/${agentId}/drive/path-config`, {
+      method: 'PUT',
+      body: JSON.stringify(config),
     }),
 };

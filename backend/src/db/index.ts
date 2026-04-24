@@ -482,6 +482,14 @@ export async function initializeDatabase() {
     END $$
   `;
 
+  // Add path_rules column for Drive path-based permissions
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE agent_service_access ADD COLUMN IF NOT EXISTS path_rules TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
+
   // Create telegram_link_codes table
   await sql`
     CREATE TABLE IF NOT EXISTS telegram_link_codes (

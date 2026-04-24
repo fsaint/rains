@@ -4,6 +4,7 @@
 
 import { google, type drive_v3 } from 'googleapis';
 import type { ServerContext, ToolResult } from '../common/types.js';
+import { resolvePermission, canRead, canWrite, type PermissionLevel } from './path-rules.js';
 
 type DriveClient = drive_v3.Drive;
 
@@ -33,15 +34,27 @@ function getDriveClient(context: ServerContext): DriveClient {
 }
 
 /**
+ * Resolve the effective Drive permission for this context, using path rules if available.
+ */
+function drivePermission(context: ServerContext, folderId?: string): PermissionLevel {
+  const defaultLevel: PermissionLevel = context.driveDefaultLevel ?? 'write';
+  return resolvePermission(folderId, context.drivePathRules, defaultLevel);
+}
+
+/**
  * List files handler
  */
 export async function handleListFiles(
   args: Record<string, unknown>,
   context: ServerContext
 ): Promise<ToolResult> {
+  const folderId = args.folderId as string | undefined;
+  if (!canRead(drivePermission(context, folderId))) {
+    return { success: false, error: 'Permission denied: read access not granted for this folder' };
+  }
+
   const drive = getDriveClient(context);
 
-  const folderId = args.folderId as string | undefined;
   const pageSize = Math.min((args.pageSize as number) ?? 20, 100);
   const pageToken = args.pageToken as string | undefined;
   const orderBy = (args.orderBy as string) ?? 'modifiedTime desc';
@@ -80,6 +93,10 @@ export async function handleGetFile(
   args: Record<string, unknown>,
   context: ServerContext
 ): Promise<ToolResult> {
+  if (!canRead(drivePermission(context))) {
+    return { success: false, error: 'Permission denied: read access not granted' };
+  }
+
   const drive = getDriveClient(context);
 
   const fileId = args.fileId as string;
@@ -108,6 +125,10 @@ export async function handleReadFile(
   args: Record<string, unknown>,
   context: ServerContext
 ): Promise<ToolResult> {
+  if (!canRead(drivePermission(context))) {
+    return { success: false, error: 'Permission denied: read access not granted' };
+  }
+
   const drive = getDriveClient(context);
 
   const fileId = args.fileId as string;
@@ -224,6 +245,10 @@ export async function handleSearch(
   args: Record<string, unknown>,
   context: ServerContext
 ): Promise<ToolResult> {
+  if (!canRead(drivePermission(context))) {
+    return { success: false, error: 'Permission denied: read access not granted' };
+  }
+
   const drive = getDriveClient(context);
 
   const query = args.query as string;
@@ -258,12 +283,16 @@ export async function handleCreateFile(
   args: Record<string, unknown>,
   context: ServerContext
 ): Promise<ToolResult> {
+  const parentId = args.parentId as string | undefined;
+  if (!canWrite(drivePermission(context, parentId))) {
+    return { success: false, error: 'Permission denied: write access not granted for this folder' };
+  }
+
   const drive = getDriveClient(context);
 
   const name = args.name as string;
   const mimeType = args.mimeType as string | undefined;
   const content = args.content as string | undefined;
-  const parentId = args.parentId as string | undefined;
 
   const fileMetadata: drive_v3.Schema$File = {
     name,
@@ -317,6 +346,10 @@ export async function handleUpdateFile(
   args: Record<string, unknown>,
   context: ServerContext
 ): Promise<ToolResult> {
+  if (!canWrite(drivePermission(context))) {
+    return { success: false, error: 'Permission denied: write access not granted' };
+  }
+
   const drive = getDriveClient(context);
 
   const fileId = args.fileId as string;
@@ -380,6 +413,10 @@ export async function handleShareFile(
   args: Record<string, unknown>,
   context: ServerContext
 ): Promise<ToolResult> {
+  if (!canWrite(drivePermission(context))) {
+    return { success: false, error: 'Permission denied: write access not granted' };
+  }
+
   const drive = getDriveClient(context);
 
   const fileId = args.fileId as string;
@@ -422,6 +459,10 @@ export async function handleDeleteFile(
   args: Record<string, unknown>,
   context: ServerContext
 ): Promise<ToolResult> {
+  if (!canWrite(drivePermission(context))) {
+    return { success: false, error: 'Permission denied: write access not granted' };
+  }
+
   const drive = getDriveClient(context);
 
   const fileId = args.fileId as string;

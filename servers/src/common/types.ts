@@ -20,6 +20,19 @@ export interface ServerConfig {
 }
 
 /**
+ * A path-based permission rule for Google Drive.
+ * Matches a specific folder by its Drive folder ID and grants a permission level.
+ */
+export interface DrivePathRule {
+  /** Google Drive folder ID (e.g. "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs") */
+  folderId: string;
+  /** Human-readable label (e.g. "/my_agent_folder") */
+  label?: string;
+  /** Permission level for this folder and its contents */
+  permission: 'read' | 'write' | 'blocked';
+}
+
+/**
  * Context passed to tool handlers
  */
 export interface ServerContext {
@@ -33,6 +46,10 @@ export interface ServerContext {
   requestId: string;
   /** Linked accounts for multi-account support */
   linkedAccounts?: Array<{ email: string; name?: string; isDefault: boolean }>;
+  /** Default Drive permission level (for Drive service only) */
+  driveDefaultLevel?: 'read' | 'write' | 'blocked';
+  /** Per-folder Drive path rules (for Drive service only) */
+  drivePathRules?: DrivePathRule[];
 }
 
 /**

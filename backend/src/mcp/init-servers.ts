@@ -48,6 +48,8 @@ function createServerWrapper(
         accessToken: getAccessToken?.() ?? context.accessToken,
         agentId: context.agentId,
         linkedAccounts: context.linkedAccounts,
+        driveDefaultLevel: context.driveDefaultLevel,
+        drivePathRules: context.drivePathRules,
       });
     },
   };
