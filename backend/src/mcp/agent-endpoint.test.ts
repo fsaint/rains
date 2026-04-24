@@ -442,4 +442,41 @@ describe('reins_get_result tool', () => {
     expect(response.error).toBeDefined();
     expect(response.error!.message).toMatch(/not found/i);
   });
+
+  it('returns expired status for an expired job', async () => {
+    vi.mocked(approvalQueue.get).mockResolvedValueOnce({
+      id: 'job-1', agentId: 'agent-1', tool: 'gmail_send_email',
+      arguments: {}, status: 'expired',
+      requestedAt: new Date(), expiresAt: new Date(Date.now() - 1000),
+    } as any);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'reins_get_result', arguments: { jobId: 'job-1' } },
+    });
+
+    expect(response.error).toBeUndefined();
+    const content = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text);
+    expect(content.status).toBe('expired');
+    expect(content.jobId).toBe('job-1');
+  });
+
+  it('returns pending when approved but execution not yet complete', async () => {
+    vi.mocked(approvalQueue.get).mockResolvedValueOnce({
+      id: 'job-1', agentId: 'agent-1', tool: 'gmail_send_email',
+      arguments: {}, status: 'approved',
+      requestedAt: new Date(), expiresAt: new Date(Date.now() + 3600_000),
+      resultJson: undefined,
+    } as any);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'reins_get_result', arguments: { jobId: 'job-1' } },
+    });
+
+    expect(response.error).toBeUndefined();
+    const content = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text);
+    expect(content.status).toBe('pending');
+    expect(content.jobId).toBe('job-1');
+  });
 });

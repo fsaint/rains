@@ -21,6 +21,7 @@ import { auditLogger } from '../audit/logger.js';
 import { credentialVault } from '../credentials/vault.js';
 import { sendReauthEmail } from '../services/email.js';
 import { config } from '../config/index.js';
+import type { DeferredJobResult } from '@reins/shared';
 
 // ============================================================================
 // Types
@@ -663,13 +664,17 @@ async function handleCallTool(
 
     // Security: only return results for jobs belonging to this agent
     if (!approval || approval.agentId !== agentId) {
+      await auditLogger.logToolCall(agentId, 'reins_get_result', args, 'blocked', Date.now() - startTime, {
+        reason: 'Job not found or agent mismatch',
+        jobId,
+      });
       return {
         jsonrpc: '2.0', id: requestId,
         error: { code: -32602, message: `Job not found: ${jobId}`, data: {} },
       };
     }
 
-    let jobResult: import('@reins/shared').DeferredJobResult;
+    let jobResult: DeferredJobResult;
 
     if (approval.status === 'pending') {
       jobResult = { status: 'pending', jobId };
@@ -680,7 +685,13 @@ async function handleCallTool(
     } else {
       // approved — return result if execution completed, pending if executor hasn't run yet
       if (approval.resultJson) {
-        jobResult = { status: 'completed', jobId, result: JSON.parse(approval.resultJson) };
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(approval.resultJson);
+        } catch {
+          parsed = { raw: approval.resultJson };
+        }
+        jobResult = { status: 'completed', jobId, result: parsed };
       } else {
         jobResult = { status: 'pending', jobId };
       }
