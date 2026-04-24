@@ -3248,6 +3248,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           region: deployment.region,
           mcpConfigJson: deployment.mcp_config_json,
           runtime: deployment.runtime,
+          isManual: deployment.is_manual === 1 || deployment.is_manual === true,
           createdAt: deployment.created_at,
         } : null,
       },

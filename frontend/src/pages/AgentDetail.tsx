@@ -472,7 +472,7 @@ export default function AgentDetail() {
         {dep && dep.status !== 'destroyed' && dep.status !== 'error' && (
           <div className="bg-white rounded-xl border border-gray-100 p-5">
             <div className="flex items-center gap-2 flex-wrap">
-              {dep.status === 'stopped' && (
+              {!dep.isManual && dep.status === 'stopped' && (
                 <button
                   onClick={() => startMutation.mutate()}
                   disabled={isActionLoading}
@@ -482,7 +482,7 @@ export default function AgentDetail() {
                   Start
                 </button>
               )}
-              {dep.status === 'running' && (
+              {!dep.isManual && dep.status === 'running' && (
                 <button
                   onClick={() => stopMutation.mutate()}
                   disabled={isActionLoading}
@@ -492,7 +492,7 @@ export default function AgentDetail() {
                   Stop
                 </button>
               )}
-              {dep.status === 'running' && (
+              {!dep.isManual && dep.status === 'running' && (
                 <button
                   onClick={() => restartMutation.mutate()}
                   disabled={isActionLoading}
@@ -503,33 +503,39 @@ export default function AgentDetail() {
                   Restart
                 </button>
               )}
-              <button
-                onClick={() => redeployMutation.mutate()}
-                disabled={isActionLoading}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-trust-blue bg-trust-blue/5 hover:bg-trust-blue/10 border border-trust-blue/10 rounded-lg transition-colors disabled:opacity-50"
-              >
-                {redeployMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                Redeploy
-              </button>
-              <button
-                onClick={() => { setReauthStatus('idle'); setReauthError(''); setShowReauth(true); }}
-                disabled={isActionLoading}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition-colors disabled:opacity-50"
-              >
-                <KeyRound className="w-4 h-4" />
-                Re-auth OpenAI
-              </button>
+              {!dep.isManual && (
+                <button
+                  onClick={() => redeployMutation.mutate()}
+                  disabled={isActionLoading}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-trust-blue bg-trust-blue/5 hover:bg-trust-blue/10 border border-trust-blue/10 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {redeployMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                  Redeploy
+                </button>
+              )}
+              {!dep.isManual && (
+                <button
+                  onClick={() => { setReauthStatus('idle'); setReauthError(''); setShowReauth(true); }}
+                  disabled={isActionLoading}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  <KeyRound className="w-4 h-4" />
+                  Re-auth OpenAI
+                </button>
+              )}
               <div className="flex-1" />
-              {/* Logs & Chat */}
-              <button
-                onClick={() => setShowLogs(true)}
-                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 border border-gray-200 rounded-lg transition-colors"
-                title="View live logs"
-              >
-                <ScrollText className="w-4 h-4" />
-                Logs
-              </button>
-              {dep.status === 'running' && (
+              {/* Logs & Chat — hidden for manual agents */}
+              {!dep.isManual && (
+                <button
+                  onClick={() => setShowLogs(true)}
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 border border-gray-200 rounded-lg transition-colors"
+                  title="View live logs"
+                >
+                  <ScrollText className="w-4 h-4" />
+                  Logs
+                </button>
+              )}
+              {!dep.isManual && dep.status === 'running' && (
                 <button
                   onClick={() => setShowChat(true)}
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-white bg-trust-blue hover:bg-trust-blue/90 rounded-lg transition-colors"

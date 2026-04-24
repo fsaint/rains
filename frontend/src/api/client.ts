@@ -128,6 +128,7 @@ export interface AgentDetail {
     region: string | null;
     mcpConfigJson: string | null;
     runtime?: string | null;
+    isManual?: boolean;
     createdAt: string;
   } | null;
 }

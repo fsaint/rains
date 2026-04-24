@@ -112,7 +112,7 @@ const PRESET_AGENTS = [
 ];
 
 const STEPS = ['Basics', 'Model', 'Personality', 'Deploy'];
-const MANUAL_STEPS = ['Basics', 'Personality', 'Finish'];
+const MANUAL_STEPS = ['Basics', 'Finish'];
 
 export default function AgentNew() {
   const navigate = useNavigate();
@@ -558,8 +558,8 @@ export default function AgentNew() {
         </>
       )}
 
-      {/* Step 3: Personality (hosted step 2, manual step 1) */}
-      {((agentType === 'hosted' && step === 2) || (agentType === 'manual' && step === 1)) && (
+      {/* Step 3: Personality (hosted only, step 2) */}
+      {(agentType === 'hosted' && step === 2) && (
         <div className="space-y-4">
           <section className="bg-white rounded-xl border border-gray-100 p-6 space-y-4">
             <div>
@@ -670,7 +670,7 @@ export default function AgentNew() {
       )}
 
       {/* Manual: Finish step */}
-      {agentType === 'manual' && step === 2 && (
+      {agentType === 'manual' && step === 1 && (
         <section className="bg-white rounded-xl border border-gray-100 p-6 space-y-3">
           <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Ready to Connect</h2>
           <p className="text-sm text-gray-600">
