@@ -142,6 +142,17 @@ export interface ApprovalDecision {
   comment?: string;
 }
 
+export type DeferredJobStatus = 'pending' | 'completed' | 'rejected' | 'expired';
+
+export interface DeferredJobResult {
+  status: DeferredJobStatus;
+  jobId: string;
+  /** Present when status === 'completed' */
+  result?: unknown;
+  /** Present when status === 'rejected' */
+  reason?: string;
+}
+
 // ============================================================================
 // Audit Types
 // ============================================================================
