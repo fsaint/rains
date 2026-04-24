@@ -76,6 +76,17 @@ export const MCP_ERROR_CODES = {
   MISSING_CREDENTIALS: -32005,
 } as const;
 
+interface ToolExecutionResult {
+  success: boolean;
+  data?: unknown;
+  /** True when the tool ran but returned an error result (MCP isError: true) */
+  isToolError?: boolean;
+  /** For JSON-RPC protocol errors (credential/auth problems) */
+  errorCode?: number;
+  errorMessage?: string;
+  errorData?: Record<string, unknown>;
+}
+
 // ============================================================================
 // Service Type Mapping (loaded from registry)
 // ============================================================================
@@ -355,6 +366,255 @@ async function handleListTools(
 }
 
 // ============================================================================
+// executeTool — credential resolution + tool invocation
+// ============================================================================
+
+/**
+ * Resolve credentials and call the tool on the downstream MCP server.
+ * Returns a ToolExecutionResult so the caller can map it to either a
+ * JSON-RPC error or a tools/call result.
+ */
+async function executeTool(
+  agentId: string,
+  serviceType: string,
+  toolName: string,
+  argsIn: Record<string, unknown>,
+  hasInstances: boolean,
+  serviceInstances: (typeof agentServiceInstances.$inferSelect)[],
+): Promise<ToolExecutionResult> {
+  let args = { ...argsIn };
+  const context: ToolContext = {
+    requestId: crypto.randomUUID(),
+    agentId,
+  };
+
+  const isListAccountsTool = toolName.endsWith('_list_accounts');
+
+  if (hasInstances) {
+    // Instance-based credential resolution
+    if (isListAccountsTool) {
+      const accounts: Array<{ email: string; name?: string; isDefault: boolean }> = [];
+      for (const inst of serviceInstances) {
+        if (inst.credentialId) {
+          const [cred] = await db.select().from(credentials).where(eq(credentials.id, inst.credentialId));
+          if (cred?.accountEmail) {
+            accounts.push({
+              email: cred.accountEmail,
+              name: cred.accountName ?? undefined,
+              isDefault: inst.isDefault,
+            });
+          }
+        }
+      }
+      context.linkedAccounts = accounts;
+    } else {
+      // Resolve instance credential based on args.account or default
+      const requestedAccount = args.account as string | undefined;
+      let targetInstance = serviceInstances.find((i) => i.isDefault) ?? serviceInstances[0];
+
+      if (requestedAccount) {
+        let found = false;
+        for (const inst of serviceInstances) {
+          if (inst.credentialId) {
+            const [cred] = await db.select().from(credentials).where(eq(credentials.id, inst.credentialId));
+            if (cred?.accountEmail === requestedAccount) {
+              targetInstance = inst;
+              found = true;
+              break;
+            }
+          }
+        }
+        if (!found) {
+          return {
+            success: false,
+            errorCode: MCP_ERROR_CODES.MISSING_CREDENTIALS,
+            errorMessage: `No credential found for account: ${requestedAccount}. Use ${serviceType}_list_accounts to see available accounts.`,
+            errorData: { service: serviceType, requestedAccount },
+          };
+        }
+      }
+
+      // Strip `account` from args before passing to handler
+      const { account: _account, ...cleanArgs } = args;
+      args = cleanArgs;
+
+      // Auto-heal: if instance has no credential, try to find a matching one now.
+      if (!targetInstance.credentialId) {
+        try {
+          const { serviceDefinitions } = await import('@reins/servers');
+          const def = serviceDefinitions.find((d) => d.type === serviceType);
+          const [agentRow] = await db.select().from(agents).where(eq(agents.id, agentId));
+          if (def && agentRow?.userId) {
+            const serviceIds = def.auth.credentialServiceIds ?? [serviceType];
+            const [matchingCred] = await db
+              .select()
+              .from(credentials)
+              .where(and(inArray(credentials.serviceId, serviceIds), eq(credentials.userId, agentRow.userId)));
+            if (matchingCred) {
+              await db
+                .update(agentServiceInstances)
+                .set({ credentialId: matchingCred.id, updatedAt: new Date().toISOString() })
+                .where(eq(agentServiceInstances.id, targetInstance.id));
+              targetInstance = { ...targetInstance, credentialId: matchingCred.id };
+            }
+          }
+        } catch (healErr) {
+          console.warn(`[agent-endpoint] auto-heal failed for ${serviceType}:`, healErr);
+        }
+      }
+
+      if (targetInstance.credentialId) {
+        const credential = await credentialVault.retrieve(targetInstance.credentialId);
+        if (credential) {
+          context.credential = credential;
+          const accessToken = await credentialVault.getValidAccessToken(targetInstance.credentialId);
+          if (accessToken) {
+            context.accessToken = accessToken;
+          } else {
+            await createMCPReauthApproval(agentId, serviceType, targetInstance.credentialId).catch(() => {});
+            return {
+              success: false,
+              errorCode: MCP_ERROR_CODES.MISSING_CREDENTIALS,
+              errorMessage: `Credentials expired and could not be refreshed for service: ${serviceType}`,
+              errorData: { service: serviceType },
+            };
+          }
+        }
+      }
+    }
+  } else {
+    // Legacy credential resolution path
+    const linkedCreds = await db
+      .select()
+      .from(agentServiceCredentials)
+      .where(and(eq(agentServiceCredentials.agentId, agentId), eq(agentServiceCredentials.serviceType, serviceType)));
+
+    if (isListAccountsTool && linkedCreds.length > 0) {
+      // Populate linkedAccounts from junction table + credentials metadata
+      const accounts: Array<{ email: string; name?: string; isDefault: boolean }> = [];
+      for (const lc of linkedCreds) {
+        const [cred] = await db.select().from(credentials).where(eq(credentials.id, lc.credentialId));
+        if (cred?.accountEmail) {
+          accounts.push({
+            email: cred.accountEmail,
+            name: cred.accountName ?? undefined,
+            isDefault: lc.isDefault,
+          });
+        }
+      }
+      context.linkedAccounts = accounts;
+    } else if (linkedCreds.length > 0) {
+      // Resolve credential based on args.account or default
+      const requestedAccount = args.account as string | undefined;
+      let targetCredentialId: string | undefined;
+
+      if (requestedAccount) {
+        // Find credential matching the requested account email
+        for (const lc of linkedCreds) {
+          const [cred] = await db.select().from(credentials).where(eq(credentials.id, lc.credentialId));
+          if (cred?.accountEmail === requestedAccount) {
+            targetCredentialId = lc.credentialId;
+            break;
+          }
+        }
+        if (!targetCredentialId) {
+          return {
+            success: false,
+            errorCode: MCP_ERROR_CODES.MISSING_CREDENTIALS,
+            errorMessage: `No credential found for account: ${requestedAccount}. Use gmail_list_accounts to see available accounts.`,
+            errorData: { service: serviceType, requestedAccount },
+          };
+        }
+      } else {
+        // Use default credential, fall back to first
+        const defaultCred = linkedCreds.find((lc) => lc.isDefault);
+        targetCredentialId = defaultCred?.credentialId ?? linkedCreds[0].credentialId;
+      }
+
+      // Strip `account` from args before passing to handler
+      const { account: _account, ...cleanArgs } = args;
+      args = cleanArgs;
+
+      const credential = await credentialVault.retrieve(targetCredentialId);
+      if (credential) {
+        context.credential = credential;
+        const accessToken = await credentialVault.getValidAccessToken(targetCredentialId);
+        if (accessToken) {
+          context.accessToken = accessToken;
+        } else {
+          await createMCPReauthApproval(agentId, serviceType, targetCredentialId).catch(() => {});
+          return {
+            success: false,
+            errorCode: MCP_ERROR_CODES.MISSING_CREDENTIALS,
+            errorMessage: `Credentials expired and could not be refreshed for service: ${serviceType}`,
+            errorData: { service: serviceType },
+          };
+        }
+      }
+    } else {
+      // Fallback to legacy single credential from agent_service_access
+      const [accessRecord] = await db
+        .select()
+        .from(agentServiceAccess)
+        .where(and(eq(agentServiceAccess.agentId, agentId), eq(agentServiceAccess.serviceType, serviceType)));
+
+      if (accessRecord?.credentialId) {
+        const credential = await credentialVault.retrieve(accessRecord.credentialId);
+        if (credential) {
+          context.credential = credential;
+          const accessToken = await credentialVault.getValidAccessToken(accessRecord.credentialId);
+          if (accessToken) {
+            context.accessToken = accessToken;
+          } else {
+            await createMCPReauthApproval(agentId, serviceType, accessRecord.credentialId).catch(() => {});
+            return {
+              success: false,
+              errorCode: MCP_ERROR_CODES.MISSING_CREDENTIALS,
+              errorMessage: `Credentials expired and could not be refreshed for service: ${serviceType}`,
+              errorData: { service: serviceType },
+            };
+          }
+        }
+      } else {
+        // Check if this service requires credentials (from registry)
+        const serviceDef = _registryLoaded ? (await import('@reins/servers')).serviceRegistry.get(serviceType) : null;
+        const requiresAuth = serviceDef?.auth.required ?? false;
+        if (requiresAuth) {
+          return {
+            success: false,
+            errorCode: MCP_ERROR_CODES.MISSING_CREDENTIALS,
+            errorMessage: `No credentials linked for service: ${serviceType}`,
+            errorData: { service: serviceType },
+          };
+        }
+      }
+    }
+  }
+
+  // Get the server and call the tool
+  const server = serverManager.getServer(serviceType);
+  if (!server) {
+    return {
+      success: false,
+      errorCode: MCP_ERROR_CODES.SERVICE_NOT_ENABLED,
+      errorMessage: `Server not available: ${serviceType}`,
+      errorData: { service: serviceType },
+    };
+  }
+
+  const toolResult = await server.callTool(toolName, args, context);
+  if (toolResult.success) {
+    return { success: true, data: toolResult.data };
+  }
+  // Tool ran but returned error (use isToolError flag, not errorCode)
+  return {
+    success: false,
+    isToolError: true,
+    errorMessage: typeof toolResult.error === 'string' ? toolResult.error : 'Unknown error',
+  };
+}
+
+// ============================================================================
 // tools/call Handler
 // ============================================================================
 
@@ -497,302 +757,63 @@ async function handleCallTool(
     await auditLogger.logApproval(agentId, toolName, 'success', decision.approver);
   }
 
-  // Multi-account credential resolution
-  // First try instances, then fall back to legacy junction table
-  const context: ToolContext = {
-    requestId: crypto.randomUUID(),
-    agentId,
-  };
-
-  const isListAccountsTool = toolName.endsWith('_list_accounts');
-
-  if (hasInstances) {
-    // Instance-based credential resolution
-    if (isListAccountsTool) {
-      const accounts: Array<{ email: string; name?: string; isDefault: boolean }> = [];
-      for (const inst of serviceInstances) {
-        if (inst.credentialId) {
-          const [cred] = await db.select().from(credentials).where(eq(credentials.id, inst.credentialId));
-          if (cred?.accountEmail) {
-            accounts.push({
-              email: cred.accountEmail,
-              name: cred.accountName ?? undefined,
-              isDefault: inst.isDefault,
-            });
-          }
-        }
-      }
-      context.linkedAccounts = accounts;
-    } else {
-      // Resolve instance credential based on args.account or default
-      const requestedAccount = args.account as string | undefined;
-      let targetInstance = serviceInstances.find((i) => i.isDefault) ?? serviceInstances[0];
-
-      if (requestedAccount) {
-        let found = false;
-        for (const inst of serviceInstances) {
-          if (inst.credentialId) {
-            const [cred] = await db.select().from(credentials).where(eq(credentials.id, inst.credentialId));
-            if (cred?.accountEmail === requestedAccount) {
-              targetInstance = inst;
-              found = true;
-              break;
-            }
-          }
-        }
-        if (!found) {
-          return {
-            jsonrpc: '2.0',
-            id: requestId,
-            error: {
-              code: MCP_ERROR_CODES.MISSING_CREDENTIALS,
-              message: `No credential found for account: ${requestedAccount}. Use ${serviceType}_list_accounts to see available accounts.`,
-              data: { service: serviceType, requestedAccount },
-            },
-          };
-        }
-      }
-
-      // Strip `account` from args before passing to handler
-      const { account: _account, ...cleanArgs } = args;
-      args = cleanArgs;
-
-      // Auto-heal: if instance has no credential, try to find a matching one now.
-      if (!targetInstance.credentialId) {
-        try {
-          const { serviceDefinitions } = await import('@reins/servers');
-          const def = serviceDefinitions.find((d) => d.type === serviceType);
-          const [agentRow] = await db.select().from(agents).where(eq(agents.id, agentId));
-          if (def && agentRow?.userId) {
-            const serviceIds = def.auth.credentialServiceIds ?? [serviceType];
-            const [matchingCred] = await db
-              .select()
-              .from(credentials)
-              .where(and(inArray(credentials.serviceId, serviceIds), eq(credentials.userId, agentRow.userId)));
-            if (matchingCred) {
-              await db
-                .update(agentServiceInstances)
-                .set({ credentialId: matchingCred.id, updatedAt: new Date().toISOString() })
-                .where(eq(agentServiceInstances.id, targetInstance.id));
-              targetInstance = { ...targetInstance, credentialId: matchingCred.id };
-            }
-          }
-        } catch (healErr) {
-          console.warn(`[agent-endpoint] auto-heal failed for ${serviceType}:`, healErr);
-        }
-      }
-
-      if (targetInstance.credentialId) {
-        const credential = await credentialVault.retrieve(targetInstance.credentialId);
-        if (credential) {
-          context.credential = credential;
-          const accessToken = await credentialVault.getValidAccessToken(targetInstance.credentialId);
-          if (accessToken) {
-            context.accessToken = accessToken;
-          } else {
-            await createMCPReauthApproval(agentId, serviceType, targetInstance.credentialId).catch(() => {});
-            return {
-              jsonrpc: '2.0',
-              id: requestId,
-              error: {
-                code: MCP_ERROR_CODES.MISSING_CREDENTIALS,
-                message: `Credentials expired and could not be refreshed for service: ${serviceType}`,
-                data: { service: serviceType },
-              },
-            };
-          }
-        }
-      }
-    }
-  } else {
-  // Legacy credential resolution path
-  const linkedCreds = await db
-    .select()
-    .from(agentServiceCredentials)
-    .where(and(eq(agentServiceCredentials.agentId, agentId), eq(agentServiceCredentials.serviceType, serviceType)));
-
-  if (isListAccountsTool && linkedCreds.length > 0) {
-    // Populate linkedAccounts from junction table + credentials metadata
-    const accounts: Array<{ email: string; name?: string; isDefault: boolean }> = [];
-    for (const lc of linkedCreds) {
-      const [cred] = await db.select().from(credentials).where(eq(credentials.id, lc.credentialId));
-      if (cred?.accountEmail) {
-        accounts.push({
-          email: cred.accountEmail,
-          name: cred.accountName ?? undefined,
-          isDefault: lc.isDefault,
-        });
-      }
-    }
-    context.linkedAccounts = accounts;
-  } else if (linkedCreds.length > 0) {
-    // Resolve credential based on args.account or default
-    const requestedAccount = args.account as string | undefined;
-    let targetCredentialId: string | undefined;
-
-    if (requestedAccount) {
-      // Find credential matching the requested account email
-      for (const lc of linkedCreds) {
-        const [cred] = await db.select().from(credentials).where(eq(credentials.id, lc.credentialId));
-        if (cred?.accountEmail === requestedAccount) {
-          targetCredentialId = lc.credentialId;
-          break;
-        }
-      }
-      if (!targetCredentialId) {
-        return {
-          jsonrpc: '2.0',
-          id: requestId,
-          error: {
-            code: MCP_ERROR_CODES.MISSING_CREDENTIALS,
-            message: `No credential found for account: ${requestedAccount}. Use gmail_list_accounts to see available accounts.`,
-            data: { service: serviceType, requestedAccount },
-          },
-        };
-      }
-    } else {
-      // Use default credential, fall back to first
-      const defaultCred = linkedCreds.find((lc) => lc.isDefault);
-      targetCredentialId = defaultCred?.credentialId ?? linkedCreds[0].credentialId;
-    }
-
-    // Strip `account` from args before passing to handler
-    const { account: _account, ...cleanArgs } = args;
-    args = cleanArgs;
-
-    const credential = await credentialVault.retrieve(targetCredentialId);
-    if (credential) {
-      context.credential = credential;
-      const accessToken = await credentialVault.getValidAccessToken(targetCredentialId);
-      if (accessToken) {
-        context.accessToken = accessToken;
-      } else {
-        await createMCPReauthApproval(agentId, serviceType, targetCredentialId).catch(() => {});
-        return {
-          jsonrpc: '2.0',
-          id: requestId,
-          error: {
-            code: MCP_ERROR_CODES.MISSING_CREDENTIALS,
-            message: `Credentials expired and could not be refreshed for service: ${serviceType}`,
-            data: { service: serviceType },
-          },
-        };
-      }
-    }
-  } else {
-    // Fallback to legacy single credential from agent_service_access
-    const [accessRecord] = await db
-      .select()
-      .from(agentServiceAccess)
-      .where(and(eq(agentServiceAccess.agentId, agentId), eq(agentServiceAccess.serviceType, serviceType)));
-
-    if (accessRecord?.credentialId) {
-      const credential = await credentialVault.retrieve(accessRecord.credentialId);
-      if (credential) {
-        context.credential = credential;
-        const accessToken = await credentialVault.getValidAccessToken(accessRecord.credentialId);
-        if (accessToken) {
-          context.accessToken = accessToken;
-        } else {
-          await createMCPReauthApproval(agentId, serviceType, accessRecord.credentialId).catch(() => {});
-          return {
-            jsonrpc: '2.0',
-            id: requestId,
-            error: {
-              code: MCP_ERROR_CODES.MISSING_CREDENTIALS,
-              message: `Credentials expired and could not be refreshed for service: ${serviceType}`,
-              data: { service: serviceType },
-            },
-          };
-        }
-      }
-    } else {
-      // Check if this service requires credentials (from registry)
-      const serviceDef = _registryLoaded ? (await import('@reins/servers')).serviceRegistry.get(serviceType) : null;
-      const requiresAuth = serviceDef?.auth.required ?? false;
-      if (requiresAuth) {
-        return {
-          jsonrpc: '2.0',
-          id: requestId,
-          error: {
-            code: MCP_ERROR_CODES.MISSING_CREDENTIALS,
-            message: `No credentials linked for service: ${serviceType}`,
-            data: { service: serviceType },
-          },
-        };
-      }
-    }
-  }
-  } // end hasInstances else
-
-  // Get the server and call the tool
-  const server = serverManager.getServer(serviceType );
-  if (!server) {
-    return {
-      jsonrpc: '2.0',
-      id: requestId,
-      error: {
-        code: MCP_ERROR_CODES.SERVICE_NOT_ENABLED,
-        message: `Server not available: ${serviceType}`,
-        data: { service: serviceType },
-      },
-    };
-  }
-
+  // Execute the tool (credentials resolved internally)
+  let toolExecResult: ToolExecutionResult;
   try {
-    const result = await server.callTool(toolName, args, context);
-    const durationMs = Date.now() - startTime;
-
-    if (result.success) {
-      await auditLogger.logToolCall(agentId, toolName, args, 'success', durationMs, {
-        serviceType,
-      });
-
-      return {
-        jsonrpc: '2.0',
-        id: requestId,
-        result: {
-          content: [
-            {
-              type: 'text',
-              text: typeof result.data === 'string'
-                ? result.data
-                : JSON.stringify(result.data, null, 2),
-            },
-          ],
-        },
-      };
-    } else {
-      await auditLogger.logToolCall(agentId, toolName, args, 'error', durationMs, {
-        error: result.error,
-        serviceType,
-      });
-
-      return {
-        jsonrpc: '2.0',
-        id: requestId,
-        result: {
-          content: [{ type: 'text', text: result.error ?? 'Unknown error' }],
-          isError: true,
-        },
-      };
-    }
+    toolExecResult = await executeTool(agentId, serviceType, toolName, args, hasInstances, serviceInstances);
   } catch (error) {
     const durationMs = Date.now() - startTime;
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    await auditLogger.logToolCall(agentId, toolName, args, 'error', durationMs, { error: errorMessage, serviceType });
+    return {
+      jsonrpc: '2.0',
+      id: requestId,
+      result: { content: [{ type: 'text', text: errorMessage }], isError: true },
+    };
+  }
+  const durationMs = Date.now() - startTime;
 
-    await auditLogger.logToolCall(agentId, toolName, args, 'error', durationMs, {
-      error: errorMessage,
-      serviceType,
-    });
-
+  if (toolExecResult.success) {
+    await auditLogger.logToolCall(agentId, toolName, args, 'success', durationMs, { serviceType });
     return {
       jsonrpc: '2.0',
       id: requestId,
       result: {
-        content: [{ type: 'text', text: errorMessage }],
+        content: [{
+          type: 'text',
+          text: typeof toolExecResult.data === 'string'
+            ? toolExecResult.data
+            : JSON.stringify(toolExecResult.data, null, 2),
+        }],
+      },
+    };
+  }
+
+  await auditLogger.logToolCall(agentId, toolName, args, 'error', durationMs, {
+    error: toolExecResult.errorMessage,
+    serviceType,
+  });
+
+  // Tool ran but returned an error result (MCP isError convention)
+  if (toolExecResult.isToolError) {
+    return {
+      jsonrpc: '2.0',
+      id: requestId,
+      result: {
+        content: [{ type: 'text', text: toolExecResult.errorMessage ?? 'Unknown error' }],
         isError: true,
       },
     };
   }
+
+  // Credential/auth/policy error — JSON-RPC error response
+  return {
+    jsonrpc: '2.0',
+    id: requestId,
+    error: {
+      code: toolExecResult.errorCode ?? -32000,
+      message: toolExecResult.errorMessage ?? 'Tool execution failed',
+      data: toolExecResult.errorData,
+    },
+  };
 }
