@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
+import { approvalQueue } from '../approvals/queue.js';
 import {
   handleMCPRequest,
   getServiceTypeFromTool,
@@ -160,6 +161,7 @@ vi.mock('../approvals/queue.js', () => ({
     submit: vi.fn().mockResolvedValue('approval-123'),
     waitForDecision: vi.fn().mockResolvedValue({ approved: true, approver: 'user' }),
     registerExecutor: vi.fn(),
+    get: vi.fn().mockResolvedValue(null),
   },
 }));
 
@@ -340,5 +342,104 @@ describe('handleMCPRequest', () => {
         expect.any(Function),
       );
     });
+  });
+});
+
+describe('reins_get_result tool', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('appears in tools/list for any agent', async () => {
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/list',
+    });
+    const toolNames = (response.result as { tools: Array<{ name: string }> }).tools.map((t) => t.name);
+    expect(toolNames).toContain('reins_get_result');
+  });
+
+  it('returns pending status for an unresolved job', async () => {
+    vi.mocked(approvalQueue.get).mockResolvedValueOnce({
+      id: 'job-1', agentId: 'agent-1', tool: 'gmail_send_email',
+      arguments: {}, status: 'pending',
+      requestedAt: new Date(), expiresAt: new Date(Date.now() + 3600_000),
+    } as any);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'reins_get_result', arguments: { jobId: 'job-1' } },
+    });
+
+    expect(response.error).toBeUndefined();
+    const content = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text);
+    expect(content.status).toBe('pending');
+    expect(content.jobId).toBe('job-1');
+  });
+
+  it('returns completed status with result when job is approved and executed', async () => {
+    vi.mocked(approvalQueue.get).mockResolvedValueOnce({
+      id: 'job-1', agentId: 'agent-1', tool: 'gmail_send_email',
+      arguments: {}, status: 'approved',
+      requestedAt: new Date(), expiresAt: new Date(Date.now() + 3600_000),
+      resultJson: JSON.stringify({ messageId: 'msg-123' }),
+    } as any);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'reins_get_result', arguments: { jobId: 'job-1' } },
+    });
+
+    expect(response.error).toBeUndefined();
+    const content = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text);
+    expect(content.status).toBe('completed');
+    expect(content.result).toEqual({ messageId: 'msg-123' });
+  });
+
+  it('returns rejected status with reason', async () => {
+    vi.mocked(approvalQueue.get).mockResolvedValueOnce({
+      id: 'job-1', agentId: 'agent-1', tool: 'gmail_send_email',
+      arguments: {}, status: 'rejected',
+      requestedAt: new Date(), expiresAt: new Date(Date.now() + 3600_000),
+      resolutionComment: 'Not allowed at this time',
+    } as any);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'reins_get_result', arguments: { jobId: 'job-1' } },
+    });
+
+    expect(response.error).toBeUndefined();
+    const content = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text);
+    expect(content.status).toBe('rejected');
+    expect(content.reason).toBe('Not allowed at this time');
+  });
+
+  it('returns error for unknown jobId', async () => {
+    vi.mocked(approvalQueue.get).mockResolvedValueOnce(null);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'reins_get_result', arguments: { jobId: 'nonexistent' } },
+    });
+
+    expect(response.error).toBeDefined();
+    expect(response.error!.message).toMatch(/not found/i);
+  });
+
+  it('only returns results for jobs belonging to the calling agent', async () => {
+    vi.mocked(approvalQueue.get).mockResolvedValueOnce({
+      id: 'job-1', agentId: 'other-agent', tool: 'gmail_send_email',
+      arguments: {}, status: 'approved',
+      requestedAt: new Date(), expiresAt: new Date(Date.now() + 3600_000),
+      resultJson: JSON.stringify({ secret: 'data' }),
+    } as any);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'reins_get_result', arguments: { jobId: 'job-1' } },
+    });
+
+    expect(response.error).toBeDefined();
+    expect(response.error!.message).toMatch(/not found/i);
   });
 });

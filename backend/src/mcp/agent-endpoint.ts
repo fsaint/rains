@@ -356,6 +356,25 @@ async function handleListTools(
     }
   }
 
+  // Always inject the built-in reins_get_result polling tool
+  tools.push({
+    name: 'reins_get_result',
+    description:
+      'Check the status of a deferred tool call that required approval. ' +
+      'Returns status: pending | completed | rejected | expired. ' +
+      'When completed, includes the result of the original tool call.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        jobId: {
+          type: 'string',
+          description: 'The jobId returned by the original deferred tool call',
+        },
+      },
+      required: ['jobId'],
+    },
+  });
+
   return {
     jsonrpc: '2.0',
     id: requestId,
@@ -629,6 +648,51 @@ async function handleCallTool(
   requestId: string | number
 ): Promise<MCPResponse> {
   const startTime = Date.now();
+
+  // Built-in tool: reins_get_result — poll for deferred approval job status
+  if (toolName === 'reins_get_result') {
+    const { jobId } = args as { jobId?: string };
+    if (!jobId || typeof jobId !== 'string') {
+      return {
+        jsonrpc: '2.0', id: requestId,
+        error: { code: -32602, message: 'jobId is required', data: {} },
+      };
+    }
+
+    const approval = await approvalQueue.get(jobId);
+
+    // Security: only return results for jobs belonging to this agent
+    if (!approval || approval.agentId !== agentId) {
+      return {
+        jsonrpc: '2.0', id: requestId,
+        error: { code: -32602, message: `Job not found: ${jobId}`, data: {} },
+      };
+    }
+
+    let jobResult: import('@reins/shared').DeferredJobResult;
+
+    if (approval.status === 'pending') {
+      jobResult = { status: 'pending', jobId };
+    } else if (approval.status === 'rejected') {
+      jobResult = { status: 'rejected', jobId, reason: approval.resolutionComment };
+    } else if (approval.status === 'expired') {
+      jobResult = { status: 'expired', jobId };
+    } else {
+      // approved — return result if execution completed, pending if executor hasn't run yet
+      if (approval.resultJson) {
+        jobResult = { status: 'completed', jobId, result: JSON.parse(approval.resultJson) };
+      } else {
+        jobResult = { status: 'pending', jobId };
+      }
+    }
+
+    return {
+      jsonrpc: '2.0', id: requestId,
+      result: {
+        content: [{ type: 'text', text: JSON.stringify(jobResult) }],
+      },
+    };
+  }
 
   // Determine service type from tool name
   const serviceType = getServiceTypeFromTool(toolName);
