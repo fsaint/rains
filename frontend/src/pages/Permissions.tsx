@@ -576,8 +576,8 @@ function AddServiceModal({ agentId, agentName, availableServices, onClose, onAdd
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-xl">
-        <div className="flex items-center justify-between mb-6">
+      <div className="bg-white rounded-xl w-full max-w-md shadow-xl flex flex-col max-h-[90vh]">
+        <div className="flex items-center justify-between p-6 pb-4 flex-shrink-0">
           <div>
             <h2 className="text-lg font-semibold text-reins-navy">Add Service</h2>
             <p className="text-sm text-gray-500">Choose a service to add to {agentName}</p>
@@ -587,7 +587,7 @@ function AddServiceModal({ agentId, agentName, availableServices, onClose, onAdd
           </button>
         </div>
 
-        <div className="space-y-2">
+        <div className="space-y-2 overflow-y-auto px-6 pb-6">
           {servicesWithCreds.length > 0 && (
             <>
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-1 pb-1">
@@ -647,7 +647,7 @@ function AddServiceModal({ agentId, agentName, availableServices, onClose, onAdd
           ))}
         </div>
 
-        <div className="flex justify-end mt-6 pt-4 border-t border-gray-100">
+        <div className="flex justify-end px-6 py-4 border-t border-gray-100 flex-shrink-0">
           <button
             onClick={onClose}
             className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
