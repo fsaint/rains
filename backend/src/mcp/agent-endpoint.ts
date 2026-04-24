@@ -733,28 +733,35 @@ async function handleCallTool(
       `MCP endpoint call for ${toolName}`
     );
 
-    // Wait for approval (5 minute timeout)
-    const decision = await approvalQueue.waitForDecision(approvalId, 5 * 60 * 1000);
+    // Capture snapshot for deferred execution (executor runs when human approves)
+    const capturedArgs = { ...args };
+    const capturedInstances = [...serviceInstances];
+    const capturedHasInstances = hasInstances;
 
-    if (!decision || !decision.approved) {
-      await auditLogger.logToolCall(agentId, toolName, args, 'blocked', Date.now() - startTime, {
-        reason: decision ? 'Approval denied' : 'Approval timeout',
-        approvalId,
-        serviceType,
-      });
+    approvalQueue.registerExecutor(approvalId, () =>
+      executeTool(agentId, serviceType, toolName, capturedArgs, capturedHasInstances, capturedInstances)
+    );
 
-      return {
-        jsonrpc: '2.0',
-        id: requestId,
-        error: {
-          code: MCP_ERROR_CODES.APPROVAL_DENIED,
-          message: decision ? 'Approval denied' : 'Approval timed out',
-          data: { tool: toolName, approvalId },
-        },
-      };
-    }
+    await auditLogger.logToolCall(agentId, toolName, args, 'pending', Date.now() - startTime, {
+      reason: 'Awaiting approval',
+      approvalId,
+      serviceType,
+    });
 
-    await auditLogger.logApproval(agentId, toolName, 'success', decision.approver);
+    return {
+      jsonrpc: '2.0',
+      id: requestId,
+      result: {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            deferred: true,
+            jobId: approvalId,
+            message: 'This action requires approval. Use reins_get_result to check when complete.',
+          }),
+        }],
+      },
+    };
   }
 
   // Execute the tool (credentials resolved internally)

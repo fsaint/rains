@@ -159,6 +159,7 @@ vi.mock('../approvals/queue.js', () => ({
   approvalQueue: {
     submit: vi.fn().mockResolvedValue('approval-123'),
     waitForDecision: vi.fn().mockResolvedValue({ approved: true, approver: 'user' }),
+    registerExecutor: vi.fn(),
   },
 }));
 
@@ -303,6 +304,41 @@ describe('handleMCPRequest', () => {
 
       expect(response.error).toBeDefined();
       expect(response.error?.code).toBe(MCP_ERROR_CODES.INVALID_PARAMS);
+    });
+
+    it('returns deferred response immediately when tool requires approval', async () => {
+      const { approvalQueue } = await import('../approvals/queue.js');
+
+      const request: MCPRequest = {
+        jsonrpc: '2.0',
+        id: 42,
+        method: 'tools/call',
+        params: {
+          name: 'gmail_create_draft',
+          arguments: { to: 'test@example.com', subject: 'Hello', body: 'World' },
+        },
+      };
+
+      const response = await handleMCPRequest('agent-1', request);
+
+      // Should return a result (not an error)
+      expect(response.error).toBeUndefined();
+      expect(response.result).toBeDefined();
+
+      const result = response.result as { content: Array<{ type: string; text: string }> };
+      expect(result.content).toHaveLength(1);
+      expect(result.content[0].type).toBe('text');
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.deferred).toBe(true);
+      expect(typeof parsed.jobId).toBe('string');
+      expect(parsed.jobId.length).toBeGreaterThan(0);
+
+      // registerExecutor must have been called with the jobId
+      expect(approvalQueue.registerExecutor).toHaveBeenCalledWith(
+        parsed.jobId,
+        expect.any(Function),
+      );
     });
   });
 });
