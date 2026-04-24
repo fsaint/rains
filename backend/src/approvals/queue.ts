@@ -151,6 +151,8 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
         this.emit('resolved', request);
         this.notifyWaiter(id, { approved: false, approver, comment: reason });
       }
+      // Clean up any registered executor — approval was rejected
+      this.pendingExecutors.delete(id);
       return true;
     }
 
@@ -217,8 +219,9 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
         args: [now],
       });
 
-      // Notify waiters
+      // Clean up any registered executors for expired approvals and notify waiters
       for (const id of expiredIds) {
+        this.pendingExecutors.delete(id);
         this.notifyWaiter(id, null);
       }
 
