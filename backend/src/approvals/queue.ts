@@ -238,10 +238,10 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
       waiter.resolve(decision);
       this.pendingWaiters.delete(id);
     } else {
-      // No in-memory waiter — the agent's HTTP connection timed out before the
-      // user resolved the approval. The approval is stored in the DB but the
-      // tool call will not execute (the agent already received a timeout error).
-      console.warn(`[approvals] notifyWaiter: no waiter for ${id} — agent connection likely timed out`);
+      // No in-memory waiter. This is the expected path for deferred approvals
+      // (agent returned immediately with a jobId and is polling via reins_get_result).
+      // It can also occur when the agent's HTTP connection timed out before the
+      // user resolved a legacy blocking approval.
     }
   }
 

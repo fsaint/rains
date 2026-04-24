@@ -656,7 +656,7 @@ async function handleCallTool(
     if (!jobId || typeof jobId !== 'string') {
       return {
         jsonrpc: '2.0', id: requestId,
-        error: { code: -32602, message: 'jobId is required', data: {} },
+        error: { code: MCP_ERROR_CODES.INVALID_PARAMS, message: 'jobId is required', data: {} },
       };
     }
 
@@ -670,7 +670,7 @@ async function handleCallTool(
       });
       return {
         jsonrpc: '2.0', id: requestId,
-        error: { code: -32602, message: `Job not found: ${jobId}`, data: {} },
+        error: { code: MCP_ERROR_CODES.INVALID_PARAMS, message: `Job not found: ${jobId}`, data: {} },
       };
     }
 
@@ -808,7 +808,10 @@ async function handleCallTool(
       `MCP endpoint call for ${toolName}`
     );
 
-    // Capture snapshot for deferred execution (executor runs when human approves)
+    // Capture snapshot for deferred execution (executor runs when human approves).
+    // Note: capturedInstances is a shallow copy — elements are still the original row
+    // objects. Mutations to individual row fields after this point would affect the closure.
+    // In practice rows are read-only in this path, so this is safe.
     const capturedArgs = { ...args };
     const capturedInstances = [...serviceInstances];
     const capturedHasInstances = hasInstances;
