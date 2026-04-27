@@ -1818,7 +1818,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         'https://www.googleapis.com/auth/gmail.readonly',
         'https://www.googleapis.com/auth/gmail.compose',
         'https://www.googleapis.com/auth/drive.readonly',
-        'https://www.googleapis.com/auth/calendar.readonly',
+        'https://www.googleapis.com/auth/calendar.events',
       ];
       requestedServices = ['gmail', 'drive', 'calendar'];
     }
@@ -1940,6 +1940,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         if (pendingFlow.reconnectCredentialId) {
           // Reconnect: update existing credential with fresh tokens
           await credentialVault.update(pendingFlow.reconnectCredentialId, tokenData);
+          await credentialVault.updateGrantedServices(pendingFlow.reconnectCredentialId, grantedServices);
 
           // Auto-resolve the reauth approval if one was associated with this OAuth flow
           if (pendingFlow.reauthApprovalId) {
@@ -2153,6 +2154,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
         if (pendingFlow.reconnectCredentialId) {
           await credentialVault.update(pendingFlow.reconnectCredentialId, tokenData);
+          await credentialVault.updateGrantedServices(pendingFlow.reconnectCredentialId, grantedServices);
 
           // Auto-resolve the reauth approval if one was associated with this OAuth flow
           if (pendingFlow.reauthApprovalId) {
