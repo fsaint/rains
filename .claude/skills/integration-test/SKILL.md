@@ -1,17 +1,26 @@
 ---
 name: integration-test
-description: Run the full Reins integration test suite — all 6 runtime×provider combinations (OpenClaw+Hermes × Anthropic+OpenAI+MiniMax) via Playwright UI + Telethon Telegram verification. Use when the user asks to "run integration tests", "test all combinations", "verify the bots work", or "run e2e tests".
+description: Run the full Reins integration test suite — all 6 runtime×provider combinations (OpenClaw+Hermes × Anthropic+OpenAI+MiniMax) via Playwright UI + Telethon Telegram verification. Use when the user asks to "run integration tests", "test all combinations", "verify the bots work", or "run e2e tests". Supports local (default) and production targets.
 ---
 
 # Integration Test — All Runtime × Provider Combinations
 
 Tests all 6 combinations of runtime (OpenClaw, Hermes) × LLM provider (Anthropic, OpenAI, MiniMax) by creating agents through the UI and verifying bot replies via real Telegram messages.
 
+## Targets
+
+| Target | Frontend URL | Env file | Agent deployment |
+|--------|-------------|----------|-----------------|
+| `local` (default) | `http://localhost:6173` | `tests/integration/.env.test` | Local Docker |
+| `prod` | `https://reins.btv.pw` | `tests/integration/.env.prod-test` | Fly.io |
+
+To run against production, source `.env.prod-test` instead of `.env.test` and navigate Playwright to `$REINS_FRONTEND_URL`. All other steps are the same except container restart (see below).
+
 ## Prerequisites
 
 ### Test credentials file
 
-All secrets live in `tests/integration/.env.test` (gitignored). This file must exist with the following variables populated:
+Secrets live in `tests/integration/.env.test` (local) or `tests/integration/.env.prod-test` (prod), both gitignored. Each file must have:
 
 ```
 # LLM provider API keys
@@ -19,8 +28,9 @@ ANTHROPIC_API_KEY=sk-ant-api03-...
 OPENAI_API_KEY=sk-proj-...
 MINIMAX_API_KEY=sk-cp-...
 
-# Reins backend (local dev)
-REINS_URL=http://localhost:5001
+# Reins backend
+REINS_URL=http://localhost:5001          # or https://reins.btv.pw for prod
+REINS_FRONTEND_URL=http://localhost:6173  # or https://reins.btv.pw for prod
 REINS_ADMIN_EMAIL=admin@reins.local
 REINS_ADMIN_PASSWORD=testpass123
 
@@ -168,17 +178,20 @@ Navigate to `http://localhost:6173/agents/new` and click **Hosted Agent**.
 
 Note the agent ID from the URL (e.g. `/agents/uhfcEbkGWF9XjE3BsQ-ZM` → `uhfcEbkGWF9XjE3BsQ-ZM`).
 
-### Step 2 — Wait for container
+### Step 2 — Wait for container / machine
 
+**Local:**
 ```bash
 # Watch until container appears (OpenClaw also shows "(healthy)" — Hermes has no HTTP health check)
 docker ps --format "{{.Names}}\t{{.Status}}" | grep "reins-"
 ```
-
 - **OpenClaw**: wait for `(healthy)` — typically 20–60 s
-- **Hermes**: container shows `Up N seconds` with no health annotation; the gateway is ready once it connects to Telegram (~10–15 s after start)
+- **Hermes**: container shows `Up N seconds`; ready once it connects to Telegram (~10–15 s after start)
 
-The container name is `reins-` + first 12 chars of the `deployed_agents` instance ID (not the agent ID). The UI shows the container name under Management → App Name.
+The container name is `reins-` + first 12 chars of the `deployed_agents` instance ID. The UI shows it under Management → App Name.
+
+**Prod:**
+Watch the agent detail page in the UI for status to change to `running`. Fly machines typically start within 30–60 s. The UI shows the Fly app name and machine ID under Management.
 
 ### Step 3 — Basic ping test via Telethon
 
@@ -249,11 +262,12 @@ eval "$TENV python3 /tmp/tg_mcp_tool_test.py EmailAndCalendar_bot $AGENT_ID \
 
 ### Step 5 — Tear down
 
+**Local:**
 ```bash
 docker stop <container-name> && docker rm <container-name>
 ```
 
-Or delete via the Reins UI (Agents → Delete).
+**Prod:** Delete via the Reins UI (Agents → Delete) — this destroys the Fly machine automatically.
 
 ---
 
@@ -381,6 +395,7 @@ The OpenClaw image is resolved automatically from the `OPENCLAW_APP` Fly app —
 
 ## Quick checklist
 
+**Local:**
 ```
 [ ] tests/integration/.env.test exists and has all keys
 [ ] ANTHROPIC_API_KEY is in root .env (for OpenClaw Anthropic)
@@ -391,6 +406,22 @@ The OpenClaw image is resolved automatically from the `OPENCLAW_APP` Fly app —
 [ ] Telethon session exists (~/.reins_test_telethon.session)
 [ ] No orphan containers from previous runs (docker ps | grep reins-)
 [ ] /tmp/run_sandbox_tests.sh, /tmp/tg_mcp_tool_test.py, /tmp/tg_send_and_wait_filtered.py all present
+```
+
+**Prod (additional/different):**
+```
+[ ] tests/integration/.env.prod-test exists and has all keys
+[ ] Telethon session exists (~/.reins_test_telethon.session)
+[ ] fly CLI authenticated (fly auth whoami)
+[ ] /tmp/run_sandbox_tests.sh, /tmp/tg_mcp_tool_test.py, /tmp/tg_send_and_wait_filtered.py all present
+[ ] e2e-admin@reins.local account exists on reins.btv.pw
+```
+
+When invoking sandbox_tests for prod, pass the env file as the third argument:
+```bash
+source /tmp/run_sandbox_tests.sh
+sandbox_tests Telmanfsj_bot <agent_id> /Users/fsaint/git/reins/tests/integration/.env.prod-test
+```
 
 Test 1: OpenClaw + Anthropic  [ ] ping [ ] allowed [ ] approve [ ] reject [ ] blocked
 Test 2: OpenClaw + OpenAI     [ ] ping [ ] allowed [ ] approve [ ] reject [ ] blocked

@@ -58,3 +58,4 @@ ios/.xcode.env.local
 # Binary files
 *.docx
 tests/integration/.env.test
+tests/integration/.env.prod-test
