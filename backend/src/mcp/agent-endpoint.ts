@@ -402,6 +402,7 @@ async function credentialCoversService(credentialId: string, serviceType: string
   let scopes: string[];
   try {
     scopes = JSON.parse(row.grantedServices);
+    if (!Array.isArray(scopes)) return true;
   } catch {
     return true;
   }
@@ -594,6 +595,16 @@ async function executeTool(
         const accessToken = await credentialVault.getValidAccessToken(targetCredentialId);
         if (accessToken) {
           context.accessToken = accessToken;
+          const hasScope = await credentialCoversService(targetCredentialId, serviceType);
+          if (!hasScope) {
+            await createMCPReauthApproval(agentId, serviceType, targetCredentialId).catch(() => {});
+            return {
+              success: false,
+              errorCode: MCP_ERROR_CODES.MISSING_CREDENTIALS,
+              errorMessage: `Credential for ${serviceType} has insufficient scope — please re-authenticate`,
+              errorData: { service: serviceType, reason: 'insufficient_scope' },
+            };
+          }
         } else {
           await createMCPReauthApproval(agentId, serviceType, targetCredentialId).catch(() => {});
           return {
