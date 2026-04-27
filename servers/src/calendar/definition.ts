@@ -13,7 +13,7 @@ export const definition: ServiceDefinitionWithTools = {
     required: true,
     credentialServiceIds: ['calendar', 'google'],
     oauthScopes: [
-      'https://www.googleapis.com/auth/calendar.readonly',
+      'https://www.googleapis.com/auth/calendar.events',
     ],
   },
   tools: calendarTools,
