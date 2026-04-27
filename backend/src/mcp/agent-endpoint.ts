@@ -386,6 +386,29 @@ async function handleListTools(
 }
 
 // ============================================================================
+// credentialCoversService — scope guard helper
+// ============================================================================
+
+/**
+ * Returns true if the credential's granted_services includes the requested
+ * serviceType, or if granted_services is null/empty (backward compatibility).
+ */
+async function credentialCoversService(credentialId: string, serviceType: string): Promise<boolean> {
+  const [row] = await db
+    .select({ grantedServices: credentials.grantedServices })
+    .from(credentials)
+    .where(eq(credentials.id, credentialId));
+  if (!row?.grantedServices) return true;
+  let scopes: string[];
+  try {
+    scopes = JSON.parse(row.grantedServices);
+  } catch {
+    return true;
+  }
+  return scopes.includes(serviceType);
+}
+
+// ============================================================================
 // executeTool — credential resolution + tool invocation
 // ============================================================================
 
@@ -490,6 +513,16 @@ async function executeTool(
           const accessToken = await credentialVault.getValidAccessToken(targetInstance.credentialId);
           if (accessToken) {
             context.accessToken = accessToken;
+            const hasScope = await credentialCoversService(targetInstance.credentialId, serviceType);
+            if (!hasScope) {
+              await createMCPReauthApproval(agentId, serviceType, targetInstance.credentialId).catch(() => {});
+              return {
+                success: false,
+                errorCode: MCP_ERROR_CODES.MISSING_CREDENTIALS,
+                errorMessage: `Credential for ${serviceType} has insufficient scope — please re-authenticate`,
+                errorData: { service: serviceType, reason: 'insufficient_scope' },
+              };
+            }
           } else {
             await createMCPReauthApproval(agentId, serviceType, targetInstance.credentialId).catch(() => {});
             return {
@@ -585,6 +618,16 @@ async function executeTool(
           const accessToken = await credentialVault.getValidAccessToken(accessRecord.credentialId);
           if (accessToken) {
             context.accessToken = accessToken;
+            const hasScope = await credentialCoversService(accessRecord.credentialId, serviceType);
+            if (!hasScope) {
+              await createMCPReauthApproval(agentId, serviceType, accessRecord.credentialId).catch(() => {});
+              return {
+                success: false,
+                errorCode: MCP_ERROR_CODES.MISSING_CREDENTIALS,
+                errorMessage: `Credential for ${serviceType} has insufficient scope — please re-authenticate`,
+                errorData: { service: serviceType, reason: 'insufficient_scope' },
+              };
+            }
           } else {
             await createMCPReauthApproval(agentId, serviceType, accessRecord.credentialId).catch(() => {});
             return {

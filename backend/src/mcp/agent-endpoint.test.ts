@@ -30,13 +30,18 @@ vi.mock('../services/email.js', () => ({
   sendReauthEmail: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Shared `where` mock so individual tests can override with mockReturnValueOnce
+const { dbWhereMock } = vi.hoisted(() => ({
+  dbWhereMock: vi.fn().mockResolvedValue([{ id: 'agent-1', name: 'Test Agent', status: 'active' }]),
+}));
+
 vi.mock('../db/index.js', () => ({
   db: {
-    select: () => ({
+    select: vi.fn(() => ({
       from: () => ({
-        where: vi.fn().mockResolvedValue([{ id: 'agent-1', name: 'Test Agent', status: 'active' }]),
+        where: dbWhereMock,
       }),
-    }),
+    })),
   },
 }));
 
@@ -162,6 +167,8 @@ vi.mock('../approvals/queue.js', () => ({
     waitForDecision: vi.fn().mockResolvedValue({ approved: true, approver: 'user' }),
     registerExecutor: vi.fn(),
     get: vi.fn().mockResolvedValue(null),
+    getLatestDeferred: vi.fn().mockResolvedValue(null),
+    submitReauth: vi.fn().mockResolvedValue({ id: 'reauth-1', isNew: true, emailThrottled: false }),
   },
 }));
 
@@ -179,6 +186,7 @@ vi.mock('../credentials/vault.js', () => ({
       type: 'oauth2',
       data: { accessToken: 'test-token' },
     }),
+    getValidAccessToken: vi.fn().mockResolvedValue('test-access-token'),
   },
 }));
 
@@ -479,5 +487,85 @@ describe('reins_get_result tool', () => {
     const content = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text);
     expect(content.status).toBe('pending');
     expect(content.jobId).toBe('job-1');
+  });
+});
+
+describe('scope guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns MISSING_CREDENTIALS when credential granted_services excludes the service', async () => {
+    // Override vault mock: return a valid credential + access token
+    const { credentialVault } = await import('../credentials/vault.js');
+    vi.mocked(credentialVault.retrieve).mockResolvedValueOnce({
+      serviceId: 'google',
+      type: 'oauth2' as const,
+      data: { accessToken: 'test-token' },
+    });
+    vi.mocked(credentialVault.getValidAccessToken).mockResolvedValueOnce('test-access-token');
+
+    // Override db mock for each sequential where() call:
+    // 1. agents lookup → agent found
+    dbWhereMock.mockResolvedValueOnce([{ id: 'agent-1', name: 'Test Agent', status: 'active' }]);
+    // 2. agentServiceInstances → empty (forces legacy path)
+    dbWhereMock.mockResolvedValueOnce([]);
+    // 3. agentServiceCredentials → empty (forces agentServiceAccess path)
+    dbWhereMock.mockResolvedValueOnce([]);
+    // 4. agentServiceAccess → has a credential
+    dbWhereMock.mockResolvedValueOnce([{ credentialId: 'cred-1' }]);
+    // 5. credentials grantedServices → only gmail, not calendar
+    dbWhereMock.mockResolvedValueOnce([{ grantedServices: '["gmail"]' }]);
+
+    const request: MCPRequest = {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'calendar_create_event',
+        arguments: { summary: 'Test' },
+      },
+    };
+
+    const response = await handleMCPRequest('agent-1', request);
+    expect(response.error?.code).toBe(MCP_ERROR_CODES.MISSING_CREDENTIALS);
+    expect(response.error?.message).toContain('insufficient scope');
+  });
+
+  it('allows through when granted_services is null (backward compat)', async () => {
+    // Override vault mock
+    const { credentialVault } = await import('../credentials/vault.js');
+    vi.mocked(credentialVault.retrieve).mockResolvedValueOnce({
+      serviceId: 'google',
+      type: 'oauth2' as const,
+      data: { accessToken: 'test-token' },
+    });
+    vi.mocked(credentialVault.getValidAccessToken).mockResolvedValueOnce('test-access-token');
+
+    // 1. agents → found
+    dbWhereMock.mockResolvedValueOnce([{ id: 'agent-1', name: 'Test Agent', status: 'active' }]);
+    // 2. agentServiceInstances → empty
+    dbWhereMock.mockResolvedValueOnce([]);
+    // 3. agentServiceCredentials → empty
+    dbWhereMock.mockResolvedValueOnce([]);
+    // 4. agentServiceAccess → has credential
+    dbWhereMock.mockResolvedValueOnce([{ credentialId: 'cred-1' }]);
+    // 5. credentials grantedServices → null (no scope info)
+    dbWhereMock.mockResolvedValueOnce([{ grantedServices: null }]);
+
+    const request: MCPRequest = {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'calendar_create_event',
+        arguments: { summary: 'Test' },
+      },
+    };
+
+    const response = await handleMCPRequest('agent-1', request);
+    // Should NOT be a MISSING_CREDENTIALS error for insufficient scope
+    const isInsufficientScope = response.error?.message?.includes('insufficient scope');
+    expect(isInsufficientScope).toBeFalsy();
   });
 });
