@@ -322,4 +322,33 @@ describe('CredentialVault', () => {
       expect(typeof call.args[2]).toBe('string'); // auth_tag
     });
   });
+
+  // ==========================================================================
+  // updateGrantedServices
+  // ==========================================================================
+
+  describe('updateGrantedServices', () => {
+    it('should update granted_services for an existing credential', async () => {
+      vi.mocked(client.execute).mockResolvedValueOnce({
+        rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [],
+      });
+
+      const result = await vault.updateGrantedServices('cred-1', ['gmail', 'calendar']);
+      expect(result).toBe(true);
+
+      const call = vi.mocked(client.execute).mock.calls[0][0] as { sql: string; args: unknown[] };
+      expect(call.sql).toContain('UPDATE credentials SET granted_services');
+      expect(call.args).toContain('["gmail","calendar"]');
+      expect(call.args).toContain('cred-1');
+    });
+
+    it('should return false when credential does not exist', async () => {
+      vi.mocked(client.execute).mockResolvedValueOnce({
+        rows: [], rowsAffected: 0, lastInsertRowid: 0n, columns: [],
+      });
+
+      const result = await vault.updateGrantedServices('nonexistent', ['gmail']);
+      expect(result).toBe(false);
+    });
+  });
 });

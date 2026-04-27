@@ -334,6 +334,18 @@ export class CredentialVault {
   }
 
   /**
+   * Update the granted_services metadata for an existing credential.
+   * Called after a successful OAuth reconnect to keep scope tracking current.
+   */
+  async updateGrantedServices(credentialId: string, grantedServices: string[]): Promise<boolean> {
+    const result = await client.execute({
+      sql: `UPDATE credentials SET granted_services = ?, updated_at = ? WHERE id = ?`,
+      args: [JSON.stringify(grantedServices), new Date().toISOString(), credentialId],
+    });
+    return result.rowsAffected > 0;
+  }
+
+  /**
    * Get a valid access token for a Google OAuth credential, refreshing if expired.
    * Returns the access token string or null if refresh fails.
    */
