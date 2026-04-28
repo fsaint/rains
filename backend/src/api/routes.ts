@@ -67,6 +67,7 @@ import { isCodexTokenExpired } from '../services/token-monitor.js';
 import { forwardToOpenclaw, handleMyChatMember } from '../services/agent-bot-relay.js';
 import * as provider from '../providers/index.js';
 import { nanoid } from 'nanoid';
+import jwt from 'jsonwebtoken';
 import {
   CreateAgentSchema,
   UpdateAgentSchema,
@@ -81,6 +82,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // Helper to get userId from authenticated request
   function getUserId(request: any): string {
     return (request.session as SessionPayload).userId;
+  }
+
+  // Helper to validate onboarding bot API key
+  function validateOnboardingApiKey(request: any): boolean {
+    const auth = request.headers.authorization as string | undefined;
+    return !!config.onboardingApiKey && auth === `Bearer ${config.onboardingApiKey}`;
   }
 
   const OPENAI_AUTH_BASE = 'https://auth.openai.com';
@@ -1852,6 +1859,56 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   });
 
   /**
+   * Onboarding bot: Generate one-time Gmail OAuth link tied to a Telegram user ID
+   */
+  app.post('/api/onboarding/oauth/google/link', async (request, reply) => {
+    if (!validateOnboardingApiKey(request)) {
+      return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Invalid API key' } });
+    }
+
+    const body = request.body as { telegramUserId?: number };
+    if (!body?.telegramUserId) {
+      return reply.code(400).send({ error: { code: 'INVALID_REQUEST', message: 'telegramUserId is required' } });
+    }
+
+    // Check if credential already linked for this Telegram user via account_name prefix
+    const existing = await client.execute({
+      sql: `SELECT id FROM credentials WHERE account_name LIKE ?`,
+      args: [`[tg:${body.telegramUserId}]%`],
+    });
+    if (existing.rows.length > 0) {
+      return reply.code(409).send({ error: { code: 'ALREADY_LINKED', message: 'Gmail already connected for this Telegram user' } });
+    }
+
+    if (!config.googleClientId || !config.googleRedirectUri) {
+      return reply.code(500).send({ error: { code: 'CONFIG_ERROR', message: 'Google OAuth not configured' } });
+    }
+
+    // Generate OAuth state and build URL
+    const state = nanoid(32);
+    storePendingOAuthFlow(state, {
+      service: 'google',
+      telegramUserId: body.telegramUserId,
+      grantedServices: ['gmail'],
+    });
+
+    const params = new URLSearchParams({
+      client_id: config.googleClientId,
+      redirect_uri: config.googleRedirectUri,
+      response_type: 'code',
+      scope: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile',
+      state,
+      access_type: 'offline',
+      prompt: 'consent',
+    });
+
+    const url = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+
+    return { url, expiresAt };
+  });
+
+  /**
    * Google OAuth callback
    */
   app.get<{ Querystring: { code?: string; state?: string; error?: string } }>(
@@ -1956,6 +2013,36 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           );
         }
 
+        if (pendingFlow.telegramUserId) {
+          // Onboarding flow: store credential without userId, tag accountName with telegram ID
+          await credentialVault.storeOAuth({
+            serviceId: 'google',
+            accountEmail: userInfo.email,
+            accountName: `[tg:${pendingFlow.telegramUserId}] ${userInfo.name ?? userInfo.email}`,
+            userId: undefined,
+            grantedServices,
+            data: tokenData,
+          });
+
+          // Fire webhook to onboarding bot if configured
+          if (config.onboardingBotWebhookUrl && config.onboardingBotWebhookSecret) {
+            fetch(`${config.onboardingBotWebhookUrl}/webhook/oauth-complete`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${config.onboardingBotWebhookSecret}`,
+              },
+              body: JSON.stringify({
+                telegramUserId: pendingFlow.telegramUserId,
+                email: userInfo.email,
+                success: true,
+              }),
+            }).catch((err) => console.error('[onboarding] webhook fire failed:', err));
+          }
+
+          return reply.redirect(`${dashboardUrl}/oauth-complete?success=true`);
+        }
+
         // Store new credential with account info and granted services
         await credentialVault.storeOAuth({
           serviceId: 'google',
@@ -1974,6 +2061,85 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         console.error('OAuth callback error:', err);
         return reply.redirect(`${dashboardUrl}/credentials?oauth_error=internal_error`);
       }
+    }
+  );
+
+  /**
+   * Onboarding bot: Generate a signed JWT setup link for a Telegram user
+   */
+  app.post('/api/onboarding/auth/setup-link', async (request, reply) => {
+    if (!validateOnboardingApiKey(request)) {
+      return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Invalid API key' } });
+    }
+
+    const body = request.body as { telegramUserId?: number };
+    if (!body?.telegramUserId) {
+      return reply.code(400).send({ error: { code: 'INVALID_REQUEST', message: 'telegramUserId is required' } });
+    }
+
+    // Find linked user by telegram_user_id
+    const userResult = await client.execute({
+      sql: `SELECT id, email FROM users WHERE telegram_user_id = ?`,
+      args: [String(body.telegramUserId)],
+    });
+
+    // Also look up the Gmail credential for email via account_name prefix
+    const credResult = await client.execute({
+      sql: `SELECT account_email FROM credentials WHERE account_name LIKE ? ORDER BY created_at DESC LIMIT 1`,
+      args: [`[tg:${body.telegramUserId}]%`],
+    });
+
+    const email = (userResult.rows[0]?.email as string | undefined)
+      ?? (credResult.rows[0]?.account_email as string | undefined);
+
+    if (!email) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No linked account for this Telegram user' } });
+    }
+
+    const userId = userResult.rows[0]?.id as string | undefined;
+
+    const payload = {
+      telegramUserId: body.telegramUserId,
+      email,
+      userId,
+      type: 'setup',
+    };
+
+    const token = jwt.sign(payload, config.sessionSecret, { expiresIn: '24h' });
+    const url = `${config.dashboardUrl}/setup?token=${token}`;
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+    return { url, expiresAt };
+  });
+
+  /**
+   * Onboarding bot: Get deployment status
+   */
+  app.get<{ Params: { deploymentId: string } }>(
+    '/api/onboarding/deployments/:deploymentId/status',
+    async (request, reply) => {
+      if (!validateOnboardingApiKey(request)) {
+        return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Invalid API key' } });
+      }
+
+      const { deploymentId } = request.params;
+      const result = await client.execute({
+        sql: `SELECT id, agent_id, status, fly_app_name, updated_at FROM deployed_agents WHERE id = ?`,
+        args: [deploymentId],
+      });
+
+      if (result.rows.length === 0) {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Deployment not found' } });
+      }
+
+      const row = result.rows[0];
+      return {
+        deploymentId: row.id,
+        status: row.status,
+        agentId: row.agent_id,
+        appName: row.fly_app_name,
+        updatedAt: row.updated_at,
+      };
     }
   );
 
@@ -2750,7 +2916,6 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
    * Creates an agent record and immediately provisions it.
    */
   app.post('/api/agents/create-and-deploy', async (request, reply) => {
-    const userId = getUserId(request);
     const body = request.body as {
       name: string;
       description?: string;
@@ -2765,7 +2930,38 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       modelCredentials?: string;
       mcpServers?: string;
       runtime?: 'openclaw' | 'hermes';
+      onboardingTelegramUserId?: number;
     };
+
+    // Dual auth: API key (onboarding bot) or session
+    let userId: string;
+    if (validateOnboardingApiKey(request) && body.onboardingTelegramUserId) {
+      // Onboarding flow: look up or create user by telegram user ID
+      const existing = await client.execute({
+        sql: `SELECT id FROM users WHERE telegram_user_id = ?`,
+        args: [String(body.onboardingTelegramUserId)],
+      });
+      if (existing.rows.length > 0) {
+        userId = existing.rows[0].id as string;
+      } else {
+        // Create a placeholder user; they'll set their password via setup-link
+        const credResult = await client.execute({
+          sql: `SELECT account_email FROM credentials WHERE account_name LIKE ? LIMIT 1`,
+          args: [`[tg:${body.onboardingTelegramUserId}]%`],
+        });
+        const email = (credResult.rows[0]?.account_email as string | undefined) ?? `telegram_${body.onboardingTelegramUserId}@agenthelm.local`;
+        const newUserId = nanoid();
+        const now2 = new Date().toISOString();
+        const passwordHash = await (await import('bcryptjs')).default.hash(nanoid(32), 10);
+        await client.execute({
+          sql: `INSERT INTO users (id, email, name, password_hash, role, status, telegram_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'user', 'active', ?, ?, ?)`,
+          args: [newUserId, email, body.name.trim(), passwordHash, String(body.onboardingTelegramUserId), now2, now2],
+        });
+        userId = newUserId;
+      }
+    } else {
+      userId = getUserId(request);
+    }
 
     // Validate telegram group chat IDs (must be numeric) and topic prompts
     if (body.telegramGroups) {

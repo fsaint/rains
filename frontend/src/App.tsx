@@ -26,6 +26,7 @@ import AgentNew from './pages/AgentNew';
 import AgentDetail from './pages/AgentDetail';
 import Backups from './pages/Backups';
 import Notifications from './pages/Notifications';
+import OAuthComplete from './pages/OAuthComplete';
 import { auth } from './api/client';
 import type { User as UserType } from './api/client';
 
@@ -66,6 +67,11 @@ function App() {
         <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-600 border-t-trust-blue" />
       </div>
     );
+  }
+
+  // Public routes — no auth required
+  if (location.pathname === '/oauth-complete') {
+    return <OAuthComplete />;
   }
 
   // Not authenticated

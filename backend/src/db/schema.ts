@@ -10,6 +10,8 @@ export const users = pgTable('users', {
   role: text('role').default('user').notNull(), // 'admin' | 'user'
   status: text('status').default('active').notNull(), // 'active' | 'suspended' | 'deleted'
   telegramChatId: text('telegram_chat_id'), // Telegram chat ID for approval notifications
+  telegramUserId: text('telegram_user_id').unique(),
+  telegramNotifyChatId: text('telegram_notify_chat_id'),
   createdAt: text('created_at').default(sql`now()`).notNull(),
   updatedAt: text('updated_at').default(sql`now()`).notNull(),
 });

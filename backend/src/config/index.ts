@@ -55,6 +55,11 @@ const ConfigSchema = z.object({
   mailgunApiKey: z.string().optional(),
   mailgunDomain: z.string().optional(),
   mailgunFrom: z.string().optional(),
+
+  // Onboarding bot
+  onboardingApiKey: z.string().optional(),
+  onboardingBotWebhookUrl: z.string().optional(),
+  onboardingBotWebhookSecret: z.string().optional(),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -91,6 +96,10 @@ function loadConfig(): Config {
     mailgunApiKey: process.env.MAILGUN_API_KEY,
     mailgunDomain: process.env.MAILGUN_DOMAIN,
     mailgunFrom: process.env.MAILGUN_FROM,
+    // Onboarding bot
+    onboardingApiKey: process.env.ONBOARDING_API_KEY,
+    onboardingBotWebhookUrl: process.env.ONBOARDING_BOT_WEBHOOK_URL,
+    onboardingBotWebhookSecret: process.env.ONBOARDING_BOT_WEBHOOK_SECRET,
   };
 
   const result = ConfigSchema.safeParse(raw);

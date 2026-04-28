@@ -11,6 +11,7 @@ interface PendingOAuthFlow {
   grantedServices?: string[];
   reconnectCredentialId?: string;
   reauthApprovalId?: string;
+  telegramUserId?: number;
   initiatedAt: Date;
 }
 
@@ -23,7 +24,7 @@ const pendingFlows = new Map<string, PendingOAuthFlow>();
  */
 export function storePendingOAuthFlow(
   state: string,
-  flow: { service: string; userId?: string; grantedServices?: string[]; reconnectCredentialId?: string; reauthApprovalId?: string }
+  flow: { service: string; userId?: string; grantedServices?: string[]; reconnectCredentialId?: string; reauthApprovalId?: string; telegramUserId?: number }
 ): void {
   pendingFlows.set(state, {
     service: flow.service,
@@ -31,6 +32,7 @@ export function storePendingOAuthFlow(
     grantedServices: flow.grantedServices,
     reconnectCredentialId: flow.reconnectCredentialId,
     reauthApprovalId: flow.reauthApprovalId,
+    telegramUserId: flow.telegramUserId,
     initiatedAt: new Date(),
   });
 

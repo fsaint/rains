@@ -228,8 +228,36 @@ export class TelegramNotifier {
       await this.handleStartCommand(update);
     } else if (update.callback_query) {
       await this.handleCallbackQuery(update.callback_query);
+    } else if (update.message) {
+      await this.handleOnboardingMessage(update.message);
     }
-    // Everything else: silently ignore
+  }
+
+  private async handleOnboardingMessage(
+    msg: NonNullable<TelegramUpdate['message']>
+  ): Promise<void> {
+    const telegramUserId = msg.from?.id;
+    if (!telegramUserId) return;
+
+    const chatId = String(msg.chat.id);
+
+    // Check if this user is an onboarding applicant waiting for notify_chat_id
+    try {
+      const result = await client.execute({
+        sql: `SELECT state, notify_chat_id FROM applicants WHERE telegram_user_id = ?`,
+        args: [telegramUserId],
+      });
+      const row = result.rows[0];
+      if (!row || row.state !== 'notify_bot' || row.notify_chat_id) return;
+
+      await client.execute({
+        sql: `UPDATE applicants SET notify_chat_id = ?, updated_at = NOW() WHERE telegram_user_id = ?`,
+        args: [chatId, telegramUserId],
+      });
+      await this.sendMessage(chatId, 'Got it. Heading back to set up your agent.', {});
+    } catch (err) {
+      console.error('[telegram] handleOnboardingMessage error:', err);
+    }
   }
 
   // -------------------------------------------------------------------------

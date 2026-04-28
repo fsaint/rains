@@ -8,12 +8,14 @@
     "shared",
     "backend",
     "frontend",
-    "servers"
+    "servers",
+    "onboarding"
   ],
   "scripts": {
     "dev": "npm run dev --workspaces --if-present",
     "dev:backend": "npm run dev --workspace=backend",
     "dev:frontend": "npm run dev --workspace=frontend",
+    "dev:onboarding": "npm run dev --workspace=onboarding",
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "test:coverage": "npm run test:coverage --workspaces --if-present",
