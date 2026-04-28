@@ -11,6 +11,8 @@ const ConfigSchema = z.object({
   port: z.coerce.number().default(3001),
   webhookUrl: z.string().url().optional(),
   nodeEnv: z.enum(['development', 'production', 'test']).default('development'),
+  notifyBotUsername: z.string().default('reins_dev_bot'),
+  dashboardUrl: z.string().url().default('https://reins-dev.btv.pw'),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -27,6 +29,8 @@ function loadConfig(): Config {
     port: process.env.PORT,
     webhookUrl: process.env.WEBHOOK_URL,
     nodeEnv: process.env.NODE_ENV,
+    notifyBotUsername: process.env.NOTIFY_BOT_USERNAME,
+    dashboardUrl: process.env.DASHBOARD_URL,
   };
 
   const result = ConfigSchema.safeParse(raw);

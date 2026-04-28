@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import { config } from '../config/index.js';
 import { client } from '../db/index.js';
 import { nanoid } from 'nanoid';
+import { storePendingOAuthFlow, getPendingOAuthFlow, deletePendingOAuthFlow } from '../oauth/pending-flows.js';
 
 const COOKIE_NAME = 'reins_session';
 const TOKEN_EXPIRY = '7d';
@@ -148,6 +149,95 @@ export async function registerAuth(app: FastifyInstance) {
       },
     };
   });
+
+  // Google SSO — redirect browser to Google
+  app.get('/api/auth/google', async (_request, reply) => {
+    if (!config.googleClientId || !config.googleLoginRedirectUri) {
+      return reply.code(500).send({ error: 'Google login not configured' });
+    }
+    const state = nanoid(32);
+    storePendingOAuthFlow(state, { service: 'google_login' });
+    const params = new URLSearchParams({
+      client_id: config.googleClientId,
+      redirect_uri: config.googleLoginRedirectUri,
+      response_type: 'code',
+      scope: 'openid email profile',
+      state,
+      access_type: 'online',
+      prompt: 'select_account',
+    });
+    return reply.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
+  });
+
+  // Google SSO callback
+  app.get<{ Querystring: { code?: string; state?: string; error?: string } }>(
+    '/api/auth/google/callback',
+    async (request, reply) => {
+      const { code, state, error } = request.query;
+      if (error || !code || !state) {
+        return reply.redirect(`${config.dashboardUrl}/?login_error=true`);
+      }
+
+      const pendingFlow = getPendingOAuthFlow(state);
+      if (!pendingFlow || pendingFlow.service !== 'google_login') {
+        return reply.redirect(`${config.dashboardUrl}/?login_error=invalid_state`);
+      }
+      deletePendingOAuthFlow(state);
+
+      try {
+        const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            client_id: config.googleClientId!,
+            client_secret: config.googleClientSecret!,
+            code,
+            grant_type: 'authorization_code',
+            redirect_uri: config.googleLoginRedirectUri!,
+          }),
+        });
+
+        if (!tokenResponse.ok) {
+          return reply.redirect(`${config.dashboardUrl}/?login_error=token_failed`);
+        }
+
+        const tokens = await tokenResponse.json() as { access_token: string };
+        const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+          headers: { Authorization: `Bearer ${tokens.access_token}` },
+        });
+
+        if (!userInfoResponse.ok) {
+          return reply.redirect(`${config.dashboardUrl}/?login_error=userinfo_failed`);
+        }
+
+        const userInfo = await userInfoResponse.json() as { email: string; name?: string };
+
+        const result = await client.execute({
+          sql: `SELECT id, email, name, role, status FROM users WHERE email = ? AND status = 'active'`,
+          args: [userInfo.email],
+        });
+
+        if (result.rows.length === 0) {
+          return reply.redirect(`${config.dashboardUrl}/?login_error=not_authorized`);
+        }
+
+        const user = result.rows[0];
+        const token = signSession(user.id as string, user.email as string, user.role as 'admin' | 'user');
+        reply.setCookie(COOKIE_NAME, token, {
+          path: '/',
+          httpOnly: true,
+          secure: config.dashboardUrl.startsWith('https'),
+          sameSite: 'lax',
+          maxAge: 7 * 24 * 60 * 60,
+        });
+
+        return reply.redirect(config.dashboardUrl);
+      } catch (err) {
+        console.error('[auth/google] callback error:', err);
+        return reply.redirect(`${config.dashboardUrl}/?login_error=internal`);
+      }
+    }
+  );
 
   // Magic link — validates a time-limited token, sets a session cookie, redirects to the approval
   app.get('/api/auth/magic', async (request, reply) => {

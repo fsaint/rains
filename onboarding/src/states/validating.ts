@@ -10,7 +10,7 @@ const TIMEOUT_MS = 3 * 60 * 1_000; // 3 minutes
 export async function handleValidating(
   ctx: Context,
   applicant: Applicant
-): Promise<'password_setup' | void> {
+): Promise<'done' | void> {
   await ctx.reply(HELM.validating);
 
   const deadline = Date.now() + TIMEOUT_MS;
@@ -38,7 +38,7 @@ export async function handleValidating(
             // Non-fatal — continue regardless
           }
 
-          resolve('password_setup');
+          resolve('done');
           return;
         }
       } catch (err: unknown) {

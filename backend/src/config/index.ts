@@ -32,6 +32,7 @@ const ConfigSchema = z.object({
   googleClientId: z.string().optional(),
   googleClientSecret: z.string().optional(),
   googleRedirectUri: z.string().default('https://reins.btv.pw/api/oauth/google/callback'),
+  googleLoginRedirectUri: z.string().default('https://reins.btv.pw/api/auth/google/callback'),
 
   // Microsoft OAuth (for Outlook Mail, Outlook Calendar)
   microsoftClientId: z.string().optional(),
@@ -78,6 +79,7 @@ function loadConfig(): Config {
     googleClientId: process.env.GOOGLE_CLIENT_ID,
     googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
     googleRedirectUri: process.env.GOOGLE_REDIRECT_URI,
+    googleLoginRedirectUri: process.env.GOOGLE_LOGIN_REDIRECT_URI,
     // Microsoft OAuth
     microsoftClientId: process.env.MICROSOFT_CLIENT_ID,
     microsoftClientSecret: process.env.MICROSOFT_CLIENT_SECRET,

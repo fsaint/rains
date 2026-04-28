@@ -1,3 +1,5 @@
+import { config } from './config.js';
+
 export const HELM = {
   greeting: "I'm Helm. AgentHelm gives you a personal AI agent that lives in Telegram and actually does things — think of it as hiring an intern who never sleeps and never asks for equity.\n\nBefore we get started, here's what you'll need:\n• A Google account to connect (so your agent can handle email)\n• A MiniMax API key from platform.minimax.io — or an Anthropic key if you're feeling bougie\n• A Telegram bot token from @BotFather\n\nWhat would you use a personal AI agent for?",
   askGmail: "Love it. One more thing before I pass you along — what's your Gmail address? We'll use it to connect your agent to your inbox.",
@@ -12,13 +14,13 @@ export const HELM = {
   minimaxInvalid: "That key didn't check out. Try again.",
   botfatherInstructions: "Open @BotFather on Telegram. Send /newbot, give your agent a name, and paste the token it gives you back here.",
   botfatherInvalid: "That token didn't check out. Make sure you copied the full thing.",
-  notifyBotInstructions: "One more thing — message @reins_dev_bot on Telegram. That's how I'll reach you when something needs your attention: re-authentication, key renewals, status updates. One message is all it takes.",
-  notifyBotTimeout: "I didn't see you message @reins_dev_bot. You can do that later — continuing setup.",
+  notifyBotInstructions: `One more thing — message @${config.notifyBotUsername} on Telegram. That's how I'll reach you when something needs your attention: re-authentication, key renewals, status updates. One message is all it takes.`,
+  notifyBotTimeout: `I didn't see you message @${config.notifyBotUsername}. You can do that later — continuing setup.`,
   provisioning: "Your agent is spinning up. Stand by.",
   validating: "Deploying your agent. This takes a moment.",
   validatingTimeout: "Taking longer than expected. I'll follow up shortly.",
   passwordSetup: "Your agent is live. Set up your AgentHelm account — this link expires in 24 hours.",
-  done: "You're operational. Your agent is live in Telegram. I'll be around.",
+  done: `You're all set. Your agent is live.\n\nSign in to your dashboard at ${config.dashboardUrl} — use the same Google account you connected. That's where you'll manage permissions, review approvals, and check on your agent.`,
   error: "Something went wrong on my end. I've flagged it. Sit tight.",
   alreadyDone: "You're already set up. Your agent is live.",
 };
