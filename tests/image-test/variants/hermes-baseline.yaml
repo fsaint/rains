@@ -1,0 +1,5 @@
+name: hermes-baseline
+runtime: hermes
+description: Current Hermes production configuration
+dockerfile: docker/hermes/Dockerfile
+build_args: {}

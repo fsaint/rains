@@ -13,6 +13,7 @@ import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { createTestApp, createTestMachine, waitForHealthy, destroyTest } from './lifecycle.js';
+import { writePromotion } from './read-promoted.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -20,7 +21,9 @@ import { createTestApp, createTestMachine, waitForHealthy, destroyTest } from '.
 
 interface VariantYaml {
   name: string;
+  runtime?: 'openclaw' | 'hermes';
   description?: string;
+  dockerfile?: string;
   build_args: Record<string, string>;
 }
 
@@ -80,8 +83,12 @@ function parseVariantYaml(filePath: string): VariantYaml {
   for (const line of lines) {
     if (line.startsWith('name:')) {
       result.name = line.split(':').slice(1).join(':').trim().replace(/^['"]|['"]$/g, '');
+    } else if (line.startsWith('runtime:')) {
+      result.runtime = line.split(':')[1].trim() as 'openclaw' | 'hermes';
     } else if (line.startsWith('description:')) {
       result.description = line.split(':').slice(1).join(':').trim().replace(/^['"]|['"]$/g, '');
+    } else if (line.startsWith('dockerfile:')) {
+      result.dockerfile = line.split(':').slice(1).join(':').trim().replace(/^['"]|['"]$/g, '');
     } else if (line.startsWith('build_args:')) {
       inBuildArgs = true;
     } else if (inBuildArgs && /^  \w/.test(line)) {
@@ -287,6 +294,7 @@ async function main() {
   let variantYamlPath = '';
   const scenarioYamlPaths: string[] = [];
   let skipBuild = false;
+  let promote = false;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--variant' && args[i + 1]) {
@@ -295,11 +303,13 @@ async function main() {
       scenarioYamlPaths.push(args[++i]);
     } else if (args[i] === '--skip-build') {
       skipBuild = true;
+    } else if (args[i] === '--promote') {
+      promote = true;
     }
   }
 
   if (!variantYamlPath || scenarioYamlPaths.length === 0) {
-    console.error('Usage: runner.ts --variant <yaml> --scenario <yaml> [--scenario <yaml>] [--skip-build]');
+    console.error('Usage: runner.ts --variant <yaml> --scenario <yaml> [--scenario <yaml>] [--skip-build] [--promote]');
     process.exit(1);
   }
 
@@ -411,6 +421,28 @@ async function main() {
   console.log('');
   console.log(`Total: ${summary.totals.passed}/${summary.totals.total} passed`);
   console.log(`Results saved: ${summaryPath}`);
+
+  // 9. Promote if all scenarios passed and --promote flag is set
+  if (promote) {
+    if (summary.totals.failed > 0) {
+      console.log('\nSkipping promotion — not all scenarios passed.');
+    } else {
+      const runtime = variant.runtime;
+      if (!runtime) {
+        console.log('\nSkipping promotion — variant has no "runtime" field (add runtime: openclaw or runtime: hermes).');
+      } else {
+        writePromotion(runtime, {
+          variant: variant.name,
+          image,
+          tested_at: new Date().toISOString(),
+          scenarios_passed: allResults.map((r) => r.scenario),
+        });
+        console.log(`\nPromoted ${variant.name} as production image for ${runtime}`);
+        console.log(`  Image: ${image}`);
+        console.log(`  Updated: tests/image-test/promoted.yaml`);
+      }
+    }
+  }
 
   const exitCode = summary.totals.failed > 0 ? 1 : 0;
   process.exit(exitCode);

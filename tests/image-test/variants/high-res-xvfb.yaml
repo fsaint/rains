@@ -1,4 +1,5 @@
 name: high-res-xvfb
+runtime: openclaw
 description: Higher resolution virtual display with extra fonts
 build_args:
   XVFB_RESOLUTION: "1920x1080x24"

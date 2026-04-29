@@ -1,0 +1,5 @@
+# Blessed production images — updated automatically by runner.ts --promote
+# Read by: npx tsx tests/image-test/lib/read-promoted.ts <openclaw|hermes>
+
+openclaw: null
+hermes: null
