@@ -1,7 +1,7 @@
 /**
  * Token Monitor Service
  *
- * Two background loops:
+ * Background loops:
  *
  * 1. Token Expiry Check (every 15 min)
  *    Scans all openai-codex deployed agents, decodes the JWT exp from
@@ -13,6 +13,12 @@
  *    the health check is critical AND the token is expired, fires reauth
  *    immediately — catching agents that are already broken faster than the
  *    15-min token loop.
+ *
+ * 3. OAuth credential expiry check (every 30 min)
+ *
+ * 4. MiniMax key validity check (every 30 min)
+ *    Validates stored MiniMax API keys by making a cheap test call. Fires
+ *    a reauth approval if the key returns 401 so the user is notified.
  */
 
 import { client } from '../db/index.js';
@@ -20,9 +26,10 @@ import { approvalQueue } from '../approvals/queue.js';
 import { credentialVault } from '../credentials/vault.js';
 import * as provider from '../providers/index.js';
 
-const TOKEN_CHECK_INTERVAL_MS  = 15 * 60 * 1000; // 15 minutes
-const HEALTH_CHECK_INTERVAL_MS =  5 * 60 * 1000; //  5 minutes
-const OAUTH_CHECK_INTERVAL_MS  = 30 * 60 * 1000; // 30 minutes
+const TOKEN_CHECK_INTERVAL_MS    = 15 * 60 * 1000; // 15 minutes
+const HEALTH_CHECK_INTERVAL_MS   =  5 * 60 * 1000; //  5 minutes
+const OAUTH_CHECK_INTERVAL_MS    = 30 * 60 * 1000; // 30 minutes
+const MINIMAX_CHECK_INTERVAL_MS  = 30 * 60 * 1000; // 30 minutes
 const EXPIRY_WARN_AHEAD_MS     = 24 * 60 * 60 * 1000; // warn 24h before expiry
 
 // Maps credential service_id → reauth provider name used in the approval modal
@@ -215,17 +222,73 @@ async function runOAuthExpiryCheck(): Promise<void> {
   }
 }
 
+// ─── Loop 4: MiniMax key validity check ──────────────────────────────────────
+
+async function validateMinimaxKey(apiKey: string): Promise<boolean> {
+  try {
+    const res = await fetch('https://api.minimax.io/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'MiniMax-M2.7', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
+    });
+    return res.status !== 401;
+  } catch {
+    return true; // network error — don't fire false-positive reauth
+  }
+}
+
+async function runMinimaxKeyCheck(): Promise<void> {
+  const result = await client.execute(
+    `SELECT da.id, da.agent_id, da.openai_api_key, a.name AS agent_name
+     FROM deployed_agents da
+     JOIN agents a ON a.id = da.agent_id
+     WHERE da.model_provider IN ('minimax', 'openai')
+       AND da.openai_api_key IS NOT NULL
+       AND da.openai_api_key NOT LIKE '***%'
+       AND da.status NOT IN ('destroyed', 'error')`
+  );
+
+  for (const row of result.rows) {
+    const agentId   = row.agent_id as string;
+    const agentName = row.agent_name as string;
+    const apiKey    = row.openai_api_key as string;
+
+    // Only test keys that look like MiniMax keys
+    if (!apiKey.startsWith('sk-') && !apiKey.startsWith('eyJ')) continue;
+    // Skip non-MiniMax OpenAI keys (they don't start with sk-cp-)
+    if (!apiKey.startsWith('sk-cp-') && !apiKey.startsWith('sk-minimax')) continue;
+
+    const valid = await validateMinimaxKey(apiKey);
+    if (valid) continue;
+
+    const context = `Your MiniMax API key for agent "${agentName}" is returning authentication errors. Get a new key from platform.minimax.io and update it in your dashboard.`;
+
+    const { isNew } = await approvalQueue.submitReauth(
+      agentId,
+      'minimax',
+      context,
+      { source: 'minimax_monitor', agentName },
+    );
+
+    if (isNew) {
+      console.info(`[token-monitor] MiniMax reauth approval created for agent ${agentId} (${agentName})`);
+    }
+  }
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 let tokenCheckTimer: NodeJS.Timeout | null = null;
 let healthCheckTimer: NodeJS.Timeout | null = null;
 let oauthCheckTimer: NodeJS.Timeout | null = null;
+let minimaxCheckTimer: NodeJS.Timeout | null = null;
 
 export function startTokenMonitor(): void {
   // Run immediately on startup, then on interval
   runTokenExpiryCheck().catch(console.error);
   runHealthCheck().catch(console.error);
   runOAuthExpiryCheck().catch(console.error);
+  runMinimaxKeyCheck().catch(console.error);
 
   tokenCheckTimer = setInterval(() => {
     runTokenExpiryCheck().catch(console.error);
@@ -239,13 +302,18 @@ export function startTokenMonitor(): void {
     runOAuthExpiryCheck().catch(console.error);
   }, OAUTH_CHECK_INTERVAL_MS);
 
-  console.info('[token-monitor] Started (token check: 15min, health check: 5min, oauth check: 30min)');
+  minimaxCheckTimer = setInterval(() => {
+    runMinimaxKeyCheck().catch(console.error);
+  }, MINIMAX_CHECK_INTERVAL_MS);
+
+  console.info('[token-monitor] Started (token check: 15min, health check: 5min, oauth check: 30min, minimax check: 30min)');
 }
 
 export function stopTokenMonitor(): void {
-  if (tokenCheckTimer) { clearInterval(tokenCheckTimer); tokenCheckTimer = null; }
-  if (healthCheckTimer) { clearInterval(healthCheckTimer); healthCheckTimer = null; }
-  if (oauthCheckTimer) { clearInterval(oauthCheckTimer); oauthCheckTimer = null; }
+  if (tokenCheckTimer)   { clearInterval(tokenCheckTimer);   tokenCheckTimer   = null; }
+  if (healthCheckTimer)  { clearInterval(healthCheckTimer);  healthCheckTimer  = null; }
+  if (oauthCheckTimer)   { clearInterval(oauthCheckTimer);   oauthCheckTimer   = null; }
+  if (minimaxCheckTimer) { clearInterval(minimaxCheckTimer); minimaxCheckTimer = null; }
 }
 
 /**

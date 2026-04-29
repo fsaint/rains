@@ -13,6 +13,7 @@ import type { ApprovalRequest } from '@reins/shared';
 const PROVIDER_LABELS: Record<string, string> = {
   anthropic: 'Anthropic Claude',
   'openai-codex': 'OpenAI',
+  minimax: 'MiniMax',
   fly: 'Fly.io',
   docker: 'Docker',
   gmail: 'Gmail',
@@ -25,6 +26,11 @@ const PROVIDER_LABELS: Record<string, string> = {
   'outlook-calendar': 'Outlook Calendar',
   microsoft: 'Microsoft',
   hermeneutix: 'Hermeneutix',
+};
+
+// Providers that use a direct external link for key renewal (not OAuth)
+const PROVIDER_KEY_RENEWAL_URL: Record<string, string> = {
+  minimax: 'https://platform.minimax.io',
 };
 
 const BOT_TOKEN = process.env.REINS_TELEGRAM_BOT_TOKEN;
@@ -518,11 +524,14 @@ export class TelegramNotifier {
     const provider = (approval.arguments.provider as string) ?? 'unknown';
     const providerLabel = PROVIDER_LABELS[provider] ?? provider;
     const source = approval.arguments.source as string | undefined;
+    const renewalUrl = PROVIDER_KEY_RENEWAL_URL[provider];
 
     const sourceNote = source === 'mcp_tool_call'
       ? 'Credentials expired during a tool call'
       : source === 'token_monitor' || source === 'health_monitor'
       ? 'Token expired — agent unable to start'
+      : source === 'minimax_monitor'
+      ? 'API key is invalid or expired'
       : 'Credentials required';
 
     const text = [
@@ -532,17 +541,20 @@ export class TelegramNotifier {
       `*Agent:* \`${approval.agentId}\``,
       `*Reason:* ${sourceNote}`,
       approval.context ? `\n${approval.context}` : null,
-      ``,
-      `Link expires in 24h`,
+      renewalUrl ? null : `\nLink expires in 24h`,
     ]
       .filter(Boolean)
       .join('\n');
 
     const dashboardUrl = process.env.REINS_DASHBOARD_URL ?? 'https://reins.btv.pw';
-    const linkUrl = magicLinkUrl ?? `${dashboardUrl}/approvals?id=${approval.id}`;
-    const keyboard = [
-      [{ text: '🔑 Re-authenticate', url: linkUrl }],
-    ];
+    const keyboard: Array<Array<{ text: string; url: string }>> = renewalUrl
+      ? [
+          [{ text: '🔑 Get new API key', url: renewalUrl }],
+          [{ text: '⚙️ Update in dashboard', url: magicLinkUrl ?? `${dashboardUrl}/approvals?id=${approval.id}` }],
+        ]
+      : [
+          [{ text: '🔑 Re-authenticate', url: magicLinkUrl ?? `${dashboardUrl}/approvals?id=${approval.id}` }],
+        ];
 
     return { text, keyboard };
   }

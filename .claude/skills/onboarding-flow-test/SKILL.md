@@ -25,7 +25,7 @@ Tests the full user onboarding flow: qualification → approval → Gmail OAuth 
 | Admin approval group | `Agent Helm Verifications` (group, not a bot — use search) |
 | Notify bot | `@ReinsVerification_bot` |
 | Existing test bot token | `8366850213:AAFt9w_bREQ5NljZlKsa-tDxNEv1_bM3nJ8` (`@fsaintPA_bot`) |
-| MiniMax key | `sk-cp-_zlONXjCyfdV-hnNIIWC98OG_p1PNEip3vpYb6LAlwxxmofd9P9Y0VxqDgv6Ft9GloVLISOddADnohlm3BXwQYUaowLIFepLRX9r5q532JsT17LxH8M58cA` |
+| MiniMax key | `sk-cp-_zIONXjCyfdV-hnNlIWC98OG_p1PNEip3vpYb6LAlwxxmofd9P9Y0VxqDgv6Ft9GloVLISOddADnohIm3BXwQYUaowLlFepLRX9r5q532JsT17LxH8M58cA` |
 | Google account | `fsaint@gmail.com` |
 | Test use case answer | `Email management and scheduling` |
 
