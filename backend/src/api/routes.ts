@@ -2143,6 +2143,19 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
   );
 
+  // DELETE /api/onboarding/users/:telegramUserId/credentials — clear credentials for a Telegram user (dev/reset use)
+  app.delete('/api/onboarding/users/:telegramUserId/credentials', async (request, reply) => {
+    if (!validateOnboardingApiKey(request)) {
+      return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Invalid API key' } });
+    }
+    const { telegramUserId } = request.params as { telegramUserId: string };
+    await client.execute({
+      sql: `DELETE FROM credentials WHERE account_name LIKE ?`,
+      args: [`[tg:${telegramUserId}]%`],
+    });
+    return { ok: true };
+  });
+
   // ========================================================================
   // OAuth - Microsoft (Outlook Mail, Outlook Calendar)
   // ========================================================================
@@ -2950,14 +2963,29 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           args: [`[tg:${body.onboardingTelegramUserId}]%`],
         });
         const email = (credResult.rows[0]?.account_email as string | undefined) ?? `telegram_${body.onboardingTelegramUserId}@agenthelm.local`;
-        const newUserId = nanoid();
-        const now2 = new Date().toISOString();
-        const passwordHash = await (await import('bcryptjs')).default.hash(nanoid(32), 10);
-        await client.execute({
-          sql: `INSERT INTO users (id, email, name, password_hash, role, status, telegram_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'user', 'active', ?, ?, ?)`,
-          args: [newUserId, email, body.name.trim(), passwordHash, String(body.onboardingTelegramUserId), now2, now2],
+
+        // Check if a user with this email already exists (e.g. from a prior SSO login)
+        const byEmail = await client.execute({
+          sql: `SELECT id FROM users WHERE email = ?`,
+          args: [email],
         });
-        userId = newUserId;
+        if (byEmail.rows.length > 0) {
+          // Link the existing user to this Telegram ID and reuse it
+          userId = byEmail.rows[0].id as string;
+          await client.execute({
+            sql: `UPDATE users SET telegram_user_id = ?, updated_at = ? WHERE id = ?`,
+            args: [String(body.onboardingTelegramUserId), new Date().toISOString(), userId],
+          });
+        } else {
+          const newUserId = nanoid();
+          const now2 = new Date().toISOString();
+          const passwordHash = await (await import('bcryptjs')).default.hash(nanoid(32), 10);
+          await client.execute({
+            sql: `INSERT INTO users (id, email, name, password_hash, role, status, telegram_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'user', 'active', ?, ?, ?)`,
+            args: [newUserId, email, body.name.trim(), passwordHash, String(body.onboardingTelegramUserId), now2, now2],
+          });
+          userId = newUserId;
+        }
       }
     } else {
       userId = getUserId(request);
@@ -2996,12 +3024,14 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
 
     // Validate Telegram token
+    let botUsername: string | undefined;
     try {
       const tgRes = await fetch(`https://api.telegram.org/bot${body.telegramToken}/getMe`);
-      const tgData = await tgRes.json() as { ok: boolean };
+      const tgData = await tgRes.json() as { ok: boolean; result?: { username?: string } };
       if (!tgData.ok) {
         return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid Telegram bot token' } });
       }
+      botUsername = tgData.result?.username;
     } catch {
       return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Failed to validate Telegram token' } });
     }
@@ -3111,11 +3141,34 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         ],
       });
 
+      // Auto-connect Gmail, Calendar, and Drive for onboarding users
+      if (body.onboardingTelegramUserId && validateOnboardingApiKey(request)) {
+        try {
+          const credResult2 = await client.execute({
+            sql: `SELECT id FROM credentials WHERE account_name LIKE ? LIMIT 1`,
+            args: [`[tg:${body.onboardingTelegramUserId}]%`],
+          });
+          if (credResult2.rows.length > 0) {
+            const credentialId = credResult2.rows[0].id as string;
+            for (const serviceType of ['gmail', 'calendar', 'drive']) {
+              try {
+                await createServiceInstance(agentId, serviceType, undefined, credentialId);
+              } catch (svcErr) {
+                console.warn(`[create-and-deploy] auto-connect ${serviceType} failed:`, svcErr instanceof Error ? svcErr.message : svcErr);
+              }
+            }
+          }
+        } catch (err) {
+          console.error('[create-and-deploy] service auto-connect failed:', err instanceof Error ? err.message : err);
+        }
+      }
+
       return reply.code(201).send({
         data: {
           id: agentId,
           name: body.name.trim(),
           status: 'active',
+          botUsername,
           deployment: {
             deploymentId,
             status: 'running',
@@ -3127,6 +3180,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         },
       });
     } catch (err) {
+      console.error('[create-and-deploy] provision failed:', err instanceof Error ? err.stack : err);
       // Store failed deployment
       await client.execute({
         sql: `INSERT INTO deployed_agents (id, agent_id, status, gateway_token, created_at, updated_at) VALUES (?, ?, 'error', ?, ?, ?)`,

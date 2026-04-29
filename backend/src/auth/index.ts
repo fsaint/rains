@@ -482,6 +482,7 @@ export async function registerAuth(app: FastifyInstance) {
       path === '/api/webhooks/telegram' || // Telegram webhook (authenticated via secret_token header)
       path.startsWith('/api/webhooks/agent-bot/') || // Agent bot relay (authenticated via secret_token header)
       path.startsWith('/api/onboarding/') || // Onboarding bot (authenticated via API key)
+      path === '/api/agents/create-and-deploy' || // Onboarding bot agent provisioning (authenticated via API key)
       path === '/api/oauth/google/callback' || // Google OAuth callback — state token validated inside handler
       /^\/api\/agents\/[^/]+\/topic-prompts$/.test(path) // Topic prompts (authenticated via x-reins-agent-secret)
     ) {

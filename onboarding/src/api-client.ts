@@ -20,6 +20,7 @@ interface CreateAndDeployResponse {
     id: string;
     name: string;
     status: string;
+    botUsername?: string;
     deployment: {
       deploymentId: string;
       status: string;
@@ -85,7 +86,7 @@ export async function createAndDeploy(params: {
     modelProvider: 'minimax',
     modelName: 'MiniMax-M2.7',
     openaiApiKey: params.minimaxKey,
-    runtime: 'hermes',
+    runtime: 'openclaw',
     soulMd: DEFAULT_SOUL_MD,
     onboardingTelegramUserId: params.onboardingTelegramUserId,
   });
@@ -97,4 +98,8 @@ export async function getDeploymentStatus(deploymentId: string): Promise<Deploym
 
 export async function generateSetupLink(telegramUserId: number): Promise<SetupLinkResponse> {
   return apiRequest<SetupLinkResponse>('POST', '/api/onboarding/auth/setup-link', { telegramUserId });
+}
+
+export async function clearUserCredentials(telegramUserId: number): Promise<void> {
+  await apiRequest<{ ok: boolean }>('DELETE', `/api/onboarding/users/${telegramUserId}/credentials`);
 }

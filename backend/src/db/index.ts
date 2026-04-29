@@ -459,6 +459,7 @@ export async function initializeDatabase() {
   await sql`
     DO $$ BEGIN
       ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_user_id TEXT;
       ALTER TABLE approvals ADD COLUMN IF NOT EXISTS telegram_chat_id TEXT;
       ALTER TABLE approvals ADD COLUMN IF NOT EXISTS telegram_message_id TEXT;
     EXCEPTION WHEN duplicate_column THEN NULL;

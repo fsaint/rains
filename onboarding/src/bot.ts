@@ -3,7 +3,7 @@ import { config } from './config.js';
 import { handleMessage, registerHandler } from './state-machine.js';
 import { updateApplicant, getApplicant, sql } from './db.js';
 import { HELM } from './persona.js';
-import { generateOAuthLink } from './api-client.js';
+import { generateOAuthLink, clearUserCredentials } from './api-client.js';
 
 // State handlers
 import { handleQualification, setBot } from './states/qualification.js';
@@ -52,6 +52,7 @@ export function createBot(): Bot {
           await ctx.reply(`No applicant found with ID ${targetId}`);
           return;
         }
+        await clearUserCredentials(targetId).catch(() => {});
         await updateApplicant(targetId, { state: 'gmail_oauth' });
         await bot.api.sendMessage(targetId, HELM.approved);
         try {
@@ -81,6 +82,7 @@ export function createBot(): Bot {
       if (resetMatch) {
         const targetId = parseInt(resetMatch[1], 10);
         await sql`DELETE FROM applicants WHERE telegram_user_id = ${targetId}`;
+        await clearUserCredentials(targetId).catch(() => {});
         await ctx.reply(`Reset ${targetId} — clean slate.`);
         return;
       }

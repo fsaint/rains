@@ -402,6 +402,7 @@ VITE_API_URL=http://localhost:3000
 | `/integration-test` | "run integration tests", "test all combinations", "verify bots work" | Full 6-combination runtime×provider e2e test via Playwright UI + Telethon |
 | `/redeploy-agent` | "redeploy", "update the container", "upgrade the image" | Safely roll a Fly agent to latest image with backup/restore |
 | `/new-mcp-server` | "add a server", "create an MCP server", "scaffold a server" | Scaffold a new native MCP server in the servers package |
+| `/onboarding-flow-test` | "test the onboarding flow", "run the onboarding test", "test signup" | E2E test of Telegram onboarding bot via Playwright MCP on Telegram Web |
 
 ## Getting Help
 
