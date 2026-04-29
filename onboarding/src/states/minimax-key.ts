@@ -8,11 +8,13 @@ const MINIMAX_KEY_REGEX = /^[A-Za-z0-9_-]{20,}$/;
 
 async function validateMinimaxKey(key: string): Promise<boolean> {
   try {
-    const res = await fetch('https://api.minimax.io/v1/models', {
-      headers: { Authorization: `Bearer ${key}` },
+    const res = await fetch('https://api.minimax.io/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'MiniMax-M2.7', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
     });
-    // 200 = valid, 404 = endpoint exists (auth passed), anything else is an auth failure
-    return res.status === 200 || res.status === 404;
+    // 200 = valid, 4xx other than 401 = auth passed (quota/model errors are fine)
+    return res.status !== 401;
   } catch (err) {
     console.log('[minimax-key] validateMinimaxKey error:', err instanceof Error ? err.message : err);
     return false;
