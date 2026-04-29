@@ -59,3 +59,10 @@ ios/.xcode.env.local
 *.docx
 tests/integration/.env.test
 tests/integration/.env.prod-test
+
+# Image test secrets and run artifacts
+tests/image-test/.env.image-test
+tests/image-test/results/
+
+# Git worktrees
+.worktrees/

@@ -298,7 +298,7 @@ fi
 # on first boot. See the background poller in the startup section below.
 
 # Start Xvfb virtual framebuffer for headless browser rendering
-Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp &
+Xvfb :99 -screen 0 ${XVFB_RESOLUTION:-1280x1024x24} -nolisten tcp &
 export DISPLAY=:99
 
 # If Codex tokens provided, do a two-phase startup:

@@ -4,6 +4,7 @@ FROM ghcr.io/openclaw/openclaw:2026.4.14
 USER root
 
 # Install Xvfb (virtual framebuffer) and font packages for headless browser rendering
+ARG EXTRA_FONT_PACKAGES=""
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
     xfonts-base \
@@ -15,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     nodejs \
     npm \
+    && if [ -n "${EXTRA_FONT_PACKAGES}" ]; then apt-get install -y --no-install-recommends ${EXTRA_FONT_PACKAGES}; fi \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Chromium via Playwright into the node user's cache
@@ -65,6 +67,10 @@ ENV DISPLAY=:99
 # Bake the git SHA (or custom tag) into the image at build time
 ARG CONTAINER_VERSION=dev
 ENV CONTAINER_VERSION=${CONTAINER_VERSION}
+
+# Virtual display resolution (can be overridden per image variant)
+ARG XVFB_RESOLUTION=1280x1024x24
+ENV XVFB_RESOLUTION=${XVFB_RESOLUTION}
 
 EXPOSE 18789
 

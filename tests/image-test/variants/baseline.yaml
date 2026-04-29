@@ -1,0 +1,5 @@
+name: baseline
+description: Current production configuration
+build_args:
+  XVFB_RESOLUTION: "1280x1024x24"
+  EXTRA_FONT_PACKAGES: ""

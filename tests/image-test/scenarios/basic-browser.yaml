@@ -1,0 +1,11 @@
+name: basic-browser
+description: Verify browser can load a page and read content
+timeout_seconds: 120
+prompt: |
+  Open your browser and go to https://example.com.
+  Tell me the exact text of the h1 heading on that page.
+assertions:
+  - type: reply_contains
+    value: "Example Domain"
+  - type: reply_not_contains
+    values: ["error", "failed", "cannot open"]
