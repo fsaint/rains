@@ -1,0 +1,19 @@
+name: github-trending
+description: Load GitHub trending page (complex JS SPA) and take a screenshot
+timeout_seconds: 120
+prompt: |
+  Open your browser and go to https://github.com/trending.
+  Tell me the name of the #1 trending repository today, then take a screenshot of the page.
+  Send the screenshot to me in this Telegram chat. Follow the screenshot-sending
+  instructions in TOOLS.md: if the file path is not visible in the tool result,
+  navigate to file:///home/node/.openclaw/media/browser/ to find the filename,
+  then call message(action=send, to=<your numeric sender ID from the message header>,
+  message="Screenshot:", media=/home/node/.openclaw/media/browser/<filename>.jpg).
+assertions:
+  - type: reply_contains_any
+    values: ["github.com", "repository", "stars", "trending", "/"]
+  - type: reply_not_contains
+    values: ["cannot", "unavailable", "unable to connect"]
+  - type: screenshot_present
+  - type: reply_min_length
+    value: 30

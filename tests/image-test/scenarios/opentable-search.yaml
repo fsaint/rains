@@ -4,7 +4,7 @@ timeout_seconds: 180
 prompt: |
   Go to opentable.com and search for Italian restaurants in the Marina
   district of San Francisco for 4 people at 6pm tonight. Tell me the
-  name of the first restaurant result and take a screenshot.
+  name of the first restaurant result, take a screenshot, and send it to me here in this Telegram chat.
 assertions:
   - type: reply_contains_any
     values: ["restaurant", "Italian", "Marina"]

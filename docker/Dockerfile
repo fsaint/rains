@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xfonts-100dpi \
     fonts-liberation \
     fonts-noto-color-emoji \
+    dbus-x11 \
     python3 \
     python3-pip \
     nodejs \
@@ -45,15 +46,16 @@ RUN mkdir -p /home/node/.openclaw/plugins/reins-thread-prompt && \
 RUN mkdir -p /app/dist/plugins/runtime
 COPY plugin-runtime-shim.mjs /app/dist/plugins/runtime/index.js
 
-# Copy entrypoint, auth helper, and workspace templates
+# Copy entrypoint, auth helper, workspace templates, and Chromium wrapper
 COPY entrypoint.sh /entrypoint.sh
+COPY chromium-wrapper.sh /usr/local/bin/chromium-wrapper
 COPY write-codex-auth.js /write-codex-auth.js
 COPY workspace/ /workspace-template/
 
 # Bundle Reins knowledge skill so agents can answer platform questions on demand
 RUN mkdir -p /app/skills/reins
 COPY skills/reins/SKILL.md /app/skills/reins/SKILL.md
-RUN chmod +x /entrypoint.sh && chown -R node:node /workspace-template /app/skills/reins
+RUN chmod +x /entrypoint.sh /usr/local/bin/chromium-wrapper && chown -R node:node /workspace-template /app/skills/reins
 
 # Ensure Xvfb socket directory is writable by node user
 RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix

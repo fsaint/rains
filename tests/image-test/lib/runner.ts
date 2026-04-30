@@ -241,7 +241,9 @@ async function runScenario(
   const proc = spawnSync(
     'python3',
     [scriptPath, botUsername, scenario.prompt, String(scenario.timeout_seconds), resultsDir],
-    { encoding: 'utf8', timeout: (scenario.timeout_seconds + 30) * 1000, env: process.env },
+    // Add 120s to the timeout to account for the post-/new "wait for quiet"
+    // session reset window in tg-browser-test.py (up to 65s) plus overhead.
+    { encoding: 'utf8', timeout: (scenario.timeout_seconds + 120) * 1000, env: process.env },
   );
 
   let tgResult: TgTestResult;
@@ -372,6 +374,37 @@ async function main() {
     // 4. Get bot username from env
     const botUsername = process.env.TEST_BOT_USERNAME;
     if (!botUsername) throw new Error('TEST_BOT_USERNAME is required — set it to your test bot @username');
+
+    // 4b. Clear any accumulated conversation history from previous test runs.
+    // All runs share the same bot token + user, so history builds up across runs.
+    // Sending /new once here clears the session before warmup, without disrupting
+    // the browser process mid-scenario.
+    console.log('\nClearing session history...');
+    const tgScript = path.join(path.dirname(import.meta.url.replace('file://', '')), 'tg-browser-test.py');
+    spawnSync('python3', [tgScript, botUsername, '/new', '30', runDir], {
+      encoding: 'utf8',
+      timeout: 35_000,
+      env: process.env,
+    });
+    // Give the bot a moment to settle after reset before warmup
+    await new Promise((r) => setTimeout(r, 5000));
+
+    // 4c. Warm-up: open the browser before any scenario so Chromium is ready.
+    // OpenClaw lazily initializes Chromium; this step ensures it's running before
+    // the first scenario prompt arrives.
+    console.log('\nWarming up browser (sending pre-flight ping)...');
+    const warmupScript = path.join(path.dirname(import.meta.url.replace('file://', '')), 'tg-browser-test.py');
+    spawnSync('python3', [warmupScript, botUsername, 'Open your browser and navigate to about:blank. Reply with the word "ready" when the browser is open.', '90', runDir], {
+      encoding: 'utf8',
+      timeout: 90_000,
+      env: process.env,
+    });
+    // Wait for Chromium to fully initialize. The warm-up triggers Chrome's first
+    // spawn but may complete before Chrome is accepting CDP connections. Waiting
+    // here ensures all scenarios run against a fully-ready browser.
+    console.log('Waiting 45s for Chromium to fully initialize...');
+    await new Promise((r) => setTimeout(r, 45000));
+    console.log('Chromium ready. Starting scenarios.\n');
 
     // 5. Run scenarios
     for (const scenario of scenarios) {

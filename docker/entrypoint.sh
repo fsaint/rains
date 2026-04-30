@@ -63,6 +63,12 @@ if [ -z "$CHROMIUM_PATH" ] || [ ! -f "$CHROMIUM_PATH" ]; then
 fi
 echo "Chromium: ${CHROMIUM_PATH:-not found}"
 
+# Export the real path so the wrapper script can exec it.
+# The wrapper adds --disable-dev-shm-usage and --disable-gpu for container stability.
+export CHROMIUM_REAL_PATH="${CHROMIUM_PATH}"
+CHROMIUM_PATH=/usr/local/bin/chromium-wrapper
+echo "Using Chromium wrapper: ${CHROMIUM_PATH}"
+
 # Generate openclaw.json from environment variables
 generate_config() {
 node -e "
@@ -183,6 +189,8 @@ const config = {
     defaultProfile: 'openclaw',
     executablePath: '${CHROMIUM_PATH}',
     noSandbox: true,
+    remoteCdpTimeoutMs: 60000,
+    remoteCdpHandshakeTimeoutMs: 60000,
   },
   // Configure audio transcription (Whisper) when OPENAI_API_KEY is available
   // Skip when using a custom base URL (e.g. MiniMax) — those endpoints don't support Whisper

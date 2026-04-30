@@ -1,0 +1,19 @@
+name: screenshot-test
+description: Navigate to example.com and take a screenshot — verifies the screenshot pipeline
+timeout_seconds: 120
+prompt: |
+  Open your browser, go to https://example.com, and take a screenshot.
+  Then send the screenshot to me in this Telegram chat. Follow the screenshot-sending
+  instructions in TOOLS.md: if the file path is not visible in the tool result,
+  navigate to file:///home/node/.openclaw/media/browser/ to find the filename,
+  then call message(action=send, to=<your numeric sender ID from the message header>,
+  message="Screenshot:", media=/home/node/.openclaw/media/browser/<filename>.jpg).
+  After sending, tell me what you see on the page.
+assertions:
+  - type: reply_contains_any
+    values: ["Example Domain", "example.com", "domain"]
+  - type: reply_not_contains
+    values: ["unavailable", "cannot", "error"]
+  - type: screenshot_present
+  - type: reply_min_length
+    value: 20
