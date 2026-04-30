@@ -75,9 +75,15 @@ async def run(bot_username: str, prompt: str, timeout_secs: int, results_dir: Pa
         if history:
             baseline_msg_id = history[0].id
 
-        # Track message edits for OpenClaw streaming responses
+        # Track message edits for OpenClaw streaming responses.
+        # last_message: the most recent non-progress-indicator message from the bot.
+        # last_activity_time: updated on ANY bot message/edit (including progress indicators).
+        # We settle only when the bot has been fully silent (no activity at all) for
+        # settle_seconds — this prevents early exit while the bot is still streaming
+        # progress updates behind the scenes.
         last_message = {"text": "", "time": 0.0, "id": None}
-        settle_seconds = 8.0  # wait this long after last activity before accepting
+        last_activity_time = [0.0]  # use list so closures can mutate it
+        settle_seconds = 8.0  # wait this long after ALL bot activity ceases
 
         reply_event = asyncio.Event()
 
@@ -88,9 +94,12 @@ async def run(bot_username: str, prompt: str, timeout_secs: int, results_dir: Pa
             if event.message.id <= baseline_msg_id:
                 return
 
+            # Always update activity time, even for progress messages
+            last_activity_time[0] = time.time()
+
             text = event.message.message or ""
 
-            # Skip progress indicators
+            # Skip progress indicators for reply capture, but still track activity above
             if any(text.startswith(p) for p in SKIP_PREFIXES):
                 return
 
@@ -112,6 +121,10 @@ async def run(bot_username: str, prompt: str, timeout_secs: int, results_dir: Pa
             # Ignore messages that predated our prompt
             if event.message.id <= baseline_msg_id:
                 return
+
+            # Always update activity time, even for progress messages
+            last_activity_time[0] = time.time()
+
             text = event.message.message or ""
             if any(text.startswith(p) for p in SKIP_PREFIXES):
                 return
@@ -138,9 +151,15 @@ async def run(bot_username: str, prompt: str, timeout_secs: int, results_dir: Pa
                 "elapsed_s": round(elapsed, 1),
             }
 
-        # Settle: wait for edits to stop (OpenClaw streams via message edits)
+        # Seed activity time from when the first reply arrived (reply_event was set).
+        if last_activity_time[0] == 0.0:
+            last_activity_time[0] = time.time()
+
+        # Settle: wait until the bot has been completely silent for settle_seconds.
+        # We use last_activity_time (not last_message["time"]) so that progress-
+        # indicator edits keep the timer alive even though we skip them for reply capture.
         while True:
-            since_last = time.time() - last_message["time"]
+            since_last = time.time() - last_activity_time[0]
             if since_last >= settle_seconds:
                 break
             await asyncio.sleep(0.5)
