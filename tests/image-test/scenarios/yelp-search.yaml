@@ -1,0 +1,18 @@
+name: yelp-search
+description: Search Yelp for Italian restaurants in Marina SF
+timeout_seconds: 300
+prompt: |
+  Go to https://www.yelp.com/search?find_desc=Italian+Restaurants&find_loc=Marina+District%2C+San+Francisco%2C+CA
+  Tell me the name of the first restaurant result, then take a screenshot of the page.
+  After taking the screenshot, follow the TOOLS.md instructions to send it:
+  if the MEDIA: path is not in the tool result, navigate to
+  file:///home/node/.openclaw/media/browser/ to find the filename, then call
+  message(action=send, to=<your numeric sender ID from the message header>, message="Screenshot:", media=<path>).
+assertions:
+  - type: reply_contains_any
+    values: ["restaurant", "Italian", "Marina", "San Francisco"]
+  - type: reply_not_contains
+    values: ["cannot", "unable to access"]
+  - type: screenshot_present
+  - type: reply_min_length
+    value: 30
