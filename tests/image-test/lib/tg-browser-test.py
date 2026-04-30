@@ -51,10 +51,10 @@ async def run(bot_username: str, prompt: str, timeout_secs: int, results_dir: Pa
 
     api_id = int(os.environ["TELETHON_API_ID"])
     api_hash = os.environ["TELETHON_API_HASH"]
-    session_path = os.environ.get(
+    session_path = os.path.expanduser(os.environ.get(
         "TELETHON_SESSION",
         str(Path.home() / ".reins_imgtest_telethon.session"),
-    )
+    ))
 
     # Progress/welcome prefixes to skip (same as integration-test skill)
     SKIP_PREFIXES = ("🐍", "⚡", "📬", "⚙️")

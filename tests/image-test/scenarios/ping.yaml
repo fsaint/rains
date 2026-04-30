@@ -1,0 +1,10 @@
+name: ping
+description: Simple smoke test — verify agent is alive and can respond
+timeout_seconds: 90
+prompt: |
+  What is 7 plus 8? Reply with ONLY the number, nothing else.
+assertions:
+  - type: reply_contains
+    value: "15"
+  - type: reply_not_contains
+    values: ["error", "sorry", "cannot"]

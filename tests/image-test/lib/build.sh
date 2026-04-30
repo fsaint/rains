@@ -66,9 +66,10 @@ process.stdout.write(args);
 echo "Build args: $BUILD_ARGS"
 echo ""
 
-# Run docker build from the docker/ directory
+# Run docker build from the docker/ directory (always target linux/amd64 for Fly.io)
 # shellcheck disable=SC2086
 docker build \
+  --platform linux/amd64 \
   -f "$DOCKER_DIR/Dockerfile" \
   -t "$IMAGE_TAG" \
   $BUILD_ARGS \

@@ -241,7 +241,7 @@ async function runScenario(
   const proc = spawnSync(
     'python3',
     [scriptPath, botUsername, scenario.prompt, String(scenario.timeout_seconds), resultsDir],
-    { encoding: 'utf8', timeout: (scenario.timeout_seconds + 30) * 1000 },
+    { encoding: 'utf8', timeout: (scenario.timeout_seconds + 30) * 1000, env: process.env },
   );
 
   let tgResult: TgTestResult;
@@ -323,7 +323,8 @@ async function main() {
         const eqIdx = trimmed.indexOf('=');
         if (eqIdx > 0) {
           const key = trimmed.slice(0, eqIdx).trim();
-          const value = trimmed.slice(eqIdx + 1).trim();
+          const raw = trimmed.slice(eqIdx + 1).trim();
+          const value = raw.replace(/^["']|["']$/g, '');
           if (!process.env[key]) process.env[key] = value;
         }
       }
