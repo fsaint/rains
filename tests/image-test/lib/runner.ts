@@ -297,6 +297,8 @@ async function main() {
   const scenarioYamlPaths: string[] = [];
   let skipBuild = false;
   let promote = false;
+  let noDeploy = false;
+  let botUsernameOverride = '';
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--variant' && args[i + 1]) {
@@ -307,11 +309,16 @@ async function main() {
       skipBuild = true;
     } else if (args[i] === '--promote') {
       promote = true;
+    } else if (args[i] === '--no-deploy') {
+      noDeploy = true;
+      skipBuild = true; // no-deploy implies no build
+    } else if (args[i] === '--bot-username' && args[i + 1]) {
+      botUsernameOverride = args[++i];
     }
   }
 
   if (!variantYamlPath || scenarioYamlPaths.length === 0) {
-    console.error('Usage: runner.ts --variant <yaml> --scenario <yaml> [--scenario <yaml>] [--skip-build] [--promote]');
+    console.error('Usage: runner.ts --variant <yaml> --scenario <yaml> [--scenario <yaml>] [--skip-build] [--no-deploy [--bot-username <username>]] [--promote]');
     process.exit(1);
   }
 
@@ -351,29 +358,31 @@ async function main() {
   const allResults: ScenarioResult[] = [];
 
   try {
-    // 1. Build image
-    buildImage(variantYamlPath, skipBuild);
+    // 1. Build + deploy (skipped in --no-deploy mode)
+    if (!noDeploy) {
+      buildImage(variantYamlPath, skipBuild);
 
-    // 2. Create ephemeral test app + machine
-    const botToken = process.env.TEST_BOT_TOKEN;
-    const anthropicKey = process.env.ANTHROPIC_API_KEY;
-    if (!botToken) throw new Error('TEST_BOT_TOKEN is required in .env.image-test');
-    if (!anthropicKey) throw new Error('ANTHROPIC_API_KEY is required in .env.image-test');
+      // 2. Create ephemeral test app + machine
+      const botToken = process.env.TEST_BOT_TOKEN;
+      const anthropicKey = process.env.ANTHROPIC_API_KEY;
+      if (!botToken) throw new Error('TEST_BOT_TOKEN is required in .env.image-test');
+      if (!anthropicKey) throw new Error('ANTHROPIC_API_KEY is required in .env.image-test');
 
-    appName = await createTestApp(variant.name);
-    machineId = await createTestMachine(appName, image, {
-      TELEGRAM_BOT_TOKEN: botToken,
-      ANTHROPIC_API_KEY: anthropicKey,
-      OPENCLAW_MODEL: process.env.OPENCLAW_MODEL || 'claude-sonnet-4-5',
-      XVFB_RESOLUTION: variant.build_args.XVFB_RESOLUTION,
-    });
+      appName = await createTestApp(variant.name);
+      machineId = await createTestMachine(appName, image, {
+        TELEGRAM_BOT_TOKEN: botToken,
+        ANTHROPIC_API_KEY: anthropicKey,
+        OPENCLAW_MODEL: process.env.OPENCLAW_MODEL || 'claude-sonnet-4-5',
+        XVFB_RESOLUTION: variant.build_args.XVFB_RESOLUTION,
+      });
 
-    // 3. Wait for healthy
-    await waitForHealthy(appName, machineId);
+      // 3. Wait for healthy
+      await waitForHealthy(appName, machineId);
+    }
 
-    // 4. Get bot username from env
-    const botUsername = process.env.TEST_BOT_USERNAME;
-    if (!botUsername) throw new Error('TEST_BOT_USERNAME is required — set it to your test bot @username');
+    // 4. Resolve bot username
+    const botUsername = botUsernameOverride || process.env.TEST_BOT_USERNAME;
+    if (!botUsername) throw new Error('Bot username required: set TEST_BOT_USERNAME or pass --bot-username');
 
     // 4b. Send /new once to reset session history and trigger Chrome CDP init,
     // then wait 70s for Chrome to fully reconnect. All subsequent calls use
@@ -429,8 +438,8 @@ asyncio.run(send_new())
       }
     }
   } finally {
-    // 6. Teardown — always runs
-    if (appName && machineId) {
+    // 6. Teardown — only for machines we created
+    if (!noDeploy && appName && machineId) {
       await destroyTest(appName, machineId);
     }
   }
