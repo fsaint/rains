@@ -13,7 +13,7 @@ import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { createTestApp, createTestMachine, waitForHealthy, destroyTest } from './lifecycle.js';
-import { writePromotion } from './read-promoted.js';
+import { writePromotion, applyPromotion } from './read-promoted.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -481,6 +481,7 @@ asyncio.run(send_new())
         console.log(`\nPromoted ${variant.name} as production image for ${runtime}`);
         console.log(`  Image: ${image}`);
         console.log(`  Updated: tests/image-test/promoted.yaml`);
+        await applyPromotion(runtime, image);
       }
     }
   }
