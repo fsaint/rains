@@ -238,12 +238,12 @@ async function runScenario(
 
   const scriptPath = path.join(path.dirname(import.meta.url.replace('file://', '')), 'tg-browser-test.py');
 
+  // Pass --no-new: session reset is handled once by the runner before warmup,
+  // so scenarios run without triggering another CDP disconnect cycle.
   const proc = spawnSync(
     'python3',
-    [scriptPath, botUsername, scenario.prompt, String(scenario.timeout_seconds), resultsDir],
-    // Add 120s to the timeout to account for the post-/new "wait for quiet"
-    // session reset window in tg-browser-test.py (up to 65s) plus overhead.
-    { encoding: 'utf8', timeout: (scenario.timeout_seconds + 120) * 1000, env: process.env },
+    [scriptPath, '--no-new', botUsername, scenario.prompt, String(scenario.timeout_seconds), resultsDir],
+    { encoding: 'utf8', timeout: (scenario.timeout_seconds + 60) * 1000, env: process.env },
   );
 
   let tgResult: TgTestResult;
@@ -375,36 +375,43 @@ async function main() {
     const botUsername = process.env.TEST_BOT_USERNAME;
     if (!botUsername) throw new Error('TEST_BOT_USERNAME is required — set it to your test bot @username');
 
-    // 4b. Clear any accumulated conversation history from previous test runs.
-    // All runs share the same bot token + user, so history builds up across runs.
-    // Sending /new once here clears the session before warmup, without disrupting
-    // the browser process mid-scenario.
-    console.log('\nClearing session history...');
+    // 4b. Send /new once to reset session history and trigger Chrome CDP init,
+    // then wait 70s for Chrome to fully reconnect. All subsequent calls use
+    // --no-new so they don't re-trigger the expensive CDP reconnect cycle.
+    console.log('\nSending /new and waiting 70s for Chrome CDP to reconnect...');
     const tgScript = path.join(path.dirname(import.meta.url.replace('file://', '')), 'tg-browser-test.py');
-    spawnSync('python3', [tgScript, botUsername, '/new', '30', runDir], {
+    const sendNewScript = `
+import asyncio, os
+from pathlib import Path
+async def send_new():
+    from telethon import TelegramClient
+    api_id = int(os.environ["TELETHON_API_ID"])
+    api_hash = os.environ["TELETHON_API_HASH"]
+    session = os.path.expanduser(os.environ.get("TELETHON_SESSION", str(Path.home() / ".reins_imgtest_telethon.session")))
+    async with TelegramClient(session, api_id, api_hash) as client:
+        bot = await client.get_entity(os.environ["_RESET_BOT_USERNAME"])
+        await client.send_message(bot, "/new")
+asyncio.run(send_new())
+`;
+    spawnSync('python3', ['-c', sendNewScript], {
       encoding: 'utf8',
-      timeout: 35_000,
-      env: process.env,
+      timeout: 15_000,
+      env: { ...process.env, _RESET_BOT_USERNAME: botUsername },
     });
-    // Give the bot a moment to settle after reset before warmup
-    await new Promise((r) => setTimeout(r, 5000));
+    // Chrome drops its CDP connection on /new and needs ~60s to reconnect.
+    // Waiting 70s here ensures Chrome is accepting connections before warmup.
+    await new Promise((r) => setTimeout(r, 70_000));
 
-    // 4c. Warm-up: open the browser before any scenario so Chromium is ready.
-    // OpenClaw lazily initializes Chromium; this step ensures it's running before
-    // the first scenario prompt arrives.
+    // 4c. Warm-up: confirm Chrome is responding before running real scenarios.
+    // Uses --no-new so it doesn't trigger another CDP disconnect cycle.
     console.log('\nWarming up browser (sending pre-flight ping)...');
     const warmupScript = path.join(path.dirname(import.meta.url.replace('file://', '')), 'tg-browser-test.py');
-    spawnSync('python3', [warmupScript, botUsername, 'Open your browser and navigate to about:blank. Reply with the word "ready" when the browser is open.', '90', runDir], {
+    spawnSync('python3', [warmupScript, '--no-new', botUsername, 'Open your browser and navigate to about:blank. Reply with the word "ready" when the browser is open.', '90', runDir], {
       encoding: 'utf8',
-      timeout: 90_000,
+      timeout: 120_000,
       env: process.env,
     });
-    // Wait for Chromium to fully initialize. The warm-up triggers Chrome's first
-    // spawn but may complete before Chrome is accepting CDP connections. Waiting
-    // here ensures all scenarios run against a fully-ready browser.
-    console.log('Waiting 45s for Chromium to fully initialize...');
-    await new Promise((r) => setTimeout(r, 45000));
-    console.log('Chromium ready. Starting scenarios.\n');
+    console.log('Chrome warmed up. Starting scenarios.\n');
 
     // 5. Run scenarios
     for (const scenario of scenarios) {

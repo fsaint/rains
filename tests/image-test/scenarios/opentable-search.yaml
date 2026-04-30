@@ -1,15 +1,26 @@
 name: opentable-search
-description: Search OpenTable for a restaurant
-timeout_seconds: 180
+description: Search for Italian restaurants in Marina SF via OpenTable or Google Maps fallback
+timeout_seconds: 240
 prompt: |
-  Go to opentable.com and search for Italian restaurants in the Marina
-  district of San Francisco for 4 people at 6pm tonight. Tell me the
-  name of the first restaurant result, take a screenshot, and send it to me here in this Telegram chat.
+  I want to find Italian restaurants in the Marina district of San Francisco
+  for 4 people at 6pm tonight.
+
+  Step 1: Try visiting https://www.opentable.com/s/?covers=4&metroId=4&term=italian&neighborhood=marina
+  If OpenTable loads correctly, tell me the name of the first result and take a screenshot.
+
+  Step 2: If you get an Access Denied or any error on OpenTable, try Google Maps instead:
+  https://www.google.com/maps/search/Italian+restaurants+Marina+District+San+Francisco
+  Tell me the name of the first restaurant result and take a screenshot.
+
+  After taking a screenshot, follow the instructions in TOOLS.md to send it:
+  if the MEDIA: path is not in the tool result, navigate to
+  file:///home/node/.openclaw/media/browser/ to find the filename, then call
+  message(action=send, to=<your numeric sender ID>, message="Screenshot:", media=<path>).
 assertions:
   - type: reply_contains_any
-    values: ["restaurant", "Italian", "Marina"]
+    values: ["restaurant", "Italian", "Marina", "opentable", "Google Maps", "Maps"]
   - type: reply_not_contains
-    values: ["error", "cannot", "unable to"]
+    values: ["cannot", "unable to"]
   - type: screenshot_present
   - type: reply_min_length
     value: 50

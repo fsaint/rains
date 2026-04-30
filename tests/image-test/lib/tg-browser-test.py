@@ -32,11 +32,11 @@ from pathlib import Path
 
 
 def usage():
-    print("Usage: tg-browser-test.py <bot_username> <prompt> <timeout_secs> <results_dir>", file=sys.stderr)
+    print("Usage: tg-browser-test.py [--no-new] <bot_username> <prompt> <timeout_secs> <results_dir>", file=sys.stderr)
     sys.exit(1)
 
 
-async def run(bot_username: str, prompt: str, timeout_secs: int, results_dir: Path) -> dict:
+async def run(bot_username: str, prompt: str, timeout_secs: int, results_dir: Path, skip_new: bool = False) -> dict:
     try:
         from telethon import TelegramClient, events
         from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
@@ -187,30 +187,31 @@ async def run(bot_username: str, prompt: str, timeout_secs: int, results_dir: Pa
             reply_event.clear()
             reply_event.set()
 
-        # Reset the bot session context before each scenario so that a prior
-        # scenario's browser failure doesn't poison the LLM's expectations
-        # here. Chrome stays running across /new — only the conversation context
-        # is cleared, not the subprocess.
-        await client.send_message(bot_entity, "/new")
-        # After /new, OpenClaw sends a welcome/greeting message (possibly delayed
-        # while it reads workspace files and rebuilds context). We wait for the
-        # bot to go quiet, then re-record baseline so the greeting isn't captured
-        # as a "reply" to our scenario prompt.
-        # Strategy: poll every 5s; once the latest message ID stops changing for
-        # 10s (two consecutive stable polls), treat the bot as quiet.
-        await asyncio.sleep(15)  # initial settle after /new
-        last_seen_id = -1
-        for _ in range(10):  # up to 50s more (10 × 5s)
-            h = await client.get_messages(bot_entity, limit=1)
-            current_id = h[0].id if h else 0
-            if current_id == last_seen_id:
-                break  # bot quiet — no new messages in the last 5s
-            last_seen_id = current_id
-            await asyncio.sleep(5)
-        # Re-record baseline after bot is quiet; all /new responses are now behind it
-        history = await client.get_messages(bot_entity, limit=1)
-        if history:
-            baseline_msg_id = history[0].id
+        if not skip_new:
+            # Reset the bot session context before each scenario so that a prior
+            # scenario's browser failure doesn't poison the LLM's expectations
+            # here. Chrome stays running across /new — only the conversation context
+            # is cleared, not the subprocess.
+            await client.send_message(bot_entity, "/new")
+            # After /new, OpenClaw sends a welcome/greeting message (possibly delayed
+            # while it reads workspace files and rebuilds context). We wait for the
+            # bot to go quiet, then re-record baseline so the greeting isn't captured
+            # as a "reply" to our scenario prompt.
+            # Strategy: poll every 5s; once the latest message ID stops changing for
+            # 10s (two consecutive stable polls), treat the bot as quiet.
+            await asyncio.sleep(15)  # initial settle after /new
+            last_seen_id = -1
+            for _ in range(10):  # up to 50s more (10 × 5s)
+                h = await client.get_messages(bot_entity, limit=1)
+                current_id = h[0].id if h else 0
+                if current_id == last_seen_id:
+                    break  # bot quiet — no new messages in the last 5s
+                last_seen_id = current_id
+                await asyncio.sleep(5)
+            # Re-record baseline after bot is quiet; all /new responses are now behind it
+            history = await client.get_messages(bot_entity, limit=1)
+            if history:
+                baseline_msg_id = history[0].id
 
         # Send the prompt
         await client.send_message(bot_entity, prompt)
@@ -258,15 +259,21 @@ async def run(bot_username: str, prompt: str, timeout_secs: int, results_dir: Pa
 
 
 def main():
-    if len(sys.argv) != 5:
+    args = sys.argv[1:]
+    skip_new = False
+    if args and args[0] == "--no-new":
+        skip_new = True
+        args = args[1:]
+
+    if len(args) != 4:
         usage()
 
-    bot_username = sys.argv[1]
-    prompt = sys.argv[2]
-    timeout_secs = int(sys.argv[3])
-    results_dir = Path(sys.argv[4])
+    bot_username = args[0]
+    prompt = args[1]
+    timeout_secs = int(args[2])
+    results_dir = Path(args[3])
 
-    result = asyncio.run(run(bot_username, prompt, timeout_secs, results_dir))
+    result = asyncio.run(run(bot_username, prompt, timeout_secs, results_dir, skip_new=skip_new))
     print(json.dumps(result, indent=2))
     sys.exit(0 if result.get("ok") else 1)
 

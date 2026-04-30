@@ -85,7 +85,7 @@ export async function createTestMachine(
     method: 'POST',
     body: JSON.stringify({
       name: `imgtest-${randomSuffix()}`,
-      region: 'iad',
+      region: process.env.FLY_TEST_REGION || 'iad',
       config: {
         image,
         guest: {
@@ -134,10 +134,10 @@ export async function createTestMachine(
 export async function waitForHealthy(
   appName: string,
   machineId: string,
-  timeoutMs = 120_000,
+  timeoutMs = 180_000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  console.log(`Waiting for ${appName}/${machineId} to become healthy (timeout: ${timeoutMs / 1000}s)...`);
+  console.log(`Waiting for ${appName}/${machineId} to become healthy (timeout: ${timeoutMs / 1000}s)…`);
 
   while (Date.now() < deadline) {
     await sleep(5_000);

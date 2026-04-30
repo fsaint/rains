@@ -1,0 +1,19 @@
+name: google-maps-search
+description: Search Google Maps for Italian restaurants in Marina SF
+timeout_seconds: 240
+prompt: |
+  Go to https://www.google.com/maps/search/Italian+restaurants+Marina+District+San+Francisco
+  Wait for the results to load. Tell me the name of the first restaurant result.
+  Then take a screenshot of the page.
+  After taking the screenshot, follow the TOOLS.md instructions to send it:
+  if the MEDIA: path is not in the tool result, navigate to
+  file:///home/node/.openclaw/media/browser/ to find the filename, then call
+  message(action=send, to=<your numeric sender ID from the message header>, message="Screenshot:", media=<path>).
+assertions:
+  - type: reply_contains_any
+    values: ["restaurant", "Italian", "Marina", "San Francisco", "Ristorante", "Trattoria", "Osteria"]
+  - type: reply_not_contains
+    values: ["cannot", "unable to access", "blocked", "error loading"]
+  - type: screenshot_present
+  - type: reply_min_length
+    value: 30
