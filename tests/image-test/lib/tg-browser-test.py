@@ -68,15 +68,26 @@ async def run(bot_username: str, prompt: str, timeout_secs: int, results_dir: Pa
         # Resolve the bot entity
         bot_entity = await client.get_entity(bot_username)
 
+        # Record the last message ID from the bot before we send our prompt.
+        # This lets us ignore any in-flight replies from a previous scenario.
+        baseline_msg_id = 0
+        history = await client.get_messages(bot_entity, limit=1)
+        if history:
+            baseline_msg_id = history[0].id
+
         # Track message edits for OpenClaw streaming responses
         last_message = {"text": "", "time": 0.0, "id": None}
-        settle_seconds = 3.0  # wait this long after last edit before accepting
+        settle_seconds = 8.0  # wait this long after last activity before accepting
 
         reply_event = asyncio.Event()
 
         @client.on(events.NewMessage(from_users=bot_entity))
         async def on_new_message(event):
             nonlocal reply_text, screenshots
+            # Ignore messages that predated our prompt (leftover from previous scenario)
+            if event.message.id <= baseline_msg_id:
+                return
+
             text = event.message.message or ""
 
             # Skip progress indicators
@@ -98,6 +109,9 @@ async def run(bot_username: str, prompt: str, timeout_secs: int, results_dir: Pa
 
         @client.on(events.MessageEdited(from_users=bot_entity))
         async def on_message_edited(event):
+            # Ignore messages that predated our prompt
+            if event.message.id <= baseline_msg_id:
+                return
             text = event.message.message or ""
             if any(text.startswith(p) for p in SKIP_PREFIXES):
                 return
