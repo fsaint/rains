@@ -95,6 +95,17 @@ async function confirm(rl: readline.Interface, prompt: string): Promise<boolean>
 async function main() {
   const args = process.argv.slice(2);
 
+  // --clear
+  if (args.includes('--clear')) {
+    const clearScript = path.join(import.meta.dirname, 'lib/clear.ts');
+    const dryRun = args.includes('--dry-run');
+    const result = spawnSync('npx', ['tsx', clearScript, ...(dryRun ? ['--dry-run'] : [])], {
+      stdio: 'inherit',
+      cwd: ROOT,
+    });
+    process.exit(result.status ?? 1);
+  }
+
   // --list
   if (args.includes('--list')) {
     const variants = readMeta(VARIANTS_DIR);

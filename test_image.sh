@@ -10,6 +10,8 @@
 #   --promote               Write to promoted.yaml if all tests pass
 #   --skip-build            Skip docker build (reuse previously pushed image)
 #   --list                  List available variants and scenarios
+#   --clear                 Delete all test apps and images in the dev org
+#   --dry-run               (with --clear) show what would be deleted
 #   --help                  Show this help
 #
 # Examples:
@@ -18,6 +20,8 @@
 #   ./test_image.sh -v baseline -s ping --skip-build     # reuse existing image
 #   ./test_image.sh -v high-res-xvfb -s ping --promote   # test and promote
 #   ./test_image.sh --list                               # show all options
+#   ./test_image.sh --clear                              # clean up dev org
+#   ./test_image.sh --clear --dry-run                   # preview cleanup
 
 set -euo pipefail
 
