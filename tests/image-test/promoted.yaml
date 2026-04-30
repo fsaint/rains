@@ -1,7 +1,11 @@
 # Blessed production images — updated automatically by runner.ts --promote
 # Read by: npx tsx tests/image-test/lib/read-promoted.ts <openclaw|hermes>
 
-openclaw: null
+openclaw:
+  variant: baseline
+  image: registry.fly.io/reins-imgtest:baseline
+  tested_at: "2026-04-30T14:25:00.000Z"
+  scenarios_passed: [screenshot-test, github-trending, google-maps-search]
 
 hermes:
   variant: hermes-baseline
