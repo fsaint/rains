@@ -2772,7 +2772,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // Provisioning error classification + reauth approvals
   // ============================================================================
 
-  type ReauthProvider = 'anthropic' | 'openai-codex' | 'openai' | 'minimax' | 'fly' | 'docker' | 'unknown';
+  type ReauthProvider = 'anthropic' | 'openai-codex' | 'openai' | 'minimax' | 'fly' | 'unknown';
 
   function classifyProvisionError(err: unknown, modelProvider?: string): {
     isAuth: boolean;
@@ -2803,8 +2803,6 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       } else {
         provider = modelProvider as ReauthProvider ?? 'unknown';
       }
-    } else if (/docker|container|image/.test(msg)) {
-      provider = 'docker';
     } else if (/fly\.io|fly api/.test(msg)) {
       provider = 'fly';
     }
@@ -2815,7 +2813,6 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       'openai': 'Your OpenAI API key may be invalid or expired. Please update your OpenAI API key.',
       'minimax': 'Your MiniMax API key may be invalid or expired. Please update your MiniMax API key.',
       'fly': 'Fly.io authentication failed. Check your FLY_API_TOKEN.',
-      'docker': 'Docker provisioning failed. Ensure Docker/OrbStack is running and the image is available.',
       'unknown': 'Provisioning failed. Please re-authenticate and try again.',
     };
 
@@ -3936,7 +3933,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.code(200).send({ data: { changed: true, restarted: true } });
     }
 
-    // No Fly machine — DB-only update (docker agent or manual)
+    // No Fly machine — DB-only update
     return reply.code(200).send({ data: { changed: true, restarted: false } });
   });
 
@@ -4197,8 +4194,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
   /**
    * SSE stream of live logs for a deployed agent.
-   * For local Docker: streams docker logs -f
-   * For Fly: polls getAppLogs every 2s
+   * Polls Fly getAppLogs every 2s.
    */
   app.get<{ Params: { id: string } }>(
     '/api/agents/:id/logs/stream',
@@ -4223,45 +4219,25 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         reply.raw.write(`data: ${escaped}\n\n`);
       };
 
-      const isLocal = process.env.REINS_PROVIDER === 'local';
+      // Poll Fly logs every 2 seconds
+      let nextToken: string | undefined;
+      let stopped = false;
 
-      if (isLocal) {
-        // Stream docker logs -f
-        const child = spawn('docker', ['logs', '-f', '--timestamps', appName]);
+      request.raw.on('close', () => { stopped = true; });
 
-        const onData = (chunk: Buffer) => {
-          const lines = chunk.toString().split('\n');
-          for (const line of lines) {
-            if (line.trim()) send(line);
+      const poll = async () => {
+        if (stopped) return;
+        try {
+          const result = await provider.getLogs(appName, nextToken);
+          nextToken = result.nextToken;
+          for (const entry of result.logs) {
+            send(`[${entry.timestamp}] ${entry.message}`);
           }
-        };
+        } catch { /* ignore transient errors */ }
+        if (!stopped) setTimeout(poll, 2000);
+      };
 
-        child.stdout.on('data', onData);
-        child.stderr.on('data', onData);
-
-        request.raw.on('close', () => { child.kill(); });
-        child.on('exit', () => { try { reply.raw.end(); } catch { /* ignore */ } });
-      } else {
-        // Poll Fly logs every 2 seconds
-        let nextToken: string | undefined;
-        let stopped = false;
-
-        request.raw.on('close', () => { stopped = true; });
-
-        const poll = async () => {
-          if (stopped) return;
-          try {
-            const result = await provider.getLogs(appName, nextToken);
-            nextToken = result.nextToken;
-            for (const entry of result.logs) {
-              send(`[${entry.timestamp}] ${entry.message}`);
-            }
-          } catch { /* ignore transient errors */ }
-          if (!stopped) setTimeout(poll, 2000);
-        };
-
-        poll();
-      }
+      poll();
 
       // Keep-alive ping every 15s
       const keepAlive = setInterval(() => {

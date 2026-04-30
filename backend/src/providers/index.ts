@@ -1,13 +1,9 @@
 /**
- * Provider abstraction layer.
- * Routes provisioning calls to either Fly.io (production) or local Docker (development).
- * Selected via REINS_PROVIDER env var: "fly" | "local" (default: "fly")
+ * Provider abstraction layer — Fly.io only.
+ * Uses FLY_ORG to target the correct org (dev vs production).
  */
 
 import * as fly from './fly.js';
-import * as docker from './docker.js';
-
-const isLocal = process.env.REINS_PROVIDER === 'local';
 
 export interface ProvisionResult {
   machineId: string;
@@ -47,15 +43,6 @@ export interface ProvisionOpts {
 }
 
 export async function provision(opts: ProvisionOpts): Promise<ProvisionResult> {
-  if (isLocal) {
-    const result = await docker.createLocalContainer(opts);
-    return {
-      machineId: result.containerId,
-      appName: result.containerName,
-      managementUrl: `http://localhost:${result.port}/?token=${opts.gatewayToken}`,
-    };
-  }
-
   const appName = await fly.createApp(opts.instanceId);
   const { flyMachineId } = await fly.createMachine({ appName, ...opts });
   return {
@@ -66,33 +53,18 @@ export async function provision(opts: ProvisionOpts): Promise<ProvisionResult> {
 }
 
 export async function start(appName: string, machineId: string) {
-  if (isLocal) {
-    await docker.startLocalContainer(appName);
-  } else {
-    await fly.startMachine(appName, machineId);
-  }
+  await fly.startMachine(appName, machineId);
 }
 
 export async function stop(appName: string, machineId: string) {
-  if (isLocal) {
-    await docker.stopLocalContainer(appName);
-  } else {
-    await fly.stopMachine(appName, machineId);
-  }
+  await fly.stopMachine(appName, machineId);
 }
 
 export async function restart(appName: string, machineId: string) {
-  if (isLocal) {
-    await docker.restartLocalContainer(appName);
-  } else {
-    await fly.restartMachine(appName, machineId);
-  }
+  await fly.restartMachine(appName, machineId);
 }
 
 export async function getStatus(appName: string, machineId: string): Promise<string> {
-  if (isLocal) {
-    return docker.getLocalContainerStatus(appName);
-  }
   const machine = await fly.getMachineStatus(appName, machineId);
   const state = machine.state as string;
   return state === 'started' ? 'running' : state === 'stopped' ? 'stopped' : state;
@@ -103,40 +75,21 @@ export async function redeploy(
   machineId: string,
   opts: ProvisionOpts
 ): Promise<string> {
-  if (isLocal) {
-    const result = await docker.updateLocalContainer({
-      ...opts,
-      containerName: appName,
-    });
-    return `http://localhost:${result.port}/?token=${opts.gatewayToken}`;
-  }
-
   await fly.updateMachine(appName, machineId, opts);
   return `https://${appName}.fly.dev/?token=${opts.gatewayToken}`;
 }
 
-/**
- * Update env vars on a running machine without pulling a new image.
- * Only supported for Fly-provisioned agents. Docker agents throw an error.
- */
 export async function updateEnv(
   appName: string,
   machineId: string,
   envUpdates: Record<string, string | undefined>
 ): Promise<void> {
-  if (isLocal) {
-    throw Object.assign(new Error('live_edit_not_supported_for_docker'), { code: 'LIVE_EDIT_NOT_SUPPORTED' });
-  }
   return fly.updateMachineEnv(appName, machineId, envUpdates);
 }
 
 export async function destroy(appName: string, machineId: string) {
-  if (isLocal) {
-    await docker.removeLocalContainer(appName);
-  } else {
-    try { await fly.destroyMachine(appName, machineId); } catch { /* ignore */ }
-    try { await fly.destroyApp(appName); } catch { /* ignore */ }
-  }
+  try { await fly.destroyMachine(appName, machineId); } catch { /* ignore */ }
+  try { await fly.destroyApp(appName); } catch { /* ignore */ }
 }
 
 export interface LogEntry {
@@ -148,16 +101,9 @@ export interface LogEntry {
 }
 
 export async function getLogs(appName: string, nextToken?: string): Promise<{ logs: LogEntry[]; nextToken?: string }> {
-  if (isLocal) {
-    return { logs: [], nextToken: undefined };
-  }
   return fly.getAppLogs(appName, nextToken);
 }
 
 export async function getManagementUrl(appName: string, gatewayToken: string): Promise<string> {
-  if (isLocal) {
-    const port = await docker.getLocalContainerPort(appName);
-    return `http://localhost:${port}/?token=${gatewayToken}`;
-  }
   return `https://${appName}.fly.dev/?token=${gatewayToken}`;
 }

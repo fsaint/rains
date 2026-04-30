@@ -346,15 +346,19 @@ approval_required:
 
 ## Development Philosophy
 
-### No Docker for Development
+### Fly.io for All Environments
 
-Development runs entirely on native Node.js without Docker:
-- **Fast iteration** - No container rebuilds
-- **Simple onboarding** - Just `npm install && npm run dev`
-- **Direct debugging** - No container layers
-- **SQLite by default** - Zero database setup
+The backend always provisions agents on Fly.io — there is no local Docker provider.
+Development uses a dedicated Fly.io org (e.g. `reins-dev`) to isolate from production:
 
-Docker is only used for production builds and deployment, not local development.
+```bash
+# .env for development
+FLY_ORG=reins-dev
+FLY_API_TOKEN=<dev token>
+```
+
+This eliminates environment drift between dev and prod. The backend itself still runs
+natively on Node.js (`npm run dev`) — only the provisioned agents run on Fly.
 
 ## Commands Reference
 
