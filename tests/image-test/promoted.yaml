@@ -2,4 +2,9 @@
 # Read by: npx tsx tests/image-test/lib/read-promoted.ts <openclaw|hermes>
 
 openclaw: null
-hermes: null
+
+hermes:
+  variant: hermes-baseline
+  image: registry.fly.io/reins-imgtest:hermes-baseline
+  tested_at: "2026-04-30T14:34:03.270Z"
+  scenarios_passed: [screenshot-test, github-trending, google-maps-search]
