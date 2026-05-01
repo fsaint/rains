@@ -20,7 +20,7 @@ export const HELM = {
   validating: "Deploying your agent. This takes a moment.",
   validatingTimeout: "Taking longer than expected. I'll follow up shortly.",
   passwordSetup: "Your agent is live. Set up your AgentHelm account — this link expires in 24 hours.",
-  done: `You're all set. Your agent is live.\n\nSign in to your dashboard at ${config.dashboardUrl} — use the same Google account you connected. That's where you'll manage permissions, review approvals, and check on your agent.`,
+  done: `You're all set. Your agent is live.\n\nSign in to your dashboard at ${config.dashboardUrl} — use the same Google account you connected. That's where you'll manage permissions, review approvals, and check on your agent.\n\nJoin the Agent Helm Support Group for help, updates, and tips from other users: https://t.me/+5NUos0uOs4JjYWUx`,
   error: "Something went wrong on my end. I've flagged it. Sit tight.",
   alreadyDone: "You're already set up. Your agent is live.",
 };
