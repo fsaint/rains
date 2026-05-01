@@ -21,6 +21,7 @@ import { auditLogger } from '../audit/logger.js';
 import { credentialVault } from '../credentials/vault.js';
 import { sendReauthEmail } from '../services/email.js';
 import { config } from '../config/index.js';
+import { getPostHog } from '../analytics/posthog.js';
 import type { DeferredJobResult } from '@reins/shared';
 
 // ============================================================================
@@ -427,6 +428,23 @@ async function executeTool(
   serviceInstances: (typeof agentServiceInstances.$inferSelect)[],
 ): Promise<ToolExecutionResult> {
   let args = { ...argsIn };
+
+  // If gmail_send_draft is called with a draftId that is actually an approval jobId
+  // (the model used the jobId from gmail_create_draft's APPROVAL_PENDING response instead
+  // of waiting for the real Gmail draft ID), resolve the real draftId from the stored result.
+  if (toolName === 'gmail_send_draft' && typeof args.draftId === 'string') {
+    const relatedApproval = await approvalQueue.get(args.draftId);
+    if (relatedApproval?.tool === 'gmail_create_draft' && relatedApproval.resultJson) {
+      try {
+        const createResult = JSON.parse(relatedApproval.resultJson) as { data?: { draftId?: string } };
+        const realDraftId = createResult.data?.draftId;
+        if (realDraftId) {
+          console.log(`[executeTool] Resolved draftId jobId=${args.draftId} → gmail_id=${realDraftId}`);
+          args = { ...args, draftId: realDraftId };
+        }
+      } catch { /* ignore parse errors */ }
+    }
+  }
   const context: ToolContext = {
     requestId: crypto.randomUUID(),
     agentId,
@@ -932,6 +950,7 @@ async function handleCallTool(
 
   if (toolExecResult.success) {
     await auditLogger.logToolCall(agentId, toolName, args, 'success', durationMs, { serviceType });
+    getPostHog()?.capture({ distinctId: agentId, event: 'tool_called', properties: { agentId, tool: toolName, service: serviceType, durationMs } });
     return {
       jsonrpc: '2.0',
       id: requestId,

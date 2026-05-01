@@ -8,6 +8,7 @@ import { startBackupLoop, stopBackupLoop } from './services/agent-backup.js';
 import { startTokenMonitor, stopTokenMonitor } from './services/token-monitor.js';
 import { telegramNotifier } from './notifications/telegram.js';
 import { initializeNotificationHandlers } from './notifications/handlers.js';
+import { shutdownPostHog } from './analytics/posthog.js';
 
 const app = await buildApp();
 
@@ -76,6 +77,7 @@ const shutdown = async () => {
   stopBackupLoop();
   stopTokenMonitor();
   await shutdownNativeServers();
+  await shutdownPostHog();
   await app.close();
   process.exit(0);
 };

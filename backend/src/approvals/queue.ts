@@ -1,6 +1,7 @@
 import { client } from '../db/index.js';
 import { nanoid } from 'nanoid';
 import { EventEmitter } from 'events';
+import { getPostHog } from '../analytics/posthog.js';
 import type { ApprovalRequest, ApprovalStatus, ApprovalDecision } from '@reins/shared';
 
 const DEFAULT_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
@@ -58,6 +59,7 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
     const request = await this.get(id);
     if (request) {
       this.emit('request', request);
+      getPostHog()?.capture({ distinctId: agentId, event: 'approval_requested', properties: { agentId, tool } });
     }
 
     return id;
@@ -126,6 +128,8 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
       if (request) {
         this.emit('resolved', request);
         this.notifyWaiter(id, { approved: true, approver, comment });
+        const waitTimeMs = now.getTime() - request.requestedAt.getTime();
+        getPostHog()?.capture({ distinctId: request.agentId, event: 'approval_resolved', properties: { agentId: request.agentId, tool: request.tool, decision: 'approved', waitTimeMs } });
       }
 
       // Auto-execute deferred tool if an executor was registered
@@ -164,6 +168,8 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
       if (request) {
         this.emit('resolved', request);
         this.notifyWaiter(id, { approved: false, approver, comment: reason });
+        const waitTimeMs = now.getTime() - request.requestedAt.getTime();
+        getPostHog()?.capture({ distinctId: request.agentId, event: 'approval_resolved', properties: { agentId: request.agentId, tool: request.tool, decision: 'rejected', waitTimeMs } });
       }
       // Clean up any registered executor — approval was rejected
       this.pendingExecutors.delete(id);

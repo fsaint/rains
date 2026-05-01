@@ -1,4 +1,24 @@
+import { readFileSync, existsSync } from 'fs';
+import { resolve } from 'path';
+import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
+
+// Load the shared project-level YAML config for this environment (non-secrets).
+// env vars always override YAML values.
+function loadSharedYaml(env: string): { onboarding?: { bot_webhook_url?: string; notify_bot_username?: string } } {
+  const candidates = [
+    resolve(import.meta.dirname, `../../../config/${env}.yaml`),
+    resolve(import.meta.dirname, `../../config/${env}.yaml`),
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) {
+      return parseYaml(readFileSync(p, 'utf8'));
+    }
+  }
+  return {};
+}
+
+const sharedYaml = loadSharedYaml(process.env.NODE_ENV ?? 'development');
 
 const ConfigSchema = z.object({
   botToken: z.string().min(1, 'ONBOARDING_BOT_TOKEN is required'),
@@ -13,6 +33,10 @@ const ConfigSchema = z.object({
   nodeEnv: z.enum(['development', 'production', 'test']).default('development'),
   notifyBotUsername: z.string().default('reins_dev_bot'),
   dashboardUrl: z.string().url().default('https://reins-dev.btv.pw'),
+
+  // PostHog analytics
+  posthogApiKey: z.string().optional(),
+  posthogHost: z.string().default('https://us.i.posthog.com'),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -29,8 +53,10 @@ function loadConfig(): Config {
     port: process.env.PORT,
     webhookUrl: process.env.WEBHOOK_URL,
     nodeEnv: process.env.NODE_ENV,
-    notifyBotUsername: process.env.NOTIFY_BOT_USERNAME,
+    notifyBotUsername: process.env.NOTIFY_BOT_USERNAME ?? sharedYaml.onboarding?.notify_bot_username,
     dashboardUrl: process.env.DASHBOARD_URL,
+    posthogApiKey: process.env.POSTHOG_API_KEY,
+    posthogHost: process.env.POSTHOG_HOST,
   };
 
   const result = ConfigSchema.safeParse(raw);

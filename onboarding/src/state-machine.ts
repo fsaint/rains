@@ -1,5 +1,6 @@
 import type { Context } from 'grammy';
 import { getApplicant, upsertApplicant, updateApplicant, type Applicant } from './db.js';
+import { getPostHog } from './analytics.js';
 
 export type ApplicantState =
   | 'qualification'
@@ -54,6 +55,7 @@ export async function handleMessage(ctx: Context): Promise<void> {
       if (!nextState || nextState === currentState) break;
 
       currentApplicant = await updateApplicant(telegramUserId, { state: nextState });
+      getPostHog()?.capture({ distinctId: `telegram:${telegramUserId}`, event: `onboarding_${nextState}`, properties: { from_state: currentState } });
       currentState = nextState;
       currentHandler = handlers[nextState] ?? null;
     }

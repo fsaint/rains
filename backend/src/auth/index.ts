@@ -5,6 +5,7 @@ import { config } from '../config/index.js';
 import { client } from '../db/index.js';
 import { nanoid } from 'nanoid';
 import { storePendingOAuthFlow, getPendingOAuthFlow, deletePendingOAuthFlow } from '../oauth/pending-flows.js';
+import { getPostHog } from '../analytics/posthog.js';
 
 const COOKIE_NAME = 'reins_session';
 const TOKEN_EXPIRY = '7d';
@@ -102,6 +103,8 @@ export async function registerAuth(app: FastifyInstance) {
       sameSite: 'lax',
       maxAge: 7 * 24 * 60 * 60,
     });
+
+    getPostHog()?.capture({ distinctId: user.id as string, event: 'user_logged_in', properties: { method: 'password' } });
 
     return {
       data: {
@@ -231,6 +234,7 @@ export async function registerAuth(app: FastifyInstance) {
           maxAge: 7 * 24 * 60 * 60,
         });
 
+        getPostHog()?.capture({ distinctId: user.id as string, event: 'user_logged_in', properties: { method: 'google_sso' } });
         return reply.redirect(config.dashboardUrl);
       } catch (err) {
         console.error('[auth/google] callback error:', err);

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { usePostHog } from '@posthog/react';
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import {
   Shield,
@@ -48,6 +49,7 @@ function App() {
   const location = useLocation();
   const [user, setUser] = useState<UserType | null | undefined>(undefined);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const posthog = usePostHog();
 
   // Close drawer on route change
   useEffect(() => {
@@ -59,6 +61,14 @@ function App() {
       .then((r) => setUser(r.authenticated && r.user ? r.user : null))
       .catch(() => setUser(null));
   }, []);
+
+  useEffect(() => {
+    if (user) {
+      posthog?.identify(user.id, { email: user.email, name: user.name, role: user.role });
+    } else if (user === null) {
+      posthog?.reset();
+    }
+  }, [posthog, user]);
 
   // Loading session check
   if (user === undefined) {
@@ -162,7 +172,7 @@ function App() {
           <Link to="/" className="flex items-center gap-3">
             <Shield className="w-8 h-8 text-trust-blue" />
             <div>
-              <span className="text-xl font-semibold">Reins</span>
+              <span className="text-xl font-semibold">AgentHelm</span>
               <p className="text-xs text-gray-400 mt-0.5">The trust layer for AI agents</p>
             </div>
           </Link>
@@ -221,7 +231,7 @@ function App() {
             <Menu className="w-6 h-6" />
           </button>
           <Shield className="w-6 h-6 text-trust-blue" />
-          <span className="font-semibold text-lg">Reins</span>
+          <span className="font-semibold text-lg">AgentHelm</span>
         </header>
 
         <main className="flex-1 overflow-auto">

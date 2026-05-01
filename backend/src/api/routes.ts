@@ -61,6 +61,7 @@ import {
 } from '../oauth/pending-flows.js';
 import { handleMCPRequest, type MCPRequest } from '../mcp/agent-endpoint.js';
 import { getSession, type SessionPayload } from '../auth/index.js';
+import { getPostHog } from '../analytics/posthog.js';
 import { sendReauthEmail } from '../services/email.js';
 import { performBackup, listBackups, getBackup, restoreBackup } from '../services/agent-backup.js';
 import { isCodexTokenExpired } from '../services/token-monitor.js';
@@ -279,6 +280,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     });
 
     await auditLogger.logAgentEvent(id, 'created', { name: parsed.data.name });
+    getPostHog()?.capture({ distinctId: userId, event: 'agent_created', properties: { source: 'dashboard' } });
 
     return reply.code(201).send({ data: result.rows[0] });
   });
@@ -392,6 +394,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     });
 
     await auditLogger.logAgentEvent(id, 'deleted');
+    getPostHog()?.capture({ distinctId: userId, event: 'agent_destroyed', properties: { agentId: id } });
 
     return reply.code(204).send();
   });
@@ -1790,6 +1793,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
 
     const userId = getUserId(request);
+    getPostHog()?.capture({ distinctId: userId, event: 'credential_oauth_started', properties: { provider: 'google' } });
     const query = request.query as { services?: string; reconnect?: string; approvalId?: string };
 
     // Build scopes from requested services
@@ -2052,6 +2056,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           grantedServices,
           data: tokenData,
         });
+
+        if (pendingFlow.userId) {
+          getPostHog()?.capture({ distinctId: pendingFlow.userId, event: 'credential_connected', properties: { provider: 'google', services: grantedServices } });
+        }
 
         // Redirect back to credentials page with success
         return reply.redirect(
@@ -2984,6 +2992,24 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           userId = newUserId;
         }
       }
+      // Sync notify_chat_id from applicants → users.telegram_chat_id so that
+      // approval notifications route to the user via @AgentHelmApprovalsBot
+      try {
+        const notifyResult = await client.execute({
+          sql: `SELECT notify_chat_id FROM applicants WHERE telegram_user_id = ?`,
+          args: [body.onboardingTelegramUserId],
+        });
+        const notifyChatId = notifyResult.rows[0]?.notify_chat_id as string | null;
+        if (notifyChatId) {
+          await client.execute({
+            sql: `UPDATE users SET telegram_chat_id = ?, updated_at = ? WHERE id = ?`,
+            args: [notifyChatId, new Date().toISOString(), userId],
+          });
+          console.log(`[create-and-deploy] linked telegram_chat_id=${notifyChatId} for user ${userId}`);
+        }
+      } catch (err) {
+        console.warn('[create-and-deploy] could not sync notify_chat_id:', err instanceof Error ? err.message : err);
+      }
     } else {
       userId = getUserId(request);
     }
@@ -3087,7 +3113,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     });
 
     // Build MCP configs
-    const reinsUrl = process.env.REINS_PUBLIC_URL || config.dashboardUrl;
+    const reinsUrl = config.publicUrl || config.dashboardUrl;
     const mcpConfigs = [
       { name: 'reins', url: `${reinsUrl}/mcp/${agentId}`, transport: 'http' },
       ...userMcpServers,
@@ -3160,6 +3186,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         }
       }
 
+      getPostHog()?.capture({ distinctId: userId, event: 'agent_created', properties: { runtime: body.runtime ?? 'openclaw', modelProvider: body.modelProvider ?? 'anthropic', source: 'onboarding' } });
+      getPostHog()?.capture({ distinctId: userId, event: 'agent_deployed', properties: { runtime: body.runtime ?? 'openclaw', region: body.region ?? 'iad' } });
+
       return reply.code(201).send({
         data: {
           id: agentId,
@@ -3210,6 +3239,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
    */
   app.post<{ Params: { id: string } }>('/api/agents/:id/deploy', async (request, reply) => {
     const { id } = request.params;
+    const deployUserId = getUserId(request);
 
     // Verify agent exists
     const agentResult = await client.execute({
@@ -3254,7 +3284,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     // Build MCP config that routes through Reins proxy for policy enforcement.
     // REINS_PUBLIC_URL takes precedence (for when backend URL differs from dashboard).
-    const reinsUrl = process.env.REINS_PUBLIC_URL || config.dashboardUrl;
+    const reinsUrl = config.publicUrl || config.dashboardUrl;
     const mcpConfigs = [
       {
         name: 'reins',
@@ -3327,6 +3357,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         sql: `UPDATE agents SET status = 'active', updated_at = ? WHERE id = ?`,
         args: [now, id],
       });
+
+      getPostHog()?.capture({ distinctId: deployUserId, event: 'agent_deployed', properties: { runtime: body.runtime ?? 'openclaw', region: body.region ?? 'iad' } });
 
       return reply.code(201).send({
         data: {
@@ -3525,7 +3557,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     // Trigger redeploy with updated soul
     if (deployment.fly_app_name && deployment.fly_machine_id) {
       try {
-        const reinsUrl = process.env.REINS_PUBLIC_URL || config.dashboardUrl;
+        const reinsUrl = config.publicUrl || config.dashboardUrl;
         const mcpConfigs = [
           { name: 'reins', url: `${reinsUrl}/mcp/${id}`, transport: 'http' },
         ];
@@ -3710,7 +3742,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       });
     }
 
-    const reinsUrl = process.env.REINS_PUBLIC_URL || config.dashboardUrl;
+    const reinsUrl = config.publicUrl || config.dashboardUrl;
     const mcpConfigs = [
       { name: 'reins', url: `${reinsUrl}/mcp/${id}`, transport: 'http' },
     ];
@@ -4453,7 +4485,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const deployment = await getActiveDeployment(agentId);
     if (!deployment || deployment.status === 'stopped') return;
 
-    const reinsUrl = process.env.REINS_PUBLIC_URL || config.dashboardUrl;
+    const reinsUrl = config.publicUrl || config.dashboardUrl;
     const mcpConfigs: object[] = [
       { name: 'reins', url: `${reinsUrl}/mcp/${agentId}`, transport: 'http' },
     ];
@@ -4582,7 +4614,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
   // Telegram webhook — unauthenticated but gated by secret_token header
   app.post('/api/webhooks/telegram', async (request, reply) => {
-    const expectedSecret = process.env.REINS_TELEGRAM_WEBHOOK_SECRET;
+    const expectedSecret = config.reisTelegramWebhookSecret;
     if (expectedSecret) {
       const receivedSecret = request.headers['x-telegram-bot-api-secret-token'];
       if (receivedSecret !== expectedSecret) {
