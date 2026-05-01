@@ -27,7 +27,7 @@ export type { ServiceDefinitionWithTools } from './common/types.js';
 // Dev Sandbox is only available outside production so fake tools never
 // appear in real deployments.
 const devOnlyServices: ServiceDefinitionWithTools[] =
-  process.env.NODE_ENV !== 'production' ? [devSandbox] : [];
+  (process.env.NODE_ENV !== 'production' || process.env.ENABLE_DEV_SANDBOX === 'true') ? [devSandbox] : [];
 
 export const serviceDefinitions: ServiceDefinitionWithTools[] = [
   gmail,
