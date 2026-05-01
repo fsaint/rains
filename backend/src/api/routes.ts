@@ -3011,7 +3011,11 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         console.warn('[create-and-deploy] could not sync notify_chat_id:', err instanceof Error ? err.message : err);
       }
     } else {
-      userId = getUserId(request);
+      const session = getSession(request);
+      if (!session) {
+        return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Not authenticated' } });
+      }
+      userId = session.userId;
     }
 
     // Validate telegram group chat IDs (must be numeric) and topic prompts
