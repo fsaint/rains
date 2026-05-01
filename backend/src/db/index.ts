@@ -509,6 +509,22 @@ export async function initializeDatabase() {
     )
   `;
 
+  // Pending OAuth flows — DB-backed to survive multi-machine & restarts
+  await sql`
+    CREATE TABLE IF NOT EXISTS pending_oauth_flows (
+      state TEXT PRIMARY KEY,
+      service TEXT NOT NULL,
+      user_id TEXT,
+      granted_services TEXT,
+      reconnect_credential_id TEXT,
+      reauth_approval_id TEXT,
+      telegram_user_id INTEGER,
+      initiated_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_pending_oauth_expires ON pending_oauth_flows(expires_at)`;
+
   // Seed: create admin user if no users exist
   const userCount = await sql`SELECT COUNT(*) as count FROM users`;
   const count = Number(userCount[0]?.count ?? 0);

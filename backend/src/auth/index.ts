@@ -156,7 +156,7 @@ export async function registerAuth(app: FastifyInstance) {
       return reply.code(500).send({ error: 'Google login not configured' });
     }
     const state = nanoid(32);
-    storePendingOAuthFlow(state, { service: 'google_login' });
+    await storePendingOAuthFlow(state, { service: 'google_login' });
     const params = new URLSearchParams({
       client_id: config.googleClientId,
       redirect_uri: config.googleLoginRedirectUri,
@@ -178,11 +178,11 @@ export async function registerAuth(app: FastifyInstance) {
         return reply.redirect(`${config.dashboardUrl}/?login_error=true`);
       }
 
-      const pendingFlow = getPendingOAuthFlow(state);
+      const pendingFlow = await getPendingOAuthFlow(state);
       if (!pendingFlow || pendingFlow.service !== 'google_login') {
         return reply.redirect(`${config.dashboardUrl}/?login_error=invalid_state`);
       }
-      deletePendingOAuthFlow(state);
+      await deletePendingOAuthFlow(state);
 
       try {
         const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {

@@ -1834,7 +1834,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     // Generate state token for CSRF protection
     const state = nanoid(32);
-    storePendingOAuthFlow(state, {
+    await storePendingOAuthFlow(state, {
       service: 'google',
       userId,
       grantedServices: requestedServices,
@@ -1886,7 +1886,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     // Generate OAuth state and build URL
     const state = nanoid(32);
-    storePendingOAuthFlow(state, {
+    await storePendingOAuthFlow(state, {
       service: 'google',
       telegramUserId: body.telegramUserId,
       grantedServices: ['gmail'],
@@ -1928,13 +1928,13 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       }
 
       // Validate state token
-      const pendingFlow = getPendingOAuthFlow(state);
+      const pendingFlow = await getPendingOAuthFlow(state);
       if (!pendingFlow) {
         return reply.redirect(`${dashboardUrl}/credentials?oauth_error=invalid_state`);
       }
 
       // Delete the pending flow to prevent replay attacks
-      deletePendingOAuthFlow(state);
+      await deletePendingOAuthFlow(state);
 
       if (!config.googleClientId || !config.googleClientSecret || !config.googleRedirectUri) {
         return reply.redirect(`${dashboardUrl}/credentials?oauth_error=config_error`);
@@ -2224,7 +2224,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     // Generate state token for CSRF protection
     const state = nanoid(32);
-    storePendingOAuthFlow(state, {
+    await storePendingOAuthFlow(state, {
       service: 'microsoft',
       userId,
       grantedServices: requestedServices,
@@ -2264,12 +2264,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         return reply.redirect(`${dashboardUrl}/credentials?oauth_error=missing_params`);
       }
 
-      const pendingFlow = getPendingOAuthFlow(state);
+      const pendingFlow = await getPendingOAuthFlow(state);
       if (!pendingFlow) {
         return reply.redirect(`${dashboardUrl}/credentials?oauth_error=invalid_state`);
       }
 
-      deletePendingOAuthFlow(state);
+      await deletePendingOAuthFlow(state);
 
       if (!config.microsoftClientId || !config.microsoftClientSecret || !config.microsoftRedirectUri) {
         return reply.redirect(`${dashboardUrl}/credentials?oauth_error=config_error`);
