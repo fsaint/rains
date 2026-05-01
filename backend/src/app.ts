@@ -7,6 +7,8 @@ import Fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
+import fastifyStatic from '@fastify/static';
+import { resolve } from 'path';
 import { apiRoutes } from './api/routes.js';
 import { registerAuth } from './auth/index.js';
 
@@ -22,6 +24,18 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   // All API routes
   await app.register(apiRoutes);
+
+  // Serve frontend SPA in production
+  if (process.env.NODE_ENV === 'production') {
+    await app.register(fastifyStatic, {
+      root: resolve(import.meta.dirname, '../../frontend/dist'),
+      prefix: '/',
+      wildcard: false,
+    });
+    app.setNotFoundHandler((_req, reply) => {
+      reply.sendFile('index.html');
+    });
+  }
 
   return app;
 }

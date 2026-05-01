@@ -47,7 +47,7 @@ export async function handleMessage(ctx: Context): Promise<void> {
   try {
     let currentState = state;
     let currentApplicant = applicant;
-    let currentHandler: typeof handler = handler;
+    let currentHandler: StateHandler | null = handler;
 
     while (currentHandler) {
       const nextState = await currentHandler(ctx, currentApplicant);

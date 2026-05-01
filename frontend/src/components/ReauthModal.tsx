@@ -295,7 +295,7 @@ export function ReauthModal({ approval, onComplete, onDismiss }: Props) {
               <h2 className="font-semibold text-gray-900 text-base">Re-authenticate {providerLabel}</h2>
               <p className="text-xs text-gray-500 mt-0.5">
                 Agent: {approval.agentId}
-                {approval.arguments.email && (
+                {!!approval.arguments.email && (
                   <> &middot; {approval.arguments.email as string}</>
                 )}
               </p>

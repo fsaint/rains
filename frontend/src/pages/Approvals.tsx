@@ -169,7 +169,7 @@ export default function Approvals() {
                         <p className="text-xs text-gray-500 uppercase tracking-wider">Agent</p>
                         <p className="font-medium truncate">{approval.agentId}</p>
                       </div>
-                      {approval.arguments.addedBy && (
+                      {!!approval.arguments.addedBy && (
                         <div>
                           <p className="text-xs text-gray-500 uppercase tracking-wider">Added by</p>
                           <p className="font-medium">{approval.arguments.addedBy as string}</p>
