@@ -1,7 +1,7 @@
 import { config } from './config.js';
 
 export const HELM = {
-  greeting: "I'm Helm. AgentHelm gives you a personal AI agent that lives in Telegram and actually does things — think of it as hiring an intern who never sleeps and never asks for equity.\n\nBefore we get started, here's what you'll need:\n• A Google account to connect (so your agent can handle email)\n• A MiniMax API key from platform.minimax.io — or an Anthropic key if you're feeling bougie\n• A Telegram bot token from @BotFather\n\nWhat would you use a personal AI agent for?",
+  greeting: "I'm Helm. AgentHelm gives you a personal AI agent that lives in Telegram and actually does things — think of it as hiring an intern who never sleeps and never asks for equity.\n\nBefore we get started, here's what you'll need:\n• A Google account to connect (so your agent can handle email)\n• A MiniMax API key from https://platform.minimax.io/subscribe/token-plan — or an Anthropic key if you're feeling bougie\n• A Telegram bot token from @BotFather\n\nWhat would you use a personal AI agent for?",
   askGmail: "Love it. One more thing before I pass you along — what's your Gmail address? We'll use it to connect your agent to your inbox.",
   pendingApproval: "Great answer! If it were up to me, I'd hand you the keys right now. But my boss reviews every application personally — he's the paranoid type. Thinks everyone is a bot. Ironic, I know. Sit tight, I'll ping you when you're cleared.",
   waitingOnClearance: "Waiting on clearance. You'll hear from me.",
@@ -10,7 +10,7 @@ export const HELM = {
   gmailOauth: "First, connect your Gmail. This is what your agent will use to read and send email on your behalf.",
   gmailConnected: "Gmail connected.",
   gmailFailed: "Gmail connection failed. Try again.",
-  minimaxInstructions: "Head to platform.minimax.io — create an account and grab your API key. Paste it here when you have it.",
+  minimaxInstructions: "Head to https://platform.minimax.io/subscribe/token-plan — create an account and grab your API key. Paste it here when you have it.",
   minimaxInvalid: "That key didn't check out. Try again.",
   botfatherInstructions: "Open @BotFather on Telegram. Send /newbot, give your agent a name, and paste the token it gives you back here.",
   botfatherInvalid: "That token didn't check out. Make sure you copied the full thing.",
