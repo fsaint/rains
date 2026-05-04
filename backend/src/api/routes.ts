@@ -3010,6 +3010,16 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       } catch (err) {
         console.warn('[create-and-deploy] could not sync notify_chat_id:', err instanceof Error ? err.message : err);
       }
+      // Claim Telegram-originated credentials: associate them with the resolved user
+      // so they appear on the dashboard's Credentials page.
+      try {
+        await client.execute({
+          sql: `UPDATE credentials SET user_id = ? WHERE account_name LIKE ? AND user_id IS NULL`,
+          args: [userId, `[tg:${body.onboardingTelegramUserId}]%`],
+        });
+      } catch (err) {
+        console.warn('[create-and-deploy] could not claim telegram credentials:', err instanceof Error ? err.message : err);
+      }
     } else {
       const session = getSession(request);
       if (!session) {
