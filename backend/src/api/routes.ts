@@ -1893,14 +1893,14 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     await storePendingOAuthFlow(state, {
       service: 'google',
       telegramUserId: body.telegramUserId,
-      grantedServices: ['gmail'],
+      grantedServices: ['gmail', 'calendar', 'drive'],
     });
 
     const params = new URLSearchParams({
       client_id: config.googleClientId,
       redirect_uri: config.googleRedirectUri,
       response_type: 'code',
-      scope: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile',
+      scope: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.readonly',
       state,
       access_type: 'offline',
       prompt: 'consent',
@@ -2949,6 +2949,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       mcpServers?: string;
       runtime?: 'openclaw' | 'hermes';
       onboardingTelegramUserId?: number;
+      initialPrompt?: string;
     };
 
     // Dual auth: API key (onboarding bot) or session
@@ -3149,23 +3150,28 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         modelCredentials: body.modelCredentials,
         webhookRelaySecret,
         runtime: body.runtime ?? 'openclaw',
+        initialPrompt: body.initialPrompt,
       });
 
       const telegramGroupsJson = body.telegramGroups && body.telegramGroups.length > 0
         ? JSON.stringify(body.telegramGroups)
         : null;
 
-      // OpenClaw's webhook server runs on port 8787; Fly exposes 8443→8787
+      // Webhook relay: Hermes uses /api/webhooks/agent-bot/:id; OpenClaw uses /telegram-webhook
+      // Both runtimes bind on 8787; Fly exposes 8443→8787
+      const isHermesRuntime = (body.runtime ?? 'openclaw') === 'hermes';
       const openclawWebhookUrl = result.appName
-        ? `https://${result.appName}.fly.dev:8443/telegram-webhook`
+        ? isHermesRuntime
+          ? `https://${result.appName}.fly.dev:8443/api/webhooks/agent-bot/${deploymentId}`
+          : `https://${result.appName}.fly.dev:8443/telegram-webhook`
         : null;
 
       await client.execute({
-        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openai_api_key, telegram_groups_json, model_credentials, mcp_config_json, openclaw_webhook_url, webhook_relay_secret, runtime, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_bot_username, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openai_api_key, telegram_groups_json, model_credentials, mcp_config_json, openclaw_webhook_url, webhook_relay_secret, runtime, initial_prompt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           deploymentId, agentId,
           result.appName, result.machineId, 'running', result.managementUrl,
-          body.telegramToken, body.telegramUserId ?? null,
+          body.telegramToken, botUsername ?? null, body.telegramUserId ?? null,
           body.soulMd ?? null,
           body.modelProvider ?? 'anthropic', resolvedModelName,
           body.region ?? 'iad', gatewayToken,
@@ -3174,6 +3180,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           body.mcpServers ?? null,
           openclawWebhookUrl, webhookRelaySecret,
           body.runtime ?? 'openclaw',
+          body.initialPrompt ?? null,
           now, now,
         ],
       });
@@ -3296,6 +3303,14 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const webhookRelaySecret = nanoid(32);
     const now = new Date().toISOString();
 
+    // Fetch bot username for dashboard display
+    let deployBotUsername: string | null = null;
+    try {
+      const tgRes = await fetch(`https://api.telegram.org/bot${body.telegramToken}/getMe`);
+      const tgData = await tgRes.json() as { ok: boolean; result?: { username?: string } };
+      if (tgData.ok) deployBotUsername = tgData.result?.username ?? null;
+    } catch { /* non-fatal */ }
+
     // Build MCP config that routes through Reins proxy for policy enforcement.
     // REINS_PUBLIC_URL takes precedence (for when backend URL differs from dashboard).
     const reinsUrl = config.publicUrl || config.dashboardUrl;
@@ -3338,13 +3353,17 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         runtime: body.runtime ?? 'openclaw',
       });
 
-      // OpenClaw's webhook server runs on port 8787; Fly exposes 8443→8787
+      // Webhook relay: Hermes uses /api/webhooks/agent-bot/:id; OpenClaw uses /telegram-webhook
+      // Both runtimes bind on 8787; Fly exposes 8443→8787
+      const isHermesRt = (body.runtime ?? 'openclaw') === 'hermes';
       const openclawWebhookUrl = result.appName
-        ? `https://${result.appName}.fly.dev:8443/telegram-webhook`
+        ? isHermesRt
+          ? `https://${result.appName}.fly.dev:8443/api/webhooks/agent-bot/${deploymentId}`
+          : `https://${result.appName}.fly.dev:8443/telegram-webhook`
         : null;
 
       await client.execute({
-        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openclaw_webhook_url, webhook_relay_secret, runtime, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_bot_username, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openclaw_webhook_url, webhook_relay_secret, runtime, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           deploymentId,
           id,
@@ -3353,6 +3372,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           'running',
           result.managementUrl,
           body.telegramToken,
+          deployBotUsername,
           body.telegramUserId ?? null,
           body.soulMd ?? null,
           resolvedModelProvider,
@@ -3534,6 +3554,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           managementUrl: deployment.management_url,
           gatewayToken: deployment.gateway_token,
           telegramToken: maskedTelegram,
+          telegramBotUsername: deployment.telegram_bot_username ?? null,
           telegramUserId: deployment.telegram_user_id,
           openaiApiKey: maskedOpenaiApiKey,
           telegramGroups: telegramGroups ?? [],
@@ -3597,6 +3618,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
             modelName: deployment.model_name as string | undefined,
             openaiApiKey: deployment.openai_api_key as string | undefined,
             modelCredentials: deployment.model_credentials as string | undefined,
+            // Only re-inject initial prompt if agent hasn't completed first-run setup
+            initialPrompt: !deployment.has_onboarded ? deployment.initial_prompt as string | undefined : undefined,
           }
         );
 

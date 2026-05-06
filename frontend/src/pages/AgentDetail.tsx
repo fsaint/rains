@@ -394,7 +394,18 @@ export default function AgentDetail() {
             )}
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-400 mt-1">
               {dep?.region && <span>Region: {dep.region}</span>}
-              {dep?.telegramToken && <span>Telegram: {dep.telegramToken}</span>}
+              {dep?.telegramBotUsername ? (
+                <a
+                  href={`https://t.me/${dep.telegramBotUsername}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-blue-400 underline"
+                >
+                  @{dep.telegramBotUsername}
+                </a>
+              ) : dep?.telegramToken ? (
+                <span>Telegram: {dep.telegramToken}</span>
+              ) : null}
               {dep?.modelProvider && <span>Model: {dep.modelProvider}/{dep.modelName}</span>}
             </div>
           </div>

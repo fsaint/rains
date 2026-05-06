@@ -95,6 +95,7 @@ export interface CreateAndDeployData {
   description?: string;
   telegramToken: string;
   telegramUserId?: string;
+  initialPrompt?: string;
   modelProvider?: 'anthropic' | 'openai-codex' | 'openai' | 'minimax';
   modelName?: string;
   soulMd?: string;
@@ -119,6 +120,7 @@ export interface AgentDetail {
     managementUrl: string | null;
     gatewayToken: string;
     telegramToken: string | null;
+    telegramBotUsername: string | null;
     telegramUserId: string | null;
     openaiApiKey: string | null;
     telegramGroups: TelegramGroup[];

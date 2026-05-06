@@ -455,6 +455,15 @@ export async function initializeDatabase() {
     END $$
   `;
 
+  // Add initial_prompt and has_onboarded for first-run setup
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS initial_prompt TEXT;
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS has_onboarded INTEGER DEFAULT 0;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
+
   // Add Telegram notification columns
   await sql`
     DO $$ BEGIN
@@ -491,6 +500,14 @@ export async function initializeDatabase() {
     END $$
   `;
 
+  // Add telegram_bot_username for display in the dashboard
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS telegram_bot_username TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
+
   // Add path_rules column for Drive path-based permissions
   await sql`
     DO $$ BEGIN
@@ -518,12 +535,16 @@ export async function initializeDatabase() {
       granted_services TEXT,
       reconnect_credential_id TEXT,
       reauth_approval_id TEXT,
-      telegram_user_id INTEGER,
-      initiated_at TEXT NOT NULL,
-      expires_at TEXT NOT NULL
+      telegram_user_id BIGINT,
+      initiated_at TIMESTAMPTZ NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL
     )
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_pending_oauth_expires ON pending_oauth_flows(expires_at)`;
+  // Migrate existing columns to correct types for Postgres (was designed for SQLite)
+  await sql`ALTER TABLE pending_oauth_flows ALTER COLUMN telegram_user_id TYPE BIGINT`;
+  await sql`ALTER TABLE pending_oauth_flows ALTER COLUMN initiated_at TYPE TIMESTAMPTZ USING initiated_at::TIMESTAMPTZ`;
+  await sql`ALTER TABLE pending_oauth_flows ALTER COLUMN expires_at TYPE TIMESTAMPTZ USING expires_at::TIMESTAMPTZ`;
 
   // Seed: create admin user if no users exist
   const userCount = await sql`SELECT COUNT(*) as count FROM users`;

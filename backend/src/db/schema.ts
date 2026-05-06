@@ -204,6 +204,7 @@ export const deployedAgents = pgTable('deployed_agents', {
   status: text('status').default('pending').notNull(), // pending | starting | running | stopped | error | destroyed
   managementUrl: text('management_url'),
   telegramToken: text('telegram_token'),
+  telegramBotUsername: text('telegram_bot_username'),
   telegramUserId: text('telegram_user_id'),
   soulMd: text('soul_md'),
   modelProvider: text('model_provider').default('anthropic'),
@@ -217,6 +218,8 @@ export const deployedAgents = pgTable('deployed_agents', {
   modelCredentials: text('model_credentials'),
   mcpConfigJson: text('mcp_config_json'),
   isManual: integer('is_manual').default(0),
+  initialPrompt: text('initial_prompt'),
+  hasOnboarded: integer('has_onboarded').default(0),
   createdAt: text('created_at').default(sql`now()`).notNull(),
   updatedAt: text('updated_at').default(sql`now()`).notNull(),
 });
