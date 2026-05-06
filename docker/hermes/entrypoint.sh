@@ -96,6 +96,12 @@ else
   : > ~/.hermes/SOUL.md
 fi
 
+# Append first-run instructions if this is the agent's first boot
+if [ -n "$INITIAL_PROMPT" ]; then
+  printf '\n\n' >> ~/.hermes/SOUL.md
+  printf '%s' "$INITIAL_PROMPT" >> ~/.hermes/SOUL.md
+fi
+
 # Append Reins platform knowledge so the agent can answer configuration and
 # best-practice questions regardless of whether a persona was provided.
 if [ -f /knowledge.md ]; then
