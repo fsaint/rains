@@ -11,15 +11,15 @@ tools:
     - gmail_get_message
     - gmail_search
     - gmail_list_labels
+    - gmail_create_draft
 
   # Operations requiring human approval
   require_approval:
-    - gmail_create_draft
+    - gmail_send_message
     - gmail_send_draft
 
   # Blocked by default - uncomment to enable with approval
   block:
-    - gmail_send_message
     - gmail_delete_message
 
 constraints:
