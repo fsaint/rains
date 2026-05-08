@@ -31,21 +31,51 @@ const BACKEND_URL = 'http://localhost:5001';
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
+/** Returns an auth header object with the session cookie for API-only tests. */
+async function loginCookies(request: APIRequestContext): Promise<{ cookie: string }> {
+  const res = await request.post(`${BACKEND_URL}/api/auth/login`, {
+    data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
+  });
+  expect(res.ok(), `Login API failed: ${await res.text()}`).toBe(true);
+  const setCookie = res.headers()['set-cookie'] ?? '';
+  const match = setCookie.match(/reins_session=([^;]+)/);
+  expect(match, 'reins_session cookie not found').toBeTruthy();
+  return { cookie: `reins_session=${match![1]}` };
+}
+
+/**
+ * Polls GET /api/agents/:id/deployment until status matches or deadline passes.
+ * Returns final status.
+ */
+async function waitForStatus(
+  request: APIRequestContext,
+  agentId: string,
+  targetStatus: string,
+  timeoutMs: number,
+  headers: { cookie: string },
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let status = 'pending';
+  while (status !== targetStatus && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 5_000));
+    const s = await request.get(`${BACKEND_URL}/api/agents/${agentId}/deployment`, { headers });
+    if (s.ok()) {
+      const d = await s.json() as { data: { status: string } };
+      status = d.data?.status ?? status;
+    }
+  }
+  expect(status, `Agent never reached '${targetStatus}' status (last: ${status})`).toBe(targetStatus);
+  return status;
+}
+
 /**
  * Authenticates via the backend /api/auth/login endpoint (email+password),
  * extracts the session cookie, and injects it into the page context.
  * This bypasses the Google OAuth login UI which cannot be automated in tests.
  */
 async function login(page: Page, request: APIRequestContext) {
-  const res = await request.post(`${BACKEND_URL}/api/auth/login`, {
-    data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
-  });
-  expect(res.ok(), `Login API failed: ${await res.text()}`).toBe(true);
-
-  const setCookie = res.headers()['set-cookie'] ?? '';
-  const match = setCookie.match(/reins_session=([^;]+)/);
-  expect(match, 'reins_session cookie not found in login response').toBeTruthy();
-  const sessionValue = match![1];
+  const { cookie } = await loginCookies(request);
+  const sessionValue = cookie.replace('reins_session=', '');
 
   await page.context().addCookies([{
     name: 'reins_session',
@@ -234,16 +264,7 @@ test(
     test.skip(!FLY_API_TOKEN, 'FLY_API_TOKEN not set — skipping memory persistence test');
     test.setTimeout(360_000);
 
-    const cookies = await (async () => {
-      const res = await request.post(`${BACKEND_URL}/api/auth/login`, {
-        data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
-      });
-      expect(res.ok(), `Login failed: ${await res.text()}`).toBe(true);
-      const setCookie = res.headers()['set-cookie'] ?? '';
-      const match = setCookie.match(/reins_session=([^;]+)/);
-      expect(match, 'session cookie not found').toBeTruthy();
-      return { cookie: `reins_session=${match![1]}` };
-    })();
+    const cookies = await loginCookies(request);
 
     // ── Step 1: Create a Hermes agent (uses shared bot) ──────────────────────
     const deployRes = await request.post(`${BACKEND_URL}/api/agents/create-and-deploy`, {
@@ -264,22 +285,9 @@ test(
     const flyAppName = deployBody.data.deployment.appName;
 
     try {
-      // ── Step 2: Wait for machine to be running ────────────────────────────
-      const POLL_INTERVAL = 5_000;
-      const DEADLINE_RUNNING = Date.now() + 120_000;
-      let status = 'pending';
-      while (status !== 'running' && Date.now() < DEADLINE_RUNNING) {
-        await new Promise((r) => setTimeout(r, POLL_INTERVAL));
-        const s = await request.get(`${BACKEND_URL}/api/agents/${agentId}/deployment`, { headers: cookies });
-        if (s.ok()) {
-          const d = await s.json() as { data: { status: string; machineId: string } };
-          status = d.data?.status ?? status;
-        }
-      }
-      expect(status, 'Agent never reached running status').toBe('running');
-
-      // Give Hermes a moment to fully connect to Telegram after startup
-      await new Promise((r) => setTimeout(r, 20_000));
+      // ── Step 2: Wait for running ──────────────────────────────────────────
+      await waitForStatus(request, agentId, 'running', 120_000, cookies);
+      await new Promise((r) => setTimeout(r, 20_000)); // Hermes connect time
 
       // ── Step 3: Tell the agent to remember BANANA ─────────────────────────
       const storeReply = telethonSend(
@@ -304,30 +312,17 @@ test(
       // 200 or 204 = destroyed; allow 404 in case it already stopped
       expect([200, 204, 404], `Destroy returned ${destroyRes.status()}`).toContain(destroyRes.status());
 
-      // ── Step 6: Redeploy via Reins — should recreate with same volume ─────
+      // ── Step 6: Redeploy via Reins — recreates machine with same volume ────
       const redeployRes = await request.post(
         `${BACKEND_URL}/api/agents/${agentId}/redeploy`,
         { data: {}, headers: cookies },
       );
       expect(redeployRes.ok(), `Redeploy failed: ${await redeployRes.text()}`).toBe(true);
 
-      // ── Step 7: Wait for the new machine to reach running ─────────────────
-      const DEADLINE_REDEPLOY = Date.now() + 120_000;
-      let redeployStatus = 'pending';
-      while (redeployStatus !== 'running' && Date.now() < DEADLINE_REDEPLOY) {
-        await new Promise((r) => setTimeout(r, POLL_INTERVAL));
-        const s = await request.get(`${BACKEND_URL}/api/agents/${agentId}/deployment`, { headers: cookies });
-        if (s.ok()) {
-          const d = await s.json() as { data: { status: string } };
-          redeployStatus = d.data?.status ?? redeployStatus;
-        }
-      }
-      expect(redeployStatus, 'Redeployed agent never reached running status').toBe('running');
+      await waitForStatus(request, agentId, 'running', 120_000, cookies);
+      await new Promise((r) => setTimeout(r, 20_000)); // new machine connect time
 
-      // Give the new Hermes machine time to fully reconnect to Telegram
-      await new Promise((r) => setTimeout(r, 20_000));
-
-      // ── Step 8: Ask the agent to recall the secret code word ─────────────
+      // ── Step 7: Ask the agent to recall BANANA ────────────────────────────
       const recallReply = telethonSend(
         SHARED_BOT_USERNAME,
         'What is the secret code word I asked you to remember?',
@@ -335,7 +330,135 @@ test(
       );
       expect(recallReply.toUpperCase(), 'Agent forgot BANANA after machine recreation').toContain('BANANA');
     } finally {
-      // Always clean up the Fly app, even on test failure
+      await request.delete(`${BACKEND_URL}/api/agents/${agentId}`, { headers: cookies });
+    }
+  }
+);
+
+// ── 6. Redeploy (updateMachine path) + memory smoke ──────────────────────────
+
+test(
+  'agent memory persists across in-place redeploy (updateMachine)',
+  async ({ request }) => {
+    const missingTelethon = !TELETHON_API_ID || !TELETHON_API_HASH || !TELETHON_PHONE;
+    test.skip(!SHARED_BOT_USERNAME, 'SHARED_BOT_USERNAME not set');
+    test.skip(missingTelethon, 'Telethon credentials not set');
+    test.setTimeout(360_000);
+
+    const cookies = await loginCookies(request);
+
+    // ── Step 1: Create Hermes agent ───────────────────────────────────────
+    const deployRes = await request.post(`${BACKEND_URL}/api/agents/create-and-deploy`, {
+      data: {
+        name: `E2E Redeploy Memory ${Date.now()}`,
+        telegramUserId: TELEGRAM_USER_ID,
+        modelProvider: 'anthropic',
+        modelName: 'claude-sonnet-4-5',
+        runtime: 'hermes',
+      },
+      headers: cookies,
+    });
+    expect(deployRes.ok(), `Deploy failed: ${await deployRes.text()}`).toBe(true);
+    const agentId = ((await deployRes.json()) as { data: { id: string } }).data.id;
+
+    try {
+      await waitForStatus(request, agentId, 'running', 120_000, cookies);
+      await new Promise((r) => setTimeout(r, 20_000)); // Hermes connect time
+
+      // ── Step 2: Store KIWI ────────────────────────────────────────────────
+      const storeReply = telethonSend(
+        SHARED_BOT_USERNAME,
+        'Remember this secret code word: KIWI. Confirm you stored it.',
+        60,
+      );
+      expect(storeReply.length).toBeGreaterThan(0);
+
+      // ── Step 3: Redeploy in-place (machine exists — uses updateMachine) ──
+      const redeployRes = await request.post(
+        `${BACKEND_URL}/api/agents/${agentId}/redeploy`,
+        { data: {}, headers: cookies },
+      );
+      expect(redeployRes.ok(), `Redeploy failed: ${await redeployRes.text()}`).toBe(true);
+
+      await waitForStatus(request, agentId, 'running', 120_000, cookies);
+      await new Promise((r) => setTimeout(r, 20_000));
+
+      // ── Step 4: Recall KIWI ───────────────────────────────────────────────
+      const recall = telethonSend(
+        SHARED_BOT_USERNAME,
+        'What is the secret code word I asked you to remember?',
+        90,
+      );
+      expect(recall.toUpperCase(), 'Agent forgot KIWI after redeploy').toContain('KIWI');
+    } finally {
+      await request.delete(`${BACKEND_URL}/api/agents/${agentId}`, { headers: cookies });
+    }
+  }
+);
+
+// ── 7. Stop → start + memory smoke ───────────────────────────────────────────
+
+test(
+  'agent memory persists across stop and start',
+  async ({ request }) => {
+    const missingTelethon = !TELETHON_API_ID || !TELETHON_API_HASH || !TELETHON_PHONE;
+    test.skip(!SHARED_BOT_USERNAME, 'SHARED_BOT_USERNAME not set');
+    test.skip(missingTelethon, 'Telethon credentials not set');
+    test.setTimeout(360_000);
+
+    const cookies = await loginCookies(request);
+
+    // ── Step 1: Create Hermes agent ───────────────────────────────────────
+    const deployRes = await request.post(`${BACKEND_URL}/api/agents/create-and-deploy`, {
+      data: {
+        name: `E2E Stop-Start Memory ${Date.now()}`,
+        telegramUserId: TELEGRAM_USER_ID,
+        modelProvider: 'anthropic',
+        modelName: 'claude-sonnet-4-5',
+        runtime: 'hermes',
+      },
+      headers: cookies,
+    });
+    expect(deployRes.ok(), `Deploy failed: ${await deployRes.text()}`).toBe(true);
+    const agentId = ((await deployRes.json()) as { data: { id: string } }).data.id;
+
+    try {
+      await waitForStatus(request, agentId, 'running', 120_000, cookies);
+      await new Promise((r) => setTimeout(r, 20_000));
+
+      // ── Step 2: Store MANGO ───────────────────────────────────────────────
+      const storeReply = telethonSend(
+        SHARED_BOT_USERNAME,
+        'Remember this secret code word: MANGO. Confirm you stored it.',
+        60,
+      );
+      expect(storeReply.length).toBeGreaterThan(0);
+
+      // ── Step 3: Stop ──────────────────────────────────────────────────────
+      const stopRes = await request.post(
+        `${BACKEND_URL}/api/agents/${agentId}/stop`,
+        { headers: cookies },
+      );
+      expect(stopRes.ok(), `Stop failed: ${await stopRes.text()}`).toBe(true);
+      await waitForStatus(request, agentId, 'stopped', 60_000, cookies);
+
+      // ── Step 4: Start ─────────────────────────────────────────────────────
+      const startRes = await request.post(
+        `${BACKEND_URL}/api/agents/${agentId}/start`,
+        { headers: cookies },
+      );
+      expect(startRes.ok(), `Start failed: ${await startRes.text()}`).toBe(true);
+      await waitForStatus(request, agentId, 'running', 120_000, cookies);
+      await new Promise((r) => setTimeout(r, 20_000));
+
+      // ── Step 5: Recall MANGO ──────────────────────────────────────────────
+      const recall = telethonSend(
+        SHARED_BOT_USERNAME,
+        'What is the secret code word I asked you to remember?',
+        90,
+      );
+      expect(recall.toUpperCase(), 'Agent forgot MANGO after stop/start').toContain('MANGO');
+    } finally {
       await request.delete(`${BACKEND_URL}/api/agents/${agentId}`, { headers: cookies });
     }
   }
