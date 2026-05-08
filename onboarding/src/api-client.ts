@@ -77,14 +77,16 @@ export async function createAndDeploy(params: {
   telegramToken?: string;
   telegramUserId: string;
   onboardingTelegramUserId: number;
+  minimaxApiKey?: string;
   initialPrompt?: string;
 }): Promise<CreateAndDeployResponse> {
   return apiRequest<CreateAndDeployResponse>('POST', '/api/agents/create-and-deploy', {
     name: params.name,
     ...(params.telegramToken ? { telegramToken: params.telegramToken } : {}),
     telegramUserId: params.telegramUserId,
-    modelProvider: 'anthropic',
-    modelName: 'claude-sonnet-4-5',
+    modelProvider: 'minimax',
+    modelName: 'MiniMax-M2.7',
+    openaiApiKey: params.minimaxApiKey,
     runtime: 'openclaw',
     soulMd: DEFAULT_SOUL_MD,
     onboardingTelegramUserId: params.onboardingTelegramUserId,

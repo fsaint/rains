@@ -16,6 +16,7 @@ RUN uv pip install --system -e ".[all]"
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 COPY knowledge.md /knowledge.md
+COPY skills/ /agenthelm-skills/
 
 EXPOSE 8000
 EXPOSE 8787

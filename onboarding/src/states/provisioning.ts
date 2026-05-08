@@ -25,12 +25,14 @@ export async function handleProvisioning(
       ...(config.sharedBotEnabled ? {} : { telegramToken: applicant.bot_token! }),
       telegramUserId: String(telegramUserId),
       onboardingTelegramUserId: telegramUserId,
+      minimaxApiKey: applicant.minimax_key ?? undefined,
       initialPrompt,
     });
 
     await updateApplicant(telegramUserId, {
       agent_id: response.data.id,
       deployment_id: response.data.deployment.deploymentId,
+      bot_username: response.data.botUsername ?? null,
     });
 
     return 'validating';

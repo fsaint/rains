@@ -248,7 +248,7 @@ async function buildMachineConfig(opts: CreateMachineOpts) {
       // MiniMax via OpenAI-compatible API: translate to 'openai' provider + base URL
       // (OpenClaw's native minimax extension uses /anthropic endpoint that doesn't support M2.7+)
       ...(opts.modelProvider === 'minimax'
-        ? { MODEL_PROVIDER: 'openai', OPENAI_BASE_URL: 'https://api.minimax.io/v1', ...(opts.openaiApiKey ? { OPENAI_API_KEY: opts.openaiApiKey } : {}) }
+        ? { MODEL_PROVIDER: 'openai', OPENAI_BASE_URL: 'https://api.minimax.io/v1', OPENAI_API_KEY: opts.openaiApiKey || process.env.MINIMAX_API_KEY || '' }
         : { ...(opts.modelProvider ? { MODEL_PROVIDER: opts.modelProvider } : {}), ...(opts.openaiApiKey ? { OPENAI_API_KEY: opts.openaiApiKey } : {}) }),
       ...(opts.telegramGroups && opts.telegramGroups.length > 0 ? { TELEGRAM_GROUPS_JSON: JSON.stringify(opts.telegramGroups) } : {}),
       ...(opts.modelCredentials ? { OPENAI_CODEX_TOKENS: opts.modelCredentials } : {}),

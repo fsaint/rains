@@ -119,8 +119,8 @@ test('create a manual (BYO) agent through the wizard', async ({ page, request })
   await login(page, request);
   await page.goto('/agents/new');
 
-  // Agent type chooser — choose Manual
-  await page.getByRole('button', { name: /manual agent/i }).click();
+  // Agent type chooser — hidden manual option (small link at bottom)
+  await page.getByRole('button', { name: /bring your own agent/i }).click();
 
   // Step 0: Basics
   const agentName = `E2E Manual Agent ${Date.now()}`;
@@ -129,8 +129,8 @@ test('create a manual (BYO) agent through the wizard', async ({ page, request })
   // Step 0 (Basics) → Step 1 (Finish)
   await page.getByRole('button', { name: /next/i }).click();
 
-  // Step 1: "Create Manual Agent" button
-  await page.getByRole('button', { name: /create manual agent/i }).click();
+  // Step 1: "Create Agent" button
+  await page.getByRole('button', { name: /^create agent$/i }).click();
 
   // Should navigate to /agents/:id
   await page.waitForURL(/\/agents\/[^/]+$/, { timeout: 15_000 });

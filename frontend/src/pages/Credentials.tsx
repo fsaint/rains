@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Plus, Trash2, Key, RefreshCw, CheckCircle, AlertCircle, Clock, X, Mail, HardDrive, Calendar, Github, SquareKanban, BookOpen, Headphones } from 'lucide-react';
-import { credentials, oauth, type Credential } from '../api/client';
+import { credentials, oauth, permissions, type Credential } from '../api/client';
 
 interface CredentialHealth {
   valid: boolean;
@@ -27,6 +27,7 @@ const GOOGLE_SERVICES = [
 
 export default function Credentials() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createType, setCreateType] = useState<'pick' | 'google_scopes' | 'microsoft_connect' | 'github_pat' | 'linear_key' | 'notion_key' | 'hermeneutix_key' | 'zendesk_key' | 'api_key'>('pick');
@@ -74,6 +75,34 @@ export default function Credentials() {
       queryClient.invalidateQueries({ queryKey: ['credentials'] });
       setHealthStatus({});
       setSearchParams({});
+
+      // If the user came from the agent creation flow, wire up gmail/calendar/drive
+      const pendingAgentId = sessionStorage.getItem('pendingGmailAgentSetup');
+      if (pendingAgentId && service === 'google' && email) {
+        const agentType = sessionStorage.getItem('pendingGmailAgentType') ?? 'email-calendar';
+        sessionStorage.removeItem('pendingGmailAgentSetup');
+        sessionStorage.removeItem('pendingGmailAgentType');
+        const GOOGLE_SERVICES = ['gmail', 'calendar', 'drive'] as const;
+        // Fetch fresh credential list to find the just-linked credential
+        credentials.list().then((list) => {
+          const cred = list.find((c) => c.serviceId === 'google' && c.accountEmail === email);
+          if (!cred) {
+            navigate(`/agents/new?created=${pendingAgentId}&type=${agentType}&gmail_connected=true`);
+            return;
+          }
+          Promise.all(
+            GOOGLE_SERVICES.map((svc) =>
+              permissions.setServiceAccess(pendingAgentId, svc, true)
+                .then(() => permissions.linkCredential(pendingAgentId, svc, cred.id))
+                .catch(() => { /* best-effort */ })
+            )
+          ).then(() => {
+            navigate(`/agents/new?created=${pendingAgentId}&type=${agentType}&gmail_connected=true`);
+          });
+        }).catch(() => {
+          navigate(`/agents/new?created=${pendingAgentId}&type=${agentType}&gmail_connected=true`);
+        });
+      }
     } else if (oauthError) {
       const errorMessages: Record<string, string> = {
         missing_params: 'OAuth flow was interrupted.',
@@ -88,6 +117,15 @@ export default function Credentials() {
         message: errorMessages[oauthError] || `OAuth error: ${oauthError}`,
       });
       setSearchParams({});
+
+      // If error occurred during agent creation flow, return the user so they can retry
+      const pendingAgentId = sessionStorage.getItem('pendingGmailAgentSetup');
+      if (pendingAgentId) {
+        const agentType = sessionStorage.getItem('pendingGmailAgentType') ?? 'email-calendar';
+        sessionStorage.removeItem('pendingGmailAgentSetup');
+        sessionStorage.removeItem('pendingGmailAgentType');
+        navigate(`/agents/new?created=${pendingAgentId}&type=${agentType}`);
+      }
     }
 
     if (oauthSuccess || oauthError) {

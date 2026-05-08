@@ -1,7 +1,12 @@
 #!/bin/sh
 set -e
 
-mkdir -p ~/.hermes
+mkdir -p ~/.hermes/skills
+
+# Seed pre-installed AgentHelm skills (no-clobber — user skills take precedence)
+if [ -d /agenthelm-skills ] && [ "$(ls -A /agenthelm-skills 2>/dev/null)" ]; then
+  cp -rn /agenthelm-skills/* ~/.hermes/skills/ 2>/dev/null || true
+fi
 
 # ── Secrets (.env) ─────────────────────────────────────────────────────────────
 {

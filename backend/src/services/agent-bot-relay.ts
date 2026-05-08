@@ -62,7 +62,7 @@ export async function forwardToOpenclaw(
       method: 'POST',
       headers,
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {
       console.warn(`[webhook-relay] OpenClaw returned ${res.status} for deployment ${deploymentId}`);

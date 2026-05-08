@@ -3090,19 +3090,20 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       }
     }
 
-    // Validate Telegram token (skip for shared bot — already validated at startup)
+    // Resolve bot username via getMe (validates custom tokens; shared bot: non-fatal)
     let botUsername: string | undefined;
-    if (!isSharedBot) {
-      try {
-        const tgRes = await fetch(`https://api.telegram.org/bot${effectiveTelegramToken}/getMe`);
-        const tgData = await tgRes.json() as { ok: boolean; result?: { username?: string } };
-        if (!tgData.ok) {
-          return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid Telegram bot token' } });
-        }
-        botUsername = tgData.result?.username;
-      } catch {
+    try {
+      const tgRes = await fetch(`https://api.telegram.org/bot${effectiveTelegramToken}/getMe`);
+      const tgData = await tgRes.json() as { ok: boolean; result?: { username?: string } };
+      if (!tgData.ok && !isSharedBot) {
+        return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid Telegram bot token' } });
+      }
+      botUsername = tgData.result?.username;
+    } catch {
+      if (!isSharedBot) {
         return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Failed to validate Telegram token' } });
       }
+      // shared bot: getMe failure is non-fatal, username stays undefined
     }
 
     // Reject deploys with an already-expired Codex token

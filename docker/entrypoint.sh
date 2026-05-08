@@ -322,7 +322,7 @@ export DISPLAY=:99
 #    (the doctor strips channels.telegram.groups on each startup)
 if [ -n "$OPENAI_CODEX_TOKENS" ]; then
   # Phase 1: let gateway initialize (creates dirs, runs doctor)
-  node /app/openclaw.mjs gateway --bind lan --port 18789 &
+  node /app/openclaw.mjs gateway --port 18789 &
   GATEWAY_PID=$!
   sleep 8
   kill $GATEWAY_PID 2>/dev/null
@@ -333,7 +333,7 @@ if [ -n "$OPENAI_CODEX_TOKENS" ]; then
   node /write-codex-auth.js
 
   # Phase 3: restart gateway in background so we can re-patch config after doctor runs
-  node /app/openclaw.mjs gateway --bind lan --port 18789 &
+  node /app/openclaw.mjs gateway --port 18789 &
   GATEWAY_PID=$!
 
   # Wait for gateway to become healthy (doctor rewrites openclaw.json during this window)
@@ -421,9 +421,9 @@ if [ -n "$OPENAI_CODEX_TOKENS" ]; then
     wait $GATEWAY_PID
   else
     echo "Gateway exited after config patch, restarting as main process..."
-    exec node /app/openclaw.mjs gateway --bind lan --port 18789
+    exec node /app/openclaw.mjs gateway --port 18789
   fi
-elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$OPENAI_API_KEY" ] && [ -n "$MODEL_NAME" ]; then
+elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
   # For custom OpenAI-compatible base URLs (e.g. MiniMax), use a 2-phase startup on first
   # boot only. The gateway loads models.json into memory at boot and never re-reads it, so
   # we must inject the custom model BEFORE the final gateway start.
@@ -445,7 +445,7 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$OPENAI_API_KEY" ] && [ -n "$MODEL_NAME"
   else
     echo "[entrypoint] models.json: $MODEL_NAME not found, running Phase 1 to initialize workspace"
     # Phase 1: start briefly so doctor creates workspace + default models.json
-    node /app/openclaw.mjs gateway --bind lan --port 18789 &
+    node /app/openclaw.mjs gateway --port 18789 &
     GATEWAY_PID=$!
     sleep 8
     kill $GATEWAY_PID 2>/dev/null
@@ -483,7 +483,7 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$OPENAI_API_KEY" ] && [ -n "$MODEL_NAME"
     console.log('[entrypoint] models.json: registered openai/' + modelName + ' at ' + baseUrl);
   " 2>&1 || true
 
-  exec node /app/openclaw.mjs gateway --bind lan --port 18789
+  exec node /app/openclaw.mjs gateway --port 18789
 else
-  exec node /app/openclaw.mjs gateway --bind lan --port 18789
+  exec node /app/openclaw.mjs gateway --port 18789
 fi

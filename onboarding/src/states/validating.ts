@@ -5,7 +5,25 @@ import { HELM } from '../persona.js';
 import { getDeploymentStatus } from '../api-client.js';
 
 const POLL_INTERVAL_MS = 10_000;
-const TIMEOUT_MS = 3 * 60 * 1_000; // 3 minutes
+const MACHINE_TIMEOUT_MS = 3 * 60 * 1_000;  // 3 min: wait for Fly machine to reach 'running'
+const HEALTH_TIMEOUT_MS = 3 * 60 * 1_000;   // 3 min: wait for agent to become responsive
+const HEALTH_POLL_MS = 8_000;
+
+async function waitForHealthy(appName: string): Promise<boolean> {
+  const deadline = Date.now() + HEALTH_TIMEOUT_MS;
+  const url = `https://${appName}.fly.dev/healthz`;
+
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(5_000) });
+      if (res.ok) return true;
+    } catch {
+      // Not yet reachable — keep polling
+    }
+    await new Promise((r) => setTimeout(r, HEALTH_POLL_MS));
+  }
+  return false;
+}
 
 export async function handleValidating(
   ctx: Context,
@@ -13,32 +31,17 @@ export async function handleValidating(
 ): Promise<'done' | void> {
   await ctx.reply(HELM.validating);
 
-  const deadline = Date.now() + TIMEOUT_MS;
+  const deadline = Date.now() + MACHINE_TIMEOUT_MS;
   const deploymentId = applicant.deployment_id!;
 
-  return new Promise((resolve) => {
+  // Step 1: wait for Fly machine to reach 'running'
+  const machineRunning = await new Promise<{ appName: string } | null>((resolve) => {
     const interval = setInterval(async () => {
       try {
         const status = await getDeploymentStatus(deploymentId);
-
         if (status.status === 'running') {
           clearInterval(interval);
-
-          // Send a test message from the user's new bot so they know it's live
-          try {
-            await fetch(`https://api.telegram.org/bot${applicant.bot_token}/sendMessage`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                chat_id: Number(applicant.telegram_user_id),
-                text: "Your agent is online. I'm ready.",
-              }),
-            });
-          } catch {
-            // Non-fatal — continue regardless
-          }
-
-          resolve('done');
+          resolve({ appName: status.appName });
           return;
         }
       } catch (err: unknown) {
@@ -47,22 +50,34 @@ export async function handleValidating(
 
       if (Date.now() > deadline) {
         clearInterval(interval);
-        await ctx.reply(HELM.validatingTimeout);
-
-        // Alert admin about the timeout
-        try {
-          const { Bot } = await import('grammy');
-          const tmpBot = new Bot(config.botToken);
-          await tmpBot.api.sendMessage(
-            config.adminTelegramId,
-            `Deployment timeout for user ${applicant.telegram_user_id}, deployment ${deploymentId}`
-          );
-        } catch {
-          // Non-fatal
-        }
-
-        resolve(undefined);
+        resolve(null);
       }
     }, POLL_INTERVAL_MS);
   });
+
+  if (!machineRunning) {
+    await ctx.reply(HELM.validatingTimeout);
+    try {
+      const { Bot } = await import('grammy');
+      const tmpBot = new Bot(config.botToken);
+      await tmpBot.api.sendMessage(
+        config.adminTelegramId,
+        `Deployment timeout for user ${applicant.telegram_user_id}, deployment ${deploymentId}`
+      );
+    } catch { /* non-fatal */ }
+    return;
+  }
+
+  // Step 2: wait for the agent to actually respond to health checks
+  const isHealthy = await waitForHealthy(machineRunning.appName);
+  if (!isHealthy) {
+    console.warn(`[validating] agent ${machineRunning.appName} did not pass healthz — proceeding anyway`);
+  }
+
+  // Step 3: send done message with bot link
+  const botUsername = applicant.bot_username;
+  const botLink = botUsername ? `\n\nStart chatting with your agent: t.me/${botUsername}` : '';
+  await ctx.reply(`${HELM.done}${botLink}`);
+
+  return 'done';
 }

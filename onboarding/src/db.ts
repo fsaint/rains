@@ -11,6 +11,7 @@ export interface Applicant {
   state: string;
   minimax_key: string | null;
   bot_token: string | null;
+  bot_username: string | null;
   notify_chat_id: string | null;
   agent_id: string | null;
   deployment_id: string | null;
@@ -39,6 +40,7 @@ export async function initDb(): Promise<void> {
   `;
   // Migrate existing tables
   await sql`ALTER TABLE applicants ADD COLUMN IF NOT EXISTS gmail_address TEXT`;
+  await sql`ALTER TABLE applicants ADD COLUMN IF NOT EXISTS bot_username TEXT`;
 }
 
 export async function getApplicant(telegramUserId: number): Promise<Applicant | null> {
