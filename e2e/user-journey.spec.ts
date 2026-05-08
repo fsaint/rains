@@ -5,68 +5,88 @@
  *   1. Login page renders and authenticates
  *   2. Create a manual (BYO) agent through the wizard
  *   3. Verify agent appears on the dashboard / detail page
- *   4. [Docker] Create a hosted agent using the stub container, verify it
- *      reaches "running" status and its /healthz endpoint responds
+ *   4. [Fly] Create a hosted agent on Fly.io, verify it reaches "running" status
+ *   5. [Fly + Telethon] Agent memory persists across full machine destroy + redeploy
  *
- * Test 4 runs only when:
- *   - TEST_TELEGRAM_BOT_TOKEN env var is set
- *   - REINS_PROVIDER=local and Docker is available
- *   - The stub image is built: `docker build -t reins-stub-openclaw docker/stub-openclaw`
+ * Test 4 runs only when TEST_TELEGRAM_BOT_TOKEN is set.
+ * Test 5 runs only when:
+ *   - SHARED_BOT_USERNAME is set (the @username of the platform shared bot)
+ *   - TELEGRAM_API_ID / TELEGRAM_API_HASH / TELEGRAM_PHONE are set (Telethon session)
+ *   - /tmp/tg_send_and_wait_filtered.py exists
  */
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
+import { execFileSync } from 'child_process';
 
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@reins.local';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'changeme';
+const ADMIN_EMAIL = process.env.REINS_ADMIN_EMAIL || process.env.ADMIN_EMAIL || 'admin@reins.local';
+const ADMIN_PASSWORD = process.env.REINS_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || 'testpass123';
 const TELEGRAM_TOKEN = process.env.TEST_TELEGRAM_BOT_TOKEN || '';
-const HAS_DOCKER = process.env.REINS_PROVIDER === 'local';
+const TELEGRAM_USER_ID = process.env.TEST_TELEGRAM_USER_ID || '';
+const SHARED_BOT_USERNAME = process.env.SHARED_BOT_USERNAME || '';
+const TELETHON_API_ID = process.env.TELEGRAM_API_ID || '';
+const TELETHON_API_HASH = process.env.TELEGRAM_API_HASH || '';
+const TELETHON_PHONE = process.env.TELEGRAM_PHONE || '';
+const FLY_API_TOKEN = process.env.FLY_API_TOKEN || '';
+const BACKEND_URL = 'http://localhost:5001';
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
-async function login(page: Page) {
-  await page.goto('/');
+/**
+ * Authenticates via the backend /api/auth/login endpoint (email+password),
+ * extracts the session cookie, and injects it into the page context.
+ * This bypasses the Google OAuth login UI which cannot be automated in tests.
+ */
+async function login(page: Page, request: APIRequestContext) {
+  const res = await request.post(`${BACKEND_URL}/api/auth/login`, {
+    data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
+  });
+  expect(res.ok(), `Login API failed: ${await res.text()}`).toBe(true);
 
-  // May be already on login page or redirected there
-  await page.getByPlaceholder('Email').waitFor({ timeout: 10_000 });
-  await page.getByPlaceholder('Email').fill(ADMIN_EMAIL);
-  await page.getByPlaceholder('Password').fill(ADMIN_PASSWORD);
-  await page.getByRole('button', { name: 'Continue' }).click();
+  const setCookie = res.headers()['set-cookie'] ?? '';
+  const match = setCookie.match(/reins_session=([^;]+)/);
+  expect(match, 'reins_session cookie not found in login response').toBeTruthy();
+  const sessionValue = match![1];
 
-  // Wait for navigation away from login
-  await page.waitForFunction(
-    () => !document.querySelector('input[placeholder="Password"]'),
-    { timeout: 10_000 }
-  );
+  await page.context().addCookies([{
+    name: 'reins_session',
+    value: sessionValue,
+    domain: 'localhost',
+    path: '/',
+  }]);
+
+  await page.goto('/agents');
+  // Confirm we landed on an authenticated page
+  await expect(page.locator('body')).not.toBeEmpty();
 }
 
 // ── 1. Login ──────────────────────────────────────────────────────────────────
 
-test('login page renders and rejects bad credentials', async ({ page }) => {
+test('login page shows Google OAuth button', async ({ page }) => {
   await page.goto('/');
-  await page.getByPlaceholder('Email').waitFor();
-
-  // Bad credentials → error message visible
-  await page.getByPlaceholder('Email').fill('wrong@test.com');
-  await page.getByPlaceholder('Password').fill('badpassword');
-  await page.getByRole('button', { name: 'Continue' }).click();
-
-  // Error should appear (wrong creds → still on login page)
-  await expect(page.getByPlaceholder('Password')).toBeVisible({ timeout: 5_000 });
+  // The login page renders with the Google sign-in button
+  await expect(page.getByRole('button', { name: /continue with google/i }))
+    .toBeVisible({ timeout: 10_000 });
 });
 
-test('login succeeds with valid credentials', async ({ page }) => {
-  await login(page);
+test('login page shows error message for failed OAuth', async ({ page }) => {
+  await page.goto('/?login_error=not_authorized');
+  await expect(page.getByRole('button', { name: /continue with google/i }))
+    .toBeVisible({ timeout: 10_000 });
+  // Error text from ERROR_MESSAGES['not_authorized']
+  await expect(page.getByText(/hasn't been set up yet/i)).toBeVisible({ timeout: 5_000 });
+});
 
-  // Should be on the dashboard — login inputs gone
-  await expect(page.getByPlaceholder('Password')).not.toBeVisible();
-  // Dashboard has some content visible
+test('login succeeds via API session injection', async ({ page, request }) => {
+  await login(page, request);
+  // Landed on agents page — Google button gone
+  await expect(page.getByRole('button', { name: /continue with google/i })).not.toBeVisible();
   await expect(page.locator('body')).not.toBeEmpty();
 });
 
 // ── 2. Create manual agent ────────────────────────────────────────────────────
 
-test('create a manual (BYO) agent through the wizard', async ({ page }) => {
-  await login(page);
+test('create a manual (BYO) agent through the wizard', async ({ page, request }) => {
+  await login(page, request);
   await page.goto('/agents/new');
 
   // Agent type chooser — choose Manual
@@ -76,17 +96,11 @@ test('create a manual (BYO) agent through the wizard', async ({ page }) => {
   const agentName = `E2E Manual Agent ${Date.now()}`;
   await page.getByPlaceholder(/my assistant/i).fill(agentName);
 
-  // Advance through remaining steps
-  // Step 0 → Step 1 (Personality)
-  const nextBtn = page.getByRole('button', { name: /next/i });
-  await nextBtn.click();
+  // Step 0 (Basics) → Step 1 (Finish)
+  await page.getByRole('button', { name: /next/i }).click();
 
-  // Step 1 (Personality) → Step 2 (Finish)
-  await nextBtn.click();
-
-  // Last step: submit
-  const submitBtn = page.getByRole('button', { name: /create|finish|submit/i }).last();
-  await submitBtn.click();
+  // Step 1: "Create Manual Agent" button
+  await page.getByRole('button', { name: /create manual agent/i }).click();
 
   // Should navigate to /agents/:id
   await page.waitForURL(/\/agents\/[^/]+$/, { timeout: 15_000 });
@@ -97,8 +111,8 @@ test('create a manual (BYO) agent through the wizard', async ({ page }) => {
 
 // ── 3. Dashboard shows created agent ─────────────────────────────────────────
 
-test('created agents appear in the agent list', async ({ page }) => {
-  await login(page);
+test('created agents appear in the agent list', async ({ page, request }) => {
+  await login(page, request);
 
   // Navigate to the agents / permissions page
   await page.goto('/agents');
@@ -111,75 +125,218 @@ test('created agents appear in the agent list', async ({ page }) => {
   });
 });
 
-// ── 4. Hosted agent deployment with stub Docker ───────────────────────────────
+// ── 4. Hosted agent deployment on Fly.io ─────────────────────────────────────
 
 test(
-  'hosted agent deploys via stub Docker container and gateway responds',
+  'hosted agent deploys to Fly.io and reaches running status',
   async ({ page, request }) => {
     test.skip(!TELEGRAM_TOKEN, 'TEST_TELEGRAM_BOT_TOKEN not set — skipping hosted deploy test');
-    test.skip(!HAS_DOCKER, 'REINS_PROVIDER≠local — skipping Docker deployment test');
+    test.setTimeout(300_000); // Fly machines take up to 90 s to start + polling + UI check
 
-    await login(page);
+    await login(page, request);
 
-    // Use the API directly to create-and-deploy (avoids navigating the full
-    // model-credentials UI step which requires a real API key in the wizard)
     const cookies = await page.context().cookies();
     const sessionCookie = cookies.find((c) => c.name === 'reins_session');
     expect(sessionCookie, 'session cookie must exist after login').toBeDefined();
+    const authHeader = { cookie: `${sessionCookie!.name}=${sessionCookie!.value}` };
 
-    const deployRes = await request.post('/api/agents/create-and-deploy', {
+    // Create and deploy via API — uses Fly.io provider (no Docker needed)
+    const deployRes = await request.post(`${BACKEND_URL}/api/agents/create-and-deploy`, {
       data: {
-        name: `E2E Hosted Agent ${Date.now()}`,
+        name: `E2E Fly Agent ${Date.now()}`,
         telegramToken: TELEGRAM_TOKEN,
+        telegramUserId: TELEGRAM_USER_ID,
         modelProvider: 'anthropic',
         modelName: 'claude-sonnet-4-5',
+        runtime: 'openclaw',
       },
-      headers: {
-        cookie: `${sessionCookie!.name}=${sessionCookie!.value}`,
-      },
+      headers: authHeader,
     });
 
     expect(deployRes.ok(), `Deployment failed: ${await deployRes.text()}`).toBe(true);
 
     const body = await deployRes.json() as {
-      data: {
-        id: string;
-        deployment: {
-          status: string;
-          managementUrl: string;
-          appName: string;
-        };
-      };
+      data: { id: string; deployment: { status: string; appName: string } };
     };
+    const agentId = body.data.id;
 
-    expect(body.data.deployment.status).toBe('running');
+    // create-and-deploy returns 'running' optimistically but the Fly machine is still
+    // booting. Always poll the deployment endpoint until it confirms 'running' from
+    // a live Fly status check (the endpoint polls Fly on each call and updates the DB).
+    // Allow up to 90 s for the machine to reach 'started' state.
+    const POLL_INTERVAL = 5_000;
+    const DEADLINE = Date.now() + 90_000;
+    let finalStatus = 'pending'; // start pessimistic — ignore the optimistic create-and-deploy response
 
-    const managementUrl = body.data.deployment.managementUrl;
-    expect(managementUrl).toBeTruthy();
-
-    // Allow up to 15 s for the stub container to become healthy
-    const POLL_INTERVAL = 1_000;
-    const DEADLINE = Date.now() + 15_000;
-    let healthy = false;
-
-    while (Date.now() < DEADLINE) {
-      try {
-        const health = await fetch(`${managementUrl}/healthz`);
-        if (health.ok) {
-          const json = await health.json() as { status: string };
-          healthy = json.status === 'ok';
-          break;
-        }
-      } catch {
-        // container not up yet, keep polling
-      }
+    while (finalStatus !== 'running' && Date.now() < DEADLINE) {
       await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+      const statusRes = await request.get(`${BACKEND_URL}/api/agents/${agentId}/deployment`, {
+        headers: authHeader,
+      });
+      if (statusRes.ok()) {
+        const s = await statusRes.json() as { data: { status: string } };
+        finalStatus = s.data?.status ?? finalStatus;
+      }
     }
 
-    expect(healthy, `Gateway at ${managementUrl}/healthz never became healthy`).toBe(true);
+    try {
+      expect(finalStatus, `Agent never reached running status (last: ${finalStatus})`).toBe('running');
 
-    // Navigate to the agent detail page and verify UI shows running status
-    await page.goto(`/agents/${body.data.id}`);
-    await expect(page.getByText(/running/i)).toBeVisible({ timeout: 10_000 });
+      // Navigate to the agent detail page and wait for the status badge to show "running".
+      // Reload every 8 s (each load triggers a live Fly status check) for up to 120 s.
+      await page.goto(`/agents/${agentId}`);
+      for (let i = 0; i < 15; i++) {
+        const visible = await page.getByText(/running/i).isVisible().catch(() => false);
+        if (visible) break;
+        await new Promise((r) => setTimeout(r, 8_000));
+        await page.reload();
+      }
+      // Final check after the last reload
+      await expect(page.getByText(/running/i)).toBeVisible({ timeout: 10_000 });
+    } finally {
+      // Always clean up the Fly machine, even on test failure
+      await request.delete(`${BACKEND_URL}/api/agents/${agentId}`, { headers: authHeader });
+    }
+  }
+);
+
+// ── 5. Memory persistence: destroy machine + redeploy + recall ────────────────
+
+/**
+ * Sends a message to a Telegram bot via Telethon and waits for a reply.
+ * Returns the reply text, or throws on timeout.
+ */
+function telethonSend(botUsername: string, message: string, timeoutSecs = 90): string {
+  const result = execFileSync('python3', [
+    '/tmp/tg_send_and_wait_filtered.py',
+    botUsername,
+    message,
+    String(timeoutSecs),
+  ], {
+    env: {
+      ...process.env,
+      TELEGRAM_API_ID: TELETHON_API_ID,
+      TELEGRAM_API_HASH: TELETHON_API_HASH,
+      TELEGRAM_PHONE: TELETHON_PHONE,
+    },
+    timeout: (timeoutSecs + 15) * 1000,
+    encoding: 'utf8',
+  });
+  return result.trim();
+}
+
+test(
+  'agent memory persists across Fly machine destroy and redeploy',
+  async ({ request }) => {
+    const missingTelethon = !TELETHON_API_ID || !TELETHON_API_HASH || !TELETHON_PHONE;
+    test.skip(!SHARED_BOT_USERNAME, 'SHARED_BOT_USERNAME not set — skipping memory persistence test');
+    test.skip(missingTelethon, 'Telethon credentials not set — skipping memory persistence test');
+    test.skip(!FLY_API_TOKEN, 'FLY_API_TOKEN not set — skipping memory persistence test');
+    test.setTimeout(360_000);
+
+    const cookies = await (async () => {
+      const res = await request.post(`${BACKEND_URL}/api/auth/login`, {
+        data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
+      });
+      expect(res.ok(), `Login failed: ${await res.text()}`).toBe(true);
+      const setCookie = res.headers()['set-cookie'] ?? '';
+      const match = setCookie.match(/reins_session=([^;]+)/);
+      expect(match, 'session cookie not found').toBeTruthy();
+      return { cookie: `reins_session=${match![1]}` };
+    })();
+
+    // ── Step 1: Create a Hermes agent (uses shared bot) ──────────────────────
+    const deployRes = await request.post(`${BACKEND_URL}/api/agents/create-and-deploy`, {
+      data: {
+        name: `E2E Memory Test ${Date.now()}`,
+        telegramUserId: TELEGRAM_USER_ID,
+        modelProvider: 'anthropic',
+        modelName: 'claude-sonnet-4-5',
+        runtime: 'hermes',
+      },
+      headers: cookies,
+    });
+    expect(deployRes.ok(), `Deploy failed: ${await deployRes.text()}`).toBe(true);
+    const deployBody = await deployRes.json() as {
+      data: { id: string; deployment: { appName: string; machineId: string } };
+    };
+    const agentId = deployBody.data.id;
+    const flyAppName = deployBody.data.deployment.appName;
+
+    try {
+      // ── Step 2: Wait for machine to be running ────────────────────────────
+      const POLL_INTERVAL = 5_000;
+      const DEADLINE_RUNNING = Date.now() + 120_000;
+      let status = 'pending';
+      while (status !== 'running' && Date.now() < DEADLINE_RUNNING) {
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+        const s = await request.get(`${BACKEND_URL}/api/agents/${agentId}/deployment`, { headers: cookies });
+        if (s.ok()) {
+          const d = await s.json() as { data: { status: string; machineId: string } };
+          status = d.data?.status ?? status;
+        }
+      }
+      expect(status, 'Agent never reached running status').toBe('running');
+
+      // Give Hermes a moment to fully connect to Telegram after startup
+      await new Promise((r) => setTimeout(r, 20_000));
+
+      // ── Step 3: Tell the agent to remember BANANA ─────────────────────────
+      const storeReply = telethonSend(
+        SHARED_BOT_USERNAME,
+        'Please remember this secret code word for me: BANANA. Confirm that you stored it.',
+        60,
+      );
+      expect(storeReply.length, 'No reply to store request').toBeGreaterThan(0);
+
+      // ── Step 4: Get the current machine ID from the deployment record ─────
+      const depRes = await request.get(`${BACKEND_URL}/api/agents/${agentId}/deployment`, { headers: cookies });
+      expect(depRes.ok()).toBe(true);
+      const depData = await depRes.json() as { data: { machineId: string } };
+      const machineId = depData.data.machineId;
+      expect(machineId, 'machineId missing from deployment').toBeTruthy();
+
+      // ── Step 5: Destroy the Fly machine (volume stays intact) ─────────────
+      const destroyRes = await request.delete(
+        `https://api.machines.dev/v1/apps/${flyAppName}/machines/${machineId}?force=true`,
+        { headers: { Authorization: `Bearer ${FLY_API_TOKEN}` } },
+      );
+      // 200 or 204 = destroyed; allow 404 in case it already stopped
+      expect([200, 204, 404], `Destroy returned ${destroyRes.status()}`).toContain(destroyRes.status());
+
+      // ── Step 6: Redeploy via Reins — should recreate with same volume ─────
+      const redeployRes = await request.post(
+        `${BACKEND_URL}/api/agents/${agentId}/redeploy`,
+        { data: {}, headers: cookies },
+      );
+      expect(redeployRes.ok(), `Redeploy failed: ${await redeployRes.text()}`).toBe(true);
+
+      // ── Step 7: Wait for the new machine to reach running ─────────────────
+      const DEADLINE_REDEPLOY = Date.now() + 120_000;
+      let redeployStatus = 'pending';
+      while (redeployStatus !== 'running' && Date.now() < DEADLINE_REDEPLOY) {
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+        const s = await request.get(`${BACKEND_URL}/api/agents/${agentId}/deployment`, { headers: cookies });
+        if (s.ok()) {
+          const d = await s.json() as { data: { status: string } };
+          redeployStatus = d.data?.status ?? redeployStatus;
+        }
+      }
+      expect(redeployStatus, 'Redeployed agent never reached running status').toBe('running');
+
+      // Give the new Hermes machine time to fully reconnect to Telegram
+      await new Promise((r) => setTimeout(r, 20_000));
+
+      // ── Step 8: Ask the agent to recall the secret code word ─────────────
+      const recallReply = telethonSend(
+        SHARED_BOT_USERNAME,
+        'What is the secret code word I asked you to remember?',
+        90,
+      );
+      expect(recallReply.toUpperCase(), 'Agent forgot BANANA after machine recreation').toContain('BANANA');
+    } finally {
+      // Always clean up the Fly app, even on test failure
+      await request.delete(`${BACKEND_URL}/api/agents/${agentId}`, { headers: cookies });
+    }
   }
 );
