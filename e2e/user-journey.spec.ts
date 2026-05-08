@@ -230,6 +230,23 @@ test(
   }
 );
 
+// ── 5-7. Memory persistence tests ────────────────────────────────────────────
+
+/**
+ * Delete any agents whose names start with the given prefix.
+ * Used to clean up leftover shared-bot agents before memory tests run.
+ */
+async function deleteAgentsByPrefix(request: APIRequestContext, prefix: string, headers: { cookie: string }) {
+  const listRes = await request.get(`${BACKEND_URL}/api/agents`, { headers });
+  if (!listRes.ok()) return;
+  const agents = (await listRes.json() as { data: Array<{ id: string; name: string }> }).data ?? [];
+  for (const agent of agents) {
+    if (agent.name.startsWith(prefix)) {
+      await request.delete(`${BACKEND_URL}/api/agents/${agent.id}`, { headers });
+    }
+  }
+}
+
 // ── 5. Memory persistence: destroy machine + redeploy + recall ────────────────
 
 /**
@@ -249,7 +266,7 @@ function telethonSend(botUsername: string, message: string, timeoutSecs = 90): s
       TELEGRAM_API_HASH: TELETHON_API_HASH,
       TELEGRAM_PHONE: TELETHON_PHONE,
     },
-    timeout: (timeoutSecs + 15) * 1000,
+    timeout: (timeoutSecs + 45) * 1000, // extra buffer for process startup
     encoding: 'utf8',
   });
   return result.trim();
@@ -262,9 +279,10 @@ test(
     test.skip(!SHARED_BOT_USERNAME, 'SHARED_BOT_USERNAME not set — skipping memory persistence test');
     test.skip(missingTelethon, 'Telethon credentials not set — skipping memory persistence test');
     test.skip(!FLY_API_TOKEN, 'FLY_API_TOKEN not set — skipping memory persistence test');
-    test.setTimeout(360_000);
+    test.setTimeout(480_000);
 
     const cookies = await loginCookies(request);
+    await deleteAgentsByPrefix(request, 'E2E Memory Test', cookies);
 
     // ── Step 1: Create a Hermes agent (uses shared bot) ──────────────────────
     const deployRes = await request.post(`${BACKEND_URL}/api/agents/create-and-deploy`, {
@@ -286,8 +304,8 @@ test(
 
     try {
       // ── Step 2: Wait for running ──────────────────────────────────────────
-      await waitForStatus(request, agentId, 'running', 120_000, cookies);
-      await new Promise((r) => setTimeout(r, 20_000)); // Hermes connect time
+      await waitForStatus(request, agentId, 'running', 180_000, cookies);
+      await new Promise((r) => setTimeout(r, 45_000)); // Hermes connect time
 
       // ── Step 3: Tell the agent to remember BANANA ─────────────────────────
       const storeReply = telethonSend(
@@ -300,9 +318,9 @@ test(
       // ── Step 4: Get the current machine ID from the deployment record ─────
       const depRes = await request.get(`${BACKEND_URL}/api/agents/${agentId}/deployment`, { headers: cookies });
       expect(depRes.ok()).toBe(true);
-      const depData = await depRes.json() as { data: { machineId: string } };
-      const machineId = depData.data.machineId;
-      expect(machineId, 'machineId missing from deployment').toBeTruthy();
+      const depData = await depRes.json() as { data: { flyMachineId: string } };
+      const machineId = depData.data.flyMachineId;
+      expect(machineId, 'flyMachineId missing from deployment').toBeTruthy();
 
       // ── Step 5: Destroy the Fly machine (volume stays intact) ─────────────
       const destroyRes = await request.delete(
@@ -320,7 +338,7 @@ test(
       expect(redeployRes.ok(), `Redeploy failed: ${await redeployRes.text()}`).toBe(true);
 
       await waitForStatus(request, agentId, 'running', 120_000, cookies);
-      await new Promise((r) => setTimeout(r, 20_000)); // new machine connect time
+      await new Promise((r) => setTimeout(r, 45_000)); // new machine connect time
 
       // ── Step 7: Ask the agent to recall BANANA ────────────────────────────
       const recallReply = telethonSend(
@@ -343,9 +361,10 @@ test(
     const missingTelethon = !TELETHON_API_ID || !TELETHON_API_HASH || !TELETHON_PHONE;
     test.skip(!SHARED_BOT_USERNAME, 'SHARED_BOT_USERNAME not set');
     test.skip(missingTelethon, 'Telethon credentials not set');
-    test.setTimeout(360_000);
+    test.setTimeout(420_000);
 
     const cookies = await loginCookies(request);
+    await deleteAgentsByPrefix(request, 'E2E Redeploy Memory', cookies);
 
     // ── Step 1: Create Hermes agent ───────────────────────────────────────
     const deployRes = await request.post(`${BACKEND_URL}/api/agents/create-and-deploy`, {
@@ -362,8 +381,8 @@ test(
     const agentId = ((await deployRes.json()) as { data: { id: string } }).data.id;
 
     try {
-      await waitForStatus(request, agentId, 'running', 120_000, cookies);
-      await new Promise((r) => setTimeout(r, 20_000)); // Hermes connect time
+      await waitForStatus(request, agentId, 'running', 180_000, cookies);
+      await new Promise((r) => setTimeout(r, 45_000)); // Hermes connect time
 
       // ── Step 2: Store KIWI ────────────────────────────────────────────────
       const storeReply = telethonSend(
@@ -404,9 +423,10 @@ test(
     const missingTelethon = !TELETHON_API_ID || !TELETHON_API_HASH || !TELETHON_PHONE;
     test.skip(!SHARED_BOT_USERNAME, 'SHARED_BOT_USERNAME not set');
     test.skip(missingTelethon, 'Telethon credentials not set');
-    test.setTimeout(360_000);
+    test.setTimeout(420_000);
 
     const cookies = await loginCookies(request);
+    await deleteAgentsByPrefix(request, 'E2E Stop-Start Memory', cookies);
 
     // ── Step 1: Create Hermes agent ───────────────────────────────────────
     const deployRes = await request.post(`${BACKEND_URL}/api/agents/create-and-deploy`, {
