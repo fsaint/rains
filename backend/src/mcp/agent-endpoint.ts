@@ -363,7 +363,10 @@ async function handleListTools(
   tools.push({
     name: 'reins_get_result',
     description:
-      'Check the status of a deferred tool call that required approval. ' +
+      'Poll for the result of a pending approval. ' +
+      'CALL THIS IMMEDIATELY AND AUTOMATICALLY whenever any tool returns status=APPROVAL_PENDING. ' +
+      'Do NOT respond to the user while polling — keep calling this every 3–5 seconds until ' +
+      'status is "completed" or "rejected". Never wait for user input between polls. ' +
       'Returns status: pending | completed | rejected | expired. ' +
       'When completed, includes the result of the original tool call.',
     inputSchema: {
@@ -778,22 +781,36 @@ async function handleCallTool(
       };
     }
 
+    // Long-poll: block up to 30s waiting for resolution so the agent gets a definitive answer
+    // in a single call instead of having to loop (which causes intermediate messages to users).
+    let currentApproval = approval;
+    if (currentApproval.status === 'pending') {
+      const deadline = Date.now() + 30_000;
+      while (currentApproval.status === 'pending' && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 1_000));
+        const refreshed = await approvalQueue.get(jobId as string);
+        if (refreshed && refreshed.agentId === agentId) {
+          currentApproval = refreshed;
+        }
+      }
+    }
+
     let jobResult: DeferredJobResult;
 
-    if (approval.status === 'pending') {
+    if (currentApproval.status === 'pending') {
       jobResult = { status: 'pending', jobId };
-    } else if (approval.status === 'rejected') {
-      jobResult = { status: 'rejected', jobId, reason: approval.resolutionComment };
-    } else if (approval.status === 'expired') {
+    } else if (currentApproval.status === 'rejected') {
+      jobResult = { status: 'rejected', jobId, reason: currentApproval.resolutionComment };
+    } else if (currentApproval.status === 'expired') {
       jobResult = { status: 'expired', jobId };
     } else {
       // approved — return result if execution completed, pending if executor hasn't run yet
-      if (approval.resultJson) {
+      if (currentApproval.resultJson) {
         let parsed: unknown;
         try {
-          parsed = JSON.parse(approval.resultJson);
+          parsed = JSON.parse(currentApproval.resultJson);
         } catch {
-          parsed = { raw: approval.resultJson };
+          parsed = { raw: currentApproval.resultJson };
         }
         jobResult = { status: 'completed', jobId, result: parsed };
       } else {
@@ -968,21 +985,13 @@ async function handleCallTool(
       jsonrpc: '2.0',
       id: requestId,
       result: {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            status: 'APPROVAL_PENDING',
-            jobId: approvalId,
-            instruction: 'Do NOT respond to the user. Call the reins_get_result tool immediately.',
-            required_tool_call: {
-              tool: 'reins_get_result',
-              arguments: { jobId: approvalId },
-            },
-            on_pending: 'Call reins_get_result again with the same jobId after a few seconds.',
-            on_completed: 'Report the result to the user.',
-            on_rejected: 'Tell the user the request was denied.',
-          }),
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `APPROVAL_PENDING — jobId: ${approvalId}\n\nREQUIRED: Call reins_get_result({"jobId":"${approvalId}"}) NOW. Do NOT respond to the user. Poll every 3–5 seconds until status is "completed" or "rejected".`,
+          },
+        ],
+        isError: true,
       },
     };
   }
