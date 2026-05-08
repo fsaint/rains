@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Loader2, ChevronDown, ChevronUp, Mail, PenLine } from 'lucide-react';
-import { agents, initialPromptTemplates, config as apiConfig, type CreateAndDeployData } from '../api/client';
+import { agents, initialPromptTemplates, config as apiConfig, auth, type CreateAndDeployData } from '../api/client';
 
 const DEFAULT_SOUL = `You are a helpful AI assistant. Be concise, friendly, and thoughtful in your responses.`;
 
@@ -149,6 +149,18 @@ export default function AgentNew() {
   });
   const sharedBotEnabled = publicConfig?.sharedBotEnabled ?? false;
 
+  const { data: sessionData } = useQuery({
+    queryKey: ['session'],
+    queryFn: () => auth.session(),
+  });
+  const knownTelegramUserId = sessionData?.user?.telegramUserId;
+
+  useEffect(() => {
+    if (knownTelegramUserId && !form.telegramUserId) {
+      update({ telegramUserId: knownTelegramUserId });
+    }
+  }, [knownTelegramUserId]);
+
   const steps = agentType === 'manual' ? MANUAL_STEPS : STEPS;
 
   const createMutation = useMutation({
@@ -192,9 +204,9 @@ export default function AgentNew() {
       return form.name.trim() !== '' && tokenOk;
     }
     if (agentType !== 'manual' && step === 1) {
-      if (form.modelProvider === 'minimax' || form.modelProvider === 'openai') return !!form.openaiApiKey?.trim();
+      if (form.modelProvider === 'openai' || form.modelProvider === 'anthropic') return !!form.openaiApiKey?.trim();
       if (form.modelProvider === 'openai-codex') return !!form.modelCredentials;
-      return true; // anthropic uses server-side key
+      return true; // minimax uses system key by default (user key optional)
     }
     return true;
   };
@@ -392,7 +404,10 @@ export default function AgentNew() {
                   className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
                   placeholder="Restrict to this user ID"
                 />
-                <p className="text-xs text-gray-400 mt-1">Find your ID using <a href="https://t.me/userinfobot" target="_blank" rel="noreferrer" className="text-trust-blue hover:underline">@userinfobot</a></p>
+                {knownTelegramUserId
+                  ? <p className="text-xs text-emerald-600 mt-1">Autofilled from your linked Telegram account</p>
+                  : <p className="text-xs text-gray-400 mt-1">Find your ID using <a href="https://t.me/userinfobot" target="_blank" rel="noreferrer" className="text-trust-blue hover:underline">@userinfobot</a></p>
+                }
               </div>
             </>
           )}
@@ -408,24 +423,26 @@ export default function AgentNew() {
             <button
               type="button"
               onClick={() => update({ runtime: 'openclaw' })}
-              className={`p-4 rounded-xl border-2 text-left transition-all ${
+              className={`relative p-4 rounded-xl border-2 text-left transition-all ${
                 form.runtime !== 'hermes'
                   ? 'border-trust-blue bg-trust-blue/5'
                   : 'border-gray-200 hover:border-gray-300'
               }`}
             >
+              <span className="absolute top-2 right-2 text-[10px] font-semibold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full">Recommended</span>
               <p className="font-medium text-reins-navy">OpenClaw</p>
               <p className="text-xs text-gray-400 mt-1">Full-featured runtime with browser, plugins, and code execution.</p>
             </button>
             <button
               type="button"
               onClick={() => update({ runtime: 'hermes', modelProvider: form.modelProvider === 'openai-codex' ? 'anthropic' : form.modelProvider })}
-              className={`p-4 rounded-xl border-2 text-left transition-all ${
+              className={`relative p-4 rounded-xl border-2 text-left transition-all ${
                 form.runtime === 'hermes'
                   ? 'border-trust-blue bg-trust-blue/5'
                   : 'border-gray-200 hover:border-gray-300'
               }`}
             >
+              <span className="absolute top-2 right-2 text-[10px] font-semibold bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded-full">Unstable</span>
               <p className="font-medium text-reins-navy">Hermes</p>
               <p className="text-xs text-gray-400 mt-1">Lightweight Python agent with memory, skills, and 15+ messaging platforms.</p>
             </button>
@@ -449,25 +466,27 @@ export default function AgentNew() {
             </button>
             <button
               type="button"
-              onClick={() => update({ modelProvider: 'anthropic', modelName: 'claude-sonnet-4-5' })}
-              className={`p-4 rounded-xl border-2 text-left transition-all ${
+              onClick={() => update({ modelProvider: 'anthropic', modelName: 'claude-sonnet-4-5', openaiApiKey: '' })}
+              className={`relative p-4 rounded-xl border-2 text-left transition-all ${
                 form.modelProvider === 'anthropic'
                   ? 'border-trust-blue bg-trust-blue/5'
                   : 'border-gray-200 hover:border-gray-300'
               }`}
             >
+              <span className="absolute top-2 right-2 text-[10px] font-semibold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">Expensive</span>
               <p className="font-medium text-reins-navy">Anthropic Claude</p>
-              <p className="text-xs text-gray-400 mt-1">Uses the server's Anthropic API key</p>
+              <p className="text-xs text-gray-400 mt-1">Requires your Anthropic API key</p>
             </button>
             <button
               type="button"
               onClick={() => update({ modelProvider: 'openai', modelName: 'gpt-4.1', openaiApiKey: '' })}
-              className={`p-4 rounded-xl border-2 text-left transition-all ${
+              className={`relative p-4 rounded-xl border-2 text-left transition-all ${
                 form.modelProvider === 'openai'
                   ? 'border-trust-blue bg-trust-blue/5'
                   : 'border-gray-200 hover:border-gray-300'
               }`}
             >
+              <span className="absolute top-2 right-2 text-[10px] font-semibold bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full">Wrong Choice</span>
               <p className="font-medium text-reins-navy">OpenAI</p>
               <p className="text-xs text-gray-400 mt-1">Uses your OpenAI API key</p>
             </button>
@@ -488,6 +507,19 @@ export default function AgentNew() {
                   <option value="claude-opus-4-6">Claude Opus 4.6</option>
                   <option value="claude-haiku-4-5">Claude Haiku 4.5</option>
                 </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
+                  Anthropic API Key *
+                </label>
+                <input
+                  type="password"
+                  value={form.openaiApiKey || ''}
+                  onChange={(e) => update({ openaiApiKey: e.target.value })}
+                  placeholder="sk-ant-api03-..."
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-mono focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
+                />
+                <p className="text-xs text-gray-400 mt-1">Get your key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" className="text-trust-blue hover:underline">console.anthropic.com</a></p>
               </div>
             </div>
           )}
@@ -556,23 +588,20 @@ export default function AgentNew() {
                   <option value="MiniMax-M2.5-highspeed">MiniMax M2.5 Highspeed</option>
                 </select>
               </div>
+              <div className="rounded-lg bg-emerald-50 border border-emerald-100 px-4 py-3 text-sm text-emerald-700">
+                Platform API key will be used — no key required.
+              </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
-                  MiniMax API Key
+                  MiniMax API Key <span className="normal-case font-normal text-gray-400">(optional — use your own)</span>
                 </label>
                 <input
                   type="password"
                   value={form.openaiApiKey || ''}
                   onChange={(e) => update({ openaiApiKey: e.target.value })}
-                  placeholder="sk-cp-..."
+                  placeholder="sk-cp-... (leave blank to use platform key)"
                   className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-mono focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
                 />
-                <p className="text-xs text-gray-400 mt-1">
-                  Don't have an account?{' '}
-                  <a href="https://platform.minimax.io/user/register" target="_blank" rel="noreferrer" className="text-trust-blue hover:underline">Sign up at platform.minimax.io</a>
-                  {' '}· Then get your key at{' '}
-                  <a href="https://platform.minimax.io/user/keys" target="_blank" rel="noreferrer" className="text-trust-blue hover:underline">API Keys</a>
-                </p>
               </div>
             </div>
           )}

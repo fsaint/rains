@@ -130,7 +130,7 @@ export async function registerAuth(app: FastifyInstance) {
 
     // Fetch current user info
     const result = await client.execute({
-      sql: `SELECT id, email, name, role, telegram_chat_id FROM users WHERE id = ? AND status = 'active'`,
+      sql: `SELECT id, email, name, role, telegram_chat_id, telegram_user_id FROM users WHERE id = ? AND status = 'active'`,
       args: [session.userId],
     });
 
@@ -148,6 +148,7 @@ export async function registerAuth(app: FastifyInstance) {
           name: user.name,
           role: user.role,
           telegramLinked: !!user.telegram_chat_id,
+          telegramUserId: user.telegram_user_id ?? undefined,
         },
       },
     };

@@ -364,6 +364,7 @@ export interface User {
   name: string;
   role: 'admin' | 'user';
   telegramLinked?: boolean;
+  telegramUserId?: string;
 }
 
 export interface AuthResponse {
