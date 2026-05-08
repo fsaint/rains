@@ -522,6 +522,14 @@ export async function initializeDatabase() {
     END $$
   `;
 
+  // Add fly_volume_id for per-agent persistent state (Fly volumes)
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS fly_volume_id TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
+
   // Add path_rules column for Drive path-based permissions
   await sql`
     DO $$ BEGIN

@@ -3207,7 +3207,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         : null;
 
       await client.execute({
-        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_bot_username, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openai_api_key, telegram_groups_json, model_credentials, mcp_config_json, openclaw_webhook_url, webhook_relay_secret, runtime, initial_prompt, is_shared_bot, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_bot_username, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openai_api_key, telegram_groups_json, model_credentials, mcp_config_json, openclaw_webhook_url, webhook_relay_secret, runtime, initial_prompt, is_shared_bot, fly_volume_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           deploymentId, agentId,
           result.appName, result.machineId, 'running', result.managementUrl,
@@ -3222,6 +3222,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           body.runtime ?? 'openclaw',
           body.initialPrompt ?? null,
           isSharedBot ? 1 : 0,
+          result.volumeId ?? null,
           now, now,
         ],
       });
@@ -3857,7 +3858,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         try { newTelegramGroups = JSON.parse(deployment.telegram_groups_json as string); } catch { /* ignore */ }
       }
 
-      const managementUrl = await provider.redeploy(
+      const { managementUrl, newMachineId } = await provider.redeploy(
         deployment.fly_app_name as string,
         deployment.fly_machine_id as string,
         {
@@ -3874,6 +3875,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           modelCredentials: newModelCredentials,
           webhookRelaySecret: deployment.webhook_relay_secret as string | undefined,
           runtime: ((deployment.runtime as string | undefined) ?? 'openclaw') as 'openclaw' | 'hermes',
+          volumeId: (deployment.fly_volume_id as string | undefined) ?? undefined,
+          isSharedBot: !!(deployment.is_shared_bot as number | undefined),
         }
       );
 
@@ -3883,9 +3886,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
       const now = new Date().toISOString();
       await client.execute({
-        sql: `UPDATE deployed_agents SET status = 'running', management_url = ?, telegram_token = COALESCE(?, telegram_token), telegram_user_id = COALESCE(?, telegram_user_id), soul_md = COALESCE(?, soul_md), model_provider = ?, model_name = ?, openai_api_key = CASE WHEN ? THEN ? ELSE openai_api_key END, telegram_groups_json = CASE WHEN ? THEN ? ELSE telegram_groups_json END, model_credentials = COALESCE(?, model_credentials), updated_at = ? WHERE id = ?`,
+        sql: `UPDATE deployed_agents SET status = 'running', management_url = ?, fly_machine_id = COALESCE(?, fly_machine_id), telegram_token = COALESCE(?, telegram_token), telegram_user_id = COALESCE(?, telegram_user_id), soul_md = COALESCE(?, soul_md), model_provider = ?, model_name = ?, openai_api_key = CASE WHEN ? THEN ? ELSE openai_api_key END, telegram_groups_json = CASE WHEN ? THEN ? ELSE telegram_groups_json END, model_credentials = COALESCE(?, model_credentials), updated_at = ? WHERE id = ?`,
         args: [
           managementUrl,
+          newMachineId ?? null,
           body?.telegramToken ?? null,
           body?.telegramUserId ?? null,
           body?.soulMd ?? null,
@@ -4575,7 +4579,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       } catch { /* ignore malformed json */ }
     }
 
-    await provider.redeploy(
+    const { newMachineId: autoNewMachineId } = await provider.redeploy(
       deployment.fly_app_name as string,
       deployment.fly_machine_id as string,
       {
@@ -4589,12 +4593,16 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         modelName: deployment.model_name as string | undefined,
         openaiApiKey: deployment.openai_api_key as string | undefined,
         modelCredentials: deployment.model_credentials as string | undefined,
+        volumeId: (deployment.fly_volume_id as string | undefined) ?? undefined,
+        webhookRelaySecret: deployment.webhook_relay_secret as string | undefined,
+        runtime: ((deployment.runtime as string | undefined) ?? 'openclaw') as 'openclaw' | 'hermes',
+        isSharedBot: !!(deployment.is_shared_bot as number | undefined),
       }
     );
 
     await client.execute({
-      sql: `UPDATE deployed_agents SET status = 'running', updated_at = ? WHERE id = ?`,
-      args: [new Date().toISOString(), deployment.id as string],
+      sql: `UPDATE deployed_agents SET status = 'running', fly_machine_id = COALESCE(?, fly_machine_id), updated_at = ? WHERE id = ?`,
+      args: [autoNewMachineId ?? null, new Date().toISOString(), deployment.id as string],
     });
   }
 

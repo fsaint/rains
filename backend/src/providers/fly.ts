@@ -124,6 +124,20 @@ async function allocateIps(appName: string) {
   );
 }
 
+export async function createVolume(appName: string, region: string, sizeGb = 1): Promise<string> {
+  const res = await flyFetch(`/apps/${appName}/volumes`, {
+    method: 'POST',
+    body: JSON.stringify({
+      name: 'agent_state',
+      region: region || 'iad',
+      size_gb: sizeGb,
+      encrypted: false,
+    }),
+  });
+  const vol = (await res.json()) as { id: string };
+  return vol.id;
+}
+
 export async function createApp(instanceId: string): Promise<string> {
   // Keep only lowercase alphanumeric chars (no dashes/underscores) to avoid double-dash
   // when the nanoid starts with '-' or '_', which Fly rejects as an invalid app name.
@@ -162,6 +176,7 @@ export interface CreateMachineOpts {
   runtime?: string;
   initialPrompt?: string;
   isSharedBot?: boolean;
+  volumeId?: string;
 }
 
 export interface TopicPrompt {
@@ -248,6 +263,8 @@ async function buildMachineConfig(opts: CreateMachineOpts) {
       } : {}),
       ...(opts.initialPrompt ? { INITIAL_PROMPT: opts.initialPrompt } : {}),
     },
+    // OpenClaw runs as 'node' user. Mount only /agents to avoid hiding pre-installed plugins.
+    ...(opts.volumeId ? { mounts: [{ volume: opts.volumeId, path: '/home/node/.openclaw/agents' }] } : {}),
     services: [
       {
         ports: [{ port: 443, handlers: ['tls', 'http'] }],
@@ -315,6 +332,8 @@ async function buildHermesMachineConfig(opts: CreateMachineOpts) {
       USAGE_CALLBACK_URL: `${reinsUrl}/api/webhooks/usage`,
       ...(opts.initialPrompt ? { INITIAL_PROMPT: opts.initialPrompt } : {}),
     },
+    // Hermes runs as root. Full ~/.hermes mount is safe (no pre-installed files there).
+    ...(opts.volumeId ? { mounts: [{ volume: opts.volumeId, path: '/root/.hermes' }] } : {}),
     services: [
       {
         ports: [{ port: 443, handlers: ['tls', 'http'] }],

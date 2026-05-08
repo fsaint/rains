@@ -220,6 +220,7 @@ export const deployedAgents = pgTable('deployed_agents', {
   isManual: integer('is_manual').default(0),
   initialPrompt: text('initial_prompt'),
   hasOnboarded: integer('has_onboarded').default(0),
+  flyVolumeId: text('fly_volume_id'),
   createdAt: text('created_at').default(sql`now()`).notNull(),
   updatedAt: text('updated_at').default(sql`now()`).notNull(),
 });

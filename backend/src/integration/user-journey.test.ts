@@ -144,6 +144,7 @@ describe('User Journey — login → create agent → deploy', () => {
       machineId: 'stub-machine-id',
       appName: 'reins-stub-app',
       managementUrl: 'http://localhost:18789',
+      volumeId: null,
     });
 
     // Telegram validation: mock global fetch for the /getMe call
