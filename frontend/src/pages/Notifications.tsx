@@ -164,7 +164,7 @@ export default function Notifications() {
           <div className="flex-1">
             <h2 className="text-white font-semibold text-lg">iOS Push Notifications</h2>
             <p className="text-gray-400 text-sm mt-1">
-              Automatically enabled when you install the Reins iOS app on your device. No configuration needed here.
+              Automatically enabled when you install the AgentHelm iOS app on your device. No configuration needed here.
             </p>
           </div>
         </div>

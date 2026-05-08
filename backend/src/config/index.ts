@@ -104,6 +104,10 @@ const ConfigSchema = z.object({
   reisTelegramBotToken: z.string().optional(),
   reisTelegramWebhookSecret: z.string().optional(),
 
+  // Shared Telegram bot (pilot mode — routes messages by sender user ID)
+  sharedBotToken: z.string().optional(),
+  sharedBotWebhookSecret: z.string().optional(),
+
   // Onboarding bot
   onboardingApiKey: z.string().optional(),
   onboardingBotWebhookUrl: z.string().optional(),
@@ -159,6 +163,9 @@ function loadConfig(): Config {
     // Telegram
     reisTelegramBotToken: process.env.REINS_TELEGRAM_BOT_TOKEN,
     reisTelegramWebhookSecret: process.env.REINS_TELEGRAM_WEBHOOK_SECRET,
+    // Shared bot
+    sharedBotToken: process.env.SHARED_BOT_TOKEN,
+    sharedBotWebhookSecret: process.env.SHARED_BOT_WEBHOOK_SECRET,
     // Onboarding bot
     onboardingApiKey: process.env.ONBOARDING_API_KEY,
     onboardingBotWebhookUrl: process.env.ONBOARDING_BOT_WEBHOOK_URL ?? yaml.onboarding?.bot_webhook_url,

@@ -8,6 +8,7 @@
 
 import { db, client } from '../db/index.js';
 import { agents, agentServiceAccess, agentServiceCredentials, agentServiceInstances, credentials } from '../db/schema.js';
+import { updateMachineEnv } from '../providers/fly.js';
 import { eq, and, inArray } from 'drizzle-orm';
 import { serverManager, type ToolContext } from './server-manager.js';
 import {
@@ -376,6 +377,26 @@ async function handleListTools(
       required: ['jobId'],
     },
   });
+
+  // Inject reins__mark_onboarded if this agent has not yet completed first-run setup
+  const deploymentRow = await client.execute({
+    sql: `SELECT id, fly_app_name, fly_machine_id, has_onboarded FROM deployed_agents WHERE agent_id = ? ORDER BY created_at DESC LIMIT 1`,
+    args: [agentId],
+  });
+  const deployment = deploymentRow.rows[0];
+  if (deployment && !deployment.has_onboarded) {
+    tools.push({
+      name: 'reins__mark_onboarded',
+      description:
+        'Signal that first-run setup is complete. Call this after finishing all initial setup tasks. ' +
+        'Removes first-run instructions from future restarts.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {},
+        required: [],
+      },
+    });
+  }
 
   return {
     jsonrpc: '2.0',
@@ -784,6 +805,40 @@ async function handleCallTool(
       jsonrpc: '2.0', id: requestId,
       result: {
         content: [{ type: 'text', text: JSON.stringify(jobResult) }],
+      },
+    };
+  }
+
+  // Built-in tool: reins__mark_onboarded — signal first-run setup complete
+  if (toolName === 'reins__mark_onboarded') {
+    const depRow = await client.execute({
+      sql: `SELECT id, fly_app_name, fly_machine_id FROM deployed_agents WHERE agent_id = ? ORDER BY created_at DESC LIMIT 1`,
+      args: [agentId],
+    });
+    const dep = depRow.rows[0];
+    if (dep) {
+      const now = new Date().toISOString();
+      await client.execute({
+        sql: `UPDATE deployed_agents SET has_onboarded = 1, initial_prompt = NULL, updated_at = ? WHERE id = ?`,
+        args: [now, dep.id as string],
+      });
+      // Remove INITIAL_PROMPT env var from the Fly machine so it doesn't reappear on restart
+      if (dep.fly_app_name && dep.fly_machine_id) {
+        try {
+          await updateMachineEnv(
+            dep.fly_app_name as string,
+            dep.fly_machine_id as string,
+            { INITIAL_PROMPT: undefined }
+          );
+        } catch (err) {
+          console.warn('[mark_onboarded] updateMachineEnv failed (non-fatal):', err instanceof Error ? err.message : err);
+        }
+      }
+    }
+    return {
+      jsonrpc: '2.0', id: requestId,
+      result: {
+        content: [{ type: 'text', text: 'First-run setup marked complete. These instructions will not appear again.' }],
       },
     };
   }

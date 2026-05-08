@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 // Load the shared project-level YAML config for this environment (non-secrets).
 // env vars always override YAML values.
-function loadSharedYaml(env: string): { onboarding?: { bot_webhook_url?: string; notify_bot_username?: string } } {
+function loadSharedYaml(env: string): { onboarding?: { bot_webhook_url?: string; notify_bot_username?: string; shared_bot_enabled?: boolean } } {
   const candidates = [
     resolve(import.meta.dirname, `../../../config/${env}.yaml`),
     resolve(import.meta.dirname, `../../config/${env}.yaml`),
@@ -37,6 +37,9 @@ const ConfigSchema = z.object({
   // PostHog analytics
   posthogApiKey: z.string().optional(),
   posthogHost: z.string().default('https://us.i.posthog.com'),
+
+  // Shared bot mode — skip BotFather step during onboarding
+  sharedBotEnabled: z.boolean().default(false),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -57,6 +60,9 @@ function loadConfig(): Config {
     dashboardUrl: process.env.DASHBOARD_URL,
     posthogApiKey: process.env.POSTHOG_API_KEY,
     posthogHost: process.env.POSTHOG_HOST,
+    sharedBotEnabled: process.env.SHARED_BOT_ENABLED !== undefined
+      ? process.env.SHARED_BOT_ENABLED === 'true'
+      : (sharedYaml.onboarding?.shared_bot_enabled ?? false),
   };
 
   const result = ConfigSchema.safeParse(raw);

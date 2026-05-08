@@ -17,6 +17,12 @@ if [ -n "$SOUL_MD" ]; then
   echo "$SOUL_MD" > "$WORKSPACE_DIR/SOUL.md"
 fi
 
+# Append first-run instructions if this is the agent's first boot
+if [ -n "$INITIAL_PROMPT" ]; then
+  printf '\n\n' >> "$WORKSPACE_DIR/SOUL.md"
+  printf '%s' "$INITIAL_PROMPT" >> "$WORKSPACE_DIR/SOUL.md"
+fi
+
 # Append container version info so the agent knows what image it's running in
 {
   echo ""

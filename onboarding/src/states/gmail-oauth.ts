@@ -8,7 +8,7 @@ interface ApiError extends Error {
   status?: number;
 }
 
-export async function handleGmailOauth(ctx: Context, applicant: Applicant): Promise<'minimax_key' | void> {
+export async function handleGmailOauth(ctx: Context, applicant: Applicant): Promise<'notify_bot' | void> {
   try {
     const { url } = await generateOAuthLink(Number(applicant.telegram_user_id));
     const keyboard = new InlineKeyboard().url('Connect Gmail →', url);
@@ -18,7 +18,7 @@ export async function handleGmailOauth(ctx: Context, applicant: Applicant): Prom
     if (apiErr.status === 409) {
       // Already linked — advance state machine
       await ctx.reply('Your Gmail is already connected. Continuing...');
-      return 'minimax_key';
+      return 'notify_bot';
     } else {
       console.log('[gmail-oauth] error generating OAuth link:', err instanceof Error ? err.stack : err);
       await ctx.reply(HELM.error);

@@ -1,7 +1,10 @@
 import Fastify from 'fastify';
-import type { Bot } from 'grammy';
+import type { Bot, Context } from 'grammy';
 import { config } from './config.js';
 import { getApplicant, updateApplicant } from './db.js';
+import { HELM } from './persona.js';
+import { pollForNotifyChatId } from './states/notify-bot.js';
+import { handleMessage } from './state-machine.js';
 
 interface OAuthCompleteBody {
   telegramUserId?: number;
@@ -32,12 +35,30 @@ export function createWebhookServer(bot: Bot) {
     }
 
     if (body.success) {
-      await updateApplicant(body.telegramUserId, { state: 'minimax_key' });
-      await bot.api.sendMessage(body.telegramUserId, 'Gmail connected.');
-      await bot.api.sendMessage(
-        body.telegramUserId,
-        'Head to platform.minimax.io — create an account and grab your API key. Paste it here when you have it.'
-      );
+      await updateApplicant(body.telegramUserId, { state: 'notify_bot' });
+      await bot.api.sendMessage(body.telegramUserId, HELM.gmailConnected);
+      await bot.api.sendMessage(body.telegramUserId, HELM.notifyBotInstructions);
+
+      // Auto-advance: poll for notify_chat_id then run provisioning → validating → done
+      // without waiting for the user to send another message to the onboarding bot.
+      const userId = body.telegramUserId;
+      const sendMsg = (text: string, opts?: object) =>
+        bot.api.sendMessage(String(userId), text, opts as never);
+      void pollForNotifyChatId(userId, () => sendMsg(HELM.notifyBotTimeout))
+        .then(async () => {
+          // Guard: only advance if still in notify_bot state (not already moved forward
+          // by a concurrent handleNotifyBot call from the user messaging the onboarding bot)
+          const current = await getApplicant(userId);
+          if (current?.state !== 'notify_bot') return;
+          await updateApplicant(userId, { state: 'provisioning' });
+          const fakeCtx = {
+            from: { id: userId, username: applicant.username ?? undefined },
+            message: { text: '' },
+            reply: sendMsg,
+          } as unknown as Context;
+          await handleMessage(fakeCtx);
+        })
+        .catch(err => console.error('[webhook-server] post-oauth state machine error:', err));
     } else {
       await bot.api.sendMessage(
         body.telegramUserId,

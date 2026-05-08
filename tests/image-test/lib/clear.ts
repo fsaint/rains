@@ -44,7 +44,7 @@ function getFlyToken(): string {
 }
 
 function getTestOrg(): string {
-  return process.env.FLY_TEST_ORG || 'development-808';
+  return process.env.FLY_TEST_ORG || 'personal';
 }
 
 // ---------------------------------------------------------------------------

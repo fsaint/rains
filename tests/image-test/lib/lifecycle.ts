@@ -13,7 +13,7 @@ function getFlyToken(): string {
 }
 
 function getTestOrg(): string {
-  return process.env.FLY_TEST_ORG || 'reins-test';
+  return process.env.FLY_TEST_ORG || 'personal';
 }
 
 function randomSuffix(): string {

@@ -8,6 +8,7 @@
 
 import { client } from '../db/index.js';
 import { createMagicLinkToken } from '../auth/index.js';
+import { config } from '../config/index.js';
 import type { ApprovalRequest } from '@reins/shared';
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -33,11 +34,11 @@ const PROVIDER_KEY_RENEWAL_URL: Record<string, string> = {
   minimax: 'https://platform.minimax.io',
 };
 
-const BOT_TOKEN = process.env.REINS_TELEGRAM_BOT_TOKEN;
-const WEBHOOK_SECRET = process.env.REINS_TELEGRAM_WEBHOOK_SECRET;
+const BOT_TOKEN = config.reisTelegramBotToken;
+const WEBHOOK_SECRET = config.reisTelegramWebhookSecret;
 const WEBHOOK_URL =
   process.env.REINS_TELEGRAM_WEBHOOK_URL ||
-  (process.env.REINS_PUBLIC_URL ? `${process.env.REINS_PUBLIC_URL}/api/webhooks/telegram` : null);
+  (config.publicUrl ? `${config.publicUrl}/api/webhooks/telegram` : null);
 
 const LINK_CODE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const LINK_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // unambiguous chars
@@ -546,7 +547,7 @@ export class TelegramNotifier {
       .filter(Boolean)
       .join('\n');
 
-    const dashboardUrl = process.env.REINS_DASHBOARD_URL ?? 'https://reins.btv.pw';
+    const dashboardUrl = config.dashboardUrl;
     const keyboard: Array<Array<{ text: string; url: string }>> = renewalUrl
       ? [
           [{ text: '🔑 Get new API key', url: renewalUrl }],
@@ -621,7 +622,7 @@ export class TelegramNotifier {
 
   private buildMagicLinkUrl(userId: string, approvalId: string): string {
     const token = createMagicLinkToken(userId, approvalId);
-    const dashboardUrl = process.env.REINS_DASHBOARD_URL ?? 'https://reins.btv.pw';
+    const dashboardUrl = config.dashboardUrl;
     return `${dashboardUrl}/api/auth/magic?t=${token}`;
   }
 

@@ -70,6 +70,22 @@ if (telegramNotifier.isConfigured()) {
   app.log.info('Telegram bot initialization started');
 }
 
+// Register shared bot webhook (non-fatal if not configured or fails)
+if (config.sharedBotToken) {
+  const reinsUrl = config.publicUrl || config.dashboardUrl;
+  const webhookUrl = `${reinsUrl}/api/webhooks/shared-bot`;
+  const params: Record<string, string> = { url: webhookUrl, allowed_updates: JSON.stringify(['message', 'edited_message', 'callback_query', 'my_chat_member']) };
+  if (config.sharedBotWebhookSecret) params.secret_token = config.sharedBotWebhookSecret;
+  fetch(`https://api.telegram.org/bot${config.sharedBotToken}/setWebhook`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+    .then((res) => res.json())
+    .then((data) => app.log.info(`Shared bot webhook set: ${webhookUrl} — ${JSON.stringify(data)}`))
+    .catch((err) => app.log.error('Shared bot setWebhook failed:', err));
+}
+
 // Graceful shutdown
 const shutdown = async () => {
   app.log.info('Shutting down...');

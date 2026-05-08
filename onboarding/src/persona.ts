@@ -1,7 +1,7 @@
 import { config } from './config.js';
 
 export const HELM = {
-  greeting: "I'm Helm. AgentHelm gives you a personal AI agent that lives in Telegram and actually does things — think of it as hiring an intern who never sleeps and never asks for equity.\n\nBefore we get started, here's what you'll need:\n• A Google account to connect (so your agent can handle email)\n• A MiniMax API key from https://platform.minimax.io/subscribe/token-plan — or an Anthropic key if you're feeling bougie\n• A Telegram bot token from @BotFather\n\nWhat would you use a personal AI agent for?",
+  greeting: "I'm Helm. AgentHelm gives you a personal AI agent that lives in Telegram and actually does things — think of it as hiring an intern who never sleeps and never asks for equity.\n\nAll you need to get started is a Google account. We'll connect your Gmail so your agent can handle email on your behalf.\n\nWhat would you use a personal AI agent for?",
   askGmail: "Love it. One more thing before I pass you along — what's your Gmail address? We'll use it to connect your agent to your inbox.",
   pendingApproval: "Great answer! If it were up to me, I'd hand you the keys right now. But my boss reviews every application personally — he's the paranoid type. Thinks everyone is a bot. Ironic, I know. Sit tight, I'll ping you when you're cleared.",
   waitingOnClearance: "Waiting on clearance. You'll hear from me.",
@@ -14,6 +14,7 @@ export const HELM = {
   minimaxInvalid: "That key didn't check out. Try again.",
   botfatherInstructions: "Open @BotFather on Telegram. Send /newbot, give your agent a name, and paste the token it gives you back here.",
   botfatherInvalid: "That token didn't check out. Make sure you copied the full thing.",
+  botfatherSecondAgent: "You already have an agent on the platform bot. To add another, you'll need your own Telegram bot token. Open @BotFather, send /newbot, pick a name, and paste the token here.",
   notifyBotInstructions: `One more thing — message @${config.notifyBotUsername} on Telegram. That's how I'll reach you when something needs your attention: re-authentication, key renewals, status updates. One message is all it takes.`,
   notifyBotTimeout: `I didn't see you message @${config.notifyBotUsername}. You can do that later — continuing setup.`,
   provisioning: "Your agent is spinning up. Stand by.",

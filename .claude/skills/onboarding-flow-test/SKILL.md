@@ -5,7 +5,9 @@ description: Run the Reins onboarding bot end-to-end test via Playwright MCP on 
 
 # Onboarding Flow Test — Telegram Bot E2E
 
-Tests the full user onboarding flow: qualification → approval → Gmail OAuth → MiniMax key → bot token → notify bot → agent deployment.
+Tests the full user onboarding flow: qualification → approval → Gmail OAuth → notify bot → agent deployment → ping → browser.
+
+The platform provides the LLM API key (Anthropic) and the shared Telegram bot — users no longer supply a MiniMax key or create their own bot via BotFather.
 
 ## Prerequisites
 
@@ -23,9 +25,8 @@ Tests the full user onboarding flow: qualification → approval → Gmail OAuth 
 |----------|-------|
 | Onboarding bot | `@SpecialAgentHelmBot` |
 | Admin approval group | `Agent Helm Verifications` (group, not a bot — use search) |
-| Notify bot | `@ReinsVerification_bot` |
-| Existing test bot token | `8366850213:AAFt9w_bREQ5NljZlKsa-tDxNEv1_bM3nJ8` (`@fsaintPA_bot`) |
-| MiniMax key | `sk-cp-_zIONXjCyfdV-hnNlIWC98OG_p1PNEip3vpYb6LAlwxxmofd9P9Y0VxqDgv6Ft9GloVLISOddADnohIm3BXwQYUaowLlFepLRX9r5q532JsT17LxH8M58cA` |
+| Notify bot (prod) | `@AgentHelmApprovalsBot` (chatlist href `#8781774032`) |
+| Shared agent bot (dev) | `@AgentHelmDevPilot_bot` (chatlist href `#8578547339`) |
 | Google account | `fsaint@gmail.com` |
 | Test use case answer | `Email management and scheduling` |
 
@@ -80,33 +81,51 @@ chat.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, ... }));
 - After redirect, page lands at `t.me/SpecialAgentHelmBot` — OAuth complete
 - Switch back to tab 0 (Telegram Web)
 
-### 6. MiniMax key
+### 6. Notify bot
 
-- Bot shows: "Gmail connected. Head to platform.minimax.io..."
-- Send the MiniMax key
-
-### 7. Bot token
-
-- Bot asks for a Telegram bot token from BotFather
-- Send the existing `fsaintPA_bot` token (no need to create a new bot each run)
-- Do NOT run `/newbot` — just paste the token directly
-
-### 8. Notify bot
-
-- Bot asks user to message `@ReinsVerification_bot`
-- Search for `ReinsVerification` → click it
+- Bot shows: "Gmail connected." then the notify-bot instructions
+- Bot asks user to message `@AgentHelmApprovalsBot` (dev: `@reins_dev_bot`)
+- Dev: use `page.locator('a[href="#8641616936"]').click()` to navigate to `@reins_dev_bot`
 - Send any message (e.g. `hi`)
 - Bot replies: "Got it. Heading back to set up your agent."
 
-### 9. Verify success
+### 7. Verify deployment success
 
-Switch to Special Agent Helm chat. Expected final messages:
+Switch to the onboarding bot chat. Expected final messages:
 - "Your agent is spinning up. Stand by."
 - "Deploying your agent. This takes a moment."
 - **"You're all set. Your agent is live."**
-- Link to `https://reins.btv.pw`
+- Link to the dashboard
 
-Also check `@fsaintPA_bot` — it should say: **"Your agent is online. I'm ready."**
+### 8. Ping test — agent is alive
+
+The agent now runs on the **shared bot** (`@AgentHelmDevPilot_bot` in dev):
+- Click `a[href="#8578547339"]` in the chatlist
+- Send: `hello`
+- **Pass:** agent replies within ~30s with any coherent response
+- **Fail:** no response after 60s, or error message
+
+Poll for response (check last message every 3s for up to 60s):
+```js
+const msgs = document.querySelectorAll('[class*="message "]');
+const lastText = Array.from(msgs).at(-1)?.textContent;
+// Pass if lastText doesn't match the 'hello' we just sent
+```
+
+### 9. Browser test — agent can use browser tool
+
+Still in the shared bot chat, send:
+```
+Go to https://example.com and tell me the page title
+```
+
+**Pass:** agent replies with "Example Domain" (the actual title of example.com) within ~90s.
+The response confirms:
+- The browser MCP server is wired up correctly
+- The agent can reach external URLs through Reins
+- Shared-bot routing → OpenClaw → tool call pipeline is working end-to-end
+
+Poll for response up to 90s. Accept any reply that contains "Example Domain" or "example.com".
 
 ## Playwright Navigation Notes
 

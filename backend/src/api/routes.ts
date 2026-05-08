@@ -103,6 +103,15 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   });
 
   // ========================================================================
+  // Initial prompt templates (public — not sensitive)
+  // ========================================================================
+
+  app.get('/api/initial-prompt-templates', async () => {
+    const result = await client.execute(`SELECT id, name, content FROM initial_prompt_templates ORDER BY id`);
+    return { templates: result.rows.map((r) => ({ id: r.id, name: r.name, content: r.content })) };
+  });
+
+  // ========================================================================
   // Agents
   // ========================================================================
 
@@ -2937,7 +2946,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const body = request.body as {
       name: string;
       description?: string;
-      telegramToken: string;
+      telegramToken?: string;
       telegramUserId?: string;
       modelProvider?: string;
       modelName?: string;
@@ -3057,21 +3066,43 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (!body?.name?.trim()) {
       return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'name is required' } });
     }
-    if (!body?.telegramToken?.trim()) {
-      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'telegramToken is required' } });
+
+    // Shared bot mode: use platform token when no user token provided
+    const isSharedBot = !body?.telegramToken?.trim() && !!config.sharedBotToken;
+    if (!isSharedBot && !body?.telegramToken?.trim()) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'telegramToken is required (or enable shared bot mode)' } });
+    }
+    const effectiveTelegramToken = isSharedBot ? config.sharedBotToken! : body.telegramToken;
+
+    // Shared bot: enforce one-per-user limit — second agent must use their own token
+    if (isSharedBot && body.telegramUserId) {
+      const existing = await client.execute({
+        sql: `SELECT id FROM deployed_agents WHERE telegram_user_id = ? AND is_shared_bot = 1 LIMIT 1`,
+        args: [String(body.telegramUserId)],
+      });
+      if (existing.rows.length > 0) {
+        return reply.code(400).send({
+          error: {
+            code: 'SHARED_BOT_LIMIT_REACHED',
+            message: 'You already have an agent on the shared bot. Provide your own Telegram bot token to create another.',
+          },
+        });
+      }
     }
 
-    // Validate Telegram token
+    // Validate Telegram token (skip for shared bot — already validated at startup)
     let botUsername: string | undefined;
-    try {
-      const tgRes = await fetch(`https://api.telegram.org/bot${body.telegramToken}/getMe`);
-      const tgData = await tgRes.json() as { ok: boolean; result?: { username?: string } };
-      if (!tgData.ok) {
-        return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid Telegram bot token' } });
+    if (!isSharedBot) {
+      try {
+        const tgRes = await fetch(`https://api.telegram.org/bot${effectiveTelegramToken}/getMe`);
+        const tgData = await tgRes.json() as { ok: boolean; result?: { username?: string } };
+        if (!tgData.ok) {
+          return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Invalid Telegram bot token' } });
+        }
+        botUsername = tgData.result?.username;
+      } catch {
+        return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Failed to validate Telegram token' } });
       }
-      botUsername = tgData.result?.username;
-    } catch {
-      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Failed to validate Telegram token' } });
     }
 
     // Reject deploys with an already-expired Codex token
@@ -3134,10 +3165,15 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       ...userMcpServers,
     ];
 
+    // For shared bot, use the configured webhook secret instead of a per-deployment one
+    const effectiveWebhookSecret = isSharedBot
+      ? (config.sharedBotWebhookSecret ?? webhookRelaySecret)
+      : webhookRelaySecret;
+
     try {
       const result = await provider.provision({
         instanceId: deploymentId,
-        telegramToken: body.telegramToken,
+        telegramToken: effectiveTelegramToken,
         telegramUserId: body.telegramUserId,
         mcpConfigs,
         gatewayToken,
@@ -3148,39 +3184,44 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         openaiApiKey: body.openaiApiKey,
         telegramGroups: body.telegramGroups,
         modelCredentials: body.modelCredentials,
-        webhookRelaySecret,
+        webhookRelaySecret: effectiveWebhookSecret,
         runtime: body.runtime ?? 'openclaw',
         initialPrompt: body.initialPrompt,
+        isSharedBot,
       });
 
       const telegramGroupsJson = body.telegramGroups && body.telegramGroups.length > 0
         ? JSON.stringify(body.telegramGroups)
         : null;
 
-      // Webhook relay: Hermes uses /api/webhooks/agent-bot/:id; OpenClaw uses /telegram-webhook
-      // Both runtimes bind on 8787; Fly exposes 8443→8787
+      // openclaw_webhook_url = the machine's port-8443 endpoint that Reins forwards updates TO.
+      // Hermes mirrors the path from TELEGRAM_WEBHOOK_URL on its own webhook server — so the
+      // forwarding URL must use the same path that was registered with Telegram.
       const isHermesRuntime = (body.runtime ?? 'openclaw') === 'hermes';
       const openclawWebhookUrl = result.appName
         ? isHermesRuntime
-          ? `https://${result.appName}.fly.dev:8443/api/webhooks/agent-bot/${deploymentId}`
+          ? isSharedBot
+            ? `https://${result.appName}.fly.dev:8443/api/webhooks/shared-bot`
+            : `https://${result.appName}.fly.dev:8443/api/webhooks/agent-bot/${deploymentId}`
           : `https://${result.appName}.fly.dev:8443/telegram-webhook`
         : null;
 
       await client.execute({
-        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_bot_username, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openai_api_key, telegram_groups_json, model_credentials, mcp_config_json, openclaw_webhook_url, webhook_relay_secret, runtime, initial_prompt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_bot_username, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openai_api_key, telegram_groups_json, model_credentials, mcp_config_json, openclaw_webhook_url, webhook_relay_secret, runtime, initial_prompt, is_shared_bot, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           deploymentId, agentId,
           result.appName, result.machineId, 'running', result.managementUrl,
-          body.telegramToken, botUsername ?? null, body.telegramUserId ?? null,
+          effectiveTelegramToken, botUsername ?? null, body.telegramUserId ?? null,
           body.soulMd ?? null,
           body.modelProvider ?? 'anthropic', resolvedModelName,
           body.region ?? 'iad', gatewayToken,
           body.openaiApiKey ?? null, telegramGroupsJson,
           body.modelCredentials ?? null,
           body.mcpServers ?? null,
-          openclawWebhookUrl, webhookRelaySecret,
+          openclawWebhookUrl, effectiveWebhookSecret,
           body.runtime ?? 'openclaw',
           body.initialPrompt ?? null,
+          isSharedBot ? 1 : 0,
           now, now,
         ],
       });
@@ -4336,7 +4377,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       try {
         const url = await provider.getManagementUrl(
           deployment.fly_app_name as string,
-          deployment.gateway_token as string
+          deployment.gateway_token as string,
+          deployment.runtime as string | undefined
         );
         return { data: { url } };
       } catch (err) {
@@ -4666,6 +4708,105 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       console.error('Telegram webhook handler error:', err);
     }
     return reply.send({ ok: true });
+  });
+
+  // ========================================================================
+  // Public config endpoint (no auth)
+  // ========================================================================
+
+  app.get('/api/config/public', async (_request, reply) => {
+    return reply.send({ sharedBotEnabled: !!config.sharedBotToken });
+  });
+
+  // ========================================================================
+  // Shared bot webhook — routes messages to deployed agents by telegram_user_id
+  // ========================================================================
+
+  // Rate-limit map: userId → last "no agent" reply timestamp
+  const sharedBotNoAgentLastSent = new Map<string, number>();
+
+  app.post('/api/webhooks/shared-bot', async (request, reply) => {
+    // Always return 200 immediately — Telegram retries on non-2xx
+    reply.send({ ok: true });
+
+    if (!config.sharedBotToken) return;
+
+    // Verify secret token
+    if (config.sharedBotWebhookSecret) {
+      const receivedSecret = request.headers['x-telegram-bot-api-secret-token'];
+      if (receivedSecret !== config.sharedBotWebhookSecret) return;
+    }
+
+    const body = request.body as Record<string, unknown>;
+
+    // Extract sender user ID from various update types
+    function extractTelegramUserId(update: Record<string, unknown>): string | null {
+      const msg = (update.message ?? update.edited_message ?? update.channel_post ?? update.edited_channel_post) as Record<string, unknown> | undefined;
+      if (msg?.from) return String((msg.from as Record<string, unknown>).id);
+      const cq = update.callback_query as Record<string, unknown> | undefined;
+      if (cq?.from) return String((cq.from as Record<string, unknown>).id);
+      const mcm = update.my_chat_member as Record<string, unknown> | undefined;
+      if (mcm?.from) return String((mcm.from as Record<string, unknown>).id);
+      const inlineQuery = update.inline_query as Record<string, unknown> | undefined;
+      if (inlineQuery?.from) return String((inlineQuery.from as Record<string, unknown>).id);
+      return null;
+    }
+
+    // Skip non-private chats (shared bot is DM-only)
+    const msgOrCq = (body.message ?? body.edited_message ?? body.callback_query) as Record<string, unknown> | undefined;
+    const chat = msgOrCq?.chat as Record<string, unknown> | undefined;
+    if (chat && chat.type !== 'private') return;
+
+    const telegramUserId = extractTelegramUserId(body);
+    if (!telegramUserId) return;
+
+    // Look up most recent running shared-bot deployment for this user
+    const depResult = await client.execute({
+      sql: `SELECT da.id, da.agent_id, da.openclaw_webhook_url, da.webhook_relay_secret
+            FROM deployed_agents da
+            WHERE da.telegram_user_id = ? AND da.is_shared_bot = 1 AND da.status = 'running'
+            ORDER BY da.created_at DESC LIMIT 1`,
+      args: [telegramUserId],
+    });
+
+    if (depResult.rows.length === 0) {
+      // Unknown user — send a rate-limited reply (1 per hour)
+      const now = Date.now();
+      const lastSent = sharedBotNoAgentLastSent.get(telegramUserId) ?? 0;
+      if (now - lastSent > 3600_000) {
+        sharedBotNoAgentLastSent.set(telegramUserId, now);
+        // Send only on direct messages
+        if (chat?.type === 'private') {
+          const chatId = (chat as Record<string, unknown>).id;
+          fetch(`https://api.telegram.org/bot${config.sharedBotToken}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text: "I don't have an agent set up for you yet. Visit the platform to get started." }),
+          }).catch(() => {});
+        }
+      }
+      return;
+    }
+
+    const dep = depResult.rows[0];
+    const deploymentId = dep.id as string;
+    const agentId = dep.agent_id as string;
+    const openclawUrl = dep.openclaw_webhook_url as string | null;
+    const relaySecret = dep.webhook_relay_secret as string | null;
+
+    // Intercept my_chat_member events
+    if (body.my_chat_member) {
+      handleMyChatMember(deploymentId, agentId, body.my_chat_member as Parameters<typeof handleMyChatMember>[2]).catch((err) =>
+        console.error(`[shared-bot-relay] handleMyChatMember error for ${deploymentId}:`, err)
+      );
+    }
+
+    // Forward to the agent machine
+    if (openclawUrl) {
+      forwardToOpenclaw(deploymentId, openclawUrl, body, relaySecret ?? undefined).catch((err) =>
+        console.error(`[shared-bot-relay] forwardToOpenclaw error for ${deploymentId}:`, err)
+      );
+    }
   });
 
   /**

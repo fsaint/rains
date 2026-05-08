@@ -1,26 +1,26 @@
 ---
 name: integration-test
-description: Run the full Reins integration test suite — all 6 runtime×provider combinations (OpenClaw+Hermes × Anthropic+OpenAI+MiniMax) via Playwright UI + Telethon Telegram verification. Use when the user asks to "run integration tests", "test all combinations", "verify the bots work", or "run e2e tests". Supports local (default) and production targets.
+description: Run the full Reins integration test suite — all 8 test cases (6 runtime×provider combinations + 2 shared bot cases) via Playwright UI + Telethon Telegram verification. Use when the user asks to "run integration tests", "test all combinations", "verify the bots work", or "run e2e tests". Supports dev (default) and production targets.
 ---
 
-# Integration Test — All Runtime × Provider Combinations
+# Integration Test — All Runtime × Provider + Shared Bot Cases
 
-Tests all 6 combinations of runtime (OpenClaw, Hermes) × LLM provider (Anthropic, OpenAI, MiniMax) by creating agents through the UI and verifying bot replies via real Telegram messages.
+Tests all 6 combinations of runtime (OpenClaw, Hermes) × LLM provider (Anthropic, OpenAI, MiniMax) plus 2 shared bot cases (OpenClaw and Hermes routing by telegram_user_id), creating agents through the UI and verifying bot replies via real Telegram messages.
 
 ## Targets
 
 | Target | Frontend URL | Env file | Agent deployment |
 |--------|-------------|----------|-----------------|
-| `local` (default) | `http://localhost:6173` | `tests/integration/.env.test` | Local Docker |
-| `prod` | `https://reins.btv.pw` | `tests/integration/.env.prod-test` | Fly.io |
+| `dev` (default) | `http://localhost:6173` | `tests/integration/.env.test` | Fly.io `reins-dev` org |
+| `prod` | `https://app.agenthelm.mom` | `tests/integration/.env.prod-test` | Fly.io `personal` org |
 
-To run against production, source `.env.prod-test` instead of `.env.test` and navigate Playwright to `$REINS_FRONTEND_URL`. All other steps are the same except container restart (see below).
+Both targets deploy agents to Fly.io — dev uses the `reins-dev` org for isolation. The backend and frontend still run locally for the dev target.
 
 ## Prerequisites
 
 ### Test credentials file
 
-Secrets live in `tests/integration/.env.test` (local) or `tests/integration/.env.prod-test` (prod), both gitignored. Each file must have:
+Secrets live in `tests/integration/.env.test` (dev) or `tests/integration/.env.prod-test` (prod), both gitignored. Each file must have:
 
 ```
 # LLM provider API keys
@@ -29,21 +29,26 @@ OPENAI_API_KEY=sk-proj-...
 MINIMAX_API_KEY=sk-cp-...
 
 # Reins backend
-REINS_URL=http://localhost:5001          # or https://reins.btv.pw for prod
-REINS_FRONTEND_URL=http://localhost:6173  # or https://reins.btv.pw for prod
+REINS_URL=http://localhost:5001          # or https://app.agenthelm.mom for prod
+REINS_FRONTEND_URL=http://localhost:6173  # or https://app.agenthelm.mom for prod
 REINS_ADMIN_EMAIL=admin@reins.local
 REINS_ADMIN_PASSWORD=testpass123
 
 # Your Telegram user ID (numeric) — used as the allowed-user for each bot
 TELEGRAM_USER_ID=5982613183
 
-# Bot tokens — for local dev all 6 can share one token if tests run sequentially
+# Bot tokens — all 6 can share one token if tests run sequentially
 BOT_TOKEN_OC_ANTHROPIC=<token>
 BOT_TOKEN_OC_OPENAI=<token>
 BOT_TOKEN_OC_MINIMAX=<token>
 BOT_TOKEN_H_ANTHROPIC=<token>
 BOT_TOKEN_H_OPENAI=<token>
 BOT_TOKEN_H_MINIMAX=<token>
+
+# Shared bot (platform-owned, routes by telegram_user_id)
+# Dev: @AgentHelmDevPilot_bot  Prod: @AgentHelmPilot_bot
+SHARED_BOT_TOKEN=<token>
+SHARED_BOT_WEBHOOK_SECRET=<hex secret>
 
 # Telethon (real Telegram user account for sending test messages)
 TELEGRAM_TEST_MODE=telethon
@@ -52,18 +57,17 @@ TELEGRAM_API_HASH=<hash from https://my.telegram.org/apps>
 TELEGRAM_PHONE=+1xxxxxxxxxx
 ```
 
-The `ANTHROPIC_API_KEY` must also be in the root `.env` file (OpenClaw reads it from the backend's server-side environment — it is never passed from the UI):
+Root `.env` must have `ANTHROPIC_API_KEY` (backend passes it to agent machines server-side) and `REINS_PUBLIC_URL` set to an externally reachable URL so Fly machines can call back to the local backend:
 
 ```
 # /Users/fsaint/git/reins/.env
 ANTHROPIC_API_KEY=sk-ant-api03-...
+REINS_PUBLIC_URL=https://reins-dev.btv.pw   # must be reachable from Fly machines
+FLY_ORG=reins-dev
+FLY_API_TOKEN=<dev org token>
 ```
 
-**Critical:** `REINS_PUBLIC_URL` in root `.env` must be `http://host.docker.internal:5001` (not the external domain) so local Docker containers can reach the backend for MCP calls:
-
-```
-REINS_PUBLIC_URL=http://host.docker.internal:5001
-```
+If the dev backend is not exposed externally, use a tunnel (e.g. `ngrok http 5001`) and set `REINS_PUBLIC_URL` to the tunnel URL.
 
 ### Telethon session
 
@@ -87,7 +91,7 @@ TELEGRAM_PHONE=$TELEGRAM_PHONE \
 python3 /tmp/tg_send_and_wait_filtered.py <bot_username> "<message>" [timeout_secs]
 ```
 
-**`/tmp/tg_mcp_tool_test.py`** — sends a message, optionally polls Reins API for an approval and approves/rejects it, then returns the final bot reply. Handles streaming via MessageEdited events + settle timer. Uses `curl` for Reins API calls (not Python urllib, which breaks with localhost cookies). Use for the dev-sandbox permission tests:
+**`/tmp/tg_mcp_tool_test.py`** — sends a message, optionally polls Reins API for an approval and approves/rejects it, then returns the final bot reply. Handles streaming via MessageEdited events + settle timer. Uses `curl` for Reins API calls. Use for the dev-sandbox permission tests:
 
 ```bash
 source tests/integration/.env.test
@@ -101,7 +105,7 @@ python3 /tmp/tg_mcp_tool_test.py <bot_username> <agent_id> "<message>" <action> 
 # action: "none" | "approve" | "reject"
 ```
 
-**`/tmp/run_sandbox_tests.sh`** — orchestrates all 4 sandbox permission tests for a given agent. Handles container restart (needed so OpenClaw picks up newly-enabled dev-sandbox tools), approval polling, and result checking:
+**`/tmp/run_sandbox_tests.sh`** — orchestrates all 4 sandbox permission tests for a given agent. Handles machine restart (needed so OpenClaw picks up newly-enabled dev-sandbox tools), approval polling, and result checking:
 
 ```bash
 source /tmp/run_sandbox_tests.sh
@@ -112,7 +116,7 @@ The cookie file `/tmp/reins_test_cookies.txt` must contain a valid admin session
 
 ```bash
 source tests/integration/.env.test
-curl -s -c /tmp/reins_test_cookies.txt -X POST http://localhost:5001/api/auth/login \
+curl -s -c /tmp/reins_test_cookies.txt -X POST $REINS_URL/api/auth/login \
   -H "Content-Type: application/json" \
   -d "{\"email\":\"$REINS_ADMIN_EMAIL\",\"password\":\"$REINS_ADMIN_PASSWORD\"}"
 ```
@@ -127,30 +131,26 @@ npm run dev:backend
 npm run dev:frontend   # typically http://localhost:6173
 ```
 
-### Docker images built
-
-```bash
-# OpenClaw image
-docker build -f docker/Dockerfile -t reins-openclaw:latest docker/
-
-# Hermes image
-docker build -f docker/hermes/Dockerfile -t reins-hermes:latest docker/hermes/
-```
-
 ---
 
 ## Test matrix
 
-| # | Runtime  | Provider  | Model default       | Key source       |
-|---|----------|-----------|---------------------|------------------|
-| 1 | OpenClaw | Anthropic | claude-sonnet-4-5   | Server env var   |
-| 2 | OpenClaw | OpenAI    | gpt-4.1             | UI API key field |
-| 3 | OpenClaw | MiniMax   | MiniMax-M2.7        | UI API key field |
-| 4 | Hermes   | Anthropic | claude-sonnet-4-5   | Server env var   |
-| 5 | Hermes   | OpenAI    | gpt-4.1             | UI API key field |
-| 6 | Hermes   | MiniMax   | MiniMax-M2.7        | UI API key field |
+| # | Runtime  | Provider  | Model default       | Key source       | Bot mode    |
+|---|----------|-----------|---------------------|------------------|-------------|
+| 1 | OpenClaw | Anthropic | claude-sonnet-4-5   | Server env var   | Per-user    |
+| 2 | OpenClaw | OpenAI    | gpt-4.1             | UI API key field | Per-user    |
+| 3 | OpenClaw | MiniMax   | MiniMax-M2.7        | UI API key field | Per-user    |
+| 4 | Hermes   | Anthropic | claude-sonnet-4-5   | Server env var   | Per-user    |
+| 5 | Hermes   | OpenAI    | gpt-4.1             | UI API key field | Per-user    |
+| 6 | Hermes   | MiniMax   | MiniMax-M2.7        | UI API key field | Per-user    |
+| 7 | OpenClaw | MiniMax   | MiniMax-M2.7        | UI API key field | Shared bot  |
+| 8 | Hermes   | MiniMax   | MiniMax-M2.7        | UI API key field | Shared bot  |
 
-Run tests **sequentially** — all 6 can share one bot token because each test fully creates → verifies → deletes before the next starts.
+Run tests **sequentially** — tests 1–6 can share one bot token because each fully creates → verifies → deletes before the next starts. Tests 7–8 use the platform shared bot (`SHARED_BOT_TOKEN`) and require `SHARED_BOT_TOKEN` + `SHARED_BOT_WEBHOOK_SECRET` set on the backend.
+
+**Shared bot bots:**
+- Dev: `@AgentHelmDevPilot_bot`
+- Prod: `@AgentHelmPilot_bot`
 
 ---
 
@@ -178,31 +178,33 @@ Navigate to `http://localhost:6173/agents/new` and click **Hosted Agent**.
 
 Note the agent ID from the URL (e.g. `/agents/uhfcEbkGWF9XjE3BsQ-ZM` → `uhfcEbkGWF9XjE3BsQ-ZM`).
 
-### Step 2 — Wait for container / machine
+### Step 2 — Wait for Fly machine to start
 
-**Local:**
+Watch the agent detail page in the UI for status to change to `running`. Fly machines in the dev org typically start within 30–60 s.
+
+To watch from the CLI (get the app name from the UI under Management):
+
 ```bash
-# Watch until container appears (OpenClaw also shows "(healthy)" — Hermes has no HTTP health check)
-docker ps --format "{{.Names}}\t{{.Status}}" | grep "reins-"
+# Check machine state
+fly machine list --app <fly-app-name> --org reins-dev
+
+# Tail logs
+fly logs --app <fly-app-name> --org reins-dev
 ```
-- **OpenClaw**: wait for `(healthy)` — typically 20–60 s
-- **Hermes**: container shows `Up N seconds`; ready once it connects to Telegram (~10–15 s after start)
 
-The container name is `reins-` + first 12 chars of the `deployed_agents` instance ID. The UI shows it under Management → App Name.
-
-**Prod:**
-Watch the agent detail page in the UI for status to change to `running`. Fly machines typically start within 30–60 s. The UI shows the Fly app name and machine ID under Management.
+- **OpenClaw**: health check passes when the gateway is up (~60 s on cold boot)
+- **Hermes**: ready once it connects to Telegram (~15–30 s after machine starts)
 
 ### Step 3 — Basic ping test via Telethon
 
-The bot username is shown in the UI (or look it up via `@BotFather`). For the test bot `@EmailAndCalendar_bot`:
+The bot username is shown in the UI (or look it up via `@BotFather`):
 
 ```bash
 source tests/integration/.env.test
 TELEGRAM_API_ID=$TELEGRAM_API_ID \
 TELEGRAM_API_HASH=$TELEGRAM_API_HASH \
 TELEGRAM_PHONE=$TELEGRAM_PHONE \
-python3 /tmp/tg_send_and_wait_filtered.py EmailAndCalendar_bot \
+python3 /tmp/tg_send_and_wait_filtered.py <bot_username> \
   "What is 7+8? Reply with ONLY the number, nothing else." 90
 ```
 
@@ -213,7 +215,7 @@ python3 /tmp/tg_send_and_wait_filtered.py EmailAndCalendar_bot \
 - Hermes may send tool-use progress lines (`🐍`, `⚙️`). The filtered script skips those too.
 - After the welcome message, the bot may reply "⚡ Interrupting..." — send once more.
 
-**OpenClaw + MiniMax quirk:** If the ping returns an error about "Unknown model: openai/MiniMax-M2.7", the models.json poller hasn't run yet. Apply the manual patch (see Known Issues) and resend.
+**OpenClaw + MiniMax quirk:** If the ping returns an error about "Unknown model: openai/MiniMax-M2.7", the models.json poller hasn't run yet. Wait 30 s and retry — the entrypoint patches models.json after the gateway becomes healthy.
 
 ### Step 4 — Dev Sandbox permission tests
 
@@ -221,12 +223,12 @@ Run the orchestration script after the ping passes:
 
 ```bash
 source /tmp/run_sandbox_tests.sh
-sandbox_tests EmailAndCalendar_bot <agent_id>
+sandbox_tests <bot_username> <agent_id>
 ```
 
 This script:
 1. Enables dev-sandbox on the agent via API (access=true, level=full)
-2. **Restarts the container** so OpenClaw picks up the new tools (OpenClaw caches tools at startup)
+2. **Restarts the Fly machine** so OpenClaw picks up the new tools (OpenClaw caches tools at startup)
 3. Waits 15 s for Telegram reconnect
 4. Runs 4 scenarios in sequence:
    - **ALLOWED** (`sandbox_echo`) — expects immediate echo of "ping-allowed"
@@ -236,6 +238,14 @@ This script:
 
 **Expected:** `4/4 passed, 0/4 failed`
 
+To restart a Fly machine manually (e.g. after enabling dev-sandbox):
+
+```bash
+# Get the machine ID from the UI or:
+fly machine list --app <fly-app-name> --org reins-dev
+fly machine restart <machine-id> --app <fly-app-name> --org reins-dev
+```
+
 **Manual step-by-step** (if you need to run scenarios individually):
 
 ```bash
@@ -244,81 +254,63 @@ source tests/integration/.env.test
 TENV="TELEGRAM_API_ID=$TELEGRAM_API_ID TELEGRAM_API_HASH=$TELEGRAM_API_HASH TELEGRAM_PHONE=$TELEGRAM_PHONE REINS_URL=$REINS_URL REINS_ADMIN_EMAIL=$REINS_ADMIN_EMAIL REINS_ADMIN_PASSWORD=$REINS_ADMIN_PASSWORD"
 
 # ALLOWED
-eval "$TENV python3 /tmp/tg_mcp_tool_test.py EmailAndCalendar_bot $AGENT_ID \
+eval "$TENV python3 /tmp/tg_mcp_tool_test.py <bot_username> $AGENT_ID \
   'Call the sandbox_echo tool with message ping-allowed. Report the tool result.' none 90"
 
 # APPROVE
-eval "$TENV python3 /tmp/tg_mcp_tool_test.py EmailAndCalendar_bot $AGENT_ID \
+eval "$TENV python3 /tmp/tg_mcp_tool_test.py <bot_username> $AGENT_ID \
   'Call sandbox_send_message: to=ops@reins.io, subject=approve-test, body=please approve. Report result.' approve 120"
 
 # DENY
-eval "$TENV python3 /tmp/tg_mcp_tool_test.py EmailAndCalendar_bot $AGENT_ID \
+eval "$TENV python3 /tmp/tg_mcp_tool_test.py <bot_username> $AGENT_ID \
   'Call sandbox_send_message: to=ops@reins.io, subject=deny-test, body=denied. Report what happened.' reject 120"
 
 # BLOCKED
-eval "$TENV python3 /tmp/tg_mcp_tool_test.py EmailAndCalendar_bot $AGENT_ID \
+eval "$TENV python3 /tmp/tg_mcp_tool_test.py <bot_username> $AGENT_ID \
   'Call ONLY the sandbox_delete_item tool to delete item-1. Do NOT call any other tool. If sandbox_delete_item is not in your toolset, say so explicitly.' none 90"
 ```
 
 ### Step 5 — Tear down
 
-**Local:**
-```bash
-docker stop <container-name> && docker rm <container-name>
-```
+Delete via the Reins UI (Agents → Delete) — this destroys the Fly machine and app automatically.
 
-**Prod:** Delete via the Reins UI (Agents → Delete) — this destroys the Fly machine automatically.
+Or via CLI:
+```bash
+fly machine destroy <machine-id> --app <fly-app-name> --org reins-dev --force
+fly apps destroy <fly-app-name> --org reins-dev --yes
+```
 
 ---
 
 ## Known issues and workarounds
 
-### REINS_PUBLIC_URL must be host.docker.internal
+### REINS_PUBLIC_URL must be externally reachable
 
-If local Docker containers point to the external server URL (e.g. `https://reins-dev.btv.pw`), MCP tool calls go to the wrong server, approvals never appear locally, and all sandbox tests fail silently.
+Fly machines need to call back to the local backend for MCP tool calls. If `REINS_PUBLIC_URL` points to `localhost`, MCP calls from agents will fail silently.
 
-**Fix:** Set in root `.env`:
-```
-REINS_PUBLIC_URL=http://host.docker.internal:5001
-```
-Then restart the backend. All new containers will embed the correct URL.
+**Fix:** Set `REINS_PUBLIC_URL` in root `.env` to an externally reachable URL:
+- If the dev backend is tunneled: use the tunnel URL (e.g. ngrok)
+- If the dev backend is behind a domain: use that (e.g. `https://reins-dev.btv.pw`)
+
+Then restart the backend. All new machines will embed the correct URL.
 
 ### OpenClaw + MiniMax: "Unknown model: openai/MiniMax-M2.7"
 
-The OpenClaw entrypoint registers the MiniMax model in `~/.openclaw/agents/main/agent/models.json` after the gateway becomes healthy (via a background poller). On first boot there can be a race where the model isn't registered yet when the first message arrives. If this error appears in `docker logs <container>`:
-
-```bash
-# Manual fix — patch models.json inside the running container
-docker exec <container> node -e "
-  const fs = require('fs');
-  const p = '/home/node/.openclaw/agents/main/agent/models.json';
-  const modelName = process.env.MODEL_NAME;
-  const baseUrl = process.env.OPENAI_BASE_URL;
-  const apiKey = process.env.OPENAI_API_KEY;
-  let d = { providers: {} };
-  try { d = JSON.parse(fs.readFileSync(p, 'utf8')); } catch(e) {}
-  const prov = d.providers['openai'] || { models: [] };
-  if (!prov.models.find(m => m.id === modelName)) {
-    prov.models.push({ id: modelName, name: modelName, api: 'openai-completions',
-      input: ['text'], cost: { input:0, output:0, cacheRead:0, cacheWrite:0 },
-      contextWindow: 1000000, maxTokens: 40000, compat: {} });
-  }
-  prov.baseUrl = baseUrl; prov.apiKey = apiKey;
-  d.providers['openai'] = prov;
-  fs.mkdirSync(require('path').dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(d, null, 2));
-  console.log('patched');
-"
-# Then resend the Telethon message — no container restart needed
-```
+The entrypoint patches `models.json` after the gateway becomes healthy. On first boot there can be a race. Wait 30–60 s and retry the ping — the background poller resolves it automatically. No manual action needed.
 
 ### OpenClaw streams responses via message edits
 
 OpenClaw sends an initial (often incomplete) Telegram message then progressively edits it. `tg_send_and_wait_filtered.py` and `tg_mcp_tool_test.py` both listen to `MessageEdited` events and use a 3-second settle timer after the last edit. Do not use the older `tg_send_and_wait.py` (no edit support).
 
-### Container restart required after enabling dev-sandbox
+### Machine restart required after enabling dev-sandbox
 
-OpenClaw caches the MCP tool list at startup. After enabling dev-sandbox via API, you must restart the container for the new tools to appear. The `run_sandbox_tests.sh` script does this automatically.
+OpenClaw caches the MCP tool list at startup. After enabling dev-sandbox via API, restart the Fly machine:
+
+```bash
+fly machine restart <machine-id> --app <fly-app-name> --org reins-dev
+```
+
+The `run_sandbox_tests.sh` script does this automatically via the Reins restart API.
 
 ### Hermes + OpenAI: org-verification / encrypted-content errors
 
@@ -330,105 +322,119 @@ Hermes emits several progress-indicator prefixes that are not final replies. All
 
 ### Hermes + MiniMax BLOCKED test: model chooses substitute tool
 
-MiniMax, when asked to "delete" something and `sandbox_delete_item` isn't in its tools list, may attempt `sandbox_update_item` as a substitute. This creates a pending approval in the queue and the bot goes silent waiting for it.
+MiniMax, when asked to "delete" something and `sandbox_delete_item` isn't in its tools list, may attempt `sandbox_update_item` as a substitute. This creates a pending approval and the bot goes silent.
 
-**Fix:** Use the explicit prompt in the BLOCKED scenario:
-```
-"Call ONLY the sandbox_delete_item tool to delete item-1. Do NOT call any other tool. If sandbox_delete_item is not in your toolset, say so explicitly."
-```
+**Fix:** Use the explicit prompt in the BLOCKED scenario (already included in `run_sandbox_tests.sh`).
 
 If the bot is stuck, reject all pending approvals:
 ```bash
-curl -s -b /tmp/reins_test_cookies.txt "http://localhost:5001/api/approvals?agentId=$AGENT_ID" | \
+source tests/integration/.env.test
+curl -s -b /tmp/reins_test_cookies.txt "$REINS_URL/api/approvals?agentId=$AGENT_ID" | \
   python3 -c "import sys,json; [print(a['id']) for a in json.load(sys.stdin)['data'] if a['status']=='pending']" | \
   while read id; do
-    curl -s -b /tmp/reins_test_cookies.txt -X POST "http://localhost:5001/api/approvals/$id/reject" \
+    curl -s -b /tmp/reins_test_cookies.txt -X POST "$REINS_URL/api/approvals/$id/reject" \
       -H "Content-Type: application/json" -d '{}'
   done
 ```
 
-### GET /api/approvals admin visibility
-
-The `GET /api/approvals` endpoint was fixed to allow admin users to see approvals for any agent regardless of ownership. If you're testing with `admin@reins.local` and agents were created by another user, the admin bypass ensures approvals are returned correctly.
-
 ### Bot token conflict (409 Conflict)
 
-Only one process can poll a bot token at a time. If a previous container is still running:
+Only one process can poll a bot token at a time. If a previous machine is still running with the same token, destroy it first (Step 5), then create the new agent.
 
-```bash
-docker ps | grep reins-
-docker stop <old-container>
-```
+### GET /api/approvals admin visibility
 
-Then retry the Telethon message (the new container will take over polling within seconds).
-
----
-
-## Deploying to Fly.io production
-
-### One-time setup (Hermes only)
-
-The Hermes image must be pushed to Fly's registry and `HERMES_IMAGE` set on the backend. Run these once after changing `docker/hermes/`:
-
-```bash
-# Create registry namespace (only once, ever)
-fly apps create reins-hermes --machines
-
-# Authenticate with Fly's registry
-fly auth docker
-
-# Build and push
-docker build -f docker/hermes/Dockerfile -t registry.fly.io/reins-hermes:latest docker/hermes/
-docker push registry.fly.io/reins-hermes:latest
-
-# Tell the backend where the image is
-fly secrets set HERMES_IMAGE=registry.fly.io/reins-hermes:latest --app <backend-app-name>
-```
-
-The OpenClaw image is resolved automatically from the `OPENCLAW_APP` Fly app — no equivalent step needed for OpenClaw unless publishing a new image.
-
-### Why Hermes needs a health server
-
-`hermes gateway run` does not expose HTTP. Fly.io requires an HTTP health check on internal port 8000 before marking a machine as started. The `docker/hermes/entrypoint.sh` starts a minimal Python HTTP server on port 8000 in the background before launching the gateway — this is what satisfies Fly's health check.
+The `GET /api/approvals` endpoint allows admin users to see approvals for any agent regardless of ownership. Testing with `admin@reins.local` covers all agents.
 
 ---
 
 ## Quick checklist
 
-**Local:**
+**Dev:**
 ```
-[ ] tests/integration/.env.test exists and has all keys
-[ ] ANTHROPIC_API_KEY is in root .env (for OpenClaw Anthropic)
-[ ] REINS_PUBLIC_URL=http://host.docker.internal:5001 in root .env
+[ ] tests/integration/.env.test exists and has all keys (incl. SHARED_BOT_TOKEN)
+[ ] ANTHROPIC_API_KEY in root .env
+[ ] SHARED_BOT_TOKEN + SHARED_BOT_WEBHOOK_SECRET in root .env (dev: @AgentHelmDevPilot_bot)
+[ ] REINS_PUBLIC_URL in root .env points to externally reachable backend URL
+[ ] FLY_ORG=reins-dev and FLY_API_TOKEN set in root .env
 [ ] Backend running (npm run dev:backend)
 [ ] Frontend running (npm run dev:frontend)
-[ ] Docker images built (reins-openclaw:latest, reins-hermes:latest)
+[ ] fly CLI authenticated (fly auth whoami)
 [ ] Telethon session exists (~/.reins_test_telethon.session)
-[ ] No orphan containers from previous runs (docker ps | grep reins-)
+[ ] No orphan Fly machines from previous runs (fly machine list --org reins-dev)
 [ ] /tmp/run_sandbox_tests.sh, /tmp/tg_mcp_tool_test.py, /tmp/tg_send_and_wait_filtered.py all present
 ```
 
 **Prod (additional/different):**
 ```
-[ ] tests/integration/.env.prod-test exists and has all keys
+[ ] tests/integration/.env.prod-test exists and has all keys (incl. SHARED_BOT_TOKEN)
+[ ] SHARED_BOT_TOKEN + SHARED_BOT_WEBHOOK_SECRET set on agenthelm-core (prod: @AgentHelmPilot_bot)
 [ ] Telethon session exists (~/.reins_test_telethon.session)
 [ ] fly CLI authenticated (fly auth whoami)
 [ ] /tmp/run_sandbox_tests.sh, /tmp/tg_mcp_tool_test.py, /tmp/tg_send_and_wait_filtered.py all present
-[ ] e2e-admin@reins.local account exists on reins.btv.pw
 ```
 
 When invoking sandbox_tests for prod, pass the env file as the third argument:
 ```bash
 source /tmp/run_sandbox_tests.sh
-sandbox_tests Telmanfsj_bot <agent_id> /Users/fsaint/git/reins/tests/integration/.env.prod-test
+sandbox_tests <bot_username> <agent_id> /Users/fsaint/git/reins/tests/integration/.env.prod-test
 ```
 
-Test 1: OpenClaw + Anthropic  [ ] ping [ ] allowed [ ] approve [ ] reject [ ] blocked
-Test 2: OpenClaw + OpenAI     [ ] ping [ ] allowed [ ] approve [ ] reject [ ] blocked
-Test 3: OpenClaw + MiniMax    [ ] ping* [ ] allowed [ ] approve [ ] reject [ ] blocked
-Test 4: Hermes + Anthropic    [ ] ping [ ] allowed [ ] approve [ ] reject [ ] blocked
-Test 5: Hermes + OpenAI       [ ] ping [ ] allowed [ ] approve [ ] reject [ ] blocked
-Test 6: Hermes + MiniMax      [ ] ping [ ] allowed [ ] approve [ ] reject [ ] blocked
-
-* Test 3: may need models.json patch if ping fails with "Unknown model" error
 ```
+Test 1: OpenClaw + Anthropic        (per-user)   [ ] ping [ ] allowed [ ] approve [ ] reject [ ] blocked
+Test 2: OpenClaw + OpenAI           (per-user)   [ ] ping [ ] allowed [ ] approve [ ] reject [ ] blocked
+Test 3: OpenClaw + MiniMax          (per-user)   [ ] ping [ ] allowed [ ] approve [ ] reject [ ] blocked
+Test 4: Hermes + Anthropic          (per-user)   [ ] ping [ ] allowed [ ] approve [ ] reject [ ] blocked
+Test 5: Hermes + OpenAI             (per-user)   [ ] ping [ ] allowed [ ] approve [ ] reject [ ] blocked
+Test 6: Hermes + MiniMax            (per-user)   [ ] ping [ ] allowed [ ] approve [ ] reject [ ] blocked
+Test 7: OpenClaw + MiniMax          (shared bot) [ ] ping [ ] routing [ ] second-user-ignored
+Test 8: Hermes + MiniMax            (shared bot) [ ] ping [ ] routing [ ] second-user-ignored
+```
+
+### Shared bot test procedure (Tests 7 & 8)
+
+These tests verify that the shared platform bot routes messages to the correct agent by `telegram_user_id`.
+
+**Prerequisites:** `SHARED_BOT_TOKEN` and `SHARED_BOT_WEBHOOK_SECRET` must be set on the backend before starting. Restart the backend if you just added them.
+
+**Step 1 — Create agent via UI (no bot token field)**
+
+Navigate to `/agents/new` → Hosted Agent. The Telegram Bot Token field will be **hidden** and replaced with "Uses platform bot". Fill in:
+- Agent Name: `Test 7: OpenClaw Shared Bot` (or `Test 8: Hermes Shared Bot`)
+- Telegram User ID: `TELEGRAM_USER_ID` from `.env.test`
+- Model: MiniMax + `MINIMAX_API_KEY`
+- Runtime: OpenClaw (Test 7) or Hermes (Test 8)
+
+**Step 2 — Wait for machine to start** (same as per-user tests)
+
+**Step 3 — Ping test via shared bot**
+
+Send via Telethon to the shared bot username (not a per-agent bot):
+
+```bash
+source tests/integration/.env.test
+SHARED_BOT_USERNAME=AgentHelmDevPilot_bot   # or AgentHelmPilot_bot for prod
+
+TELEGRAM_API_ID=$TELEGRAM_API_ID \
+TELEGRAM_API_HASH=$TELEGRAM_API_HASH \
+TELEGRAM_PHONE=$TELEGRAM_PHONE \
+python3 /tmp/tg_send_and_wait_filtered.py $SHARED_BOT_USERNAME \
+  "What is 7+8? Reply with ONLY the number, nothing else." 90
+```
+
+**Expected:** `15`
+
+**Step 4 — Routing verification**
+
+Confirm the agent's DB record has `is_shared_bot=1` and `telegram_user_id=<TELEGRAM_USER_ID>`:
+
+```bash
+source tests/integration/.env.test
+curl -s -b /tmp/reins_test_cookies.txt \
+  "$REINS_URL/api/agents/<agent_id>/deployment" | python3 -m json.tool | grep -E "is_shared|telegram_user"
+```
+
+**Step 5 — Unknown-user test**
+
+From a different Telegram account (or using a second Telethon session), message the shared bot. The bot should reply "I don't have an agent set up for you yet."
+
+**Step 6 — Tear down** (same as per-user tests)

@@ -74,22 +74,34 @@ export async function generateOAuthLink(telegramUserId: number): Promise<OAuthLi
 
 export async function createAndDeploy(params: {
   name: string;
-  telegramToken: string;
+  telegramToken?: string;
   telegramUserId: string;
-  minimaxKey: string;
   onboardingTelegramUserId: number;
+  initialPrompt?: string;
 }): Promise<CreateAndDeployResponse> {
   return apiRequest<CreateAndDeployResponse>('POST', '/api/agents/create-and-deploy', {
     name: params.name,
-    telegramToken: params.telegramToken,
+    ...(params.telegramToken ? { telegramToken: params.telegramToken } : {}),
     telegramUserId: params.telegramUserId,
-    modelProvider: 'minimax',
-    modelName: 'MiniMax-M2.7',
-    openaiApiKey: params.minimaxKey,
+    modelProvider: 'anthropic',
+    modelName: 'claude-sonnet-4-5',
     runtime: 'openclaw',
     soulMd: DEFAULT_SOUL_MD,
     onboardingTelegramUserId: params.onboardingTelegramUserId,
+    initialPrompt: params.initialPrompt,
   });
+}
+
+export async function getInitialPromptTemplate(id: string): Promise<string | undefined> {
+  try {
+    const res = await apiRequest<{ templates: Array<{ id: string; name: string; content: string }> }>(
+      'GET',
+      '/api/initial-prompt-templates'
+    );
+    return res.templates.find((t) => t.id === id)?.content;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function getDeploymentStatus(deploymentId: string): Promise<DeploymentStatusResponse> {

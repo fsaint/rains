@@ -109,7 +109,7 @@ export default function Approvals() {
               {telegramLinkMutation.isPending ? (
                 <><Loader className="w-3 h-3 animate-spin" /> Generating link…</>
               ) : (
-                <>Message @ReinsVerification_bot to activate</>
+                <>Message @AgentHelmApprovalsBot to activate</>
               )}
             </button>
           </p>

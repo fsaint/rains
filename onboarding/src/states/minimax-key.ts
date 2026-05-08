@@ -2,6 +2,7 @@ import type { Context } from 'grammy';
 import type { Applicant } from '../db.js';
 import { updateApplicant } from '../db.js';
 import { HELM } from '../persona.js';
+import { config } from '../config.js';
 
 // MiniMax API keys are typically long alphanumeric strings (30+ chars)
 const MINIMAX_KEY_REGEX = /^[A-Za-z0-9_-]{20,}$/;
@@ -24,7 +25,7 @@ async function validateMinimaxKey(key: string): Promise<boolean> {
 export async function handleMinimaxKey(
   ctx: Context,
   applicant: Applicant
-): Promise<'botfather' | void> {
+): Promise<'botfather' | 'notify_bot' | void> {
   const text = ctx.message?.text?.trim();
 
   // Empty message or a bot command — show instructions
@@ -47,5 +48,5 @@ export async function handleMinimaxKey(
   }
 
   await updateApplicant(Number(applicant.telegram_user_id), { minimax_key: text });
-  return 'botfather';
+  return config.sharedBotEnabled ? 'notify_bot' : 'botfather';
 }

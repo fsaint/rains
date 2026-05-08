@@ -79,13 +79,12 @@ export function getPromotedImage(runtime: 'openclaw' | 'hermes'): string | null 
 /**
  * Apply a promotion to production:
  *
- * - openclaw: deploys the promoted image to `agentx-openclaw` via `flyctl deploy`.
- *   The existing getOpenClawImage() in backend/src/providers/fly.ts already reads
- *   from the live agentx-openclaw machines, so this is sufficient for both new
- *   agent provisioning and /redeploy-agent to pick up the new image automatically.
+ * - openclaw: deploys the promoted image to `reins-openclaw` (OPENCLAW_APP) via
+ *   `flyctl deploy`, then sets OPENCLAW_IMAGE secret on the backend app
+ *   (REINS_BACKEND_APP) so provisioning picks it up immediately.
  *
- * - hermes: prints the `flyctl secrets set` command the user needs to run on the
- *   backend Fly app (app name may vary, so we print rather than execute).
+ * - hermes: sets HERMES_IMAGE secret on the backend app (REINS_BACKEND_APP).
+ *   Prints the manual command if REINS_BACKEND_APP is not set.
  *
  * Returns true if the apply succeeded (or was not applicable), false on error.
  */
@@ -96,7 +95,7 @@ export async function applyPromotion(
   const { spawnSync } = await import('child_process');
 
   if (runtime === 'openclaw') {
-    const openclaw_app = process.env.OPENCLAW_APP || 'agentx-openclaw';
+    const openclaw_app = process.env.OPENCLAW_APP || 'reins-openclaw';
     console.log(`Deploying ${image} to ${openclaw_app}...`);
     const result = spawnSync(
       'flyctl',
@@ -108,6 +107,27 @@ export async function applyPromotion(
       return false;
     }
     console.log(`  Deployed to ${openclaw_app} — new agents and /redeploy-agent will use this image.`);
+
+    // Also set OPENCLAW_IMAGE secret on the backend app so it takes effect immediately
+    // without requiring a machine lookup.
+    const backendApp = process.env.REINS_BACKEND_APP;
+    if (backendApp) {
+      console.log(`Setting OPENCLAW_IMAGE on ${backendApp}...`);
+      const r2 = spawnSync(
+        'flyctl',
+        ['secrets', 'set', `OPENCLAW_IMAGE=${image}`, '--app', backendApp],
+        { stdio: 'inherit', encoding: 'utf8' },
+      );
+      if (r2.status !== 0) {
+        console.error(`flyctl secrets set OPENCLAW_IMAGE failed with exit code ${r2.status}`);
+        return false;
+      }
+      console.log(`  OPENCLAW_IMAGE updated on ${backendApp}.`);
+    } else {
+      console.log(`\nTo apply to production, run:`);
+      console.log(`  flyctl secrets set OPENCLAW_IMAGE=${image} --app <your-backend-app>`);
+      console.log(`  (or set REINS_BACKEND_APP env var to automate this step)`);
+    }
     return true;
   }
 

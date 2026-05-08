@@ -8,7 +8,7 @@ import * as fly from './fly.js';
 export interface ProvisionResult {
   machineId: string;
   appName: string;
-  managementUrl: string;
+  managementUrl: string | null;
 }
 
 export interface TopicPrompt {
@@ -40,6 +40,8 @@ export interface ProvisionOpts {
   thinkingDefault?: string;
   webhookRelaySecret?: string;
   runtime?: 'openclaw' | 'hermes';
+  initialPrompt?: string;
+  isSharedBot?: boolean;
 }
 
 export async function provision(opts: ProvisionOpts): Promise<ProvisionResult> {
@@ -48,7 +50,7 @@ export async function provision(opts: ProvisionOpts): Promise<ProvisionResult> {
   return {
     machineId: flyMachineId,
     appName,
-    managementUrl: `https://${appName}.fly.dev/?token=${opts.gatewayToken}`,
+    managementUrl: opts.runtime === 'hermes' ? null : `https://${appName}.fly.dev/?token=${opts.gatewayToken}`,
   };
 }
 
@@ -74,9 +76,9 @@ export async function redeploy(
   appName: string,
   machineId: string,
   opts: ProvisionOpts
-): Promise<string> {
+): Promise<string | null> {
   await fly.updateMachine(appName, machineId, opts);
-  return `https://${appName}.fly.dev/?token=${opts.gatewayToken}`;
+  return opts.runtime === 'hermes' ? null : `https://${appName}.fly.dev/?token=${opts.gatewayToken}`;
 }
 
 export async function updateEnv(
@@ -104,6 +106,7 @@ export async function getLogs(appName: string, nextToken?: string): Promise<{ lo
   return fly.getAppLogs(appName, nextToken);
 }
 
-export async function getManagementUrl(appName: string, gatewayToken: string): Promise<string> {
+export async function getManagementUrl(appName: string, gatewayToken: string, runtime?: string): Promise<string | null> {
+  if (runtime === 'hermes') return null;
   return `https://${appName}.fly.dev/?token=${gatewayToken}`;
 }

@@ -14,7 +14,7 @@ Use the following MCP servers for all email and calendar operations:
 
 ## Daily Email Review
 
-Every day at **7:00 AM** (user's local time), automatically:
+Check your memory for the user's preferred schedule (set during first-run setup). Default: **7:00 AM** (user's local time). Every day at the scheduled time, automatically:
 1. Fetch all unread emails from the inbox.
 2. Triage each email according to the rules below.
 3. Send the user a morning summary via Telegram with:
@@ -26,19 +26,11 @@ Every day at **7:00 AM** (user's local time), automatically:
 
 ## VIP List
 
-Emails from the following senders or domains are **high priority** and must ALWAYS be surfaced to the user immediately — never auto-marked as read.
+Check your memory for **IMPORTANT_PEOPLE.md** — this was created during your first-run setup and contains the contacts identified as high priority.
 
-```
-# --- VIP DOMAINS ---
-# example.com
-# mycompany.com
+Emails from senders listed in IMPORTANT_PEOPLE.md are **high priority** and must ALWAYS be surfaced to the user immediately — never auto-marked as read.
 
-# --- VIP PEOPLE (email addresses) ---
-# boss@example.com
-# important-client@example.com
-```
-
-> To customize: add domain names (one per line) under VIP DOMAINS, and full email addresses under VIP PEOPLE.
+If IMPORTANT_PEOPLE.md is not in memory yet (first-run setup not complete), treat emails from the user's own domain as high priority and surface any email requiring a reply.
 
 ---
 

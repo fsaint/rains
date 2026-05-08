@@ -1,0 +1,39 @@
+# Reins development configuration — non-secret, environment-specific values.
+# Secrets (API keys, tokens, passwords, DB URL) go in .env or environment variables.
+# Environment variables always override values here.
+
+server:
+  port: 5001
+  host: 0.0.0.0
+  log_level: info
+
+urls:
+  dashboard_url: https://reins-dev.btv.pw
+  public_url: https://reins-dev.btv.pw
+
+oauth:
+  google_redirect_uri: http://localhost:5001/api/oauth/google/callback
+  google_login_redirect_uri: http://localhost:5001/api/auth/google/callback
+  microsoft_redirect_uri: http://localhost:3000/api/oauth/microsoft/callback
+  microsoft_tenant_id: common
+
+fly:
+  org: reins-dev
+  openclaw_app: agentx-openclaw
+  # OPENCLAW_IMAGE and HERMES_IMAGE are promoted automatically by the image-test
+  # runner (applyPromotion in tests/image-test/lib/read-promoted.ts). Override
+  # via env var or set here for a pinned dev image.
+  openclaw_image: agentx-openclaw:latest
+  hermes_image: reins-hermes:latest
+
+browser:
+  max_instances: 5
+  idle_timeout_ms: 300000
+
+onboarding:
+  bot_webhook_url: http://localhost:3001
+  # The Telegram bot users message to confirm they want agent notifications.
+  # Development uses the dev bot; production uses the official approvals bot.
+  notify_bot_username: reins_dev_bot
+  # Skip BotFather step — use platform shared bot for the user's first agent.
+  shared_bot_enabled: true

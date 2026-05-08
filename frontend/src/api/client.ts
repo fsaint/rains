@@ -93,7 +93,7 @@ export interface DeploymentInfo {
 export interface CreateAndDeployData {
   name: string;
   description?: string;
-  telegramToken: string;
+  telegramToken?: string;
   telegramUserId?: string;
   initialPrompt?: string;
   modelProvider?: 'anthropic' | 'openai-codex' | 'openai' | 'minimax';
@@ -459,6 +459,22 @@ export const admin = {
 // Health
 export const health = {
   check: () => request<{ status: string; timestamp: string }>('/health'),
+};
+
+// Public config (no auth required)
+export const config = {
+  getPublic: () => request<{ sharedBotEnabled: boolean }>('/config/public'),
+};
+
+// Initial prompt templates
+export interface InitialPromptTemplate {
+  id: string;
+  name: string;
+  content: string;
+}
+
+export const initialPromptTemplates = {
+  list: () => request<{ templates: InitialPromptTemplate[] }>('/initial-prompt-templates'),
 };
 
 // Permission Matrix Types

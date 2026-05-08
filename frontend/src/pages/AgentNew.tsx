@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Loader2, ChevronDown, ChevronUp, Mail, PenLine } from 'lucide-react';
-import { agents, type CreateAndDeployData } from '../api/client';
+import { agents, initialPromptTemplates, config as apiConfig, type CreateAndDeployData } from '../api/client';
 
 const DEFAULT_SOUL = `You are a helpful AI assistant. Be concise, friendly, and thoughtful in your responses.`;
 
@@ -101,6 +101,7 @@ const PRESET_AGENTS = [
     label: 'Email & Calendar',
     description: 'Reads email at 7 AM, triages inbox, checks calendar before adding events.',
     soul: EMAIL_CALENDAR_SOUL,
+    templateId: 'email-and-calendar',
   },
   {
     id: 'custom',
@@ -108,6 +109,7 @@ const PRESET_AGENTS = [
     label: 'Custom',
     description: 'Start from scratch and define everything yourself.',
     soul: DEFAULT_SOUL,
+    templateId: null,
   },
 ];
 
@@ -134,6 +136,18 @@ export default function AgentNew() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState('');
   const [reauthApprovalId, setReauthApprovalId] = useState<string | null>(null);
+
+  const { data: templatesData } = useQuery({
+    queryKey: ['initial-prompt-templates'],
+    queryFn: () => initialPromptTemplates.list(),
+  });
+  const templates = templatesData?.templates ?? [];
+
+  const { data: publicConfig } = useQuery({
+    queryKey: ['public-config'],
+    queryFn: () => apiConfig.getPublic(),
+  });
+  const sharedBotEnabled = publicConfig?.sharedBotEnabled ?? false;
 
   const steps = agentType === 'manual' ? MANUAL_STEPS : STEPS;
 
@@ -174,7 +188,8 @@ export default function AgentNew() {
   const canAdvance = () => {
     if (step === 0) {
       if (agentType === 'manual') return form.name.trim() !== '';
-      return form.name.trim() !== '' && form.telegramToken.trim() !== '';
+      const tokenOk = sharedBotEnabled || (form.telegramToken?.trim() ?? '') !== '';
+      return form.name.trim() !== '' && tokenOk;
     }
     if (agentType !== 'manual' && step === 1) {
       if (form.modelProvider === 'minimax' || form.modelProvider === 'openai') return !!form.openaiApiKey?.trim();
@@ -199,6 +214,7 @@ export default function AgentNew() {
     } else {
       createMutation.mutate({
         ...form,
+        telegramToken: sharedBotEnabled ? undefined : (form.telegramToken || undefined),
         telegramUserId: form.telegramUserId || undefined,
         soulMd: form.soulMd || undefined,
         openaiApiKey: form.openaiApiKey || undefined,
@@ -346,19 +362,25 @@ export default function AgentNew() {
           </div>
           {agentType !== 'manual' && (
             <>
+              {sharedBotEnabled ? (
+                <div className="rounded-lg bg-blue-50 border border-blue-100 px-4 py-3 text-sm text-blue-700">
+                  Uses the platform bot — no personal bot token required.
+                </div>
+              ) : (
               <div>
                 <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
                   Telegram Bot Token *
                 </label>
                 <input
                   type="text"
-                  value={form.telegramToken}
+                  value={form.telegramToken ?? ''}
                   onChange={(e) => update({ telegramToken: e.target.value })}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-mono focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
                   placeholder="123456789:ABC..."
                 />
                 <p className="text-xs text-gray-400 mt-1">Get this from <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="text-trust-blue hover:underline">@BotFather</a> on Telegram</p>
               </div>
+              )}
               <div>
                 <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
                   Telegram User ID <span className="normal-case font-normal text-gray-400">(optional)</span>
@@ -567,13 +589,16 @@ export default function AgentNew() {
               <p className="text-xs text-gray-400 mt-1">Choose a pre-made agent or customize from scratch.</p>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {PRESET_AGENTS.map(({ id, icon: Icon, label, description, soul }) => {
+              {PRESET_AGENTS.map(({ id, icon: Icon, label, description, soul, templateId }) => {
                 const isSelected = form.soulMd === soul;
                 return (
                   <button
                     key={id}
                     type="button"
-                    onClick={() => update({ soulMd: soul })}
+                    onClick={() => {
+                      const tpl = templateId ? templates.find((t) => t.id === templateId) : null;
+                      update({ soulMd: soul, initialPrompt: tpl?.content ?? undefined });
+                    }}
                     className={`p-4 rounded-xl border-2 text-left transition-all ${
                       isSelected
                         ? 'border-trust-blue bg-trust-blue/5'
@@ -600,6 +625,27 @@ export default function AgentNew() {
               placeholder="Define your agent's personality and instructions..."
             />
           </section>
+          {templates.length > 0 && (
+            <section className="bg-white rounded-xl border border-gray-100 p-6 space-y-3">
+              <div>
+                <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">First Run Setup</h2>
+                <p className="text-xs text-gray-400 mt-1">Optional tasks the agent runs once on first launch, then marks complete.</p>
+              </div>
+              <select
+                value={templates.find((t) => t.content === form.initialPrompt)?.id ?? ''}
+                onChange={(e) => {
+                  const tpl = templates.find((t) => t.id === e.target.value);
+                  update({ initialPrompt: tpl?.content ?? undefined });
+                }}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none bg-white"
+              >
+                <option value="">None</option>
+                {templates.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+            </section>
+          )}
         </div>
       )}
 
@@ -661,7 +707,7 @@ export default function AgentNew() {
                     rows={4}
                     placeholder={`[{"name": "server-name", "url": "https://...", "transport": "http"}]`}
                   />
-                  <p className="text-xs text-gray-400 mt-1">Reins proxy is added automatically</p>
+                  <p className="text-xs text-gray-400 mt-1">AgentHelm proxy is added automatically</p>
                 </div>
               </div>
             )}
@@ -674,12 +720,12 @@ export default function AgentNew() {
         <section className="bg-white rounded-xl border border-gray-100 p-6 space-y-3">
           <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Ready to Connect</h2>
           <p className="text-sm text-gray-600">
-            Clicking <strong>Create Manual Agent</strong> will provision a Reins agent and give you an MCP endpoint URL.
+            Clicking <strong>Create Manual Agent</strong> will provision an AgentHelm agent and give you an MCP endpoint URL.
             Paste that URL into any MCP-compatible AI agent — no hosted runtime required.
           </p>
           <ul className="text-sm text-gray-500 space-y-1 list-disc list-inside">
             <li>Works with Claude Desktop, Claude Code, OpenAI, and any MCP client</li>
-            <li>Reins enforces policies and manages OAuth credentials</li>
+            <li>AgentHelm enforces policies and manages OAuth credentials</li>
             <li>Add credentials and permissions after creation</li>
           </ul>
         </section>

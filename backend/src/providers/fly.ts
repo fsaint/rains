@@ -3,6 +3,8 @@
  * Ported from AgentX, adapted for Reins configuration patterns.
  */
 
+import { config } from '../config/index.js';
+
 const FLY_API_BASE = 'https://api.machines.dev/v1';
 
 function getFlyToken(): string {
@@ -12,20 +14,18 @@ function getFlyToken(): string {
 }
 
 function getFlyOrg(): string {
-  const org = process.env.FLY_ORG;
-  if (!org) throw new Error('FLY_ORG environment variable is required');
+  const org = config.flyOrg;
+  if (!org) throw new Error('FLY_ORG is required (set via env var or config/production.yaml)');
   return org;
 }
-
-const OPENCLAW_APP = process.env.OPENCLAW_APP || 'agentx-openclaw';
 
 let _cachedImage: string | null = null;
 let _cacheTime = 0;
 const IMAGE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 async function getOpenClawImage(): Promise<string> {
-  // Explicit image takes precedence
-  const explicit = process.env.OPENCLAW_IMAGE;
+  // Explicit image takes precedence (env var or YAML)
+  const explicit = config.openclawImage;
   if (explicit) return explicit;
 
   // Return cached image if fresh
@@ -34,7 +34,7 @@ async function getOpenClawImage(): Promise<string> {
 
   // Try to resolve from running machines first
   try {
-    const res = await fetch(`https://api.machines.dev/v1/apps/${OPENCLAW_APP}/machines`, {
+    const res = await fetch(`https://api.machines.dev/v1/apps/${config.openclawApp}/machines`, {
       headers: { Authorization: `Bearer ${getFlyToken()}` },
     });
     if (res.ok) {
@@ -59,13 +59,13 @@ async function getOpenClawImage(): Promise<string> {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        query: `{ app(name: "${OPENCLAW_APP}") { currentRelease { imageRef } } }`,
+        query: `{ app(name: "${config.openclawApp}") { currentRelease { imageRef } } }`,
       }),
     });
     const gql = await gqlRes.json() as { data?: { app?: { currentRelease?: { imageRef?: string } } } };
     const imageRef = gql.data?.app?.currentRelease?.imageRef;
     if (imageRef) {
-      console.log(`Resolved image from ${OPENCLAW_APP} latest release: ${imageRef}`);
+      console.log(`Resolved image from ${config.openclawApp} latest release: ${imageRef}`);
       _cachedImage = imageRef;
       _cacheTime = now;
       return imageRef;
@@ -74,12 +74,12 @@ async function getOpenClawImage(): Promise<string> {
     console.warn('Failed to resolve image from releases:', err);
   }
 
-  throw new Error(`Cannot resolve OpenClaw image: no machines or releases found for app ${OPENCLAW_APP}. Set OPENCLAW_IMAGE explicitly.`);
+  throw new Error(`Cannot resolve OpenClaw image: no machines or releases found for app ${config.openclawApp}. Set OPENCLAW_IMAGE explicitly.`);
 }
 
 function getHermesImage(): string {
-  const image = process.env.HERMES_IMAGE;
-  if (!image) throw new Error('HERMES_IMAGE environment variable is required for Hermes runtime');
+  const image = config.hermesImage;
+  if (!image) throw new Error('HERMES_IMAGE is required for Hermes runtime (set via env var or config/production.yaml)');
   return image;
 }
 
@@ -125,7 +125,10 @@ async function allocateIps(appName: string) {
 }
 
 export async function createApp(instanceId: string): Promise<string> {
-  const appName = `reins-${instanceId.slice(0, 8).toLowerCase().replace(/[^a-z0-9-]/g, '')}`;
+  // Keep only lowercase alphanumeric chars (no dashes/underscores) to avoid double-dash
+  // when the nanoid starts with '-' or '_', which Fly rejects as an invalid app name.
+  const suffix = instanceId.replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 8) || 'agent';
+  const appName = `reins-${suffix}`;
   await flyFetch('/apps', {
     method: 'POST',
     body: JSON.stringify({ app_name: appName, org_slug: getFlyOrg() }),
@@ -157,6 +160,8 @@ export interface CreateMachineOpts {
   thinkingDefault?: string;
   webhookRelaySecret?: string;
   runtime?: string;
+  initialPrompt?: string;
+  isSharedBot?: boolean;
 }
 
 export interface TopicPrompt {
@@ -203,7 +208,7 @@ export async function updateMachine(
 }
 
 async function buildMachineConfig(opts: CreateMachineOpts) {
-  const reinsUrl = process.env.REINS_PUBLIC_URL || process.env.REINS_DASHBOARD_URL || '';
+  const reinsUrl = config.publicUrl || config.dashboardUrl || '';
 
   return {
     image: await getOpenClawImage(),
@@ -218,7 +223,7 @@ async function buildMachineConfig(opts: CreateMachineOpts) {
       USAGE_CALLBACK_URL: `${reinsUrl}/api/webhooks/usage`,
       INSTANCE_USER_ID: opts.instanceId,
       REINS_API_URL: reinsUrl,
-      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? '',
       OPENCLAW_GATEWAY_TOKEN: opts.gatewayToken,
       OPENCLAW_NO_RESPAWN: '1',
       NODE_OPTIONS: '--max-old-space-size=3072 --dns-result-order=ipv4first',
@@ -234,10 +239,14 @@ async function buildMachineConfig(opts: CreateMachineOpts) {
       ...(opts.modelCredentials ? { OPENAI_CODEX_TOKENS: opts.modelCredentials } : {}),
       THINKING_DEFAULT: opts.thinkingDefault ?? 'medium',
       // Webhook relay: OpenClaw registers with Telegram pointing to Reins; Reins forwards back here on port 8443
+      // Shared bot: all machines point to the shared-bot endpoint instead of per-deployment URL
       ...(opts.webhookRelaySecret ? {
-        OPENCLAW_WEBHOOK_URL: `${reinsUrl}/api/webhooks/agent-bot/${opts.instanceId}`,
+        OPENCLAW_WEBHOOK_URL: opts.isSharedBot
+          ? `${reinsUrl}/api/webhooks/shared-bot`
+          : `${reinsUrl}/api/webhooks/agent-bot/${opts.instanceId}`,
         OPENCLAW_WEBHOOK_SECRET: opts.webhookRelaySecret,
       } : {}),
+      ...(opts.initialPrompt ? { INITIAL_PROMPT: opts.initialPrompt } : {}),
     },
     services: [
       {
@@ -274,7 +283,7 @@ async function buildMachineConfig(opts: CreateMachineOpts) {
 }
 
 async function buildHermesMachineConfig(opts: CreateMachineOpts) {
-  const reinsUrl = process.env.REINS_PUBLIC_URL || process.env.REINS_DASHBOARD_URL || '';
+  const reinsUrl = config.publicUrl || config.dashboardUrl || '';
 
   return {
     image: getHermesImage(),
@@ -288,7 +297,9 @@ async function buildHermesMachineConfig(opts: CreateMachineOpts) {
       ...(opts.telegramUserId ? { TELEGRAM_ALLOWED_USERS: opts.telegramUserId } : {}),
       ...(opts.webhookRelaySecret ? {
         TELEGRAM_WEBHOOK_SECRET: opts.webhookRelaySecret,
-        TELEGRAM_WEBHOOK_URL: `${reinsUrl}/api/webhooks/agent-bot/${opts.instanceId}`,
+        TELEGRAM_WEBHOOK_URL: opts.isSharedBot
+          ? `${reinsUrl}/api/webhooks/shared-bot`
+          : `${reinsUrl}/api/webhooks/agent-bot/${opts.instanceId}`,
         TELEGRAM_WEBHOOK_PORT: '8787',
       } : {}),
       ...(opts.soulMd ? { HERMES_PERSONA: opts.soulMd } : {}),
@@ -296,12 +307,13 @@ async function buildHermesMachineConfig(opts: CreateMachineOpts) {
       ...(opts.modelName ? { MODEL_NAME: opts.modelName } : {}),
       ...(opts.modelProvider === 'minimax' && opts.openaiApiKey ? { MINIMAX_API_KEY: opts.openaiApiKey } : {}),
       ...(opts.modelProvider === 'openai' && opts.openaiApiKey ? { OPENAI_API_KEY: opts.openaiApiKey } : {}),
-      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? '',
       MCP_CONFIG: JSON.stringify(opts.mcpConfigs),
       HERMES_GATEWAY_TOKEN: opts.gatewayToken,
       REINS_API_URL: reinsUrl,
       INSTANCE_USER_ID: opts.instanceId,
       USAGE_CALLBACK_URL: `${reinsUrl}/api/webhooks/usage`,
+      ...(opts.initialPrompt ? { INITIAL_PROMPT: opts.initialPrompt } : {}),
     },
     services: [
       {

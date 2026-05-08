@@ -2,8 +2,14 @@ import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import bcrypt from 'bcryptjs';
 import { nanoid } from 'nanoid';
+import { readdir, readFile } from 'fs/promises';
+import { join, dirname, basename } from 'path';
+import { fileURLToPath } from 'url';
 import { config } from '../config/index.js';
 import * as schema from './schema.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const TEMPLATES_DIR = join(__dirname, '..', '..', '..', 'templates', 'initial-prompts');
 
 const DATABASE_URL = config.databaseUrl;
 
@@ -500,6 +506,14 @@ export async function initializeDatabase() {
     END $$
   `;
 
+  // Add is_shared_bot column for shared platform bot routing
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS is_shared_bot INTEGER DEFAULT 0;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
+
   // Add telegram_bot_username for display in the dashboard
   await sql`
     DO $$ BEGIN
@@ -546,6 +560,17 @@ export async function initializeDatabase() {
   await sql`ALTER TABLE pending_oauth_flows ALTER COLUMN initiated_at TYPE TIMESTAMPTZ USING initiated_at::TIMESTAMPTZ`;
   await sql`ALTER TABLE pending_oauth_flows ALTER COLUMN expires_at TYPE TIMESTAMPTZ USING expires_at::TIMESTAMPTZ`;
 
+  // initial_prompt_templates table
+  await sql`
+    CREATE TABLE IF NOT EXISTS initial_prompt_templates (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (now()),
+      updated_at TEXT NOT NULL DEFAULT (now())
+    )
+  `;
+
   // Seed: create admin user if no users exist
   const userCount = await sql`SELECT COUNT(*) as count FROM users`;
   const count = Number(userCount[0]?.count ?? 0);
@@ -566,6 +591,39 @@ export async function initializeDatabase() {
     await sql`UPDATE credentials SET user_id = ${adminId} WHERE user_id IS NULL`;
 
     console.log(`Created admin user: ${adminEmail}`);
+  }
+
+  // Seed initial prompt templates from files
+  try {
+    await seedInitialPromptTemplates();
+  } catch (err) {
+    console.warn('[db] Could not seed initial prompt templates:', err);
+  }
+}
+
+async function seedInitialPromptTemplates() {
+  let files: string[];
+  try {
+    files = await readdir(TEMPLATES_DIR);
+  } catch {
+    // Templates directory not present (e.g. stripped Docker build)
+    return;
+  }
+
+  for (const file of files) {
+    if (!file.endsWith('.md')) continue;
+    const id = basename(file, '.md');
+    const name = id
+      .split('-')
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ')
+      .replace('And', '&');
+    const content = await readFile(join(TEMPLATES_DIR, file), 'utf-8');
+    await sql`
+      INSERT INTO initial_prompt_templates (id, name, content, created_at, updated_at)
+      VALUES (${id}, ${name}, ${content}, now(), now())
+      ON CONFLICT (id) DO UPDATE SET name = ${name}, content = ${content}, updated_at = now()
+    `;
   }
 }
 
