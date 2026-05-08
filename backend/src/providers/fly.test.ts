@@ -33,14 +33,14 @@ describe('Fly Provider', () => {
       const { createApp } = await import('./fly.js');
       const appName = await createApp('test-instance-1234');
 
-      expect(appName).toBe('reins-test-ins');
+      expect(appName).toBe('reins-testinst');
       expect(fetchMock).toHaveBeenCalledTimes(3);
 
       // Verify app creation call
       const createCall = fetchMock.mock.calls[0];
       expect(createCall[0]).toContain('/apps');
       const body = JSON.parse(createCall[1].body);
-      expect(body.app_name).toBe('reins-test-ins');
+      expect(body.app_name).toBe('reins-testinst');
       expect(body.org_slug).toBe('test-org');
     });
 
@@ -53,7 +53,7 @@ describe('Fly Provider', () => {
 
       const { createApp } = await import('./fly.js');
       const appName = await createApp('test-instance-1234');
-      expect(appName).toBe('reins-test-ins');
+      expect(appName).toBe('reins-testinst');
     });
   });
 
@@ -213,12 +213,8 @@ describe('Fly Provider', () => {
     });
 
     it('should throw if FLY_API_TOKEN is missing', async () => {
+      // getFlyToken() reads process.env at call time — no re-import needed
       delete process.env.FLY_API_TOKEN;
-      const fetchMock = vi.fn();
-      vi.stubGlobal('fetch', fetchMock);
-
-      // Re-import to pick up new env
-      vi.resetModules();
       const { createApp } = await import('./fly.js');
       await expect(createApp('test')).rejects.toThrow('FLY_API_TOKEN');
     });

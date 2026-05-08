@@ -80,9 +80,9 @@ describe('Provider Abstraction', () => {
 
   describe('redeploy', () => {
     it('should call fly.updateMachine and return management URL', async () => {
-      const url = await provider.redeploy('app', 'machine', defaultOpts);
+      const result = await provider.redeploy('app', 'machine', defaultOpts);
       expect(fly.updateMachine).toHaveBeenCalledWith('app', 'machine', expect.any(Object));
-      expect(url).toBe('https://app.fly.dev/?token=gw-token-123');
+      expect(result.managementUrl).toBe('https://app.fly.dev/?token=gw-token-123');
     });
   });
 

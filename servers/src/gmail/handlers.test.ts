@@ -237,7 +237,7 @@ describe('Gmail Handlers', () => {
       const result = await handleGetMessage({ messageId: 'msg1' }, mockContext);
 
       expect(result.data.attachments).toEqual([
-        { filename: 'document.pdf', mimeType: 'application/pdf', size: 1024 },
+        { filename: 'document.pdf', mimeType: 'application/pdf', size: 1024, attachmentId: 'att1' },
       ]);
     });
   });

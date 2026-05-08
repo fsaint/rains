@@ -43,6 +43,9 @@ vi.mock('../db/index.js', () => ({
       }),
     })),
   },
+  client: {
+    execute: vi.fn().mockResolvedValue({ rows: [] }),
+  },
 }));
 
 vi.mock('../services/permissions.js', () => ({
@@ -339,16 +342,19 @@ describe('handleMCPRequest', () => {
       expect(result.content).toHaveLength(1);
       expect(result.content[0].type).toBe('text');
 
-      const parsed = JSON.parse(result.content[0].text);
-      expect(parsed.status).toBe('APPROVAL_PENDING');
-      expect(typeof parsed.jobId).toBe('string');
-      expect(parsed.jobId.length).toBeGreaterThan(0);
-      expect(parsed.required_tool_call.tool).toBe('reins_get_result');
-      expect(parsed.required_tool_call.arguments.jobId).toBe(parsed.jobId);
+      const text = result.content[0].text;
+      expect(text).toContain('APPROVAL_PENDING');
+      expect(text).toContain('reins_get_result');
+
+      // Extract jobId from "jobId: <id>" in the text
+      const jobIdMatch = text.match(/jobId[":]+\s*"?([a-zA-Z0-9_-]+)"?/);
+      expect(jobIdMatch).not.toBeNull();
+      const jobId = jobIdMatch![1];
+      expect(jobId.length).toBeGreaterThan(0);
 
       // registerExecutor must have been called with the jobId
       expect(approvalQueue.registerExecutor).toHaveBeenCalledWith(
-        parsed.jobId,
+        jobId,
         expect.any(Function),
       );
     });
@@ -369,16 +375,26 @@ describe('reins_get_result tool', () => {
   });
 
   it('returns pending status for an unresolved job', async () => {
-    vi.mocked(approvalQueue.get).mockResolvedValueOnce({
+    // reins_get_result long-polls for 30s when status is pending — use fake timers
+    vi.useFakeTimers();
+
+    const pendingApproval = {
       id: 'job-1', agentId: 'agent-1', tool: 'gmail_send_email',
       arguments: {}, status: 'pending',
       requestedAt: new Date(), expiresAt: new Date(Date.now() + 3600_000),
-    } as any);
+    } as any;
+    vi.mocked(approvalQueue.get).mockResolvedValue(pendingApproval);
 
-    const response = await handleMCPRequest('agent-1', {
+    const responsePromise = handleMCPRequest('agent-1', {
       jsonrpc: '2.0', id: 1, method: 'tools/call',
       params: { name: 'reins_get_result', arguments: { jobId: 'job-1' } },
     });
+
+    // Advance past the 30s long-poll deadline
+    await vi.advanceTimersByTimeAsync(31_000);
+    const response = await responsePromise;
+
+    vi.useRealTimers();
 
     expect(response.error).toBeUndefined();
     const content = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text);
