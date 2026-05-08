@@ -413,7 +413,7 @@ VITE_API_URL=http://localhost:3000
 
 Five Telegram entities must be wired for a full deployment. Four are bots you own; one is a group.
 
-### 1. Onboarding Bot — `@SpecialAgentHelmBot`
+### 1. Onboarding Bot — `@SpecialAgentHelmBot` (prod) / `@AgentHelmDevOnboarding_bot` (dev)
 
 The entry point for new users. Users send `/start` to this bot to begin the onboarding flow.
 
@@ -425,7 +425,7 @@ The entry point for new users. Users send `/start` to this bot to begin the onbo
   - `/reset_<userId>` — wipes the applicant record (clean slate for re-testing)
 - **Webhook:** Telegram sends updates to `https://app.agenthelm.mom/telegram` (relayed from `agenthelm-onboarding`)
 
-### 2. Approvals Bot — `@AgentHelmApprovalsBot`
+### 2. Approvals Bot — `@AgentHelmApprovalsBot` (prod) / `@reins_dev_bot` (dev)
 
 Dual-purpose bot — used during onboarding AND by deployed agents.
 
@@ -442,12 +442,12 @@ Dual-purpose bot — used during onboarding AND by deployed agents.
 
 ### 3. Admin Notification Group — Agent Helm Verifications
 
-A private Telegram group containing `@SpecialAgentHelmBot`. New applicant notifications are sent here.
+A private Telegram group containing the onboarding bot. New applicant notifications are sent here.
 
 - **Chat ID:** set as `ADMIN_CHAT_ID` on `agenthelm-onboarding` (if omitted, falls back to `ADMIN_TELEGRAM_ID` — direct message to admin)
 - **Purpose:** Admin receives `New applicant: @username / Use case / Gmail / /approve_ /reject_` messages here
 - **No @username** — navigate via chat ID or search. Group href in Telegram Web: `#-5259694651`
-- **Setup:** Create a group, add `@SpecialAgentHelmBot`, set the group chat ID as `ADMIN_CHAT_ID`
+- **Setup:** Create a group, add the onboarding bot (`@SpecialAgentHelmBot` prod / `@AgentHelmDevOnboarding_bot` dev), set the group chat ID as `ADMIN_CHAT_ID`
 
 ### 4. Admin Telegram Account
 
@@ -477,10 +477,10 @@ Each user creates their own bot via `@BotFather` during onboarding and provides 
 ### Telegram Wiring Checklist (new deployment)
 
 ```
-[ ] Create @SpecialAgentHelmBot via BotFather → set ONBOARDING_BOT_TOKEN
-[ ] Create @AgentHelmApprovalsBot via BotFather → set REINS_TELEGRAM_BOT_TOKEN (core)
-                                                 → set NOTIFY_BOT_USERNAME (onboarding)
-[ ] Create Agent Helm Verifications group → add @SpecialAgentHelmBot
+[ ] Create @SpecialAgentHelmBot (prod) / @AgentHelmDevOnboarding_bot (dev) via BotFather → set ONBOARDING_BOT_TOKEN
+[ ] Create @AgentHelmApprovalsBot (prod) / @reins_dev_bot (dev) via BotFather → set REINS_TELEGRAM_BOT_TOKEN (core)
+                                                                              → set NOTIFY_BOT_USERNAME (onboarding)
+[ ] Create Agent Helm Verifications group → add onboarding bot
                                           → set ADMIN_CHAT_ID to group chat ID
 [ ] Set ADMIN_TELEGRAM_ID to admin's Telegram user ID
 [ ] Create Agent Helm Support group → get invite link
@@ -655,8 +655,8 @@ No `max_machines_running` constraint needed — onboarding is stateless per requ
 | `AGENTHELM_API_URL` | `https://app.agenthelm.mom` |
 | `DASHBOARD_URL` | `https://app.agenthelm.mom` |
 | `NOTIFY_BOT_USERNAME` | `AgentHelmApprovalsBot` (overrides YAML default `reins_dev_bot`) |
-| `ADMIN_TELEGRAM_ID` | Telegram user ID for the admin |
-| `ADMIN_CHAT_ID` | Chat ID for admin notifications |
+| `ADMIN_TELEGRAM_ID` | Telegram user ID of the admin — only this user's `/approve_`, `/reject_`, `/reset_` commands are accepted |
+| `ADMIN_CHAT_ID` | Chat ID of the group where the onboarding bot posts new applicant alerts and accepts admin commands. Dev: `-5159855796`. If omitted, falls back to DMing `ADMIN_TELEGRAM_ID` directly. |
 | `NODE_ENV` | `production` |
 
 ### Deploying
@@ -728,7 +728,9 @@ fly secrets set --app agenthelm-core \
 | [`docs/ops/LOCAL_DEV_SETUP.md`](docs/ops/LOCAL_DEV_SETUP.md) | Local development setup: .env variables, Google OAuth redirect URIs, Telegram tunnel, dev bots |
 | [`docs/ops/PROD_SETUP.md`](docs/ops/PROD_SETUP.md) | Production setup checklist: Google OAuth, Fly secrets, DNS, deployment steps |
 | [`docs/ops/UPDATE_API_KEY.md`](docs/ops/UPDATE_API_KEY.md) | How to update a user's LLM API key in both the DB and the running Fly machine |
+| [`docs/ops/COMMON_ERRORS.md`](docs/ops/COMMON_ERRORS.md) | Recurring operational issues: bot not responding, MiniMax startup, webhook relay 404 |
 | [`docs/ops/DNS.md`](docs/ops/DNS.md) | DNS configuration: Vercel records, Fly app hostnames, common mistakes, fix runbook |
+| [`TESTING.md`](TESTING.md) | All test tiers: unit (Vitest), E2E (Playwright), live integration (Telegram/Telethon), onboarding flow |
 | [`docs/TESTING_GUIDE.md`](docs/TESTING_GUIDE.md) | Guide for validating the first operational version of Reins end-to-end |
 | [`docs/TELEGRAM_AGENTS.md`](docs/TELEGRAM_AGENTS.md) | Telegram bot assignments and wiring for all platform bots |
 

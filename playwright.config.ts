@@ -1,4 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
+import { config as loadEnv } from 'dotenv';
+
+// Load root .env so TEST_TELEGRAM_BOT_TOKEN and other dev vars are available
+loadEnv({ path: '.env' });
 
 /**
  * Playwright E2E configuration.
@@ -42,8 +46,9 @@ export default defineConfig({
           env: {
             ADMIN_EMAIL: process.env.ADMIN_EMAIL || 'admin@reins.local',
             ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'changeme',
-            REINS_PROVIDER: process.env.REINS_PROVIDER || 'local',
-            OPENCLAW_IMAGE: process.env.OPENCLAW_IMAGE || 'reins-stub-openclaw:latest',
+            // Fly org for E2E test deployments (images live in personal org)
+            FLY_ORG: process.env.FLY_ORG || 'personal',
+            FLY_API_TOKEN: process.env.FLY_API_TOKEN || '',
           },
         },
         {

@@ -424,22 +424,38 @@ if [ -n "$OPENAI_CODEX_TOKENS" ]; then
     exec node /app/openclaw.mjs gateway --bind lan --port 18789
   fi
 elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$OPENAI_API_KEY" ] && [ -n "$MODEL_NAME" ]; then
-  # For custom OpenAI-compatible base URLs (e.g. MiniMax), use a 2-phase startup.
-  # The gateway loads models.json into memory at boot and never re-reads it, so we must
-  # inject the custom model BEFORE the final gateway start. Let doctor run first to create
-  # the workspace and write its default models.json, then patch it, then do the real start.
+  # For custom OpenAI-compatible base URLs (e.g. MiniMax), use a 2-phase startup on first
+  # boot only. The gateway loads models.json into memory at boot and never re-reads it, so
+  # we must inject the custom model BEFORE the final gateway start.
+  #
+  # Phase 1 lets the doctor create workspace + default models.json on the first boot.
+  # On subsequent boots the workspace already exists — skipping Phase 1 prevents the doctor
+  # from resetting workspace state, which causes slow (4+ min) Phase 2 startup and crashes.
 
-  # Phase 1: start briefly so doctor creates workspace + default models.json
-  node /app/openclaw.mjs gateway --bind lan --port 18789 &
-  GATEWAY_PID=$!
-  sleep 8
-  kill $GATEWAY_PID 2>/dev/null
-  wait $GATEWAY_PID 2>/dev/null || true
+  MODELS_PATH="${HOME:-/home/node}/.openclaw/agents/main/agent/models.json"
+  if node -e "
+    try {
+      const fs = require('fs');
+      const d = JSON.parse(fs.readFileSync('$MODELS_PATH', 'utf8'));
+      const p = d.providers && d.providers['openai'];
+      process.exit(p && p.models && p.models.find(m => m.id === '$MODEL_NAME') ? 0 : 1);
+    } catch(e) { process.exit(1); }
+  " 2>/dev/null; then
+    echo "[entrypoint] models.json: $MODEL_NAME already registered, skipping Phase 1"
+  else
+    echo "[entrypoint] models.json: $MODEL_NAME not found, running Phase 1 to initialize workspace"
+    # Phase 1: start briefly so doctor creates workspace + default models.json
+    node /app/openclaw.mjs gateway --bind lan --port 18789 &
+    GATEWAY_PID=$!
+    sleep 8
+    kill $GATEWAY_PID 2>/dev/null
+    wait $GATEWAY_PID 2>/dev/null || true
 
-  # Re-generate openclaw.json (doctor may have overwritten it during phase 1)
-  generate_config
+    # Re-generate openclaw.json (doctor may have overwritten it during phase 1)
+    generate_config
+  fi
 
-  # Inject custom model into models.json before final startup
+  # Inject/update custom model into models.json before final startup
   node -e "
     const fs = require('fs'), path = require('path');
     const modelsPath = (process.env.HOME || '/home/node') + '/.openclaw/agents/main/agent/models.json';

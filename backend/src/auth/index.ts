@@ -484,6 +484,8 @@ export async function registerAuth(app: FastifyInstance) {
       path.startsWith('/mcp/') ||
       path.startsWith('/api/agents/register') || // agent self-registration
       path === '/api/webhooks/telegram' || // Telegram webhook (authenticated via secret_token header)
+      path === '/api/webhooks/shared-bot' || // Shared bot relay (authenticated via secret_token header)
+      path === '/api/config/public' || // Public config (no secrets)
       path.startsWith('/api/webhooks/agent-bot/') || // Agent bot relay (authenticated via secret_token header)
       path.startsWith('/api/onboarding/') || // Onboarding bot (authenticated via API key)
       path === '/api/agents/create-and-deploy' || // Onboarding bot agent provisioning (authenticated via API key)

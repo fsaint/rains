@@ -43,13 +43,13 @@ export async function handleQualification(
 
     await updateApplicant(ctx.from!.id, { gmail_address: text });
 
-    // Notify admin
+    // Notify admin (fire-and-forget — don't block user flow on failure)
     if (_bot) {
       const username = applicant.username ? `@${applicant.username}` : `User ${ctx.from!.id}`;
-      await _bot.api.sendMessage(
+      _bot.api.sendMessage(
         config.adminChatId ?? config.adminTelegramId,
         `New applicant: ${username}\nUse case: "${applicant.use_case}"\nGmail: ${text}\n/approve_${ctx.from!.id}  /reject_${ctx.from!.id}`
-      );
+      ).catch((err: unknown) => console.error('[qualification] admin notification failed:', err));
     }
 
     await ctx.reply(HELM.pendingApproval);
