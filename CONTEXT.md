@@ -65,7 +65,9 @@ A lightweight notification bot embedded in the AgentHelm backend. Proactively al
 User finds AgentHelm (Reddit, LinkedIn, word of mouth) → fills Tally.so questionnaire → Felipe reviews → approved applicants receive invite code.
 
 ### 2. Onboarding (via `@SpecialAgentHelm`)
-State machine: `qualification` → `pending_approval` → `gmail_oauth` → `minimax_key` → `botfather` → `notify_bot` → `provisioning` → `validating` → `password_setup` → `done`.
+State machine: `qualification` → `pending_approval` → `gmail_oauth` → `notify_bot` → `provisioning` → `validating` → `password_setup` → `done`.
+
+In shared-bot mode (platform provides the bot), the `botfather` step is skipped — users go directly from `gmail_oauth` to `notify_bot`. The platform provides the LLM API key (MiniMax/Anthropic) so users are never asked for one.
 
 By the end: user has a live Telegram bot (their personal agent), a connected Gmail account, and an AgentHelm dashboard account.
 

@@ -61,21 +61,23 @@ qualification
 pending_approval
     ↓
 gmail_oauth
-    ↓
-minimax_key
-    ↓
-botfather
-    ↓
-notify_bot
-    ↓
-provisioning
-    ↓
-validating
-    ↓
-password_setup
-    ↓
-done
+    ↓ (shared-bot mode)       ↓ (custom-bot mode)
+notify_bot               botfather
+    ↓                         ↓
+    └──────────┬──────────────┘
+               ↓
+         provisioning
+               ↓
+          validating
+               ↓
+        password_setup
+               ↓
+             done
 ```
+
+**Shared-bot mode** (default, `SHARED_BOT_ENABLED=true`): the platform provides both the Telegram bot (`@MailAndCalendarHelmBot`) and the LLM API key. Users skip `minimax_key` and `botfather` entirely — they go directly from `gmail_oauth` to `notify_bot`.
+
+**Custom-bot mode** (`SHARED_BOT_ENABLED=false`): users create their own Telegram bot via BotFather and provide the token. The `minimax_key` state is a no-op that auto-advances; the platform still provides the LLM API key.
 
 ---
 
@@ -137,19 +139,15 @@ Helm: *"Gmail connected."*
 
 ---
 
-### `minimax_key`
+### `minimax_key` *(deprecated — no-op)*
 
-Helm instructs:
-> "Head to platform.minimax.io — create an account and grab your API key. Paste it here when you have it."
+This state is no longer used. The handler auto-advances to `notify_bot` (shared-bot mode) or `botfather` (custom-bot mode) without prompting the user. Retained in the code only to gracefully advance any applicants whose state was set by an older version of the flow.
 
-On paste:
-- Bot makes a test call to MiniMax API to validate
-- If valid: store key, advance
-- If invalid: *"That key didn't check out. Try again."*
+The platform provides the LLM API key (via `MINIMAX_API_KEY` secret on `agenthelm-core`) — users are never asked to supply one.
 
 ---
 
-### `botfather`
+### `botfather` *(custom-bot mode only)*
 
 Helm instructs:
 > "Open @BotFather on Telegram. Send /newbot, give your agent a name, and paste the token it gives you back here."
@@ -181,13 +179,13 @@ Bot calls AgentHelm backend:
 POST /api/agents/create-and-deploy
 {
   name: "<username>'s Agent",
-  telegramToken: <bot_token>,
   telegramUserId: <telegram_user_id>,
-  modelProvider: "minimax",
-  modelName: "MiniMax-M2.7",
-  openaiApiKey: <minimax_key>,
-  runtime: "hermes",
+  modelProvider: "anthropic",
+  modelName: "claude-sonnet-4-5",
+  runtime: "openclaw",
   soulMd: <default_starter_persona>
+  // telegramToken: omitted in shared-bot mode (SHARED_BOT_TOKEN used by backend)
+  // openaiApiKey: omitted — backend uses platform ANTHROPIC_API_KEY
 }
 ```
 
@@ -459,14 +457,14 @@ Content-Type: application/json
 
 {
   "name": "My Agent",
-  "telegramToken": "<bot_token_from_botfather>",
   "telegramUserId": "123456789",
-  "modelProvider": "minimax",
-  "modelName": "MiniMax-M2.7",
-  "openaiApiKey": "<minimax_api_key>",
-  "runtime": "hermes",
+  "modelProvider": "anthropic",
+  "modelName": "claude-sonnet-4-5",
+  "runtime": "openclaw",
   "soulMd": "<default_starter_persona>",
   "onboardingTelegramUserId": 123456789
+  // Shared-bot mode: telegramToken omitted — backend uses SHARED_BOT_TOKEN
+  // openaiApiKey omitted — backend uses platform ANTHROPIC_API_KEY
 }
 ```
 

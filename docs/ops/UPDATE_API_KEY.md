@@ -1,5 +1,9 @@
 # Updating a User's API Key
 
+> **Note (2026-05):** In shared-bot mode, the platform provides the LLM API key via `MINIMAX_API_KEY` / `ANTHROPIC_API_KEY` on `agenthelm-core`. Individual users no longer supply their own key. To rotate the platform key, update the secret on `agenthelm-core` and restart the service — no per-user update is needed.
+>
+> This runbook applies to agents that were deployed with a **user-supplied API key** (custom-bot mode or pre-shared-bot deployments).
+
 When a user's API key (MiniMax, OpenAI, etc.) is invalid or rotated, two things must be updated:
 1. The `applicants` table in the DB (source of truth for re-provisioning)
 2. The running Fly machine's env var (live key the agent actually uses)

@@ -657,6 +657,7 @@ No `max_machines_running` constraint needed — onboarding is stateless per requ
 | `NOTIFY_BOT_USERNAME` | `AgentHelmApprovalsBot` (overrides YAML default `reins_dev_bot`) |
 | `ADMIN_TELEGRAM_ID` | Telegram user ID of the admin — only this user's `/approve_`, `/reject_`, `/reset_` commands are accepted |
 | `ADMIN_CHAT_ID` | Chat ID of the group where the onboarding bot posts new applicant alerts and accepts admin commands. Dev: `-5159855796`. If omitted, falls back to DMing `ADMIN_TELEGRAM_ID` directly. |
+| `SHARED_BOT_ENABLED` | `true` — platform provides the shared Telegram bot and LLM key; users skip `botfather` and `minimax_key` steps |
 | `NODE_ENV` | `production` |
 
 ### Deploying
