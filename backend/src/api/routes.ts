@@ -3074,11 +3074,21 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
     const effectiveTelegramToken = isSharedBot ? config.sharedBotToken! : body.telegramToken;
 
+    // Normalize empty strings to null
+    const telegramUserId = body.telegramUserId?.trim() || null;
+    const openaiApiKey = body.openaiApiKey?.trim() || null;
+
+    if (isSharedBot && !telegramUserId) {
+      return reply.code(400).send({
+        error: { code: 'MISSING_TELEGRAM_USER_ID', message: 'Telegram User ID is required for shared bot agents.' },
+      });
+    }
+
     // Shared bot: enforce one-per-user limit — second agent must use their own token
-    if (isSharedBot && body.telegramUserId) {
+    if (isSharedBot && telegramUserId) {
       const existing = await client.execute({
         sql: `SELECT id FROM deployed_agents WHERE telegram_user_id = ? AND is_shared_bot = 1 LIMIT 1`,
-        args: [String(body.telegramUserId)],
+        args: [telegramUserId],
       });
       if (existing.rows.length > 0) {
         return reply.code(400).send({
@@ -3175,14 +3185,14 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const result = await provider.provision({
         instanceId: deploymentId,
         telegramToken: effectiveTelegramToken,
-        telegramUserId: body.telegramUserId,
+        telegramUserId: telegramUserId ?? undefined,
         mcpConfigs,
         gatewayToken,
         soulMd: body.soulMd,
         modelProvider: body.modelProvider,
         modelName: resolvedModelName,
         region: body.region,
-        openaiApiKey: body.openaiApiKey,
+        openaiApiKey: openaiApiKey ?? undefined,
         telegramGroups: body.telegramGroups,
         modelCredentials: body.modelCredentials,
         webhookRelaySecret: effectiveWebhookSecret,
@@ -3212,11 +3222,11 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         args: [
           deploymentId, agentId,
           result.appName, result.machineId, 'running', result.managementUrl,
-          effectiveTelegramToken, botUsername ?? null, body.telegramUserId ?? null,
+          effectiveTelegramToken, botUsername ?? null, telegramUserId,
           body.soulMd ?? null,
           body.modelProvider ?? 'anthropic', resolvedModelName,
           body.region ?? 'iad', gatewayToken,
-          body.openaiApiKey ?? null, telegramGroupsJson,
+          openaiApiKey, telegramGroupsJson,
           body.modelCredentials ?? null,
           body.mcpServers ?? null,
           openclawWebhookUrl, effectiveWebhookSecret,

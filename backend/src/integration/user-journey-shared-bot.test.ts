@@ -202,6 +202,7 @@ describe('Shared-bot agent creation flow', () => {
           name: 'Shared Bot Agent',
           modelProvider: 'anthropic',
           modelName: 'claude-sonnet-4-5',
+          telegramUserId: '123456789',
           // No telegramToken → triggers shared bot path
         },
       });
@@ -241,6 +242,7 @@ describe('Shared-bot agent creation flow', () => {
           name: 'Shared Bot Agent (getMe fail)',
           modelProvider: 'anthropic',
           modelName: 'claude-sonnet-4-5',
+          telegramUserId: '123456789',
         },
       });
 
@@ -259,6 +261,7 @@ describe('Shared-bot agent creation flow', () => {
           name: 'Shared Bot Agent (network fail)',
           modelProvider: 'anthropic',
           modelName: 'claude-sonnet-4-5',
+          telegramUserId: '123456789',
         },
       });
 

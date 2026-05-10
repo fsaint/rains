@@ -5,7 +5,7 @@
  * Service metadata is read from the @reins/servers registry — no hardcoding.
  */
 
-import { db } from '../db/index.js';
+import { db, client } from '../db/index.js';
 import { agentServiceAccess, agentToolPermissions, agentServiceCredentials, agentServiceInstances, agents, credentials } from '../db/schema.js';
 import { eq, and, inArray } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
@@ -369,25 +369,15 @@ export async function setServiceAccess(
   serviceType: string,
   enabled: boolean
 ): Promise<void> {
-  const [existing] = await db
-    .select()
-    .from(agentServiceAccess)
-    .where(and(eq(agentServiceAccess.agentId, agentId), eq(agentServiceAccess.serviceType, serviceType)));
+  const now = new Date().toISOString();
 
-  if (existing) {
-    await db
-      .update(agentServiceAccess)
-      .set({ enabled, updatedAt: new Date().toISOString() })
-      .where(eq(agentServiceAccess.id, existing.id));
-  } else {
-    await db.insert(agentServiceAccess).values({
-      id: nanoid(),
-      agentId,
-      serviceType,
-      enabled,
-      credentialId: null,
-    });
-  }
+  await client.execute({
+    sql: `INSERT INTO agent_service_access (id, agent_id, service_type, enabled, credential_id, created_at, updated_at)
+          VALUES (?, ?, ?, ?, NULL, ?, ?)
+          ON CONFLICT (agent_id, service_type)
+          DO UPDATE SET enabled = ?, updated_at = ?`,
+    args: [nanoid(), agentId, serviceType, enabled, now, now, enabled, now],
+  });
 }
 
 /**

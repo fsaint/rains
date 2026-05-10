@@ -12,6 +12,9 @@ vi.mock('../db/index.js', () => ({
     update: vi.fn(),
     delete: vi.fn(),
   },
+  client: {
+    execute: vi.fn().mockResolvedValue({ rows: [], rowsAffected: 1, columns: [], lastInsertRowid: 0n }),
+  },
 }));
 
 vi.mock('../db/schema.js', () => ({
@@ -103,7 +106,7 @@ vi.mock('@reins/servers', () => {
   };
 });
 
-import { db } from '../db/index.js';
+import { db, client } from '../db/index.js';
 import {
   getPermissionMatrix,
   getAgentServiceConfig,
@@ -250,40 +253,22 @@ describe('Permission Service', () => {
   });
 
   describe('setServiceAccess', () => {
-    it('should update existing access record', async () => {
-      const mockExisting = { id: 'access-1', agentId: 'agent-1', serviceType: 'gmail' };
-
-      vi.mocked(db.select).mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([mockExisting]),
-        }),
-      } as never);
-
-      vi.mocked(db.update).mockReturnValueOnce({
-        set: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue(undefined),
-        }),
-      } as never);
-
+    it('should upsert access record when enabling', async () => {
       await setServiceAccess('agent-1', 'gmail', true);
 
-      expect(db.update).toHaveBeenCalled();
+      expect(client.execute).toHaveBeenCalledWith(expect.objectContaining({
+        sql: expect.stringContaining('ON CONFLICT'),
+        args: expect.arrayContaining(['agent-1', 'gmail', true]),
+      }));
     });
 
-    it('should create new access record if none exists', async () => {
-      vi.mocked(db.select).mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([]),
-        }),
-      } as never);
+    it('should upsert access record when disabling', async () => {
+      await setServiceAccess('agent-1', 'gmail', false);
 
-      vi.mocked(db.insert).mockReturnValueOnce({
-        values: vi.fn().mockResolvedValue(undefined),
-      } as never);
-
-      await setServiceAccess('agent-1', 'gmail', true);
-
-      expect(db.insert).toHaveBeenCalled();
+      expect(client.execute).toHaveBeenCalledWith(expect.objectContaining({
+        sql: expect.stringContaining('ON CONFLICT'),
+        args: expect.arrayContaining(['agent-1', 'gmail', false]),
+      }));
     });
   });
 
@@ -565,33 +550,16 @@ describe('Permission Service', () => {
     });
 
     it('should disable service for none level', async () => {
-      vi.mocked(db.select).mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{ id: 'access-1' }]),
-        }),
-      } as never);
-
-      vi.mocked(db.update).mockReturnValueOnce({
-        set: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue(undefined),
-        }),
-      } as never);
-
       await setPermissionLevel('agent-1', 'gmail', 'none');
 
-      expect(db.update).toHaveBeenCalled();
+      expect(client.execute).toHaveBeenCalledWith(expect.objectContaining({
+        sql: expect.stringContaining('agent_service_access'),
+        args: expect.arrayContaining(['agent-1', 'gmail', false]),
+      }));
     });
 
     it('should enable service and set read-only permissions', async () => {
-      // Mock setServiceAccess
-      vi.mocked(db.select).mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([]),
-        }),
-      } as never);
-      vi.mocked(db.insert).mockReturnValueOnce({
-        values: vi.fn().mockResolvedValue(undefined),
-      } as never);
+      // setServiceAccess now uses client.execute (no db.select/insert needed for it)
 
       // Mock setToolPermission calls - need multiple mocks for each tool
       const gmailTools = [...PERMISSION_PRESETS.gmail.read, ...PERMISSION_PRESETS.gmail.write, ...PERMISSION_PRESETS.gmail.blocked];

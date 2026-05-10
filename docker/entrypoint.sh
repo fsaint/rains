@@ -472,7 +472,7 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
         input: ['text'],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 1000000, maxTokens: 40000,
-        compat: {}
+        compat: { supportsTools: true }
       });
     }
     provider.baseUrl = baseUrl;
