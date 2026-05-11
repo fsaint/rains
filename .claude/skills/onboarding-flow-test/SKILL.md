@@ -119,13 +119,22 @@ Still in the shared bot chat, send:
 Go to https://example.com and tell me the page title
 ```
 
-**Pass:** agent replies with "Example Domain" (the actual title of example.com) within ~90s.
-The response confirms:
-- The browser MCP server is wired up correctly
-- The agent can reach external URLs through Reins
-- Shared-bot routing → OpenClaw → tool call pipeline is working end-to-end
+**Pass:** agent replies with "Example Domain" AND the response does NOT mention "web_fetch", "fallback", or "timed out". This confirms the browser tool itself executed, not a fallback.
 
-Poll for response up to 90s. Accept any reply that contains "Example Domain" or "example.com".
+**Fail conditions:**
+- No response after 90s
+- Response mentions "browser timed out" or "used web_fetch as a fallback" → browser cold-start race condition (Chromium profile decoration finishes ~1s after the tool call timeout on first invocation)
+- Response doesn't mention "Example Domain"
+
+**Known failure mode — cold start:** On a freshly deployed agent, the first browser call may timeout. The agent may fall back to `web_fetch` and still return the correct answer. This is a FAIL — check the fly logs:
+```
+fly logs --app <fly_app_name> --no-tail | grep -i "browser"
+```
+Look for: `browser failed: timed out` followed by `browser profile decorated` 1s later — confirms cold-start race.
+
+**Workaround:** Send a second browser request after the first (Chromium will be warm). If the second one passes, the infrastructure is fine but the cold-start timeout needs fixing.
+
+Poll for response up to 90s. Check that the reply contains "Example Domain" AND was produced by the browser tool (not web_fetch).
 
 ## Playwright Navigation Notes
 
