@@ -114,6 +114,11 @@ const lastText = Array.from(msgs).at(-1)?.textContent;
 
 ### 9. Browser test — agent can use browser tool
 
+**Before sending the browser request, wait 45 seconds.** Chrome lazy-initializes on the
+first browser tool call and needs ~30s to decorate its profile after the first response.
+Sending the browser request immediately after the ping response causes a cold-start race
+where the tool times out 1s before Chrome finishes starting.
+
 Still in the shared bot chat, send:
 ```
 Go to https://example.com and tell me the page title

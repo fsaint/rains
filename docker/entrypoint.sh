@@ -195,6 +195,7 @@ const config = {
     defaultProfile: 'openclaw',
     executablePath: '${CHROMIUM_PATH}',
     noSandbox: true,
+    launchTimeoutMs: 60000,
     remoteCdpTimeoutMs: 60000,
     remoteCdpHandshakeTimeoutMs: 60000,
   },
