@@ -4890,4 +4890,466 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       }
     }
   );
+
+  // =========================================================================
+  // Memory System API
+  // Supports two auth modes:
+  //   1. Dashboard session (cookie-based, for frontend)
+  //   2. Gateway token via x-reins-agent-secret header (for MCP server on agent machines)
+  // =========================================================================
+
+  /**
+   * Resolve user_id from either session or gateway token.
+   * Returns null if neither is present / valid.
+   */
+  async function resolveMemoryUserId(request: any): Promise<string | null> {
+    // Try session first
+    const session = getSession(request);
+    if (session) return session.userId;
+
+    // Try gateway token
+    const agentSecret = request.headers['x-reins-agent-secret'] as string | undefined;
+    if (!agentSecret) return null;
+
+    const depResult = await client.execute({
+      sql: `SELECT da.agent_id, a.user_id
+            FROM deployed_agents da
+            JOIN agents a ON a.id = da.agent_id
+            WHERE da.gateway_token = ? AND da.status NOT IN ('destroyed', 'error')
+            LIMIT 1`,
+      args: [agentSecret],
+    });
+    if (depResult.rows.length === 0) return null;
+    return depResult.rows[0].user_id as string;
+  }
+
+  /** Extract [[wikilinks]] from Markdown content */
+  function parseWikilinks(content: string): string[] {
+    const matches = content.matchAll(/\[\[([^\]]+)\]\]/g);
+    return [...matches].map((m) => m[1].trim());
+  }
+
+  /** Rebuild memory_links for a single entry (after create/update) */
+  async function updateLinkIndex(entryId: string, userId: string, content: string | null): Promise<void> {
+    // Remove existing links from this source
+    await client.execute({
+      sql: `DELETE FROM memory_links WHERE source_id = ?`,
+      args: [entryId],
+    });
+    if (!content) return;
+
+    const titles = parseWikilinks(content);
+    if (titles.length === 0) return;
+
+    // Resolve each title to an entry ID within the user's vault
+    for (const title of titles) {
+      const targetResult = await client.execute({
+        sql: `SELECT id FROM memory_entries WHERE user_id = ? AND title = ? AND is_deleted = false LIMIT 1`,
+        args: [userId, title],
+      });
+      if (targetResult.rows.length === 0) continue;
+      const targetId = targetResult.rows[0].id as string;
+      if (targetId === entryId) continue; // no self-links
+
+      // Extract ~50 chars of context around the wikilink
+      const re = new RegExp(`(.{0,30})\\[\\[${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]\\](.{0,30})`);
+      const match = content.match(re);
+      const context = match ? `${match[1]}[[${title}]]${match[2]}` : null;
+
+      await client.execute({
+        sql: `INSERT INTO memory_links (source_id, target_id, context) VALUES (?, ?, ?)
+              ON CONFLICT (source_id, target_id) DO UPDATE SET context = EXCLUDED.context`,
+        args: [entryId, targetId, context],
+      });
+    }
+  }
+
+  /** Ensure user has a root Memory Index entry; create if missing */
+  async function ensureMemoryRoot(userId: string): Promise<string> {
+    const existing = await client.execute({
+      sql: `SELECT id FROM memory_entries WHERE user_id = ? AND type = 'index' AND is_deleted = false LIMIT 1`,
+      args: [userId],
+    });
+    if (existing.rows.length > 0) return existing.rows[0].id as string;
+
+    const id = nanoid();
+    const now = new Date().toISOString();
+    const content = `# Memory Index
+
+This is your persistent memory vault. Agents update this index when they learn significant new information.
+
+## People
+
+
+## Companies
+
+
+## Projects
+
+
+## Notes
+
+`;
+    await client.execute({
+      sql: `INSERT INTO memory_entries (id, user_id, type, title, content, is_deleted, created_at, updated_at)
+            VALUES (?, ?, 'index', 'Memory Index', ?, false, ?, ?)`,
+      args: [id, userId, content, now, now],
+    });
+    // Root has no branch parent
+    await client.execute({
+      sql: `INSERT INTO memory_branches (id, entry_id, parent_entry_id, position, is_expanded) VALUES (?, ?, NULL, 0, true)`,
+      args: [nanoid(), id],
+    });
+    return id;
+  }
+
+  // -------------------------------------------------------------------------
+  // GET /api/memory/root — get or create the user's memory root entry
+  // -------------------------------------------------------------------------
+  app.get('/api/memory/root', async (request, reply) => {
+    const userId = await resolveMemoryUserId(request);
+    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const rootId = await ensureMemoryRoot(userId);
+    const result = await client.execute({
+      sql: `SELECT id, type, title, content, created_at, updated_at FROM memory_entries WHERE id = ?`,
+      args: [rootId],
+    });
+    return reply.send({ data: result.rows[0] });
+  });
+
+  // -------------------------------------------------------------------------
+  // GET /api/memory/entries — list/search entries
+  // -------------------------------------------------------------------------
+  app.get('/api/memory/entries', async (request, reply) => {
+    const userId = await resolveMemoryUserId(request);
+    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const { q, type, parent_id, limit: lim = '50' } = request.query as Record<string, string>;
+    const maxLimit = Math.min(parseInt(lim, 10) || 50, 200);
+
+    let rows;
+    if (q) {
+      const result = await client.execute({
+        sql: `SELECT id, user_id, type, title, content, created_at, updated_at
+              FROM memory_entries
+              WHERE user_id = ? AND is_deleted = false
+                AND search_vector @@ plainto_tsquery('english', ?)
+                ${type ? `AND type = '${type.replace(/'/g, "''")}'` : ''}
+              ORDER BY ts_rank(search_vector, plainto_tsquery('english', ?)) DESC
+              LIMIT ?`,
+        args: [userId, q, q, maxLimit],
+      });
+      rows = result.rows;
+    } else if (parent_id) {
+      const result = await client.execute({
+        sql: `SELECT e.id, e.type, e.title, e.content, e.created_at, e.updated_at
+              FROM memory_entries e
+              JOIN memory_branches b ON b.entry_id = e.id
+              WHERE e.user_id = ? AND e.is_deleted = false AND b.parent_entry_id = ?
+                ${type ? `AND e.type = '${type.replace(/'/g, "''")}'` : ''}
+              ORDER BY b.position ASC, e.title ASC
+              LIMIT ?`,
+        args: [userId, parent_id, maxLimit],
+      });
+      rows = result.rows;
+    } else {
+      const result = await client.execute({
+        sql: `SELECT id, type, title, content, created_at, updated_at
+              FROM memory_entries
+              WHERE user_id = ? AND is_deleted = false
+                ${type ? `AND type = '${type.replace(/'/g, "''")}'` : ''}
+              ORDER BY updated_at DESC
+              LIMIT ?`,
+        args: [userId, maxLimit],
+      });
+      rows = result.rows;
+    }
+
+    return reply.send({ data: rows });
+  });
+
+  // -------------------------------------------------------------------------
+  // POST /api/memory/entries — create entry
+  // -------------------------------------------------------------------------
+  app.post('/api/memory/entries', async (request, reply) => {
+    const userId = await resolveMemoryUserId(request);
+    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const body = request.body as Record<string, unknown>;
+    const title = (body.title as string | undefined)?.trim();
+    if (!title) return reply.status(400).send({ error: 'title is required' });
+
+    const type = (body.type as string | undefined) ?? 'note';
+    const content = (body.content as string | undefined) ?? null;
+    const parentId = (body.parent_id as string | undefined) ?? null;
+
+    const id = nanoid();
+    const now = new Date().toISOString();
+
+    await client.execute({
+      sql: `INSERT INTO memory_entries (id, user_id, type, title, content, is_deleted, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, false, ?, ?)`,
+      args: [id, userId, type, title, content, now, now],
+    });
+
+    // Create branch record
+    const branchId = nanoid();
+    let position = 0;
+    if (parentId) {
+      const posResult = await client.execute({
+        sql: `SELECT COALESCE(MAX(position), -1) + 1 AS next_pos FROM memory_branches WHERE parent_entry_id = ?`,
+        args: [parentId],
+      });
+      position = (posResult.rows[0]?.next_pos as number) ?? 0;
+    }
+    await client.execute({
+      sql: `INSERT INTO memory_branches (id, entry_id, parent_entry_id, position, is_expanded) VALUES (?, ?, ?, ?, false)`,
+      args: [branchId, id, parentId, position],
+    });
+
+    // Handle initial attributes
+    const attributes = body.attributes as Array<{ type: string; name: string; value: string }> | undefined;
+    if (attributes?.length) {
+      for (const attr of attributes) {
+        await client.execute({
+          sql: `INSERT INTO memory_attributes (id, entry_id, type, name, value, position, is_deleted, created_at)
+                VALUES (?, ?, ?, ?, ?, 0, false, ?)`,
+          args: [nanoid(), id, attr.type, attr.name, attr.value, now],
+        });
+      }
+    }
+
+    await updateLinkIndex(id, userId, content);
+
+    return reply.status(201).send({ data: { id, userId, type, title, content, createdAt: now, updatedAt: now } });
+  });
+
+  // -------------------------------------------------------------------------
+  // GET /api/memory/entries/:id — get entry with attributes and backlinks
+  // -------------------------------------------------------------------------
+  app.get<{ Params: { id: string } }>('/api/memory/entries/:id', async (request, reply) => {
+    const userId = await resolveMemoryUserId(request);
+    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const { id } = request.params;
+
+    const entryResult = await client.execute({
+      sql: `SELECT id, user_id, type, title, content, created_at, updated_at
+            FROM memory_entries WHERE id = ? AND user_id = ? AND is_deleted = false`,
+      args: [id, userId],
+    });
+    if (entryResult.rows.length === 0) return reply.status(404).send({ error: 'Not found' });
+
+    const entry = entryResult.rows[0];
+
+    const attrsResult = await client.execute({
+      sql: `SELECT id, type, name, value, position FROM memory_attributes
+            WHERE entry_id = ? AND is_deleted = false ORDER BY position ASC, created_at ASC`,
+      args: [id],
+    });
+
+    const backlinksResult = await client.execute({
+      sql: `SELECT e.id, e.title, e.type, ml.context
+            FROM memory_links ml
+            JOIN memory_entries e ON e.id = ml.source_id
+            WHERE ml.target_id = ? AND e.is_deleted = false AND e.user_id = ?`,
+      args: [id, userId],
+    });
+
+    const branchResult = await client.execute({
+      sql: `SELECT parent_entry_id FROM memory_branches WHERE entry_id = ? LIMIT 1`,
+      args: [id],
+    });
+
+    return reply.send({
+      data: {
+        ...entry,
+        attributes: attrsResult.rows,
+        backlinks: backlinksResult.rows,
+        parentId: branchResult.rows[0]?.parent_entry_id ?? null,
+      },
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // PUT /api/memory/entries/:id — update entry
+  // -------------------------------------------------------------------------
+  app.put<{ Params: { id: string } }>('/api/memory/entries/:id', async (request, reply) => {
+    const userId = await resolveMemoryUserId(request);
+    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const { id } = request.params;
+    const body = request.body as Record<string, unknown>;
+
+    const existing = await client.execute({
+      sql: `SELECT id FROM memory_entries WHERE id = ? AND user_id = ? AND is_deleted = false`,
+      args: [id, userId],
+    });
+    if (existing.rows.length === 0) return reply.status(404).send({ error: 'Not found' });
+
+    const now = new Date().toISOString();
+    const fields: string[] = [];
+    const args: unknown[] = [];
+
+    if (body.title !== undefined) { fields.push('title = ?'); args.push((body.title as string).trim()); }
+    if (body.content !== undefined) { fields.push('content = ?'); args.push(body.content); }
+    if (body.type !== undefined) { fields.push('type = ?'); args.push(body.type); }
+    fields.push('updated_at = ?'); args.push(now);
+    args.push(id);
+
+    await client.execute({
+      sql: `UPDATE memory_entries SET ${fields.join(', ')} WHERE id = ?`,
+      args,
+    });
+
+    if (body.content !== undefined) {
+      await updateLinkIndex(id, userId, body.content as string | null);
+    }
+
+    const updated = await client.execute({
+      sql: `SELECT id, user_id, type, title, content, created_at, updated_at FROM memory_entries WHERE id = ?`,
+      args: [id],
+    });
+    return reply.send({ data: updated.rows[0] });
+  });
+
+  // -------------------------------------------------------------------------
+  // DELETE /api/memory/entries/:id — soft delete
+  // -------------------------------------------------------------------------
+  app.delete<{ Params: { id: string } }>('/api/memory/entries/:id', async (request, reply) => {
+    const userId = await resolveMemoryUserId(request);
+    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const { id } = request.params;
+    await client.execute({
+      sql: `UPDATE memory_entries SET is_deleted = true, updated_at = ? WHERE id = ? AND user_id = ?`,
+      args: [new Date().toISOString(), id, userId],
+    });
+    return reply.send({ ok: true });
+  });
+
+  // -------------------------------------------------------------------------
+  // GET /api/memory/tree — full tree for sidebar
+  // -------------------------------------------------------------------------
+  app.get('/api/memory/tree', async (request, reply) => {
+    const userId = await resolveMemoryUserId(request);
+    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+
+    await ensureMemoryRoot(userId);
+
+    const entries = await client.execute({
+      sql: `SELECT e.id, e.type, e.title, b.parent_entry_id, b.position, b.is_expanded
+            FROM memory_entries e
+            LEFT JOIN memory_branches b ON b.entry_id = e.id
+            WHERE e.user_id = ? AND e.is_deleted = false
+            ORDER BY b.parent_entry_id NULLS FIRST, b.position ASC, e.title ASC`,
+      args: [userId],
+    });
+
+    return reply.send({ data: entries.rows });
+  });
+
+  // -------------------------------------------------------------------------
+  // GET /api/memory/graph — nodes + edges for D3 graph view
+  // -------------------------------------------------------------------------
+  app.get('/api/memory/graph', async (request, reply) => {
+    const userId = await resolveMemoryUserId(request);
+    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const entries = await client.execute({
+      sql: `SELECT id, type, title FROM memory_entries WHERE user_id = ? AND is_deleted = false`,
+      args: [userId],
+    });
+
+    const links = await client.execute({
+      sql: `SELECT ml.source_id, ml.target_id
+            FROM memory_links ml
+            JOIN memory_entries s ON s.id = ml.source_id
+            JOIN memory_entries t ON t.id = ml.target_id
+            WHERE s.user_id = ? AND s.is_deleted = false AND t.is_deleted = false`,
+      args: [userId],
+    });
+
+    // Relation edges from attributes
+    const relations = await client.execute({
+      sql: `SELECT ma.entry_id AS source_id, ma.value AS target_id, ma.name
+            FROM memory_attributes ma
+            JOIN memory_entries e ON e.id = ma.entry_id
+            WHERE e.user_id = ? AND e.is_deleted = false
+              AND ma.type = 'relation' AND ma.is_deleted = false`,
+      args: [userId],
+    });
+
+    const nodes = entries.rows.map((e) => ({
+      id: e.id,
+      type: e.type,
+      title: e.title,
+    }));
+
+    const edges = [
+      ...links.rows.map((l) => ({ source: l.source_id, target: l.target_id, kind: 'link' })),
+      ...relations.rows.map((r) => ({ source: r.source_id, target: r.target_id, kind: r.name })),
+    ];
+
+    return reply.send({ data: { nodes, edges } });
+  });
+
+  // -------------------------------------------------------------------------
+  // POST /api/memory/entries/:id/attributes — add attribute
+  // -------------------------------------------------------------------------
+  app.post<{ Params: { id: string } }>('/api/memory/entries/:id/attributes', async (request, reply) => {
+    const userId = await resolveMemoryUserId(request);
+    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const { id } = request.params;
+    const body = request.body as Record<string, unknown>;
+    const type = body.type as string;
+    const name = body.name as string;
+    const value = body.value as string;
+
+    if (!type || !name || !value) return reply.status(400).send({ error: 'type, name, value required' });
+    if (!['label', 'relation'].includes(type)) return reply.status(400).send({ error: 'type must be label or relation' });
+
+    const ownerCheck = await client.execute({
+      sql: `SELECT id FROM memory_entries WHERE id = ? AND user_id = ? AND is_deleted = false`,
+      args: [id, userId],
+    });
+    if (ownerCheck.rows.length === 0) return reply.status(404).send({ error: 'Entry not found' });
+
+    const attrId = nanoid();
+    const now = new Date().toISOString();
+    await client.execute({
+      sql: `INSERT INTO memory_attributes (id, entry_id, type, name, value, position, is_deleted, created_at)
+            VALUES (?, ?, ?, ?, ?, 0, false, ?)`,
+      args: [attrId, id, type, name, value, now],
+    });
+
+    return reply.status(201).send({ data: { id: attrId, entryId: id, type, name, value } });
+  });
+
+  // -------------------------------------------------------------------------
+  // DELETE /api/memory/attributes/:attrId — remove attribute
+  // -------------------------------------------------------------------------
+  app.delete<{ Params: { attrId: string } }>('/api/memory/attributes/:attrId', async (request, reply) => {
+    const userId = await resolveMemoryUserId(request);
+    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const { attrId } = request.params;
+
+    // Verify ownership via joined query
+    const check = await client.execute({
+      sql: `SELECT ma.id FROM memory_attributes ma
+            JOIN memory_entries e ON e.id = ma.entry_id
+            WHERE ma.id = ? AND e.user_id = ?`,
+      args: [attrId, userId],
+    });
+    if (check.rows.length === 0) return reply.status(404).send({ error: 'Attribute not found' });
+
+    await client.execute({
+      sql: `UPDATE memory_attributes SET is_deleted = true WHERE id = ?`,
+      args: [attrId],
+    });
+    return reply.send({ ok: true });
+  });
 };

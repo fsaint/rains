@@ -15,6 +15,7 @@ import {
   Bell,
   Menu,
   X,
+  Brain,
 } from 'lucide-react';
 import Dashboard from './pages/Dashboard';
 import Credentials from './pages/Credentials';
@@ -27,6 +28,8 @@ import AgentNew from './pages/AgentNew';
 import AgentDetail from './pages/AgentDetail';
 import Backups from './pages/Backups';
 import Notifications from './pages/Notifications';
+import Memory from './pages/Memory';
+import MemoryEntry from './pages/MemoryEntry';
 import OAuthComplete from './pages/OAuthComplete';
 import { auth } from './api/client';
 import type { User as UserType } from './api/client';
@@ -39,6 +42,7 @@ const navItems = [
   { path: '/audit', label: 'Audit Log', icon: Activity },
   { path: '/backups', label: 'Backups', icon: Database },
   { path: '/notifications', label: 'Notifications', icon: Bell },
+  { path: '/memory', label: 'Memory', icon: Brain },
 ];
 
 const adminNavItems = [
@@ -245,6 +249,8 @@ function App() {
             <Route path="/audit" element={<AuditLog />} />
             <Route path="/backups" element={<Backups />} />
             <Route path="/notifications" element={<Notifications />} />
+            <Route path="/memory" element={<Memory />} />
+            <Route path="/memory/:id" element={<MemoryEntry />} />
             {isAdmin && <Route path="/admin/users" element={<AdminUsers />} />}
           </Routes>
         </main>

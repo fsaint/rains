@@ -716,3 +716,101 @@ export const permissions = {
       body: JSON.stringify(config),
     }),
 };
+
+// ============================================================================
+// Memory System
+// ============================================================================
+
+export type MemoryEntryType = 'note' | 'person' | 'company' | 'project' | 'index';
+
+export interface MemoryEntry {
+  id: string;
+  user_id?: string;
+  type: MemoryEntryType;
+  title: string;
+  content: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MemoryAttribute {
+  id: string;
+  type: 'label' | 'relation';
+  name: string;
+  value: string;
+  position: number;
+}
+
+export interface MemoryEntryDetail extends MemoryEntry {
+  attributes: MemoryAttribute[];
+  backlinks: Array<{ id: string; title: string; type: MemoryEntryType; context: string | null }>;
+  parentId: string | null;
+}
+
+export interface MemoryTreeNode {
+  id: string;
+  type: MemoryEntryType;
+  title: string;
+  parent_entry_id: string | null;
+  position: number;
+  is_expanded: boolean;
+}
+
+export interface MemoryGraphData {
+  nodes: Array<{ id: string; type: MemoryEntryType; title: string }>;
+  edges: Array<{ source: string; target: string; kind: string }>;
+}
+
+export const memory = {
+  getRoot: () =>
+    request<MemoryEntry>('/memory/root'),
+
+  listEntries: (params?: { q?: string; type?: MemoryEntryType; parent_id?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.q) qs.set('q', params.q);
+    if (params?.type) qs.set('type', params.type);
+    if (params?.parent_id) qs.set('parent_id', params.parent_id);
+    if (params?.limit) qs.set('limit', String(params.limit));
+    const query = qs.toString();
+    return request<MemoryEntry[]>(`/memory/entries${query ? `?${query}` : ''}`);
+  },
+
+  createEntry: (data: {
+    title: string;
+    type?: MemoryEntryType;
+    content?: string;
+    parent_id?: string;
+    attributes?: Array<{ type: 'label' | 'relation'; name: string; value: string }>;
+  }) =>
+    request<MemoryEntry>('/memory/entries', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  getEntry: (id: string) =>
+    request<MemoryEntryDetail>(`/memory/entries/${id}`),
+
+  updateEntry: (id: string, data: { title?: string; content?: string; type?: MemoryEntryType }) =>
+    request<MemoryEntry>(`/memory/entries/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  deleteEntry: (id: string) =>
+    request<{ ok: boolean }>(`/memory/entries/${id}`, { method: 'DELETE' }),
+
+  getTree: () =>
+    request<MemoryTreeNode[]>('/memory/tree'),
+
+  getGraph: () =>
+    request<MemoryGraphData>('/memory/graph'),
+
+  addAttribute: (entryId: string, attr: { type: 'label' | 'relation'; name: string; value: string }) =>
+    request<MemoryAttribute>(`/memory/entries/${entryId}/attributes`, {
+      method: 'POST',
+      body: JSON.stringify(attr),
+    }),
+
+  removeAttribute: (attrId: string) =>
+    request<{ ok: boolean }>(`/memory/attributes/${attrId}`, { method: 'DELETE' }),
+};

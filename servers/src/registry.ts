@@ -20,6 +20,7 @@ import { definition as notion } from './notion/definition.js';
 import { definition as hermeneutix } from './hermeneutix/definition.js';
 import { definition as zendesk } from './zendesk/definition.js';
 import { definition as devSandbox } from './dev-sandbox/definition.js';
+import { definition as memory } from './memory/definition.js';
 
 // Re-export the type from its canonical location
 export type { ServiceDefinitionWithTools } from './common/types.js';
@@ -42,6 +43,7 @@ export const serviceDefinitions: ServiceDefinitionWithTools[] = [
   notion,
   hermeneutix,
   zendesk,
+  memory,
   ...devOnlyServices,
 ];
 

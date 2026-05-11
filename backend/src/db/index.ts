@@ -579,6 +579,90 @@ export async function initializeDatabase() {
     )
   `;
 
+  // ========================================================================
+  // Memory system tables
+  // ========================================================================
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS memory_entries (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'note',
+      title TEXT NOT NULL,
+      content TEXT,
+      search_vector TSVECTOR,
+      is_deleted BOOLEAN DEFAULT false NOT NULL,
+      created_at TEXT DEFAULT now() NOT NULL,
+      updated_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_user ON memory_entries(user_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_user_type ON memory_entries(user_id, type)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_user_deleted ON memory_entries(user_id, is_deleted)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_search ON memory_entries USING GIN(search_vector)`;
+
+  // Trigger to keep search_vector in sync with title + content
+  await sql`
+    CREATE OR REPLACE FUNCTION memory_entries_search_vector_update() RETURNS trigger AS $$
+    BEGIN
+      NEW.search_vector := to_tsvector('english',
+        coalesce(NEW.title, '') || ' ' || coalesce(NEW.content, '')
+      );
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql
+  `;
+
+  await sql`
+    DROP TRIGGER IF EXISTS memory_entries_search_vector_trigger ON memory_entries
+  `;
+  await sql`
+    CREATE TRIGGER memory_entries_search_vector_trigger
+    BEFORE INSERT OR UPDATE ON memory_entries
+    FOR EACH ROW EXECUTE FUNCTION memory_entries_search_vector_update()
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS memory_branches (
+      id TEXT PRIMARY KEY,
+      entry_id TEXT NOT NULL REFERENCES memory_entries(id),
+      parent_entry_id TEXT REFERENCES memory_entries(id),
+      position INTEGER DEFAULT 0 NOT NULL,
+      is_expanded BOOLEAN DEFAULT false NOT NULL
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_memory_branches_entry ON memory_branches(entry_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_memory_branches_parent ON memory_branches(parent_entry_id)`;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS memory_attributes (
+      id TEXT PRIMARY KEY,
+      entry_id TEXT NOT NULL REFERENCES memory_entries(id),
+      type TEXT NOT NULL,
+      name TEXT NOT NULL,
+      value TEXT NOT NULL,
+      position INTEGER DEFAULT 0 NOT NULL,
+      is_deleted BOOLEAN DEFAULT false NOT NULL,
+      created_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_memory_attrs_entry ON memory_attributes(entry_id, type)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_memory_attrs_relation ON memory_attributes(type, value) WHERE type = 'relation'`;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS memory_links (
+      source_id TEXT NOT NULL REFERENCES memory_entries(id),
+      target_id TEXT NOT NULL REFERENCES memory_entries(id),
+      context TEXT,
+      PRIMARY KEY (source_id, target_id)
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_memory_links_target ON memory_links(target_id)`;
+
   // Seed: create admin user if no users exist
   const userCount = await sql`SELECT COUNT(*) as count FROM users`;
   const count = Number(userCount[0]?.count ?? 0);

@@ -181,6 +181,46 @@ export const agentServiceInstances = pgTable('agent_service_instances', {
   updatedAt: text('updated_at').default(sql`now()`).notNull(),
 });
 
+// ============================================================================
+// Memory System — Obsidian-like knowledge base per user
+// ============================================================================
+
+export const memoryEntries = pgTable('memory_entries', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  type: text('type').notNull().default('note'), // 'note' | 'person' | 'company' | 'project'
+  title: text('title').notNull(),
+  content: text('content'), // Markdown body
+  isDeleted: boolean('is_deleted').default(false).notNull(),
+  createdAt: text('created_at').default(sql`now()`).notNull(),
+  updatedAt: text('updated_at').default(sql`now()`).notNull(),
+});
+
+export const memoryBranches = pgTable('memory_branches', {
+  id: text('id').primaryKey(),
+  entryId: text('entry_id').notNull(),
+  parentEntryId: text('parent_entry_id'), // NULL = root entry
+  position: integer('position').default(0).notNull(),
+  isExpanded: boolean('is_expanded').default(false).notNull(),
+});
+
+export const memoryAttributes = pgTable('memory_attributes', {
+  id: text('id').primaryKey(),
+  entryId: text('entry_id').notNull(),
+  type: text('type').notNull(), // 'label' | 'relation'
+  name: text('name').notNull(), // e.g. 'email', 'role', 'works_at'
+  value: text('value').notNull(), // for labels: the value; for relations: target entry ID
+  position: integer('position').default(0).notNull(),
+  isDeleted: boolean('is_deleted').default(false).notNull(),
+  createdAt: text('created_at').default(sql`now()`).notNull(),
+});
+
+export const memoryLinks = pgTable('memory_links', {
+  sourceId: text('source_id').notNull(),
+  targetId: text('target_id').notNull(),
+  context: text('context'), // surrounding text snippet
+});
+
 // Pending agent registrations - agents waiting to be claimed
 export const pendingAgentRegistrations = pgTable('pending_agent_registrations', {
   id: text('id').primaryKey(),
