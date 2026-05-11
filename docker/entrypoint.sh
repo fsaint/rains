@@ -315,6 +315,27 @@ fi
 Xvfb :99 -screen 0 ${XVFB_RESOLUTION:-1280x1024x24} -nolisten tcp &
 export DISPLAY=:99
 
+# Pre-warm Chromium in the background so the 'openclaw' profile is decorated before the
+# first user browser tool call. Chrome takes 10-30s to initialize a new profile; doing it
+# here during gateway startup eliminates the cold-start race condition (profile decorates
+# ~1s after the internal tool timeout on a fresh machine).
+(
+  sleep 2  # brief pause for Xvfb to settle
+  echo "[prewarm] Warming Chromium profile..."
+  "${CHROMIUM_REAL_PATH}" \
+    --headless=new \
+    --no-sandbox \
+    --disable-dev-shm-usage \
+    --disable-gpu \
+    --user-data-dir="${CONFIG_DIR}/browsers/openclaw" \
+    about:blank > /dev/null 2>&1 &
+  PREWARM_PID=$!
+  sleep 25
+  kill $PREWARM_PID 2>/dev/null || true
+  wait $PREWARM_PID 2>/dev/null || true
+  echo "[prewarm] Chromium warm-up complete"
+) &
+
 # If Codex tokens provided, do a two-phase startup:
 # 1. Start gateway briefly so it creates dirs and runs doctor
 # 2. Kill it, inject auth, restart
