@@ -499,7 +499,7 @@ Reins supports two agent engines. Each has its own Docker image, Fly registry ap
 | | OpenClaw | Hermes |
 |---|---|---|
 | Engine | OpenClaw (Node.js) | hermes-agent (Python) |
-| Dockerfile | `Dockerfile` (repo root) | `docker/hermes/Dockerfile` (i.e. `Dockerfile` in fly.toml — resolved relative to fly.toml location) |
+| Dockerfile | `docker/Dockerfile` (run `cd docker && fly deploy`) | `docker/hermes/Dockerfile` (run `cd docker/hermes && fly deploy`) |
 | Fly registry app | `reins-openclaw` | `reins-hermes` |
 | fly.toml | `docker/fly.toml` | `docker/hermes/fly.toml` |
 | Image env var | `OPENCLAW_IMAGE` | `HERMES_IMAGE` |
@@ -514,16 +514,17 @@ Reins supports two agent engines. Each has its own Docker image, Fly registry ap
 ### Building Agent Images
 
 ```bash
-# OpenClaw — run from repo root
-fly deploy --config docker/fly.toml
+# OpenClaw — MUST run from docker/ (build context = CWD for COPY commands)
+cd docker && fly deploy
 
 # Hermes — MUST run from docker/hermes/ (build context = CWD for COPY commands)
 cd docker/hermes && fly deploy
 ```
 
-> **Critical:** Hermes deploy must be run from `docker/hermes/`, not the repo root.
+> **Critical:** Both OpenClaw and Hermes deploys must be run from their respective directories
+> (`docker/` and `docker/hermes/`), NOT from the repo root.
 > Fly/Depot uses the CWD as the build context for `COPY` instructions.
-> Running from the repo root sends an empty context (the repo root has no `entrypoint.sh`).
+> Running OpenClaw from the repo root fails: `skills/reins/SKILL.md` not found (it lives in `docker/skills/`).
 
 ### How Runtime Flows Through the System
 
