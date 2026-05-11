@@ -66,6 +66,7 @@ import { sendReauthEmail } from '../services/email.js';
 import { performBackup, listBackups, getBackup, restoreBackup } from '../services/agent-backup.js';
 import { isCodexTokenExpired } from '../services/token-monitor.js';
 import { forwardToOpenclaw, handleMyChatMember } from '../services/agent-bot-relay.js';
+import { parseWikilinks, updateLinkIndex, ensureMemoryRoot } from '../services/memory.js';
 import * as provider from '../providers/index.js';
 import { nanoid } from 'nanoid';
 import jwt from 'jsonwebtoken';
@@ -4921,86 +4922,6 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     });
     if (depResult.rows.length === 0) return null;
     return depResult.rows[0].user_id as string;
-  }
-
-  /** Extract [[wikilinks]] from Markdown content */
-  function parseWikilinks(content: string): string[] {
-    const matches = content.matchAll(/\[\[([^\]]+)\]\]/g);
-    return [...matches].map((m) => m[1].trim());
-  }
-
-  /** Rebuild memory_links for a single entry (after create/update) */
-  async function updateLinkIndex(entryId: string, userId: string, content: string | null): Promise<void> {
-    // Remove existing links from this source
-    await client.execute({
-      sql: `DELETE FROM memory_links WHERE source_id = ?`,
-      args: [entryId],
-    });
-    if (!content) return;
-
-    const titles = parseWikilinks(content);
-    if (titles.length === 0) return;
-
-    // Resolve each title to an entry ID within the user's vault
-    for (const title of titles) {
-      const targetResult = await client.execute({
-        sql: `SELECT id FROM memory_entries WHERE user_id = ? AND title = ? AND is_deleted = false LIMIT 1`,
-        args: [userId, title],
-      });
-      if (targetResult.rows.length === 0) continue;
-      const targetId = targetResult.rows[0].id as string;
-      if (targetId === entryId) continue; // no self-links
-
-      // Extract ~50 chars of context around the wikilink
-      const re = new RegExp(`(.{0,30})\\[\\[${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]\\](.{0,30})`);
-      const match = content.match(re);
-      const context = match ? `${match[1]}[[${title}]]${match[2]}` : null;
-
-      await client.execute({
-        sql: `INSERT INTO memory_links (source_id, target_id, context) VALUES (?, ?, ?)
-              ON CONFLICT (source_id, target_id) DO UPDATE SET context = EXCLUDED.context`,
-        args: [entryId, targetId, context],
-      });
-    }
-  }
-
-  /** Ensure user has a root Memory Index entry; create if missing */
-  async function ensureMemoryRoot(userId: string): Promise<string> {
-    const existing = await client.execute({
-      sql: `SELECT id FROM memory_entries WHERE user_id = ? AND type = 'index' AND is_deleted = false LIMIT 1`,
-      args: [userId],
-    });
-    if (existing.rows.length > 0) return existing.rows[0].id as string;
-
-    const id = nanoid();
-    const now = new Date().toISOString();
-    const content = `# Memory Index
-
-This is your persistent memory vault. Agents update this index when they learn significant new information.
-
-## People
-
-
-## Companies
-
-
-## Projects
-
-
-## Notes
-
-`;
-    await client.execute({
-      sql: `INSERT INTO memory_entries (id, user_id, type, title, content, is_deleted, created_at, updated_at)
-            VALUES (?, ?, 'index', 'Memory Index', ?, false, ?, ?)`,
-      args: [id, userId, content, now, now],
-    });
-    // Root has no branch parent
-    await client.execute({
-      sql: `INSERT INTO memory_branches (id, entry_id, parent_entry_id, position, is_expanded) VALUES (?, ?, NULL, 0, true)`,
-      args: [nanoid(), id],
-    });
-    return id;
   }
 
   // -------------------------------------------------------------------------
