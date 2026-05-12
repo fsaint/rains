@@ -103,6 +103,46 @@ export async function getDreamManifest(userId: string): Promise<DreamManifestEnt
   }));
 }
 
+/** Move an entry to a new parent in the tree */
+export async function setEntryParent(
+  entryId: string,
+  userId: string,
+  newParentId: string | null
+): Promise<{ ok: true } | { error: string }> {
+  // 1. Ownership check
+  const ownerCheck = await client.execute({
+    sql: `SELECT id FROM memory_entries WHERE id = ? AND user_id = ? AND is_deleted = false`,
+    args: [entryId, userId],
+  });
+  if (ownerCheck.rows.length === 0) return { error: 'Entry not found' };
+
+  // 2. Self-parent check
+  if (newParentId === entryId) return { error: 'Cannot set an entry as its own parent' };
+
+  // 3. Circular reference check — walk ancestors of newParentId
+  if (newParentId !== null) {
+    let current: string | null = newParentId;
+    const visited = new Set<string>();
+    while (current !== null) {
+      if (current === entryId) return { error: 'Circular reference: entry is an ancestor of the new parent' };
+      if (visited.has(current)) break; // infinite loop guard
+      visited.add(current);
+      const parentRow = await client.execute({
+        sql: `SELECT parent_entry_id FROM memory_branches WHERE entry_id = ? LIMIT 1`,
+        args: [current],
+      });
+      current = parentRow.rows.length > 0 ? (parentRow.rows[0].parent_entry_id as string | null) : null;
+    }
+  }
+
+  // 4. Update
+  await client.execute({
+    sql: `UPDATE memory_branches SET parent_entry_id = ? WHERE entry_id = ?`,
+    args: [newParentId, entryId],
+  });
+  return { ok: true };
+}
+
 /** Ensure user has a root Memory Index entry; create if missing */
 export async function ensureMemoryRoot(userId: string): Promise<string> {
   const existing = await client.execute({

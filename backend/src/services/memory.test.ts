@@ -17,7 +17,7 @@ vi.mock('nanoid', () => ({
 }));
 
 import { client } from '../db/index.js';
-import { parseWikilinks, updateLinkIndex, ensureMemoryRoot, getDreamManifest } from './memory.js';
+import { parseWikilinks, updateLinkIndex, ensureMemoryRoot, getDreamManifest, setEntryParent } from './memory.js';
 
 // Helper to set up a sequence of mock return values
 function mockExecuteSequence(results: Array<{ rows: Record<string, unknown>[] }>) {
@@ -311,5 +311,87 @@ describe('getDreamManifest', () => {
     const result = await getDreamManifest('user-1');
 
     expect(result).toEqual([]);
+  });
+});
+
+// ============================================================================
+// setEntryParent
+// ============================================================================
+
+describe('setEntryParent', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(client.execute).mockResolvedValue({ rows: [], rowsAffected: 0, lastInsertRowid: 0n, columns: [] });
+  });
+
+  it('updates parent_entry_id on success', async () => {
+    mockExecuteSequence([
+      { rows: [{ id: 'entry-1' }] }, // ownership check
+      { rows: [] },                   // ancestor walk: parent-1 has no further parent
+      { rows: [] },                   // UPDATE branches
+    ]);
+
+    const result = await setEntryParent('entry-1', 'user-1', 'parent-1');
+
+    expect(result).toEqual({ ok: true });
+    const updateCall = vi.mocked(client.execute).mock.calls[2][0] as { sql: string; args: unknown[] };
+    expect(updateCall.sql).toContain('UPDATE memory_branches SET parent_entry_id = ?');
+    expect(updateCall.args).toContain('parent-1');
+    expect(updateCall.args).toContain('entry-1');
+  });
+
+  it('returns error when entry not found or not owned by user', async () => {
+    vi.mocked(client.execute).mockResolvedValueOnce({ rows: [], rowsAffected: 0, lastInsertRowid: 0n, columns: [] });
+
+    const result = await setEntryParent('entry-1', 'user-1', 'parent-1');
+
+    expect(result).toMatchObject({ error: expect.any(String) });
+  });
+
+  it('returns error when setting parent to self', async () => {
+    vi.mocked(client.execute).mockResolvedValueOnce({ rows: [{ id: 'entry-1' }], rowsAffected: 0, lastInsertRowid: 0n, columns: [] });
+
+    const result = await setEntryParent('entry-1', 'user-1', 'entry-1');
+
+    expect(result).toMatchObject({ error: expect.stringContaining('own parent') });
+    // No UPDATE should have been called
+    expect(vi.mocked(client.execute)).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns error on circular reference', async () => {
+    // entry-1 → parent-X → grandparent is entry-1 (circular)
+    mockExecuteSequence([
+      { rows: [{ id: 'entry-1' }] },             // ownership
+      { rows: [{ parent_entry_id: 'entry-1' }] }, // walk: parent-X's parent is entry-1
+    ]);
+
+    const result = await setEntryParent('entry-1', 'user-1', 'parent-X');
+
+    expect(result).toMatchObject({ error: expect.stringContaining('Circular') });
+  });
+
+  it('allows setting parent to null (top level)', async () => {
+    mockExecuteSequence([
+      { rows: [{ id: 'entry-1' }] }, // ownership
+      { rows: [] },                   // UPDATE
+    ]);
+
+    const result = await setEntryParent('entry-1', 'user-1', null);
+
+    expect(result).toEqual({ ok: true });
+    const updateCall = vi.mocked(client.execute).mock.calls[1][0] as { sql: string; args: unknown[] };
+    expect(updateCall.args[0]).toBeNull();
+  });
+
+  it('skips circular check when newParentId is null', async () => {
+    mockExecuteSequence([
+      { rows: [{ id: 'entry-1' }] }, // ownership only
+      { rows: [] },                   // UPDATE
+    ]);
+
+    await setEntryParent('entry-1', 'user-1', null);
+
+    // Only 2 DB calls: ownership + UPDATE (no ancestor walk)
+    expect(vi.mocked(client.execute)).toHaveBeenCalledTimes(2);
   });
 });
