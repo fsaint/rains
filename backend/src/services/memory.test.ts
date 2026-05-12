@@ -17,7 +17,7 @@ vi.mock('nanoid', () => ({
 }));
 
 import { client } from '../db/index.js';
-import { parseWikilinks, updateLinkIndex, ensureMemoryRoot } from './memory.js';
+import { parseWikilinks, updateLinkIndex, ensureMemoryRoot, getDreamManifest } from './memory.js';
 
 // Helper to set up a sequence of mock return values
 function mockExecuteSequence(results: Array<{ rows: Record<string, unknown>[] }>) {
@@ -251,5 +251,65 @@ describe('ensureMemoryRoot', () => {
     expect(branchCall.sql).toContain('NULL');
     // Only branch id and entry id are in args (not a separate null arg)
     expect(branchCall.args).toHaveLength(2);
+  });
+});
+
+// ============================================================================
+// getDreamManifest
+// ============================================================================
+
+describe('getDreamManifest', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(client.execute).mockResolvedValue({ rows: [], rowsAffected: 0, lastInsertRowid: 0n, columns: [] });
+  });
+
+  it('returns compact entries with backlink counts', async () => {
+    vi.mocked(client.execute).mockResolvedValueOnce({
+      rows: [
+        { id: 'e1', title: 'Alice', type: 'person', parent_id: 'root-1', backlink_count: 3, updated_at: '2026-05-01T00:00:00Z' },
+        { id: 'e2', title: 'Acme', type: 'company', parent_id: null, backlink_count: 1, updated_at: '2026-05-02T00:00:00Z' },
+      ],
+      rowsAffected: 0, lastInsertRowid: 0n, columns: [],
+    });
+
+    const result = await getDreamManifest('user-1');
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({ id: 'e1', title: 'Alice', type: 'person', parent_id: 'root-1', backlink_count: 3, updated_at: '2026-05-01T00:00:00Z' });
+    expect(result[1].parent_id).toBeNull();
+  });
+
+  it('calls a single SQL query', async () => {
+    vi.mocked(client.execute).mockResolvedValueOnce({ rows: [], rowsAffected: 0, lastInsertRowid: 0n, columns: [] });
+
+    await getDreamManifest('user-1');
+
+    expect(vi.mocked(client.execute)).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(client.execute).mock.calls[0][0] as { sql: string; args: unknown[] };
+    expect(call.sql).toContain('FROM memory_entries');
+    expect(call.sql).toContain('backlink_count');
+    expect(call.args).toContain('user-1');
+  });
+
+  it('coerces backlink_count to number', async () => {
+    // postgres.js may return COUNT() as string
+    vi.mocked(client.execute).mockResolvedValueOnce({
+      rows: [{ id: 'e1', title: 'Note', type: 'note', parent_id: null, backlink_count: '5', updated_at: '2026-05-01Z' }],
+      rowsAffected: 0, lastInsertRowid: 0n, columns: [],
+    });
+
+    const result = await getDreamManifest('user-1');
+
+    expect(typeof result[0].backlink_count).toBe('number');
+    expect(result[0].backlink_count).toBe(5);
+  });
+
+  it('returns empty array when user has no entries', async () => {
+    vi.mocked(client.execute).mockResolvedValueOnce({ rows: [], rowsAffected: 0, lastInsertRowid: 0n, columns: [] });
+
+    const result = await getDreamManifest('user-1');
+
+    expect(result).toEqual([]);
   });
 });

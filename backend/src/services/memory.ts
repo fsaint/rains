@@ -69,6 +69,40 @@ This is your persistent memory vault. Agents update this index when they learn s
 
 `;
 
+export interface DreamManifestEntry {
+  id: string;
+  title: string;
+  type: string;
+  parent_id: string | null;
+  backlink_count: number;
+  updated_at: string;
+}
+
+/** Compact manifest of all entries for the dream process */
+export async function getDreamManifest(userId: string): Promise<DreamManifestEntry[]> {
+  const result = await client.execute({
+    sql: `SELECT e.id, e.title, e.type,
+                 b.parent_entry_id AS parent_id,
+                 COUNT(ml.source_id) AS backlink_count,
+                 e.updated_at
+          FROM memory_entries e
+          LEFT JOIN memory_branches b ON b.entry_id = e.id
+          LEFT JOIN memory_links ml ON ml.target_id = e.id
+          WHERE e.user_id = ? AND e.is_deleted = false
+          GROUP BY e.id, e.title, e.type, b.parent_entry_id, e.updated_at
+          ORDER BY e.type ASC, e.title ASC`,
+    args: [userId],
+  });
+  return result.rows.map((r) => ({
+    id: r.id as string,
+    title: r.title as string,
+    type: r.type as string,
+    parent_id: (r.parent_id as string | null) ?? null,
+    backlink_count: Number(r.backlink_count ?? 0),
+    updated_at: r.updated_at as string,
+  }));
+}
+
 /** Ensure user has a root Memory Index entry; create if missing */
 export async function ensureMemoryRoot(userId: string): Promise<string> {
   const existing = await client.execute({
