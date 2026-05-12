@@ -328,6 +328,21 @@ describe('Memory API — end-to-end', () => {
       });
       expect(res.statusCode).toBe(401);
     });
+
+    it('passes gateway token requests through to route handler for validation', async () => {
+      // With the auth guard fixed, a valid gateway token should reach resolveMemoryUserId
+      // and get a 200. An invalid token should get 401 from the route handler (not the guard).
+      // We verify the guard passes it through by checking the invalid token gets 401 (not a
+      // generic "UNAUTHORIZED" code — route handler returns plain { error: 'Unauthorized' }).
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/memory/root',
+        headers: { 'x-reins-agent-secret': 'invalid-token-should-reach-handler' },
+      });
+      // Route handler returns { error: 'Unauthorized' } (string), not { error: { code: 'UNAUTHORIZED' } }
+      expect(res.statusCode).toBe(401);
+      expect(res.json().error).toBe('Unauthorized');
+    });
   });
 
   // ── GET /api/memory/root ─────────────────────────────────────────────────────

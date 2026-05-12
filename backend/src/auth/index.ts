@@ -501,6 +501,8 @@ export async function registerAuth(app: FastifyInstance) {
     if (path.startsWith('/api/')) {
       const session = getSession(request);
       if (!session) {
+        // Allow agent gateway tokens to pass through — route handlers validate them
+        if (request.headers['x-reins-agent-secret']) return;
         return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Not authenticated' } });
       }
 
