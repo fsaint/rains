@@ -6,6 +6,7 @@ import { initializeNativeServers, shutdownNativeServers } from './mcp/init-serve
 import { startTokenRefreshLoop, stopTokenRefreshLoop } from './credentials/vault.js';
 import { startBackupLoop, stopBackupLoop } from './services/agent-backup.js';
 import { startTokenMonitor, stopTokenMonitor } from './services/token-monitor.js';
+import { startDreamScheduler } from './services/dream.js';
 import { telegramNotifier } from './notifications/telegram.js';
 import { initializeNotificationHandlers } from './notifications/handlers.js';
 import { shutdownPostHog } from './analytics/posthog.js';
@@ -58,6 +59,10 @@ app.log.info('Agent backup loop started (every 24 hours)');
 // Start Codex token expiry monitor
 startTokenMonitor();
 app.log.info('Token monitor started');
+
+// Start nightly dream scheduler (2am UTC)
+startDreamScheduler();
+app.log.info('Dream scheduler started (nightly at 2am UTC)');
 
 // Wire approval queue events to notification services
 initializeNotificationHandlers();
