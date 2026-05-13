@@ -546,7 +546,7 @@ export default function Permissions() {
 interface AddServiceModalProps {
   agentId: string;
   agentName: string;
-  availableServices: Array<{ type: string; name: string; icon: string }>;
+  availableServices: Array<{ type: string; name: string; icon: string; authRequired: boolean }>;
   onClose: () => void;
   onAdded: () => void;
 }
@@ -564,15 +564,39 @@ function AddServiceModal({ agentId, agentName, availableServices, onClose, onAdd
     queryFn: () => credentials.list(),
   });
 
-  // For each service, count how many credentials cover it
   function getMatchingCredentials(serviceType: string) {
     return allCredentials.filter(
       (c) => c.serviceId === serviceType || c.grantedServices?.includes(serviceType)
     );
   }
 
-  const servicesWithCreds = availableServices.filter((s) => getMatchingCredentials(s.type).length > 0);
-  const servicesWithoutCreds = availableServices.filter((s) => getMatchingCredentials(s.type).length === 0);
+  // Services that don't need credentials — always addable
+  const noAuthServices = availableServices.filter((s) => !s.authRequired);
+  // Services that need credentials and have them connected
+  const servicesWithCreds = availableServices.filter(
+    (s) => s.authRequired && getMatchingCredentials(s.type).length > 0
+  );
+  // Services that need credentials but none connected yet
+  const servicesNeedingCreds = availableServices.filter(
+    (s) => s.authRequired && getMatchingCredentials(s.type).length === 0
+  );
+
+  const serviceButton = (service: { type: string; name: string; icon: string }, badge?: React.ReactNode) => (
+    <button
+      key={service.type}
+      onClick={() => createInstanceMutation.mutate(service.type)}
+      disabled={createInstanceMutation.isPending}
+      className="w-full flex items-center gap-3 p-4 rounded-lg border-2 border-gray-200 hover:border-trust-blue/30 hover:bg-trust-blue/5 transition-all disabled:opacity-50"
+    >
+      <div className="p-2 bg-gray-50 rounded-lg text-gray-500">
+        {serviceIcons[service.type] ?? <Globe className="w-5 h-5" />}
+      </div>
+      <div className="text-left flex-1">
+        <div className="font-medium text-sm text-reins-navy">{service.name}</div>
+      </div>
+      {badge}
+    </button>
+  );
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -588,37 +612,40 @@ function AddServiceModal({ agentId, agentName, availableServices, onClose, onAdd
         </div>
 
         <div className="space-y-2 overflow-y-auto px-6 pb-6">
-          {servicesWithCreds.length > 0 && (
+          {noAuthServices.length > 0 && (
             <>
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-1 pb-1">
-                Connected accounts
+                No sign-in required
               </p>
-              {servicesWithCreds.map((service) => {
-                const count = getMatchingCredentials(service.type).length;
-                return (
-                  <button
-                    key={service.type}
-                    onClick={() => createInstanceMutation.mutate(service.type)}
-                    disabled={createInstanceMutation.isPending}
-                    className="w-full flex items-center gap-3 p-4 rounded-lg border-2 border-gray-200 hover:border-trust-blue/30 hover:bg-trust-blue/5 transition-all disabled:opacity-50"
-                  >
-                    <div className="p-2 bg-gray-50 rounded-lg text-gray-500">
-                      {serviceIcons[service.type] ?? <Globe className="w-5 h-5" />}
-                    </div>
-                    <div className="text-left flex-1">
-                      <div className="font-medium text-sm text-reins-navy">{service.name}</div>
-                    </div>
-                    <span className="flex items-center gap-1 text-xs font-medium text-safe-green bg-safe-green/10 px-2 py-0.5 rounded-full">
-                      <span className="w-1.5 h-1.5 rounded-full bg-safe-green inline-block" />
-                      {count} account{count !== 1 ? 's' : ''}
-                    </span>
-                  </button>
-                );
-              })}
+              {noAuthServices.map((service) => serviceButton(service))}
             </>
           )}
 
-          {servicesWithCreds.length > 0 && servicesWithoutCreds.length > 0 && (
+          {noAuthServices.length > 0 && servicesWithCreds.length > 0 && (
+            <div className="flex items-center gap-2 py-2">
+              <div className="flex-1 border-t border-gray-100" />
+              <span className="text-xs text-gray-400">Connected accounts</span>
+              <div className="flex-1 border-t border-gray-100" />
+            </div>
+          )}
+
+          {servicesWithCreds.length > 0 && noAuthServices.length === 0 && (
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-1 pb-1">
+              Connected accounts
+            </p>
+          )}
+
+          {servicesWithCreds.map((service) => {
+            const count = getMatchingCredentials(service.type).length;
+            return serviceButton(service,
+              <span className="flex items-center gap-1 text-xs font-medium text-safe-green bg-safe-green/10 px-2 py-0.5 rounded-full">
+                <span className="w-1.5 h-1.5 rounded-full bg-safe-green inline-block" />
+                {count} account{count !== 1 ? 's' : ''}
+              </span>
+            );
+          })}
+
+          {servicesNeedingCreds.length > 0 && (servicesWithCreds.length > 0 || noAuthServices.length > 0) && (
             <div className="flex items-center gap-2 py-2">
               <div className="flex-1 border-t border-gray-100" />
               <span className="text-xs text-gray-400">No credentials yet</span>
@@ -626,7 +653,7 @@ function AddServiceModal({ agentId, agentName, availableServices, onClose, onAdd
             </div>
           )}
 
-          {servicesWithoutCreds.map((service) => (
+          {servicesNeedingCreds.map((service) => (
             <div
               key={service.type}
               className="w-full flex items-center gap-3 p-4 rounded-lg border-2 border-dashed border-gray-200 bg-gray-50/50"

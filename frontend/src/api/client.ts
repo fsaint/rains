@@ -569,7 +569,7 @@ export interface AgentPermissionsResponse {
     status: string;
     instances: ServiceInstance[];
   }>;
-  availableServices: Array<{ type: string; name: string; icon: string }>;
+  availableServices: Array<{ type: string; name: string; icon: string; authRequired: boolean }>;
 }
 
 export interface DrivePathRule {

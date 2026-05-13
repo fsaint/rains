@@ -877,7 +877,7 @@ export interface AgentPermissionsResponse {
     status: string;
     instances: ServiceInstance[];
   }>;
-  availableServices: Array<{ type: string; name: string; icon: string }>;
+  availableServices: Array<{ type: string; name: string; icon: string; authRequired: boolean }>;
 }
 
 async function getCredentialStatus(credentialId: string | null): Promise<{
@@ -1463,7 +1463,8 @@ export async function getAgentPermissions(userId?: string): Promise<AgentPermiss
   const availableServices = registry.serviceDefinitions.map((def) => ({
     type: def.type,
     name: def.name,
-    icon: def.type, // frontend maps type to icon
+    icon: def.type,
+    authRequired: def.auth.required,
   }));
 
   return { agents: agentResults, availableServices };
