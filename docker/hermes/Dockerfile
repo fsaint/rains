@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y \
-    curl git ripgrep \
+    curl git ripgrep gettext-base \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
@@ -16,6 +16,7 @@ RUN uv pip install --system -e ".[all]"
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 COPY knowledge.md /knowledge.md
+COPY BOOTSTRAP.md /agenthelm-templates/BOOTSTRAP.md
 COPY skills/ /agenthelm-skills/
 
 EXPOSE 8000

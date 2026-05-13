@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     nodejs \
     npm \
+    gettext-base \
     && if [ -n "${EXTRA_FONT_PACKAGES}" ]; then apt-get install -y --no-install-recommends ${EXTRA_FONT_PACKAGES}; fi \
     && rm -rf /var/lib/apt/lists/*
 

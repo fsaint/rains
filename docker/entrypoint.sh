@@ -17,10 +17,13 @@ if [ -n "$SOUL_MD" ]; then
   echo "$SOUL_MD" > "$WORKSPACE_DIR/SOUL.md"
 fi
 
-# Append first-run instructions if this is the agent's first boot
-if [ -n "$INITIAL_PROMPT" ]; then
-  printf '\n\n' >> "$WORKSPACE_DIR/SOUL.md"
-  printf '%s' "$INITIAL_PROMPT" >> "$WORKSPACE_DIR/SOUL.md"
+# Substitute deployment-specific placeholders in BOOTSTRAP.md (first boot only).
+# INITIAL_PROMPT carries the per-deployment first-run instruction injected by the backend.
+# envsubst limits substitution to the named vars to avoid clobbering other ${...} patterns.
+if [ -f "$WORKSPACE_DIR/BOOTSTRAP.md" ]; then
+  INITIAL_PROMPT="${INITIAL_PROMPT:-}" \
+    envsubst '${INITIAL_PROMPT}' < "$WORKSPACE_DIR/BOOTSTRAP.md" > "$WORKSPACE_DIR/BOOTSTRAP.md.tmp" \
+    && mv "$WORKSPACE_DIR/BOOTSTRAP.md.tmp" "$WORKSPACE_DIR/BOOTSTRAP.md"
 fi
 
 # Append container version info so the agent knows what image it's running in

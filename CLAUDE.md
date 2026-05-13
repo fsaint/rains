@@ -499,7 +499,7 @@ Reins supports two agent engines. Each has its own Docker image, Fly registry ap
 | | OpenClaw | Hermes |
 |---|---|---|
 | Engine | OpenClaw (Node.js) | hermes-agent (Python) |
-| Dockerfile | `docker/Dockerfile` (run `cd docker && fly deploy`) | `docker/hermes/Dockerfile` (run `cd docker/hermes && fly deploy`) |
+| Dockerfile | `docker/Dockerfile` (build via `scripts/build-agent-image.sh openclaw`) | `docker/hermes/Dockerfile` (build via `scripts/build-agent-image.sh hermes`) |
 | Fly registry app | `reins-openclaw` | `reins-hermes` |
 | fly.toml | `docker/fly.toml` | `docker/hermes/fly.toml` |
 | Image env var | `OPENCLAW_IMAGE` | `HERMES_IMAGE` |
@@ -513,18 +513,21 @@ Reins supports two agent engines. Each has its own Docker image, Fly registry ap
 
 ### Building Agent Images
 
-```bash
-# OpenClaw — MUST run from docker/ (build context = CWD for COPY commands)
-cd docker && fly deploy
+Use the wrapper script from the **repo root** — it copies `shared/BOOTSTRAP.md` into the build context before deploying:
 
-# Hermes — MUST run from docker/hermes/ (build context = CWD for COPY commands)
-cd docker/hermes && fly deploy
+```bash
+# OpenClaw
+scripts/build-agent-image.sh openclaw
+
+# Hermes
+scripts/build-agent-image.sh hermes
 ```
 
-> **Critical:** Both OpenClaw and Hermes deploys must be run from their respective directories
-> (`docker/` and `docker/hermes/`), NOT from the repo root.
-> Fly/Depot uses the CWD as the build context for `COPY` instructions.
-> Running OpenClaw from the repo root fails: `skills/reins/SKILL.md` not found (it lives in `docker/skills/`).
+> **Why the wrapper?** `shared/BOOTSTRAP.md` is the canonical source for the agent first-run ritual. Each runtime's Dockerfile build context cannot reach `../shared/` directly, so the wrapper copies the file into place before invoking `fly deploy`.
+>
+> **Critical:** Do **not** run `fly deploy` directly from `docker/` or `docker/hermes/` — the build context will be missing `BOOTSTRAP.md` and the deploy will fail.
+>
+> The generated copies (`docker/workspace/BOOTSTRAP.md`, `docker/hermes/BOOTSTRAP.md`) are `.gitignore`d — the canonical source is `shared/BOOTSTRAP.md`.
 
 ### How Runtime Flows Through the System
 
