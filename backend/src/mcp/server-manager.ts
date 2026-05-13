@@ -43,6 +43,8 @@ export interface ToolContext {
   driveDefaultLevel?: 'read' | 'write' | 'blocked';
   /** Per-folder Drive path rules (injected for drive tools) */
   drivePathRules?: Array<{ folderId: string; label?: string; permission: 'read' | 'write' | 'blocked' }>;
+  /** Gateway token for services that call the Reins backend API (e.g. memory) */
+  gatewayToken?: string;
 }
 
 /**

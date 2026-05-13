@@ -474,6 +474,17 @@ async function executeTool(
     agentId,
   };
 
+  // Inject gateway token for services that call back into the Reins API (e.g. memory)
+  if (serviceType === 'memory') {
+    const depRow = await client.execute({
+      sql: `SELECT gateway_token FROM deployed_agents WHERE agent_id = ? AND status NOT IN ('destroyed', 'error') ORDER BY created_at DESC LIMIT 1`,
+      args: [agentId],
+    });
+    if (depRow.rows.length > 0) {
+      context.gatewayToken = depRow.rows[0].gateway_token as string;
+    }
+  }
+
   const isListAccountsTool = toolName.endsWith('_list_accounts');
 
   if (hasInstances) {
