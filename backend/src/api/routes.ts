@@ -66,7 +66,7 @@ import { sendReauthEmail } from '../services/email.js';
 import { performBackup, listBackups, getBackup, restoreBackup } from '../services/agent-backup.js';
 import { isCodexTokenExpired } from '../services/token-monitor.js';
 import { forwardToOpenclaw, handleMyChatMember } from '../services/agent-bot-relay.js';
-import { parseWikilinks, updateLinkIndex, ensureMemoryRoot } from '../services/memory.js';
+import { parseWikilinks, updateLinkIndex, ensureMemoryRoot, getDreamManifest, setEntryParent } from '../services/memory.js';
 import * as provider from '../providers/index.js';
 import { nanoid } from 'nanoid';
 import jwt from 'jsonwebtoken';
@@ -5104,10 +5104,15 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const body = request.body as Record<string, unknown>;
 
     const existing = await client.execute({
-      sql: `SELECT id FROM memory_entries WHERE id = ? AND user_id = ? AND is_deleted = false`,
+      sql: `SELECT id, type FROM memory_entries WHERE id = ? AND user_id = ? AND is_deleted = false`,
       args: [id, userId],
     });
     if (existing.rows.length === 0) return reply.status(404).send({ error: 'Not found' });
+
+    // Root index is read-only from dashboard sessions — only the agent (gateway token) may update it
+    if (existing.rows[0].type === 'index' && getSession(request)) {
+      return reply.status(403).send({ error: 'Root index can only be updated by the agent' });
+    }
 
     const now = new Date().toISOString();
     const fields: string[] = [];
@@ -5272,5 +5277,35 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       args: [attrId],
     });
     return reply.send({ ok: true });
+  });
+
+  // -------------------------------------------------------------------------
+  // GET /api/memory/dream — compact manifest for dream process
+  // -------------------------------------------------------------------------
+  app.get('/api/memory/dream', async (request, reply) => {
+    const userId = await resolveMemoryUserId(request);
+    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const entries = await getDreamManifest(userId);
+    return reply.send({ data: entries });
+  });
+
+  // -------------------------------------------------------------------------
+  // PUT /api/memory/entries/:id/parent — reparent entry (dream reorganization)
+  // -------------------------------------------------------------------------
+  app.put<{ Params: { id: string } }>('/api/memory/entries/:id/parent', async (request, reply) => {
+    const userId = await resolveMemoryUserId(request);
+    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const { id } = request.params;
+    const body = request.body as { parent_id?: string | null };
+    const newParentId = body.parent_id ?? null;
+
+    const result = await setEntryParent(id, userId, newParentId);
+    if ('error' in result) {
+      const status = result.error === 'Entry not found' ? 404 : 400;
+      return reply.status(status).send({ error: result.error });
+    }
+    return reply.send({ data: result });
   });
 };

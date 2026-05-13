@@ -173,8 +173,9 @@ function makeDbRouter(passwordHash: string) {
     }
 
     // ── Entry ownership check (used by PUT, POST attributes, DELETE entry) ────
-    if (sql.startsWith('SELECT id FROM memory_entries WHERE id = ?')) {
-      return { rows: [{ id: ENTRY_ID }], columns: [], rowsAffected: 1, lastInsertRowid: 0n };
+    if (sql.startsWith('SELECT id FROM memory_entries WHERE id = ?') ||
+        sql.startsWith('SELECT id, type FROM memory_entries WHERE id = ?')) {
+      return { rows: [{ id: ENTRY_ID, type: 'person' }], columns: [], rowsAffected: 1, lastInsertRowid: 0n };
     }
 
     // ── Full entry fetch with all fields (GET /api/memory/entries/:id body) ───
@@ -730,6 +731,106 @@ describe('Memory API — end-to-end', () => {
       });
 
       expect(res.statusCode).toBe(200);
+    });
+  });
+
+  // ── GET /api/memory/dream ────────────────────────────────────────────────────
+
+  describe('GET /api/memory/dream', () => {
+    it('returns compact manifest of all entries', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/memory/dream',
+        headers: { cookie: sessionCookie },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const { data } = res.json();
+      expect(Array.isArray(data)).toBe(true);
+      expect(data[0]).toMatchObject({
+        id: expect.any(String),
+        title: expect.any(String),
+        type: expect.any(String),
+        backlink_count: expect.any(Number),
+        updated_at: expect.any(String),
+      });
+    });
+
+    it('returns 401 without auth', async () => {
+      const res = await app.inject({ method: 'GET', url: '/api/memory/dream' });
+      expect(res.statusCode).toBe(401);
+    });
+  });
+
+  // ── PUT /api/memory/entries/:id/parent ───────────────────────────────────────
+
+  describe('PUT /api/memory/entries/:id/parent', () => {
+    it('returns 200 and { ok: true } on success', async () => {
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/memory/entries/${ENTRY_ID}/parent`,
+        headers: { cookie: sessionCookie },
+        payload: { parent_id: ROOT_ID },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data).toEqual({ ok: true });
+    });
+
+    it('returns 400 for self-parent', async () => {
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/memory/entries/${ENTRY_ID}/parent`,
+        headers: { cookie: sessionCookie },
+        payload: { parent_id: ENTRY_ID },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBeTruthy();
+    });
+
+    it('returns 404 when entry not found', async () => {
+      mockExecute.mockImplementationOnce(async () => ({ rows: [], rowsAffected: 0, lastInsertRowid: 0n, columns: [] }));
+
+      const res = await app.inject({
+        method: 'PUT',
+        url: '/api/memory/entries/nonexistent/parent',
+        headers: { cookie: sessionCookie },
+        payload: { parent_id: ROOT_ID },
+      });
+
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('returns 401 without auth', async () => {
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/memory/entries/${ENTRY_ID}/parent`,
+        payload: { parent_id: ROOT_ID },
+      });
+      expect(res.statusCode).toBe(401);
+    });
+  });
+
+  // ── Root read-only enforcement ────────────────────────────────────────────────
+
+  describe('Root read-only enforcement', () => {
+    it('returns 403 when session user tries to update root index entry', async () => {
+      // Override: ownership check returns a root entry (type = 'index')
+      mockExecute.mockImplementationOnce(async () => ({
+        rows: [{ id: ROOT_ID, type: 'index' }],
+        rowsAffected: 0, lastInsertRowid: 0n, columns: [],
+      }));
+
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/memory/entries/${ROOT_ID}`,
+        headers: { cookie: sessionCookie },
+        payload: { content: 'hacked' },
+      });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error).toContain('agent');
     });
   });
 });
