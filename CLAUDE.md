@@ -735,6 +735,7 @@ fly secrets set --app agenthelm-core \
 | [`TESTING.md`](TESTING.md) | All test tiers: unit (Vitest), E2E (Playwright), live integration (Telegram/Telethon), onboarding flow |
 | [`docs/TESTING_GUIDE.md`](docs/TESTING_GUIDE.md) | Guide for validating the first operational version of Reins end-to-end |
 | [`docs/TELEGRAM_AGENTS.md`](docs/TELEGRAM_AGENTS.md) | Telegram bot assignments and wiring for all platform bots |
+| [`docs/MEMORY.md`](docs/MEMORY.md) | Memory system: architecture, DB schema, MCP tools, REST API, auth, dream process, local dev setup |
 
 ### API Reference
 
