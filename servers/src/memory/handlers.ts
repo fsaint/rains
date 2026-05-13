@@ -12,7 +12,7 @@ function getApiBase(): string {
 }
 
 function getGatewayToken(context: ServerContext): string {
-  return (context as any).gatewayToken ?? process.env.REINS_GATEWAY_TOKEN ?? '';
+  return context.gatewayToken ?? process.env.REINS_GATEWAY_TOKEN ?? '';
 }
 
 async function memoryFetch(

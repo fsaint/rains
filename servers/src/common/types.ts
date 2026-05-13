@@ -50,6 +50,8 @@ export interface ServerContext {
   driveDefaultLevel?: 'read' | 'write' | 'blocked';
   /** Per-folder Drive path rules (for Drive service only) */
   drivePathRules?: DrivePathRule[];
+  /** Gateway token for services that call back into the Reins API (e.g. memory) */
+  gatewayToken?: string;
 }
 
 /**

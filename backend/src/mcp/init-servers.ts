@@ -50,6 +50,7 @@ function createServerWrapper(
         linkedAccounts: context.linkedAccounts,
         driveDefaultLevel: context.driveDefaultLevel,
         drivePathRules: context.drivePathRules,
+        gatewayToken: context.gatewayToken,
       });
     },
   };
