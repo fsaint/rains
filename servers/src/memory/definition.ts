@@ -19,11 +19,13 @@ export const definition: ServiceDefinitionWithTools = {
       'memory_search',
       'memory_list',
       'memory_get',
+      'memory_dream',
     ],
     write: [
       'memory_create',
       'memory_update',
       'memory_relate',
+      'memory_set_parent',
     ],
     blocked: [
       'memory_delete',

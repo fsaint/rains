@@ -12,6 +12,8 @@ import {
   handleGet,
   handleRelate,
   handleDelete,
+  handleDream,
+  handleSetParent,
 } from './handlers.js';
 
 export const memoryGetRootTool: ToolDefinition = {
@@ -175,6 +177,37 @@ export const memoryDeleteTool: ToolDefinition = {
   handler: handleDelete,
 };
 
+export const memoryDreamTool: ToolDefinition = {
+  name: 'memory_dream',
+  description:
+    'Get a compact manifest of your entire memory vault — all entries with type, parent, and backlink count. ' +
+    'Call this at the start of a dream session to survey what needs reorganization.',
+  inputSchema: {
+    type: 'object',
+    properties: {},
+  },
+  handler: handleDream,
+};
+
+export const memorySetParentTool: ToolDefinition = {
+  name: 'memory_set_parent',
+  description:
+    'Move a memory entry to a new parent. Use during dream sessions to reorganize the vault tree. ' +
+    'Set parent_id to null to move an entry to the top level (below root).',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      entry_id: { type: 'string', description: 'ID of the entry to move' },
+      parent_id: {
+        type: ['string', 'null'],
+        description: 'New parent entry ID, or null to place at top level',
+      },
+    },
+    required: ['entry_id', 'parent_id'],
+  },
+  handler: handleSetParent,
+};
+
 export const memoryTools: ToolDefinition[] = [
   memoryGetRootTool,
   memoryCreateTool,
@@ -184,4 +217,6 @@ export const memoryTools: ToolDefinition[] = [
   memoryGetTool,
   memoryRelateTool,
   memoryDeleteTool,
+  memoryDreamTool,
+  memorySetParentTool,
 ];
