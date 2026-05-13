@@ -14,6 +14,8 @@ import {
   handleGet,
   handleRelate,
   handleDelete,
+  handleDream,
+  handleSetParent,
 } from './handlers.js';
 import type { ServerContext } from '../common/types.js';
 
@@ -361,6 +363,98 @@ describe('Memory Handlers', () => {
       mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
 
       const result = await handleDelete({ id: 'missing' }, mockContext);
+
+      expect(result.success).toBe(false);
+    });
+  });
+
+  // ==========================================================================
+  // handleDream
+  // ==========================================================================
+
+  describe('handleDream', () => {
+    it('calls GET /api/memory/dream with gateway token', async () => {
+      const entries = [{ id: 'e1', title: 'Alice', type: 'person', parent_id: null, backlink_count: 2, updated_at: '2026-05-01Z' }];
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ data: entries }) });
+
+      await handleDream({}, mockContext);
+
+      const [url, opts] = mockFetch.mock.calls[0];
+      expect(url).toBe('https://test.agenthelm.mom/api/memory/dream');
+      expect(opts?.headers?.['x-reins-agent-secret']).toBe('test-gateway-token');
+    });
+
+    it('returns entries array with count', async () => {
+      const entries = [
+        { id: 'e1', title: 'Alice', type: 'person', parent_id: 'root', backlink_count: 3, updated_at: '2026Z' },
+        { id: 'e2', title: 'Acme', type: 'company', parent_id: null, backlink_count: 0, updated_at: '2026Z' },
+      ];
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ data: entries }) });
+
+      const result = await handleDream({}, mockContext);
+
+      expect(result.success).toBe(true);
+      expect(result.data.entries).toEqual(entries);
+      expect(result.data.count).toBe(2);
+    });
+
+    it('returns error on non-200 response', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'Internal error' });
+
+      const result = await handleDream({}, mockContext);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBeTruthy();
+    });
+  });
+
+  // ==========================================================================
+  // handleSetParent
+  // ==========================================================================
+
+  describe('handleSetParent', () => {
+    it('calls PUT /api/memory/entries/:entry_id/parent', async () => {
+      mockFetch.mockResolvedValueOnce(makeOkResponse({ ok: true }));
+
+      await handleSetParent({ entry_id: 'e1', parent_id: 'root-1' }, mockContext);
+
+      const [url, opts] = mockFetch.mock.calls[0];
+      expect(url).toBe('https://test.agenthelm.mom/api/memory/entries/e1/parent');
+      expect(opts?.method).toBe('PUT');
+      const body = JSON.parse(opts?.body as string);
+      expect(body.parent_id).toBe('root-1');
+    });
+
+    it('sends null parent_id to move entry to top level', async () => {
+      mockFetch.mockResolvedValueOnce(makeOkResponse({ ok: true }));
+
+      await handleSetParent({ entry_id: 'e1', parent_id: null }, mockContext);
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1]?.body as string);
+      expect(body.parent_id).toBeNull();
+    });
+
+    it('returns { ok: true } on success', async () => {
+      mockFetch.mockResolvedValueOnce(makeOkResponse({ ok: true }));
+
+      const result = await handleSetParent({ entry_id: 'e1', parent_id: 'root' }, mockContext);
+
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual({ ok: true });
+    });
+
+    it('returns error when entry not found', async () => {
+      mockFetch.mockResolvedValueOnce(makeErrorResponse(404, 'Entry not found'));
+
+      const result = await handleSetParent({ entry_id: 'missing', parent_id: 'root' }, mockContext);
+
+      expect(result.success).toBe(false);
+    });
+
+    it('returns error on circular reference', async () => {
+      mockFetch.mockResolvedValueOnce(makeErrorResponse(400, 'Circular reference'));
+
+      const result = await handleSetParent({ entry_id: 'e1', parent_id: 'child-of-e1' }, mockContext);
 
       expect(result.success).toBe(false);
     });

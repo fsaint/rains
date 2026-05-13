@@ -217,3 +217,31 @@ export async function handleDelete(
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
+
+export async function handleDream(
+  _args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  try {
+    const res = await memoryFetch(context, '/api/memory/dream');
+    if (!res.ok) throw new Error(`Dream API returned ${res.status}: ${await res.text()}`);
+    const json = await res.json() as { data: unknown[] };
+    return { success: true, data: { entries: json.data, count: json.data.length } };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function handleSetParent(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  try {
+    const result = await apiPut(context, `/api/memory/entries/${args.entry_id}/parent`, {
+      parent_id: args.parent_id ?? null,
+    });
+    return { success: true, data: result };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
