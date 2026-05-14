@@ -169,7 +169,7 @@ export default function Memory() {
       </aside>
 
       {/* Main content */}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto bg-reins-navy">
         <div className="p-6">
           {/* Header */}
           <div className="flex items-center justify-between mb-6">
