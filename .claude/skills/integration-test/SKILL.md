@@ -79,19 +79,19 @@ python3 /tmp/tg_login.py
 
 This writes `~/.reins_test_telethon.session`. After that the session is reused without prompts.
 
-Two Telethon helper scripts are used:
+Three Telethon helper scripts live in `tests/integration/` (committed to the repo):
 
-**`/tmp/tg_send_and_wait_filtered.py`** — sends a message and waits for the first non-progress reply. Skips `🐍`, `⚡`, `📬`, `⚙️` prefixes (Hermes progress/welcome). Handles OpenClaw's streaming responses by listening to MessageEdited events with a 3-second settle timer. Use for the basic ping test:
+**`tests/integration/tg_send_and_wait_filtered.py`** — sends a message and waits for the first non-progress reply. Skips `🐍`, `⚡`, `📬`, `⚙️` prefixes (Hermes progress/welcome). Handles OpenClaw's streaming responses by listening to MessageEdited events with a 3-second settle timer. Use for the basic ping test:
 
 ```bash
 source tests/integration/.env.test
 TELEGRAM_API_ID=$TELEGRAM_API_ID \
 TELEGRAM_API_HASH=$TELEGRAM_API_HASH \
 TELEGRAM_PHONE=$TELEGRAM_PHONE \
-python3 /tmp/tg_send_and_wait_filtered.py <bot_username> "<message>" [timeout_secs]
+python3 tests/integration/tg_send_and_wait_filtered.py <bot_username> "<message>" [timeout_secs]
 ```
 
-**`/tmp/tg_mcp_tool_test.py`** — sends a message, optionally polls Reins API for an approval and approves/rejects it, then returns the final bot reply. Handles streaming via MessageEdited events + settle timer. Uses `curl` for Reins API calls. Use for the dev-sandbox permission tests:
+**`tests/integration/tg_mcp_tool_test.py`** — sends a message, optionally polls Reins API for an approval and approves/rejects it, then returns the final bot reply. Handles streaming via MessageEdited events + settle timer. Uses `curl` for Reins API calls. Use for the dev-sandbox permission tests:
 
 ```bash
 source tests/integration/.env.test
@@ -101,14 +101,14 @@ TELEGRAM_PHONE=$TELEGRAM_PHONE \
 REINS_URL=$REINS_URL \
 REINS_ADMIN_EMAIL=$REINS_ADMIN_EMAIL \
 REINS_ADMIN_PASSWORD=$REINS_ADMIN_PASSWORD \
-python3 /tmp/tg_mcp_tool_test.py <bot_username> <agent_id> "<message>" <action> [timeout_secs]
+python3 tests/integration/tg_mcp_tool_test.py <bot_username> <agent_id> "<message>" <action> [timeout_secs]
 # action: "none" | "approve" | "reject"
 ```
 
-**`/tmp/run_sandbox_tests.sh`** — orchestrates all 4 sandbox permission tests for a given agent. Handles machine restart (needed so OpenClaw picks up newly-enabled dev-sandbox tools), approval polling, and result checking:
+**`tests/integration/run_sandbox_tests.sh`** — orchestrates all 4 sandbox permission tests for a given agent. Handles machine restart (needed so OpenClaw picks up newly-enabled dev-sandbox tools), approval polling, and result checking:
 
 ```bash
-source /tmp/run_sandbox_tests.sh
+source tests/integration/run_sandbox_tests.sh
 sandbox_tests <bot_username> <agent_id>
 ```
 
@@ -204,7 +204,7 @@ source tests/integration/.env.test
 TELEGRAM_API_ID=$TELEGRAM_API_ID \
 TELEGRAM_API_HASH=$TELEGRAM_API_HASH \
 TELEGRAM_PHONE=$TELEGRAM_PHONE \
-python3 /tmp/tg_send_and_wait_filtered.py <bot_username> \
+python3 tests/integration/tg_send_and_wait_filtered.py <bot_username> \
   "What is 7+8? Reply with ONLY the number, nothing else." 90
 ```
 
@@ -222,7 +222,7 @@ python3 /tmp/tg_send_and_wait_filtered.py <bot_username> \
 Run the orchestration script after the ping passes:
 
 ```bash
-source /tmp/run_sandbox_tests.sh
+source tests/integration/run_sandbox_tests.sh
 sandbox_tests <bot_username> <agent_id>
 ```
 
@@ -254,19 +254,19 @@ source tests/integration/.env.test
 TENV="TELEGRAM_API_ID=$TELEGRAM_API_ID TELEGRAM_API_HASH=$TELEGRAM_API_HASH TELEGRAM_PHONE=$TELEGRAM_PHONE REINS_URL=$REINS_URL REINS_ADMIN_EMAIL=$REINS_ADMIN_EMAIL REINS_ADMIN_PASSWORD=$REINS_ADMIN_PASSWORD"
 
 # ALLOWED
-eval "$TENV python3 /tmp/tg_mcp_tool_test.py <bot_username> $AGENT_ID \
+eval "$TENV python3 tests/integration/tg_mcp_tool_test.py <bot_username> $AGENT_ID \
   'Call the sandbox_echo tool with message ping-allowed. Report the tool result.' none 90"
 
 # APPROVE
-eval "$TENV python3 /tmp/tg_mcp_tool_test.py <bot_username> $AGENT_ID \
+eval "$TENV python3 tests/integration/tg_mcp_tool_test.py <bot_username> $AGENT_ID \
   'Call sandbox_send_message: to=ops@reins.io, subject=approve-test, body=please approve. Report result.' approve 120"
 
 # DENY
-eval "$TENV python3 /tmp/tg_mcp_tool_test.py <bot_username> $AGENT_ID \
+eval "$TENV python3 tests/integration/tg_mcp_tool_test.py <bot_username> $AGENT_ID \
   'Call sandbox_send_message: to=ops@reins.io, subject=deny-test, body=denied. Report what happened.' reject 120"
 
 # BLOCKED
-eval "$TENV python3 /tmp/tg_mcp_tool_test.py <bot_username> $AGENT_ID \
+eval "$TENV python3 tests/integration/tg_mcp_tool_test.py <bot_username> $AGENT_ID \
   'Call ONLY the sandbox_delete_item tool to delete item-1. Do NOT call any other tool. If sandbox_delete_item is not in your toolset, say so explicitly.' none 90"
 ```
 
@@ -361,7 +361,7 @@ The `GET /api/approvals` endpoint allows admin users to see approvals for any ag
 [ ] fly CLI authenticated (fly auth whoami)
 [ ] Telethon session exists (~/.reins_test_telethon.session)
 [ ] No orphan Fly machines from previous runs (fly machine list --org reins-dev)
-[ ] /tmp/run_sandbox_tests.sh, /tmp/tg_mcp_tool_test.py, /tmp/tg_send_and_wait_filtered.py all present
+[ ] tests/integration/run_sandbox_tests.sh, tg_mcp_tool_test.py, tg_send_and_wait_filtered.py present (committed to repo)
 ```
 
 **Prod (additional/different):**
@@ -370,12 +370,12 @@ The `GET /api/approvals` endpoint allows admin users to see approvals for any ag
 [ ] SHARED_BOT_TOKEN + SHARED_BOT_WEBHOOK_SECRET set on agenthelm-core (prod: @AgentHelmPilot_bot)
 [ ] Telethon session exists (~/.reins_test_telethon.session)
 [ ] fly CLI authenticated (fly auth whoami)
-[ ] /tmp/run_sandbox_tests.sh, /tmp/tg_mcp_tool_test.py, /tmp/tg_send_and_wait_filtered.py all present
+[ ] tests/integration/run_sandbox_tests.sh, tg_mcp_tool_test.py, tg_send_and_wait_filtered.py present (committed to repo)
 ```
 
 When invoking sandbox_tests for prod, pass the env file as the third argument:
 ```bash
-source /tmp/run_sandbox_tests.sh
+source tests/integration/run_sandbox_tests.sh
 sandbox_tests <bot_username> <agent_id> /Users/fsaint/git/reins/tests/integration/.env.prod-test
 ```
 
@@ -417,7 +417,7 @@ SHARED_BOT_USERNAME=AgentHelmDevPilot_bot   # or AgentHelmPilot_bot for prod
 TELEGRAM_API_ID=$TELEGRAM_API_ID \
 TELEGRAM_API_HASH=$TELEGRAM_API_HASH \
 TELEGRAM_PHONE=$TELEGRAM_PHONE \
-python3 /tmp/tg_send_and_wait_filtered.py $SHARED_BOT_USERNAME \
+python3 tests/integration/tg_send_and_wait_filtered.py $SHARED_BOT_USERNAME \
   "What is 7+8? Reply with ONLY the number, nothing else." 90
 ```
 
