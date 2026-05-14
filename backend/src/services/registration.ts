@@ -13,6 +13,7 @@ import { db, client } from '../db/index.js';
 import { pendingAgentRegistrations } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
+import { enableDefaultServices } from './permissions.js';
 
 // Claim code format: 6 alphanumeric characters, easy to type
 function generateClaimCode(): string {
@@ -117,6 +118,8 @@ export async function claimAgent(code: string, userId?: string): Promise<Registe
 
   // Remove from pending
   await db.delete(pendingAgentRegistrations).where(eq(pendingAgentRegistrations.id, pending.id));
+
+  await enableDefaultServices(pending.id);
 
   return {
     id: pending.id,

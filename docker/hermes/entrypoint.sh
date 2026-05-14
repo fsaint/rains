@@ -101,10 +101,14 @@ else
   : > ~/.hermes/SOUL.md
 fi
 
-# Append first-run instructions if this is the agent's first boot
-if [ -n "$INITIAL_PROMPT" ]; then
+# First-boot ritual: inject BOOTSTRAP.md into SOUL.md exactly once.
+# The marker file prevents re-injection on restarts, emulating OpenClaw's
+# native self-delete lifecycle for Hermes which has no built-in bootstrap loader.
+if [ ! -f ~/.hermes/.bootstrap-done ] && [ -f /agenthelm-templates/BOOTSTRAP.md ]; then
   printf '\n\n' >> ~/.hermes/SOUL.md
-  printf '%s' "$INITIAL_PROMPT" >> ~/.hermes/SOUL.md
+  INITIAL_PROMPT="${INITIAL_PROMPT:-}" \
+    envsubst '${INITIAL_PROMPT}' < /agenthelm-templates/BOOTSTRAP.md >> ~/.hermes/SOUL.md
+  touch ~/.hermes/.bootstrap-done
 fi
 
 # Append Reins platform knowledge so the agent can answer configuration and

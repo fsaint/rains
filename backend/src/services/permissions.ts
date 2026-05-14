@@ -973,6 +973,27 @@ export async function createServiceInstance(
 }
 
 /**
+ * Enable services that are on by default for every new agent (currently: memory).
+ * Idempotent — safe to call multiple times; will not create duplicate instances.
+ */
+export async function enableDefaultServices(agentId: string): Promise<void> {
+  const defaults = ['memory'];
+  for (const serviceType of defaults) {
+    try {
+      const existing = await db
+        .select()
+        .from(agentServiceInstances)
+        .where(and(eq(agentServiceInstances.agentId, agentId), eq(agentServiceInstances.serviceType, serviceType)))
+        .limit(1);
+      if (existing.length > 0) continue;
+      await createServiceInstance(agentId, serviceType);
+    } catch (err) {
+      console.warn(`[enableDefaultServices] failed to enable ${serviceType} for agent ${agentId}:`, err instanceof Error ? err.message : err);
+    }
+  }
+}
+
+/**
  * Delete a service instance
  */
 export async function deleteServiceInstance(instanceId: string): Promise<void> {
