@@ -1097,7 +1097,10 @@ export async function getAgentInstances(agentId: string): Promise<ServiceInstanc
   const results: ServiceInstance[] = [];
   for (const inst of instances) {
     const def = registry.serviceRegistry.get(inst.serviceType);
-    const credInfo = await getCredentialStatus(inst.credentialId);
+    const needsCredential = def?.auth.required ?? true;
+    const credInfo = needsCredential
+      ? await getCredentialStatus(inst.credentialId)
+      : { status: 'connected' as const, email: null, name: null };
     const { permissionLevel, toolCount, blockedCount, approvalRequiredCount } = await getInstancePermissionSummary(inst.id, inst.agentId, inst.serviceType);
 
     results.push({
