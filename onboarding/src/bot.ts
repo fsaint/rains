@@ -84,6 +84,7 @@ export function createBot(): Bot {
         await sql`DELETE FROM applicants WHERE telegram_user_id = ${targetId}`;
         await sql`DELETE FROM deployed_agents WHERE telegram_user_id = ${String(targetId)}`;
         await clearUserCredentials(targetId).catch(() => {});
+        await bot.api.sendMessage(targetId, HELM.greeting);
         await ctx.reply(`Reset ${targetId} — clean slate.`);
         return;
       }
