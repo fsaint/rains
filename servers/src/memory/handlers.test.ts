@@ -125,7 +125,8 @@ describe('Memory Handlers', () => {
       const result = await handleCreate({ title: 'My Note' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data).toEqual(entry);
+      // created=false because makeOkResponse uses status 200 (existing entry path)
+      expect(result.data).toEqual({ ...entry, created: false });
     });
 
     it('returns error on failure', async () => {
