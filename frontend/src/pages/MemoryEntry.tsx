@@ -45,11 +45,15 @@ function renderMarkdown(
   resolvedLinks: Record<string, string> = {},
   isIndex = false,
   resolvedHeadings: Record<string, string | null> = {},
+  transclusions: Record<string, { id: string; title: string; content: string }> = {},
 ): string {
+  void transclusions; // placeholder refs replaced post-render
   return md
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
+    .replace(/!\[\[([^\]]+)\]\]/g, (_, title) =>
+      `<div class="transclusion-placeholder" data-transclude="${title.trim()}"></div>`)
     .replace(/^### (.+)$/gm, (_, text) =>
       `<h3 id="${slugify(text)}" class="text-lg font-semibold text-white mt-4 mb-1">${text}</h3>`)
     .replace(/^## (.+)$/gm, (_, name) => {
@@ -324,9 +328,25 @@ export default function MemoryEntry() {
                 else if (tag) navigate(`/memory?tag=${tag}`);
               }}
               dangerouslySetInnerHTML={{
-                __html: entry.content
-                  ? `<p class="mb-2">${renderMarkdown(entry.content, entry.resolvedLinks ?? {}, entry.type === 'index', entry.resolvedHeadings ?? {})}</p>`
-                  : '<p class="text-gray-600 italic">No content yet. Click Edit to add some.</p>',
+                __html: (() => {
+                  if (!entry.content) return '<p class="text-gray-600 italic">No content yet. Click Edit to add some.</p>';
+                  const transclusions = entry.transclusions ?? {};
+                  let html = `<p class="mb-2">${renderMarkdown(entry.content, entry.resolvedLinks ?? {}, entry.type === 'index', entry.resolvedHeadings ?? {}, transclusions)}</p>`;
+                  // Replace transclusion placeholders with embedded content blocks
+                  html = html.replace(/<div class="transclusion-placeholder" data-transclude="([^"]+)"><\/div>/g, (_, title) => {
+                    const t = transclusions[title];
+                    if (!t) return `<div class="border-l-2 border-amber-400/30 pl-3 my-3 py-1"><p class="text-xs text-amber-400/70 italic">[[${title}]] — entry not found</p></div>`;
+                    const innerHtml = renderMarkdown(t.content || '', {}, false, {}, {});
+                    return `<div class="border-l-2 border-trust-blue/30 pl-3 my-3 py-1 bg-white/2 rounded-r">
+      <div class="flex items-center justify-between mb-1">
+        <span class="text-xs text-trust-blue/60 font-medium">${t.title}</span>
+        <a data-wikilink="${t.id}" class="text-xs text-gray-500 hover:text-trust-blue cursor-pointer">↗ open</a>
+      </div>
+      <div class="text-sm text-gray-300">${innerHtml}</div>
+    </div>`;
+                  });
+                  return html;
+                })(),
               }}
             />
           )}

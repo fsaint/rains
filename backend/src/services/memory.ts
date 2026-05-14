@@ -7,6 +7,44 @@
 import { client } from '../db/index.js';
 import { nanoid } from 'nanoid';
 
+/** Extract ![[Title]] transclusion references from content. */
+export function parseTransclusions(content: string): string[] {
+  const re = /!\[\[([^\]]+)\]\]/g;
+  const titles: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) titles.push(m[1].trim());
+  return titles;
+}
+
+/** Look up an entry by exact title, then by alias attribute. Returns null if not found. */
+export async function lookupEntryByTitleOrAlias(
+  userId: string,
+  title: string
+): Promise<{ id: string; title: string; content: string | null } | null> {
+  // 1. Exact title match
+  const exact = await client.execute({
+    sql: `SELECT id, title, content FROM memory_entries
+          WHERE user_id = ? AND title = ? AND is_deleted = false LIMIT 1`,
+    args: [userId, title],
+  });
+  if (exact.rows.length > 0) {
+    const r = exact.rows[0];
+    return { id: r.id as string, title: r.title as string, content: r.content as string | null };
+  }
+  // 2. Alias match
+  const alias = await client.execute({
+    sql: `SELECT e.id, e.title, e.content FROM memory_attributes a
+          JOIN memory_entries e ON e.id = a.entry_id
+          WHERE e.user_id = ? AND a.name = 'alias' AND a.value = ? AND a.is_deleted = false LIMIT 1`,
+    args: [userId, title],
+  });
+  if (alias.rows.length > 0) {
+    const r = alias.rows[0];
+    return { id: r.id as string, title: r.title as string, content: r.content as string | null };
+  }
+  return null;
+}
+
 /** Extract [[wikilinks]] from Markdown content */
 export function parseWikilinks(content: string): string[] {
   const matches = content.matchAll(/\[\[([^\]]+)\]\]/g);

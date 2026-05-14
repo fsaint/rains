@@ -748,6 +748,7 @@ export interface MemoryEntryDetail extends MemoryEntry {
   resolvedLinks: Record<string, string>;
   resolvedHeadings: Record<string, string | null>;
   tags: string[];
+  transclusions: Record<string, { id: string; title: string; content: string }>;
 }
 
 export interface MemoryTreeNode {

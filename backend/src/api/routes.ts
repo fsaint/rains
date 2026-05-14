@@ -67,7 +67,7 @@ import { sendReauthEmail } from '../services/email.js';
 import { performBackup, listBackups, getBackup, restoreBackup } from '../services/agent-backup.js';
 import { isCodexTokenExpired } from '../services/token-monitor.js';
 import { forwardToOpenclaw, handleMyChatMember } from '../services/agent-bot-relay.js';
-import { parseWikilinkRefs, updateLinkIndex, updateTagIndex, ensureMemoryRoot, getDreamManifest, setEntryParent, resolveOrCreate } from '../services/memory.js';
+import { parseWikilinkRefs, updateLinkIndex, updateTagIndex, ensureMemoryRoot, getDreamManifest, setEntryParent, resolveOrCreate, parseTransclusions, lookupEntryByTitleOrAlias } from '../services/memory.js';
 import * as provider from '../providers/index.js';
 import { nanoid } from 'nanoid';
 import jwt from 'jsonwebtoken';
@@ -5168,6 +5168,26 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       }
     }
 
+    // Resolve ![[Title]] transclusions (max depth 2, cycle-safe)
+    const transRefs = parseTransclusions((entry.content as string | null) ?? '');
+    const transclusions: Record<string, { id: string; title: string; content: string }> = {};
+    const seen = new Set<string>([id]);
+    const transclusionUserId: string = userId;
+
+    if (transRefs.length > 0) {
+      async function resolveTransclusion(title: string, depth: number): Promise<void> {
+        if (depth > 2 || title in transclusions) return;
+        const target = await lookupEntryByTitleOrAlias(transclusionUserId, title);
+        if (!target || seen.has(target.id)) return;
+        seen.add(target.id);
+        transclusions[title] = { id: target.id, title: target.title, content: target.content ?? '' };
+        // Recurse into nested transclusions
+        const nested = parseTransclusions(target.content ?? '');
+        for (const sub of nested) await resolveTransclusion(sub, depth + 1);
+      }
+      for (const t of transRefs) await resolveTransclusion(t, 0);
+    }
+
     return reply.send({
       data: {
         ...entry,
@@ -5177,6 +5197,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         resolvedLinks,
         resolvedHeadings,
         tags,
+        transclusions,
       },
     });
   });
