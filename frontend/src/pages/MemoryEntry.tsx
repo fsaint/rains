@@ -177,7 +177,7 @@ export default function MemoryEntry() {
   return (
     <div className="flex h-full">
       {/* Main editor area */}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto bg-reins-navy">
         <div className="max-w-3xl mx-auto p-6">
           {/* Breadcrumb */}
           <div className="flex items-center gap-2 mb-4">
@@ -286,7 +286,7 @@ export default function MemoryEntry() {
       </div>
 
       {/* Right sidebar: attributes + backlinks */}
-      <aside className="w-72 shrink-0 border-l border-white/10 overflow-y-auto p-4 space-y-6">
+      <aside className="w-72 shrink-0 bg-reins-navy border-l border-white/10 overflow-y-auto p-4 space-y-6">
         {/* Attributes */}
         <div>
           <div className="flex items-center justify-between mb-2">
