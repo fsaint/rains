@@ -239,6 +239,11 @@ function makeDbRouter(passwordHash: string) {
       return EMPTY;
     }
 
+    // ── Fuzzy match in resolveOrCreate — should not match any entries in tests ──
+    if (sql.includes('similarity(')) {
+      return EMPTY;
+    }
+
     // ── List / search (catch-all for FROM memory_entries with ORDER BY) ───────
     if (sql.includes('FROM memory_entries') && sql.includes('ORDER BY')) {
       return { rows: [entryRow], columns: [], rowsAffected: 1, lastInsertRowid: 0n };
