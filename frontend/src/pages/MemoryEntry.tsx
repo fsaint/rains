@@ -35,34 +35,44 @@ const INDEX_TYPE_MAP: Record<string, string> = {
   Notes: 'note',
 };
 
+function slugify(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]/g, '');
+}
+
 /** Simple Markdown renderer (subset) */
 function renderMarkdown(
   md: string,
   resolvedLinks: Record<string, string> = {},
   isIndex = false,
+  resolvedHeadings: Record<string, string | null> = {},
 ): string {
   return md
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/^### (.+)$/gm, '<h3 class="text-lg font-semibold text-white mt-4 mb-1">$1</h3>')
+    .replace(/^### (.+)$/gm, (_, text) =>
+      `<h3 id="${slugify(text)}" class="text-lg font-semibold text-white mt-4 mb-1">${text}</h3>`)
     .replace(/^## (.+)$/gm, (_, name) => {
       const typeFilter = isIndex ? INDEX_TYPE_MAP[name.trim()] : undefined;
       return typeFilter
-        ? `<h2 class="text-xl font-semibold mt-6 mb-2"><a data-typefilter="${typeFilter}" class="text-trust-blue hover:underline cursor-pointer">${name}</a></h2>`
-        : `<h2 class="text-xl font-semibold text-white mt-6 mb-2">${name}</h2>`;
+        ? `<h2 id="${slugify(name)}" class="text-xl font-semibold mt-6 mb-2"><a data-typefilter="${typeFilter}" class="text-trust-blue hover:underline cursor-pointer">${name}</a></h2>`
+        : `<h2 id="${slugify(name)}" class="text-xl font-semibold text-white mt-6 mb-2">${name}</h2>`;
     })
-    .replace(/^# (.+)$/gm, '<h1 class="text-2xl font-bold text-white mt-6 mb-3">$1</h1>')
+    .replace(/^# (.+)$/gm, (_, text) =>
+      `<h1 id="${slugify(text)}" class="text-2xl font-bold text-white mt-6 mb-3">${text}</h1>`)
     .replace(/\*\*(.+?)\*\*/g, '<strong class="text-white font-semibold">$1</strong>')
     .replace(/\*(.+?)\*/g, '<em class="italic">$1</em>')
     .replace(/`(.+?)`/g, '<code class="bg-white/10 rounded px-1 text-sm font-mono text-green-300">$1</code>')
     .replace(/((?:^|\s))#([a-z][a-z0-9-]*)/gi, (_, lead, tag) =>
       `${lead}<a data-tag="${tag.toLowerCase()}" class="text-trust-blue/80 hover:text-trust-blue cursor-pointer text-sm">#${tag}</a>`)
-    .replace(/\[\[([^\]]+)\]\]/g, (_, name) => {
-      const id = resolvedLinks[name];
-      return id
-        ? `<a data-wikilink="${id}" class="text-trust-blue underline cursor-pointer hover:text-trust-blue/80">${name}</a>`
-        : `<span class="text-amber-400 underline decoration-dotted" title="No entry named '${name}' yet">${name}</span>`;
+    .replace(/\[\[([^\]|#]+?)(?:#([^\]|]+))?\]\]/g, (_, name, heading) => {
+      const id = resolvedLinks[name.trim()];
+      const effectiveHeading = heading?.trim() ?? resolvedHeadings[name.trim()] ?? null;
+      if (id) {
+        const headingAttr = effectiveHeading ? ` data-heading="${slugify(effectiveHeading)}"` : '';
+        return `<a data-wikilink="${id}"${headingAttr} class="text-trust-blue underline cursor-pointer hover:text-trust-blue/80">${name.trim()}${heading ? `#${heading.trim()}` : ''}</a>`;
+      }
+      return `<span class="text-amber-400 underline decoration-dotted" title="No entry named '${name.trim()}' yet">${name.trim()}${heading ? `#${heading.trim()}` : ''}</span>`;
     })
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-trust-blue underline" target="_blank" rel="noopener">$1</a>')
     .replace(/^- (.+)$/gm, '<li class="ml-4 list-disc text-gray-300">$1</li>')
@@ -122,6 +132,14 @@ export default function MemoryEntry() {
       setDraftType(entry.type);
     }
   }, [entry]);
+
+  useEffect(() => {
+    if (!entry) return;
+    const hash = window.location.hash.slice(1);
+    if (!hash) return;
+    const el = document.getElementById(hash);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [entry?.id, id]);
 
   const updateMutation = useMutation({
     mutationFn: (data: { title?: string; content?: string; type?: MemoryEntryType }) =>
@@ -300,13 +318,14 @@ export default function MemoryEntry() {
                 const wikilinkId = t.getAttribute('data-wikilink');
                 const typeFilter = t.getAttribute('data-typefilter');
                 const tag = t.getAttribute('data-tag');
-                if (wikilinkId) navigate(`/memory/${wikilinkId}`);
+                const heading = t.getAttribute('data-heading');
+                if (wikilinkId) navigate(`/memory/${wikilinkId}${heading ? `#${heading}` : ''}`);
                 else if (typeFilter) navigate(`/memory?type=${typeFilter}`);
                 else if (tag) navigate(`/memory?tag=${tag}`);
               }}
               dangerouslySetInnerHTML={{
                 __html: entry.content
-                  ? `<p class="mb-2">${renderMarkdown(entry.content, entry.resolvedLinks ?? {}, entry.type === 'index')}</p>`
+                  ? `<p class="mb-2">${renderMarkdown(entry.content, entry.resolvedLinks ?? {}, entry.type === 'index', entry.resolvedHeadings ?? {})}</p>`
                   : '<p class="text-gray-600 italic">No content yet. Click Edit to add some.</p>',
               }}
             />

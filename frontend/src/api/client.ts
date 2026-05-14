@@ -746,6 +746,7 @@ export interface MemoryEntryDetail extends MemoryEntry {
   backlinks: Array<{ id: string; title: string; type: MemoryEntryType; context: string | null }>;
   parentId: string | null;
   resolvedLinks: Record<string, string>;
+  resolvedHeadings: Record<string, string | null>;
   tags: string[];
 }
 

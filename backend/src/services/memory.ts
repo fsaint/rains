@@ -13,6 +13,17 @@ export function parseWikilinks(content: string): string[] {
   return [...matches].map((m) => m[1].trim()).filter((t) => t.length > 0);
 }
 
+/** Parse [[Title]] and [[Title#Heading]] refs. */
+export function parseWikilinkRefs(content: string): Array<{ title: string; heading: string | null }> {
+  const re = /\[\[([^\]|#]+?)(?:#([^\]|]+))?\]\]/g;
+  const out: Array<{ title: string; heading: string | null }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) {
+    out.push({ title: m[1].trim(), heading: m[2]?.trim() ?? null });
+  }
+  return out;
+}
+
 /** Rebuild memory_links for a single entry (after create/update) */
 export async function updateLinkIndex(
   entryId: string,

@@ -67,7 +67,7 @@ import { sendReauthEmail } from '../services/email.js';
 import { performBackup, listBackups, getBackup, restoreBackup } from '../services/agent-backup.js';
 import { isCodexTokenExpired } from '../services/token-monitor.js';
 import { forwardToOpenclaw, handleMyChatMember } from '../services/agent-bot-relay.js';
-import { parseWikilinks, updateLinkIndex, updateTagIndex, ensureMemoryRoot, getDreamManifest, setEntryParent, resolveOrCreate } from '../services/memory.js';
+import { parseWikilinkRefs, updateLinkIndex, updateTagIndex, ensureMemoryRoot, getDreamManifest, setEntryParent, resolveOrCreate } from '../services/memory.js';
 import * as provider from '../providers/index.js';
 import { nanoid } from 'nanoid';
 import jwt from 'jsonwebtoken';
@@ -5130,7 +5130,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const tags = tagsResult.rows.map((r) => r.tag as string);
 
     // Resolve [[wikilinks]] in the content to entry IDs for clickable rendering
-    const referencedTitles = parseWikilinks((entry.content as string | null) ?? '');
+    const wikilinkRefs = parseWikilinkRefs((entry.content as string | null) ?? '');
+    const referencedTitles = [...new Set(wikilinkRefs.map((r) => r.title))];
     const resolvedLinks: Record<string, string> = {};
     if (referencedTitles.length > 0) {
       const placeholders = referencedTitles.map(() => '?').join(', ');
@@ -5160,6 +5161,13 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       }
     }
 
+    const resolvedHeadings: Record<string, string | null> = {};
+    for (const ref of wikilinkRefs) {
+      if (ref.title in resolvedLinks && ref.heading) {
+        resolvedHeadings[ref.title] = ref.heading;
+      }
+    }
+
     return reply.send({
       data: {
         ...entry,
@@ -5167,6 +5175,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         backlinks: backlinksResult.rows,
         parentId: branchResult.rows[0]?.parent_entry_id ?? null,
         resolvedLinks,
+        resolvedHeadings,
         tags,
       },
     });
