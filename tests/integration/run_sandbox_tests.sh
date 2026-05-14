@@ -9,12 +9,19 @@
 #
 # env_file defaults to tests/integration/.env.test
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve script directory — works when sourced in both bash and zsh
+if [[ -n "${ZSH_VERSION:-}" ]]; then
+  _SANDBOX_SCRIPT_DIR="$(cd "$(dirname "${(%):-%x}")" && pwd)"
+elif [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+  _SANDBOX_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+else
+  _SANDBOX_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+fi
 
 sandbox_tests() {
     local BOT_USERNAME="$1"
     local AGENT_ID="$2"
-    local ENV_FILE="${3:-$SCRIPT_DIR/.env.test}"
+    local ENV_FILE="${3:-$_SANDBOX_SCRIPT_DIR/.env.test}"
 
     if [[ -z "$BOT_USERNAME" || -z "$AGENT_ID" ]]; then
         echo "Usage: sandbox_tests <bot_username> <agent_id> [env_file]" >&2
@@ -64,7 +71,7 @@ sandbox_tests() {
         "REINS_ADMIN_PASSWORD=$REINS_ADMIN_PASSWORD"
     )
 
-    local _TOOL_SCRIPT="$SCRIPT_DIR/tg_mcp_tool_test.py"
+    local _TOOL_SCRIPT="$_SANDBOX_SCRIPT_DIR/tg_mcp_tool_test.py"
 
     # ── Scenario 1: ALLOWED — sandbox_echo ──────────────────────────────────
     echo ""
