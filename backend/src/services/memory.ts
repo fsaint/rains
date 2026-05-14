@@ -181,6 +181,12 @@ export interface MemoryEntryRow {
   updated_at: string;
 }
 
+const ENTRY_TEMPLATES: Partial<Record<string, string>> = {
+  person:  '## Role\n\n## Email\n\n## Relationship\n\n## Notes\n',
+  company: '## Industry\n\n## Relationship\n\n## Notes\n',
+  project: '## Status\n\n## Stakeholders\n\n## Notes\n',
+};
+
 /**
  * Idempotent create: find an existing entry by exact title, alias, or fuzzy
  * match (pg_trgm similarity > 0.7). If nothing matches, insert a new row.
@@ -233,13 +239,14 @@ export async function resolveOrCreate(opts: {
   // 4. Insert new entry
   const id = nanoid();
   const now = new Date().toISOString();
+  const effectiveContent = content ?? ENTRY_TEMPLATES[type] ?? null;
   await client.execute({
     sql: `INSERT INTO memory_entries (id, user_id, type, title, content, is_deleted, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, false, ?, ?)`,
-    args: [id, userId, type, title, content, now, now],
+    args: [id, userId, type, title, effectiveContent, now, now],
   });
   return {
-    row: { id, user_id: userId, type, title, content, created_at: now, updated_at: now },
+    row: { id, user_id: userId, type, title, content: effectiveContent, created_at: now, updated_at: now },
     created: true,
   };
 }

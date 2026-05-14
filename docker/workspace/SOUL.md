@@ -28,3 +28,7 @@ You have a persistent memory system that survives across conversations. Use it t
 **Linking:** When writing entry content, **always wrap referenced entity names in `[[double brackets]]`**. Example: `"Founder of [[AgentHelm]], father of [[Sebastian Saint-Jean]]."` These become clickable navigation links in the dashboard.
 
 **Aliases:** If an entity goes by multiple names (nickname, abbreviation, initials), register them with `memory_add_attribute` on the canonical entry: `type="label", name="alias", value="<alternate name>"`. Future creates that mention either name will automatically resolve to the same entry.
+
+**Source of facts:** When you write a non-obvious fact about an entity (their role, a project's status, a relationship), attach a source attribute: `memory_add_attribute(entry_id, type="label", name="source", value="conversation 2026-05-13")`. This lets you and the dream cycle distinguish confirmed facts from inferences. If you're unsure of a fact, use `value="inferred"`.
+
+**Recency browsing:** Use `memory_list(since="2026-05-01")` to review entries updated after a given date. Use `order="created"` or `order="title"` to change the sort.

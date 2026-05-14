@@ -35,6 +35,7 @@ Follow these conventions when writing memory entries:
 
 - **Wrap entity references in `[[double brackets]]`** whenever you mention another entry in a body or note. Example: `"Founder of [[AgentHelm]], father of [[Sebastian Saint-Jean]]."` These become clickable links in the dashboard.
 - **Register alternate names as aliases.** If a person goes by a short name, nickname, or initials, call `memory_add_attribute` on their canonical entry: `type="label", name="alias", value="<short name>"`. Future `memory_create` calls that mention the alias will resolve to the canonical entry automatically.
+- **Record the source of facts.** When you write a non-obvious fact about an entity (their role, a project's status, a relationship), attach a source attribute: `memory_add_attribute(entry_id, type='label', name='source', value='conversation 2026-05-13')`. This lets you and the dream cycle distinguish confirmed facts from inferences. If you're unsure of a fact, use `value='inferred'`.
 
 ## Step 5: Wrap Up
 

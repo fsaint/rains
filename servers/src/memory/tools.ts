@@ -118,9 +118,11 @@ export const memorySearchTool: ToolDefinition = {
 export const memoryListTool: ToolDefinition = {
   name: 'memory_list',
   description:
-    'List memory entries, optionally filtered by type, parent entry, or tag. ' +
+    'List memory entries, optionally filtered by type, parent entry, tag, or recency. ' +
     'Use to browse all people, companies, projects, or notes. ' +
-    'Pass tag to filter entries that contain a specific #tag (e.g. tag="client" for #client).',
+    'Pass tag to filter entries that contain a specific #tag (e.g. tag="client" for #client). ' +
+    'Pass since (ISO 8601 date) to return only entries updated on or after that date. ' +
+    'Pass order to control sort: "updated" (default), "created", or "title".',
   inputSchema: {
     type: 'object',
     properties: {
@@ -132,6 +134,8 @@ export const memoryListTool: ToolDefinition = {
       parent_id: { type: 'string', description: 'List children of this entry ID (optional)' },
       limit: { type: 'number', description: 'Max results (default: 50, max: 200)' },
       tag: { type: 'string', description: 'Filter entries by tag (e.g. "client" for #client)' },
+      since: { type: 'string', description: 'ISO 8601 date — return only entries updated at or after this date (e.g. "2026-05-01")' },
+      order: { type: 'string', enum: ['updated', 'created', 'title'], description: 'Sort order (default: updated — most recently updated first)' },
     },
   },
   handler: handleList,

@@ -4952,7 +4952,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const userId = await resolveMemoryUserId(request);
     if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
 
-    const { q, type, parent_id, limit: lim = '50', tag } = request.query as Record<string, string>;
+    const { q, type, parent_id, limit: lim = '50', tag, since, order } = request.query as Record<string, string>;
     const maxLimit = Math.min(parseInt(lim, 10) || 50, 200);
 
     let rows;
@@ -4995,12 +4995,20 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         args.push(type);
       }
 
+      if (since) {
+        whereClause += ` AND e.updated_at >= ?`;
+        args.push(since);
+      }
+
+      const orderCol = order === 'created' ? 'e.created_at' : order === 'title' ? 'e.title' : 'e.updated_at';
+      const orderDir = order === 'title' ? 'ASC' : 'DESC';
+
       args.push(maxLimit);
       const result = await client.execute({
         sql: `SELECT e.id, e.type, e.title, e.content, e.created_at, e.updated_at
               ${fromClause}
               ${whereClause}
-              ORDER BY e.updated_at DESC
+              ORDER BY ${orderCol} ${orderDir}
               LIMIT ?`,
         args,
       });

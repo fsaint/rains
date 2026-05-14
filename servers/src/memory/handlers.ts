@@ -163,6 +163,8 @@ export async function handleList(
     if (args.parent_id) params.set('parent_id', String(args.parent_id));
     if (args.limit) params.set('limit', String(Math.min(Number(args.limit), 200)));
     if (args.tag) params.set('tag', String(args.tag));
+    if (args.since) params.set('since', String(args.since));
+    if (args.order) params.set('order', String(args.order));
 
     const res = await memoryFetch(context, `/api/memory/entries?${params}`);
     if (!res.ok) throw new Error(`List returned ${res.status}`);
