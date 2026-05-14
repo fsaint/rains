@@ -14,6 +14,8 @@ import {
   handleDelete,
   handleDream,
   handleSetParent,
+  handleAddAttribute,
+  handleRemoveAttribute,
 } from './handlers.js';
 
 export const memoryGetRootTool: ToolDefinition = {
@@ -208,6 +210,42 @@ export const memorySetParentTool: ToolDefinition = {
   handler: handleSetParent,
 };
 
+export const memoryAddAttributeTool: ToolDefinition = {
+  name: 'memory_add_attribute',
+  description:
+    'Add a label or relation attribute to a memory entry. ' +
+    'Labels are key-value metadata (e.g. name="alias", value="Felipe"). ' +
+    'Relations link to another entry by ID (e.g. name="works_at", value=<entry-id>). ' +
+    'Use name="alias" to register an alternate name for an entity so future creates resolve to it.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      entry_id: { type: 'string', description: 'ID of the entry to add the attribute to' },
+      type: { type: 'string', enum: ['label', 'relation'], description: 'Attribute type' },
+      name: { type: 'string', description: 'Attribute name (e.g. alias, email, works_at)' },
+      value: { type: 'string', description: 'Attribute value or target entry ID for relations' },
+    },
+    required: ['entry_id', 'type', 'name', 'value'],
+  },
+  handler: handleAddAttribute,
+};
+
+export const memoryRemoveAttributeTool: ToolDefinition = {
+  name: 'memory_remove_attribute',
+  description:
+    'Remove an attribute from a memory entry by attribute ID. ' +
+    'Get the attribute ID from memory_get (the attributes array on the entry). ' +
+    'Use to remove wrong aliases or stale metadata.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      attribute_id: { type: 'string', description: 'ID of the attribute to remove' },
+    },
+    required: ['attribute_id'],
+  },
+  handler: handleRemoveAttribute,
+};
+
 export const memoryTools: ToolDefinition[] = [
   memoryGetRootTool,
   memoryCreateTool,
@@ -219,4 +257,6 @@ export const memoryTools: ToolDefinition[] = [
   memoryDeleteTool,
   memoryDreamTool,
   memorySetParentTool,
+  memoryAddAttributeTool,
+  memoryRemoveAttributeTool,
 ];

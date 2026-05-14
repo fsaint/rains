@@ -254,3 +254,31 @@ export async function handleSetParent(
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
+
+export async function handleAddAttribute(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  try {
+    const attr = await apiPost(context, `/api/memory/entries/${args.entry_id}/attributes`, {
+      type: args.type,
+      name: args.name,
+      value: args.value,
+    });
+    return { success: true, data: attr };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function handleRemoveAttribute(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  try {
+    await apiDelete(context, `/api/memory/attributes/${args.attribute_id}`);
+    return { success: true, data: { deleted: true, id: args.attribute_id } };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
