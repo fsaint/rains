@@ -16,6 +16,9 @@ import {
   handleDelete,
   handleDream,
   handleSetParent,
+  handleAddAttribute,
+  handleRemoveAttribute,
+  handleListTags,
 } from './handlers.js';
 import type { ServerContext } from '../common/types.js';
 
@@ -460,4 +463,161 @@ describe('Memory Handlers', () => {
       expect(result.success).toBe(false);
     });
   });
+
+  // ==========================================================================
+  // handleListTags
+  // ==========================================================================
+
+  describe('handleListTags', () => {
+    it('calls GET /api/memory/tags with gateway token', async () => {
+      mockFetch.mockResolvedValueOnce(makeOkResponse([{ tag: 'client', count: 3 }]));
+
+      await handleListTags({}, mockContext);
+
+      const [url, opts] = mockFetch.mock.calls[0];
+      expect(url).toBe('https://test.agenthelm.mom/api/memory/tags');
+      expect(opts?.headers?.['x-reins-agent-secret']).toBe('test-gateway-token');
+    });
+
+    it('returns tags array on success', async () => {
+      const tags = [{ tag: 'client', count: 3 }, { tag: 'urgent', count: 1 }];
+      mockFetch.mockResolvedValueOnce(makeOkResponse(tags));
+
+      const result = await handleListTags({}, mockContext);
+
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual({ tags });
+    });
+
+    it('returns error on failure', async () => {
+      mockFetch.mockResolvedValueOnce(makeErrorResponse(500));
+
+      const result = await handleListTags({}, mockContext);
+
+      expect(result.success).toBe(false);
+    });
+  });
+
+  // ==========================================================================
+  // handleAddAttribute
+  // ==========================================================================
+
+  describe('handleAddAttribute', () => {
+    it('calls POST /api/memory/entries/:entry_id/attributes', async () => {
+      const attr = { id: 'attr-1', type: 'label', name: 'source', value: 'conversation' };
+      mockFetch.mockResolvedValueOnce(makeOkResponse(attr));
+
+      await handleAddAttribute({ entry_id: 'e1', type: 'label', name: 'source', value: 'conversation' }, mockContext);
+
+      const [url, opts] = mockFetch.mock.calls[0];
+      expect(url).toBe('https://test.agenthelm.mom/api/memory/entries/e1/attributes');
+      expect(opts?.method).toBe('POST');
+      const body = JSON.parse(opts?.body as string);
+      expect(body.type).toBe('label');
+      expect(body.name).toBe('source');
+      expect(body.value).toBe('conversation');
+    });
+
+    it('returns created attribute on success', async () => {
+      const attr = { id: 'attr-1', type: 'label', name: 'alias', value: 'Felipe' };
+      mockFetch.mockResolvedValueOnce(makeOkResponse(attr));
+
+      const result = await handleAddAttribute(
+        { entry_id: 'e1', type: 'label', name: 'alias', value: 'Felipe' },
+        mockContext
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual(attr);
+    });
+
+    it('returns error on failure', async () => {
+      mockFetch.mockResolvedValueOnce(makeErrorResponse(404, 'Entry not found'));
+
+      const result = await handleAddAttribute(
+        { entry_id: 'missing', type: 'label', name: 'x', value: 'y' },
+        mockContext
+      );
+
+      expect(result.success).toBe(false);
+    });
+  });
+
+  // ==========================================================================
+  // handleRemoveAttribute
+  // ==========================================================================
+
+  describe('handleRemoveAttribute', () => {
+    it('calls DELETE /api/memory/attributes/:attribute_id', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 204 });
+
+      await handleRemoveAttribute({ attribute_id: 'attr-1' }, mockContext);
+
+      const [url, opts] = mockFetch.mock.calls[0];
+      expect(url).toBe('https://test.agenthelm.mom/api/memory/attributes/attr-1');
+      expect(opts?.method).toBe('DELETE');
+    });
+
+    it('returns { deleted: true, id } on success', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 204 });
+
+      const result = await handleRemoveAttribute({ attribute_id: 'attr-1' }, mockContext);
+
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual({ deleted: true, id: 'attr-1' });
+    });
+
+    it('returns error on 404', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+
+      const result = await handleRemoveAttribute({ attribute_id: 'missing' }, mockContext);
+
+      expect(result.success).toBe(false);
+    });
+  });
+
+  // ==========================================================================
+  // handleList — new tag/since/order params
+  // ==========================================================================
+
+  describe('handleList — tag/since/order params', () => {
+    it('passes tag param when provided', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ data: [] }) });
+
+      await handleList({ tag: 'client' }, mockContext);
+
+      const [url] = mockFetch.mock.calls[0];
+      expect(url).toContain('tag=client');
+    });
+
+    it('passes since param when provided', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ data: [] }) });
+
+      await handleList({ since: '2026-05-01' }, mockContext);
+
+      const [url] = mockFetch.mock.calls[0];
+      expect(url).toContain('since=2026-05-01');
+    });
+
+    it('passes order param when provided', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ data: [] }) });
+
+      await handleList({ order: 'created' }, mockContext);
+
+      const [url] = mockFetch.mock.calls[0];
+      expect(url).toContain('order=created');
+    });
+
+    it('omits tag/since/order when not provided', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ data: [] }) });
+
+      await handleList({}, mockContext);
+
+      const [url] = mockFetch.mock.calls[0];
+      expect(url).not.toContain('tag=');
+      expect(url).not.toContain('since=');
+      expect(url).not.toContain('order=');
+    });
+  });
+
 });

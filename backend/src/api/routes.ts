@@ -4981,14 +4981,16 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       });
       rows = result.rows;
     } else {
-      let whereClause = `WHERE e.user_id = ? AND e.is_deleted = false`;
-      const args: unknown[] = [userId];
+      const args: unknown[] = [];
 
       let fromClause = 'FROM memory_entries e';
       if (tag) {
         fromClause += ' JOIN memory_tags mt ON mt.entry_id = e.id AND mt.tag = ?';
         args.push(tag);
       }
+
+      let whereClause = `WHERE e.user_id = ? AND e.is_deleted = false`;
+      args.push(userId);
 
       if (type) {
         whereClause += ` AND e.type = ?`;
