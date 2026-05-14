@@ -36,5 +36,7 @@ onboarding:
   # The Telegram bot users message to confirm they want agent notifications.
   # Development uses the dev bot; production uses the official approvals bot.
   notify_bot_username: AgentHelmApprovalsBot
+  # The onboarding bot users return to after confirming the approvals bot.
+  onboarding_bot_username: SpecialAgentHelmBot
   # Skip BotFather step — use platform shared bot for the user's first agent.
   shared_bot_enabled: true

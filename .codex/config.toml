@@ -1,0 +1,15 @@
+[mcp_servers.playwright]
+args = [
+    "@playwright/mcp@latest",
+    "--browser",
+    "chrome",
+    "--viewport-size",
+    "1280,800",
+]
+command = "npx"
+
+[shell_environment_policy]
+inherit = "core"
+
+[shell_environment_policy.set]
+CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1"

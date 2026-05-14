@@ -240,7 +240,6 @@ async function buildMachineConfig(opts: CreateMachineOpts) {
       REINS_API_URL: reinsUrl,
       ANTHROPIC_API_KEY: (opts.modelProvider === 'anthropic' && opts.openaiApiKey) ? opts.openaiApiKey : (process.env.ANTHROPIC_API_KEY ?? ''),
       OPENCLAW_GATEWAY_TOKEN: opts.gatewayToken,
-      OPENCLAW_NO_RESPAWN: '1',
       NODE_OPTIONS: '--max-old-space-size=3072 --dns-result-order=ipv4first',
       ...(opts.soulMd ? { SOUL_MD: opts.soulMd } : {}),
       ...(opts.telegramUserId ? { TELEGRAM_TRUSTED_USER: opts.telegramUserId } : {}),

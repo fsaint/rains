@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Shield, AlertCircle } from 'lucide-react';
 
@@ -18,6 +18,10 @@ const ERROR_MESSAGES: Record<string, string> = {
 export default function Login(_props: LoginProps) {
   const [params] = useSearchParams();
   const [loading, setLoading] = useState(false);
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [passwordError, setPasswordError] = useState<string | null>(null);
   const errorKey = params.get('login_error');
   const error = errorKey ? (ERROR_MESSAGES[errorKey] ?? 'Sign-in failed. Please try again.') : null;
 
@@ -33,6 +37,29 @@ export default function Login(_props: LoginProps) {
   const handleGoogleLogin = () => {
     setLoading(true);
     window.location.href = '/api/auth/google';
+  };
+
+  const handlePasswordLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordError(null);
+    setLoading(true);
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      if (res.ok) {
+        window.location.href = '/';
+      } else {
+        const data = await res.json() as { error?: { message?: string } };
+        setPasswordError(data?.error?.message ?? 'Invalid email or password.');
+      }
+    } catch {
+      setPasswordError('Something went wrong. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -82,6 +109,54 @@ export default function Login(_props: LoginProps) {
               </>
             )}
           </button>
+
+          {showPasswordForm ? (
+            <form onSubmit={handlePasswordLogin} className="mt-5 space-y-3">
+              <div className="flex items-center gap-2 text-xs text-gray-500 mb-1">
+                <div className="flex-1 h-px bg-white/10" />
+                <span>or sign in with email</span>
+                <div className="flex-1 h-px bg-white/10" />
+              </div>
+              {passwordError && (
+                <div className="flex items-start gap-2 text-alert-red text-xs bg-alert-red/10 rounded-lg px-3 py-2">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  <span>{passwordError}</span>
+                </div>
+              )}
+              <input
+                type="email"
+                placeholder="Email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                required
+                className="w-full bg-white/[0.06] border border-white/[0.08] rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-trust-blue/50"
+              />
+              <input
+                type="password"
+                placeholder="Password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                required
+                className="w-full bg-white/[0.06] border border-white/[0.08] rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-trust-blue/50"
+              />
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full bg-trust-blue text-white rounded-xl px-4 py-2.5 text-sm font-medium hover:bg-trust-blue/90 disabled:opacity-60 transition-all"
+              >
+                {loading ? <div className="mx-auto animate-spin rounded-full h-4 w-4 border-2 border-white/30 border-t-white" /> : 'Sign in'}
+              </button>
+            </form>
+          ) : (
+            <div className="mt-5 text-center">
+              <button
+                onClick={() => setShowPasswordForm(true)}
+                className="text-xs text-gray-500 hover:text-gray-400 transition-colors"
+              >
+                Sign in with email & password
+              </button>
+            </div>
+          )}
         </div>
 
         <p className="text-center text-xs text-gray-600 mt-6">

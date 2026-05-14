@@ -4984,12 +4984,15 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       let whereClause = `WHERE e.user_id = ? AND e.is_deleted = false`;
       const args: unknown[] = [userId];
 
-      if (type) { whereClause += ` AND e.type = '${type.replace(/'/g, "''")}'`; }
-
       let fromClause = 'FROM memory_entries e';
       if (tag) {
         fromClause += ' JOIN memory_tags mt ON mt.entry_id = e.id AND mt.tag = ?';
         args.push(tag);
+      }
+
+      if (type) {
+        whereClause += ` AND e.type = ?`;
+        args.push(type);
       }
 
       args.push(maxLimit);

@@ -36,7 +36,7 @@ type YamlConfig = {
   };
   fly?: { org?: string; openclaw_app?: string; openclaw_image?: string; hermes_image?: string };
   browser?: { max_instances?: number; idle_timeout_ms?: number };
-  onboarding?: { bot_webhook_url?: string };
+  onboarding?: { bot_webhook_url?: string; onboarding_bot_username?: string };
 };
 
 const env = process.env.NODE_ENV ?? 'development';
@@ -112,6 +112,7 @@ const ConfigSchema = z.object({
   onboardingApiKey: z.string().optional(),
   onboardingBotWebhookUrl: z.string().optional(),
   onboardingBotWebhookSecret: z.string().optional(),
+  onboardingBotUsername: z.string().default('SpecialAgentHelmBot'),
 
   // PostHog analytics
   posthogApiKey: z.string().optional(),
@@ -170,6 +171,7 @@ function loadConfig(): Config {
     onboardingApiKey: process.env.ONBOARDING_API_KEY,
     onboardingBotWebhookUrl: process.env.ONBOARDING_BOT_WEBHOOK_URL ?? yaml.onboarding?.bot_webhook_url,
     onboardingBotWebhookSecret: process.env.ONBOARDING_BOT_WEBHOOK_SECRET,
+    onboardingBotUsername: process.env.ONBOARDING_BOT_USERNAME ?? yaml.onboarding?.onboarding_bot_username,
     // PostHog
     posthogApiKey: process.env.POSTHOG_API_KEY,
     posthogHost: process.env.POSTHOG_HOST,

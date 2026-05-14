@@ -54,12 +54,14 @@ export async function updateLinkIndex(
 
 /** Extract #tags from Markdown content. Excludes markdown headings (## Foo). */
 export function parseTags(content: string): string[] {
+  // Strip heading lines first so # H1 headings aren't picked up as tags.
+  const stripped = content.replace(/^#{1,6}\s+.*/gm, '');
   // #tag must follow whitespace or line-start, start with a letter.
   // Excludes ## headings because ## has a space after.
   const re = /(?:^|\s)#([a-z][a-z0-9-]*)/gi;
   const set = new Set<string>();
   let m: RegExpExecArray | null;
-  while ((m = re.exec(content)) !== null) set.add(m[1].toLowerCase());
+  while ((m = re.exec(stripped)) !== null) set.add(m[1].toLowerCase());
   return [...set];
 }
 

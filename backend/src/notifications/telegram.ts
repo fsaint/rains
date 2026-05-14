@@ -261,7 +261,7 @@ export class TelegramNotifier {
         sql: `UPDATE applicants SET notify_chat_id = ?, updated_at = NOW() WHERE telegram_user_id = ?`,
         args: [chatId, telegramUserId],
       });
-      await this.sendMessage(chatId, 'Got it. Heading back to set up your agent.', {});
+      await this.sendMessage(chatId, `Great. This is where your agent will ask for permissions when it needs a grown-up to review. Go back to @${config.onboardingBotUsername}`, {});
     } catch (err) {
       console.error('[telegram] handleOnboardingMessage error:', err);
     }
