@@ -111,10 +111,11 @@ export interface PermissionMatrix {
 /**
  * Get default permissions for a service from the registry
  */
-function getDefaultPermsFromDef(def: { permissions: { read: string[]; write: string[]; blocked: string[] } }): Record<string, ToolPermission> {
+function getDefaultPermsFromDef(def: { permissions: { read: string[]; write: string[]; blocked: string[]; defaultWritePermission?: 'allow' | 'require_approval' } }): Record<string, ToolPermission> {
   const result: Record<string, ToolPermission> = {};
+  const defaultWrite = def.permissions.defaultWritePermission ?? 'require_approval';
   for (const tool of def.permissions.read) result[tool] = 'allow';
-  for (const tool of def.permissions.write) result[tool] = 'require_approval';
+  for (const tool of def.permissions.write) result[tool] = defaultWrite;
   for (const tool of def.permissions.blocked) result[tool] = 'block';
   return result;
 }
@@ -130,11 +131,12 @@ function calculatePermissionLevelFromTools(
   const blockedToolsBlocked = preset.blocked.every((tool) => tools[tool] === 'block');
   const writeToolsBlocked = preset.write.length === 0 || preset.write.every((tool) => tools[tool] === 'block');
   const writeToolsApproval = preset.write.length === 0 || preset.write.every((tool) => tools[tool] === 'require_approval');
+  const writeToolsAllowed = preset.write.length === 0 || preset.write.every((tool) => tools[tool] === 'allow');
 
   if (!blockedToolsBlocked) return 'custom';
   if (!readToolsAllowed) return 'custom';
   if (writeToolsBlocked) return 'read';
-  if (writeToolsApproval) return 'full';
+  if (writeToolsApproval || writeToolsAllowed) return 'full';
   return 'custom';
 }
 
@@ -656,7 +658,7 @@ export async function setPermissionLevel(
   }
 
   for (const tool of preset.write) {
-    permissions[tool] = level === 'read' ? 'block' : 'require_approval';
+    permissions[tool] = level === 'read' ? 'block' : (def.permissions.defaultWritePermission ?? 'require_approval');
   }
 
   for (const tool of preset.blocked) {

@@ -27,12 +27,13 @@ export const definition: ServiceDefinitionWithTools = {
       'memory_relate',
       'memory_set_parent',
     ],
+    defaultWritePermission: 'allow',
     blocked: [
       'memory_delete',
     ],
   },
   permissionDescriptions: {
     read: 'Read and search the memory vault',
-    full: 'Read freely. Creating and updating memory entries require your approval.',
+    full: 'Read and write to the memory vault freely. No approval required.',
   },
 };

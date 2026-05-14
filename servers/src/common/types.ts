@@ -149,6 +149,8 @@ export interface ServiceDefinition {
     read: string[];
     write: string[];
     blocked: string[];
+    /** Default permission for write tools. Services with no external API risk can set this to 'allow'. Defaults to 'require_approval'. */
+    defaultWritePermission?: 'allow' | 'require_approval';
   };
   /** Human-readable descriptions for permission levels */
   permissionDescriptions: {
