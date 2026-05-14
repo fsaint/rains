@@ -143,6 +143,79 @@ export async function setEntryParent(
   return { ok: true };
 }
 
+export interface MemoryEntryRow {
+  id: string;
+  user_id: string;
+  type: string;
+  title: string;
+  content: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Idempotent create: find an existing entry by exact title, alias, or fuzzy
+ * match (pg_trgm similarity > 0.7). If nothing matches, insert a new row.
+ *
+ * Returns the entry row plus a `created` flag (false = pre-existing entry).
+ * The caller is responsible for creating branch/attribute records when created=true.
+ */
+export async function resolveOrCreate(opts: {
+  userId: string;
+  type: string;
+  title: string;
+  content?: string | null;
+}): Promise<{ row: MemoryEntryRow; created: boolean }> {
+  const { userId, type, title, content = null } = opts;
+
+  // 1. Exact title match
+  const exact = await client.execute({
+    sql: `SELECT id, user_id, type, title, content, created_at, updated_at
+          FROM memory_entries
+          WHERE user_id = ? AND type = ? AND title = ? AND is_deleted = false
+          LIMIT 1`,
+    args: [userId, type, title],
+  });
+  if (exact.rows.length > 0) return { row: exact.rows[0] as unknown as MemoryEntryRow, created: false };
+
+  // 2. Alias match (memory_attributes with name='alias')
+  const aliasHit = await client.execute({
+    sql: `SELECT e.id, e.user_id, e.type, e.title, e.content, e.created_at, e.updated_at
+          FROM memory_attributes a
+          JOIN memory_entries e ON e.id = a.entry_id
+          WHERE e.user_id = ? AND e.type = ? AND e.is_deleted = false
+            AND a.name = 'alias' AND a.value = ? AND a.is_deleted = false
+          LIMIT 1`,
+    args: [userId, type, title],
+  });
+  if (aliasHit.rows.length > 0) return { row: aliasHit.rows[0] as unknown as MemoryEntryRow, created: false };
+
+  // 3. Fuzzy match via pg_trgm similarity
+  const fuzzy = await client.execute({
+    sql: `SELECT id, user_id, type, title, content, created_at, updated_at
+          FROM memory_entries
+          WHERE user_id = ? AND type = ? AND is_deleted = false
+            AND similarity(title, ?) > 0.7
+          ORDER BY similarity(title, ?) DESC
+          LIMIT 1`,
+    args: [userId, type, title, title],
+  });
+  if (fuzzy.rows.length > 0) return { row: fuzzy.rows[0] as unknown as MemoryEntryRow, created: false };
+
+  // 4. Insert new entry
+  const id = nanoid();
+  const now = new Date().toISOString();
+  await client.execute({
+    sql: `INSERT INTO memory_entries (id, user_id, type, title, content, is_deleted, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, false, ?, ?)`,
+    args: [id, userId, type, title, content, now, now],
+  });
+  return {
+    row: { id, user_id: userId, type, title, content, created_at: now, updated_at: now },
+    created: true,
+  };
+}
+
 /** Ensure user has a root Memory Index entry; create if missing */
 export async function ensureMemoryRoot(userId: string): Promise<string> {
   const existing = await client.execute({

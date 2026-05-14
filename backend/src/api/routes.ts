@@ -67,7 +67,7 @@ import { sendReauthEmail } from '../services/email.js';
 import { performBackup, listBackups, getBackup, restoreBackup } from '../services/agent-backup.js';
 import { isCodexTokenExpired } from '../services/token-monitor.js';
 import { forwardToOpenclaw, handleMyChatMember } from '../services/agent-bot-relay.js';
-import { parseWikilinks, updateLinkIndex, ensureMemoryRoot, getDreamManifest, setEntryParent } from '../services/memory.js';
+import { parseWikilinks, updateLinkIndex, ensureMemoryRoot, getDreamManifest, setEntryParent, resolveOrCreate } from '../services/memory.js';
 import * as provider from '../providers/index.js';
 import { nanoid } from 'nanoid';
 import jwt from 'jsonwebtoken';
@@ -5011,16 +5011,27 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const content = (body.content as string | undefined) ?? null;
     const parentId = (body.parent_id as string | undefined) ?? null;
 
-    const id = nanoid();
-    const now = new Date().toISOString();
+    const { row, created } = await resolveOrCreate({ userId, type, title, content });
 
-    await client.execute({
-      sql: `INSERT INTO memory_entries (id, user_id, type, title, content, is_deleted, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, false, ?, ?)`,
-      args: [id, userId, type, title, content, now, now],
-    });
+    // If an existing entry was matched (exact/alias/fuzzy), return it immediately
+    if (!created) {
+      return reply.status(200).send({
+        data: {
+          id: row.id,
+          userId: row.user_id,
+          type: row.type,
+          title: row.title,
+          content: row.content,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        },
+      });
+    }
 
-    // Create branch record
+    const { id } = row;
+    const now = row.created_at;
+
+    // Create branch record for newly inserted entry
     const branchId = nanoid();
     let position = 0;
     if (parentId) {
@@ -5089,12 +5100,44 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       args: [id],
     });
 
+    // Resolve [[wikilinks]] in the content to entry IDs for clickable rendering
+    const referencedTitles = parseWikilinks((entry.content as string | null) ?? '');
+    const resolvedLinks: Record<string, string> = {};
+    if (referencedTitles.length > 0) {
+      const placeholders = referencedTitles.map(() => '?').join(', ');
+      const titleRows = await client.execute({
+        sql: `SELECT id, title FROM memory_entries
+              WHERE user_id = ? AND is_deleted = false AND title IN (${placeholders})`,
+        args: [userId, ...referencedTitles],
+      });
+      for (const r of titleRows.rows) {
+        resolvedLinks[r.title as string] = r.id as string;
+      }
+      // Fall back to alias resolution for any unresolved titles
+      const unresolved = referencedTitles.filter((t) => !(t in resolvedLinks));
+      if (unresolved.length > 0) {
+        const aliasPlaceholders = unresolved.map(() => '?').join(', ');
+        const aliasRows = await client.execute({
+          sql: `SELECT e.id, a.value AS alias
+                FROM memory_attributes a
+                JOIN memory_entries e ON e.id = a.entry_id
+                WHERE e.user_id = ? AND a.name = 'alias' AND a.is_deleted = false
+                  AND a.value IN (${aliasPlaceholders})`,
+          args: [userId, ...unresolved],
+        });
+        for (const r of aliasRows.rows) {
+          resolvedLinks[r.alias as string] = r.id as string;
+        }
+      }
+    }
+
     return reply.send({
       data: {
         ...entry,
         attributes: attrsResult.rows,
         backlinks: backlinksResult.rows,
         parentId: branchResult.rows[0]?.parent_entry_id ?? null,
+        resolvedLinks,
       },
     });
   });

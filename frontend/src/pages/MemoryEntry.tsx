@@ -28,19 +28,40 @@ const TYPE_ICONS: Record<MemoryEntryType, React.ElementType> = {
 
 const TYPE_OPTIONS: MemoryEntryType[] = ['note', 'person', 'company', 'project'];
 
+const INDEX_TYPE_MAP: Record<string, string> = {
+  People: 'person',
+  Companies: 'company',
+  Projects: 'project',
+  Notes: 'note',
+};
+
 /** Simple Markdown renderer (subset) */
-function renderMarkdown(md: string): string {
+function renderMarkdown(
+  md: string,
+  resolvedLinks: Record<string, string> = {},
+  isIndex = false,
+): string {
   return md
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/^### (.+)$/gm, '<h3 class="text-lg font-semibold text-white mt-4 mb-1">$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2 class="text-xl font-semibold text-white mt-6 mb-2">$1</h2>')
+    .replace(/^## (.+)$/gm, (_, name) => {
+      const typeFilter = isIndex ? INDEX_TYPE_MAP[name.trim()] : undefined;
+      return typeFilter
+        ? `<h2 class="text-xl font-semibold mt-6 mb-2"><a data-typefilter="${typeFilter}" class="text-trust-blue hover:underline cursor-pointer">${name}</a></h2>`
+        : `<h2 class="text-xl font-semibold text-white mt-6 mb-2">${name}</h2>`;
+    })
     .replace(/^# (.+)$/gm, '<h1 class="text-2xl font-bold text-white mt-6 mb-3">$1</h1>')
     .replace(/\*\*(.+?)\*\*/g, '<strong class="text-white font-semibold">$1</strong>')
     .replace(/\*(.+?)\*/g, '<em class="italic">$1</em>')
     .replace(/`(.+?)`/g, '<code class="bg-white/10 rounded px-1 text-sm font-mono text-green-300">$1</code>')
-    .replace(/\[\[([^\]]+)\]\]/g, '<span class="text-trust-blue underline cursor-pointer">$1</span>')
+    .replace(/\[\[([^\]]+)\]\]/g, (_, name) => {
+      const id = resolvedLinks[name];
+      return id
+        ? `<a data-wikilink="${id}" class="text-trust-blue underline cursor-pointer hover:text-trust-blue/80">${name}</a>`
+        : `<span class="text-amber-400 underline decoration-dotted" title="No entry named '${name}' yet">${name}</span>`;
+    })
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-trust-blue underline" target="_blank" rel="noopener">$1</a>')
     .replace(/^- (.+)$/gm, '<li class="ml-4 list-disc text-gray-300">$1</li>')
     .replace(/\n{2,}/g, '</p><p class="mb-2">')
@@ -270,9 +291,18 @@ export default function MemoryEntry() {
           ) : (
             <div
               className="prose prose-invert prose-sm max-w-none text-gray-300 leading-relaxed min-h-32"
+              onClick={(e) => {
+                const t = (e.target as HTMLElement).closest('[data-wikilink], [data-typefilter]');
+                if (!t) return;
+                e.preventDefault();
+                const wikilinkId = t.getAttribute('data-wikilink');
+                const typeFilter = t.getAttribute('data-typefilter');
+                if (wikilinkId) navigate(`/memory/${wikilinkId}`);
+                else if (typeFilter) navigate(`/memory?type=${typeFilter}`);
+              }}
               dangerouslySetInnerHTML={{
                 __html: entry.content
-                  ? `<p class="mb-2">${renderMarkdown(entry.content)}</p>`
+                  ? `<p class="mb-2">${renderMarkdown(entry.content, entry.resolvedLinks ?? {}, entry.type === 'index')}</p>`
                   : '<p class="text-gray-600 italic">No content yet. Click Edit to add some.</p>',
               }}
             />
@@ -287,6 +317,33 @@ export default function MemoryEntry() {
 
       {/* Right sidebar: attributes + backlinks */}
       <aside className="w-72 shrink-0 bg-reins-navy border-l border-white/10 overflow-y-auto p-4 space-y-6">
+        {/* Aliases */}
+        {(() => {
+          const aliases = entry.attributes.filter((a) => a.name === 'alias');
+          if (aliases.length === 0) return null;
+          return (
+            <div>
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Aliases</h3>
+              <div className="flex flex-wrap gap-1.5">
+                {aliases.map((a) => (
+                  <span
+                    key={a.id}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 bg-white/5 border border-white/10 rounded-full text-xs text-gray-300"
+                  >
+                    {a.value}
+                    <button
+                      onClick={() => removeAttrMutation.mutate(a.id)}
+                      className="text-gray-600 hover:text-alert-red transition-colors"
+                    >
+                      <X className="w-2.5 h-2.5" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Attributes */}
         <div>
           <div className="flex items-center justify-between mb-2">
@@ -300,11 +357,11 @@ export default function MemoryEntry() {
             </button>
           </div>
 
-          {entry.attributes.length === 0 && !showAddAttr && (
+          {entry.attributes.filter((a) => a.name !== 'alias').length === 0 && !showAddAttr && (
             <p className="text-xs text-gray-600">No properties</p>
           )}
 
-          {entry.attributes.map((attr) => (
+          {entry.attributes.filter((a) => a.name !== 'alias').map((attr) => (
             <AttributeRow
               key={attr.id}
               attr={attr}

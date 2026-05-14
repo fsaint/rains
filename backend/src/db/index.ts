@@ -634,10 +634,12 @@ export async function initializeDatabase() {
     )
   `;
 
+  await sql`CREATE EXTENSION IF NOT EXISTS pg_trgm`;
   await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_user ON memory_entries(user_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_user_type ON memory_entries(user_id, type)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_user_deleted ON memory_entries(user_id, is_deleted)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_search ON memory_entries USING GIN(search_vector)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_title_trgm ON memory_entries USING GIN(title gin_trgm_ops) WHERE is_deleted = false`;
 
   // Trigger to keep search_vector in sync with title + content
   await sql`
