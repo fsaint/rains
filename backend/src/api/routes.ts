@@ -67,7 +67,7 @@ import { sendReauthEmail } from '../services/email.js';
 import { performBackup, listBackups, getBackup, restoreBackup } from '../services/agent-backup.js';
 import { isCodexTokenExpired } from '../services/token-monitor.js';
 import { forwardToOpenclaw, handleMyChatMember } from '../services/agent-bot-relay.js';
-import { parseWikilinks, updateLinkIndex, ensureMemoryRoot, getDreamManifest, setEntryParent, resolveOrCreate } from '../services/memory.js';
+import { parseWikilinks, updateLinkIndex, updateTagIndex, ensureMemoryRoot, getDreamManifest, setEntryParent, resolveOrCreate } from '../services/memory.js';
 import * as provider from '../providers/index.js';
 import { nanoid } from 'nanoid';
 import jwt from 'jsonwebtoken';
@@ -4952,7 +4952,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const userId = await resolveMemoryUserId(request);
     if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
 
-    const { q, type, parent_id, limit: lim = '50' } = request.query as Record<string, string>;
+    const { q, type, parent_id, limit: lim = '50', tag } = request.query as Record<string, string>;
     const maxLimit = Math.min(parseInt(lim, 10) || 50, 200);
 
     let rows;
@@ -4981,14 +4981,25 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       });
       rows = result.rows;
     } else {
+      let whereClause = `WHERE e.user_id = ? AND e.is_deleted = false`;
+      const args: unknown[] = [userId];
+
+      if (type) { whereClause += ` AND e.type = '${type.replace(/'/g, "''")}'`; }
+
+      let fromClause = 'FROM memory_entries e';
+      if (tag) {
+        fromClause += ' JOIN memory_tags mt ON mt.entry_id = e.id AND mt.tag = ?';
+        args.push(tag);
+      }
+
+      args.push(maxLimit);
       const result = await client.execute({
-        sql: `SELECT id, type, title, content, created_at, updated_at
-              FROM memory_entries
-              WHERE user_id = ? AND is_deleted = false
-                ${type ? `AND type = '${type.replace(/'/g, "''")}'` : ''}
-              ORDER BY updated_at DESC
+        sql: `SELECT e.id, e.type, e.title, e.content, e.created_at, e.updated_at
+              ${fromClause}
+              ${whereClause}
+              ORDER BY e.updated_at DESC
               LIMIT ?`,
-        args: [userId, maxLimit],
+        args,
       });
       rows = result.rows;
     }
@@ -5059,6 +5070,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
 
     await updateLinkIndex(id, userId, content);
+    await updateTagIndex(id, content);
 
     return reply.status(201).send({ data: { id, userId, type, title, content, createdAt: now, updatedAt: now } });
   });
@@ -5100,6 +5112,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       args: [id],
     });
 
+    const tagsResult = await client.execute({
+      sql: `SELECT tag FROM memory_tags WHERE entry_id = ? ORDER BY tag ASC`,
+      args: [id],
+    });
+    const tags = tagsResult.rows.map((r) => r.tag as string);
+
     // Resolve [[wikilinks]] in the content to entry IDs for clickable rendering
     const referencedTitles = parseWikilinks((entry.content as string | null) ?? '');
     const resolvedLinks: Record<string, string> = {};
@@ -5138,8 +5156,29 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         backlinks: backlinksResult.rows,
         parentId: branchResult.rows[0]?.parent_entry_id ?? null,
         resolvedLinks,
+        tags,
       },
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // GET /api/memory/tags — list all distinct tags with counts
+  // -------------------------------------------------------------------------
+  app.get('/api/memory/tags', async (request, reply) => {
+    const userId = await resolveMemoryUserId(request);
+    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const result = await client.execute({
+      sql: `SELECT mt.tag, COUNT(*) AS count
+            FROM memory_tags mt
+            JOIN memory_entries e ON e.id = mt.entry_id
+            WHERE e.user_id = ? AND e.is_deleted = false
+            GROUP BY mt.tag
+            ORDER BY COUNT(*) DESC, mt.tag ASC`,
+      args: [userId],
+    });
+
+    return reply.send({ data: result.rows.map((r) => ({ tag: r.tag as string, count: Number(r.count) })) });
   });
 
   // -------------------------------------------------------------------------
@@ -5180,6 +5219,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     if (body.content !== undefined) {
       await updateLinkIndex(id, userId, body.content as string | null);
+      await updateTagIndex(id, body.content as string | null);
     }
 
     const updated = await client.execute({

@@ -16,6 +16,7 @@ import {
   handleSetParent,
   handleAddAttribute,
   handleRemoveAttribute,
+  handleListTags,
 } from './handlers.js';
 
 export const memoryGetRootTool: ToolDefinition = {
@@ -117,8 +118,9 @@ export const memorySearchTool: ToolDefinition = {
 export const memoryListTool: ToolDefinition = {
   name: 'memory_list',
   description:
-    'List memory entries, optionally filtered by type or parent entry. ' +
-    'Use to browse all people, companies, projects, or notes.',
+    'List memory entries, optionally filtered by type, parent entry, or tag. ' +
+    'Use to browse all people, companies, projects, or notes. ' +
+    'Pass tag to filter entries that contain a specific #tag (e.g. tag="client" for #client).',
   inputSchema: {
     type: 'object',
     properties: {
@@ -129,6 +131,7 @@ export const memoryListTool: ToolDefinition = {
       },
       parent_id: { type: 'string', description: 'List children of this entry ID (optional)' },
       limit: { type: 'number', description: 'Max results (default: 50, max: 200)' },
+      tag: { type: 'string', description: 'Filter entries by tag (e.g. "client" for #client)' },
     },
   },
   handler: handleList,
@@ -246,6 +249,13 @@ export const memoryRemoveAttributeTool: ToolDefinition = {
   handler: handleRemoveAttribute,
 };
 
+export const memoryListTagsTool: ToolDefinition = {
+  name: 'memory_list_tags',
+  description: 'List all tags used in your memory vault with their entry counts. Use to discover what topics are tagged.',
+  inputSchema: { type: 'object', properties: {} },
+  handler: handleListTags,
+};
+
 export const memoryTools: ToolDefinition[] = [
   memoryGetRootTool,
   memoryCreateTool,
@@ -259,4 +269,5 @@ export const memoryTools: ToolDefinition[] = [
   memorySetParentTool,
   memoryAddAttributeTool,
   memoryRemoveAttributeTool,
+  memoryListTagsTool,
 ];

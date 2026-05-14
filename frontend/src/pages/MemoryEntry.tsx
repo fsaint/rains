@@ -56,6 +56,8 @@ function renderMarkdown(
     .replace(/\*\*(.+?)\*\*/g, '<strong class="text-white font-semibold">$1</strong>')
     .replace(/\*(.+?)\*/g, '<em class="italic">$1</em>')
     .replace(/`(.+?)`/g, '<code class="bg-white/10 rounded px-1 text-sm font-mono text-green-300">$1</code>')
+    .replace(/((?:^|\s))#([a-z][a-z0-9-]*)/gi, (_, lead, tag) =>
+      `${lead}<a data-tag="${tag.toLowerCase()}" class="text-trust-blue/80 hover:text-trust-blue cursor-pointer text-sm">#${tag}</a>`)
     .replace(/\[\[([^\]]+)\]\]/g, (_, name) => {
       const id = resolvedLinks[name];
       return id
@@ -292,13 +294,15 @@ export default function MemoryEntry() {
             <div
               className="prose prose-invert prose-sm max-w-none text-gray-300 leading-relaxed min-h-32"
               onClick={(e) => {
-                const t = (e.target as HTMLElement).closest('[data-wikilink], [data-typefilter]');
+                const t = (e.target as HTMLElement).closest('[data-wikilink], [data-typefilter], [data-tag]');
                 if (!t) return;
                 e.preventDefault();
                 const wikilinkId = t.getAttribute('data-wikilink');
                 const typeFilter = t.getAttribute('data-typefilter');
+                const tag = t.getAttribute('data-tag');
                 if (wikilinkId) navigate(`/memory/${wikilinkId}`);
                 else if (typeFilter) navigate(`/memory?type=${typeFilter}`);
+                else if (tag) navigate(`/memory?tag=${tag}`);
               }}
               dangerouslySetInnerHTML={{
                 __html: entry.content
@@ -343,6 +347,24 @@ export default function MemoryEntry() {
             </div>
           );
         })()}
+
+        {/* Tags */}
+        {entry.tags && entry.tags.length > 0 && (
+          <div>
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Tags</h3>
+            <div className="flex flex-wrap gap-1.5">
+              {entry.tags.map((tag) => (
+                <button
+                  key={tag}
+                  onClick={() => navigate(`/memory?tag=${tag}`)}
+                  className="inline-flex items-center px-2 py-0.5 bg-trust-blue/10 border border-trust-blue/20 rounded-full text-xs text-trust-blue hover:bg-trust-blue/20 transition-colors"
+                >
+                  #{tag}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Attributes */}
         <div>

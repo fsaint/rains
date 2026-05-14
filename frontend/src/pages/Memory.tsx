@@ -12,6 +12,7 @@ import {
   Folder,
   FileText,
   Hash,
+  X,
 } from 'lucide-react';
 import { memory } from '../api/client';
 import type { MemoryEntryType, MemoryTreeNode } from '../api/client';
@@ -105,11 +106,13 @@ export default function Memory() {
   const [activeType, setActiveType] = useState<MemoryEntryType | ''>(
     (searchParams.get('type') as MemoryEntryType) ?? ''
   );
+  const [activeTag, setActiveTag] = useState<string>(searchParams.get('tag') ?? '');
 
-  // Keep activeType in sync when URL changes (e.g. navigating from index section headings)
+  // Keep activeType and activeTag in sync when URL changes (e.g. navigating from index section headings)
   useEffect(() => {
     const t = (searchParams.get('type') as MemoryEntryType) ?? '';
     setActiveType(t);
+    setActiveTag(searchParams.get('tag') ?? '');
   }, [searchParams]);
 
   const { data: treeNodes = [], isLoading: treeLoading } = useQuery({
@@ -118,11 +121,12 @@ export default function Memory() {
   });
 
   const { data: entries = [], isLoading: entriesLoading } = useQuery({
-    queryKey: ['memory-entries', searchQuery, activeType],
+    queryKey: ['memory-entries', searchQuery, activeType, activeTag],
     queryFn: () =>
       memory.listEntries({
         q: searchQuery || undefined,
         type: (activeType as MemoryEntryType) || undefined,
+        tag: activeTag || undefined,
         limit: 100,
       }),
     staleTime: 30_000,
@@ -226,6 +230,19 @@ export default function Memory() {
               ))}
             </div>
           </div>
+
+          {/* Active tag chip */}
+          {activeTag && (
+            <div className="mb-4 flex items-center gap-2">
+              <span className="text-sm text-gray-400">Tagged:</span>
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-trust-blue/10 border border-trust-blue/20 rounded-full text-xs text-trust-blue">
+                #{activeTag}
+                <button onClick={() => { setActiveTag(''); setSearchParams(activeType ? { type: activeType } : {}); }}>
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            </div>
+          )}
 
           {/* Entry grid */}
           {entriesLoading ? (

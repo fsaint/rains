@@ -702,6 +702,17 @@ export async function initializeDatabase() {
 
   await sql`CREATE INDEX IF NOT EXISTS idx_memory_links_target ON memory_links(target_id)`;
 
+  await sql`
+    CREATE TABLE IF NOT EXISTS memory_tags (
+      entry_id TEXT NOT NULL REFERENCES memory_entries(id) ON DELETE CASCADE,
+      tag TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (now()),
+      PRIMARY KEY (entry_id, tag)
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_memory_tags_tag ON memory_tags(tag)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_memory_tags_entry ON memory_tags(entry_id)`;
+
   // Seed: create admin user if no users exist
   const userCount = await sql`SELECT COUNT(*) as count FROM users`;
   const count = Number(userCount[0]?.count ?? 0);

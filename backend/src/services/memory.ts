@@ -52,6 +52,32 @@ export async function updateLinkIndex(
   }
 }
 
+/** Extract #tags from Markdown content. Excludes markdown headings (## Foo). */
+export function parseTags(content: string): string[] {
+  // #tag must follow whitespace or line-start, start with a letter.
+  // Excludes ## headings because ## has a space after.
+  const re = /(?:^|\s)#([a-z][a-z0-9-]*)/gi;
+  const set = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) set.add(m[1].toLowerCase());
+  return [...set];
+}
+
+/** Replace the tag index for an entry (delete+insert). */
+export async function updateTagIndex(entryId: string, content: string | null): Promise<void> {
+  await client.execute({ sql: `DELETE FROM memory_tags WHERE entry_id = ?`, args: [entryId] });
+  if (!content) return;
+  const tags = parseTags(content);
+  for (const tag of tags) {
+    const now = new Date().toISOString();
+    await client.execute({
+      sql: `INSERT INTO memory_tags (entry_id, tag, created_at) VALUES (?, ?, ?)
+            ON CONFLICT (entry_id, tag) DO NOTHING`,
+      args: [entryId, tag, now],
+    });
+  }
+}
+
 const ROOT_CONTENT = `# Memory Index
 
 This is your persistent memory vault. Agents update this index when they learn significant new information.

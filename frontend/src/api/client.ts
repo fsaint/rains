@@ -746,6 +746,7 @@ export interface MemoryEntryDetail extends MemoryEntry {
   backlinks: Array<{ id: string; title: string; type: MemoryEntryType; context: string | null }>;
   parentId: string | null;
   resolvedLinks: Record<string, string>;
+  tags: string[];
 }
 
 export interface MemoryTreeNode {
@@ -766,15 +767,19 @@ export const memory = {
   getRoot: () =>
     request<MemoryEntry>('/memory/root'),
 
-  listEntries: (params?: { q?: string; type?: MemoryEntryType; parent_id?: string; limit?: number }) => {
+  listEntries: (params?: { q?: string; type?: MemoryEntryType; parent_id?: string; limit?: number; tag?: string }) => {
     const qs = new URLSearchParams();
     if (params?.q) qs.set('q', params.q);
     if (params?.type) qs.set('type', params.type);
     if (params?.parent_id) qs.set('parent_id', params.parent_id);
     if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.tag) qs.set('tag', params.tag);
     const query = qs.toString();
     return request<MemoryEntry[]>(`/memory/entries${query ? `?${query}` : ''}`);
   },
+
+  listTags: () =>
+    request<Array<{ tag: string; count: number }>>('/memory/tags'),
 
   createEntry: (data: {
     title: string;

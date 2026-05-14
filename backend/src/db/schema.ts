@@ -1,4 +1,4 @@
-import { pgTable, text, integer, serial, real, boolean } from 'drizzle-orm/pg-core';
+import { pgTable, text, integer, serial, real, boolean, primaryKey } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 // Users table
@@ -220,6 +220,12 @@ export const memoryLinks = pgTable('memory_links', {
   targetId: text('target_id').notNull(),
   context: text('context'), // surrounding text snippet
 });
+
+export const memoryTags = pgTable('memory_tags', {
+  entryId: text('entry_id').notNull(),
+  tag: text('tag').notNull(),
+  createdAt: text('created_at').notNull().default(sql`now()`),
+}, (t) => ({ pk: primaryKey({ columns: [t.entryId, t.tag] }) }));
 
 // Pending agent registrations - agents waiting to be claimed
 export const pendingAgentRegistrations = pgTable('pending_agent_registrations', {

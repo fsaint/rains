@@ -162,11 +162,24 @@ export async function handleList(
     if (args.type) params.set('type', String(args.type));
     if (args.parent_id) params.set('parent_id', String(args.parent_id));
     if (args.limit) params.set('limit', String(Math.min(Number(args.limit), 200)));
+    if (args.tag) params.set('tag', String(args.tag));
 
     const res = await memoryFetch(context, `/api/memory/entries?${params}`);
     if (!res.ok) throw new Error(`List returned ${res.status}`);
     const json = await res.json() as { data: unknown[] };
     return { success: true, data: { entries: json.data, count: json.data.length } };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function handleListTags(
+  _args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  try {
+    const tags = await apiGet<Array<{ tag: string; count: number }>>(context, '/api/memory/tags');
+    return { success: true, data: { tags } };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
