@@ -35,6 +35,7 @@ import {
   // Instance-based functions
   getAgentPermissions,
   createServiceInstance,
+  enableDefaultServices,
   getInstanceConfig,
   updateServiceInstance,
   deleteServiceInstance,
@@ -291,6 +292,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     await auditLogger.logAgentEvent(id, 'created', { name: parsed.data.name });
     getPostHog()?.capture({ distinctId: userId, event: 'agent_created', properties: { source: 'dashboard' } });
+    await enableDefaultServices(id);
 
     return reply.code(201).send({ data: result.rows[0] });
   });
@@ -2924,6 +2926,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       args: [deploymentId, agentId, gatewayToken, body.soulMd || null, now, now],
     });
 
+    await enableDefaultServices(agentId);
+
     return reply.code(201).send({
       data: {
         id: agentId,
@@ -3238,6 +3242,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           now, now,
         ],
       });
+
+      await enableDefaultServices(agentId);
 
       // Auto-connect Gmail, Calendar, and Drive for onboarding users
       if (body.onboardingTelegramUserId && validateOnboardingApiKey(request)) {

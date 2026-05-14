@@ -395,6 +395,43 @@ export async function initializeDatabase() {
     }
   }
 
+  // Backfill memory service for existing agents
+  {
+    const agentsWithoutMemory = await sql`
+      SELECT id FROM agents
+      WHERE NOT EXISTS (
+        SELECT 1 FROM agent_service_instances
+        WHERE agent_service_instances.agent_id = agents.id
+          AND agent_service_instances.service_type = 'memory'
+      )
+    `;
+    let backfilledCount = 0;
+    for (const row of agentsWithoutMemory) {
+      const agentId = row.id as string;
+      const id = nanoid();
+      const now = new Date().toISOString();
+      try {
+        await sql`
+          INSERT INTO agent_service_instances (id, agent_id, service_type, label, credential_id, enabled, is_default, created_at, updated_at)
+          VALUES (${id}, ${agentId}, 'memory', null, null, true, true, ${now}, ${now})
+          ON CONFLICT DO NOTHING
+        `;
+        await sql`
+          INSERT INTO agent_service_access (id, agent_id, service_type, enabled, created_at, updated_at)
+          VALUES (${nanoid()}, ${agentId}, 'memory', true, ${now}, ${now})
+          ON CONFLICT (agent_id, service_type) DO UPDATE SET enabled = true, updated_at = ${now}
+        `;
+        backfilledCount++;
+      } catch {
+        // Non-fatal — log and continue
+        console.warn(`[backfill] failed to enable memory for agent ${agentId}`);
+      }
+    }
+    if (backfilledCount > 0) {
+      console.log(`Backfilled memory service for ${backfilledCount} existing agents`);
+    }
+  }
+
   await sql`
     CREATE TABLE IF NOT EXISTS pending_agent_registrations (
       id TEXT PRIMARY KEY,
