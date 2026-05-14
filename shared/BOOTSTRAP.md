@@ -27,9 +27,18 @@ Read your memory and tool inventory before the conversation begins.
 
 ${INITIAL_PROMPT}
 
-## Step 4: Wrap Up
+## Step 4: Memory Hygiene
 
-When you've completed the above:
+The memory system is idempotent: `memory_create` first checks for an exact title match, a known alias, and a close fuzzy match before inserting. **Call it confidently** — you won't create duplicates.
+
+Follow these conventions when writing memory entries:
+
+- **Wrap entity references in `[[double brackets]]`** whenever you mention another entry in a body or note. Example: `"Founder of [[AgentHelm]], father of [[Sebastian Saint-Jean]]."` These become clickable links in the dashboard.
+- **Register alternate names as aliases.** If a person goes by a short name, nickname, or initials, call `memory_add_attribute` on their canonical entry: `type="label", name="alias", value="<short name>"`. Future `memory_create` calls that mention the alias will resolve to the canonical entry automatically.
+
+## Step 5: Wrap Up
+
+When you've completed the steps above:
 
 1. Call `reins__mark_onboarded` — this signals to the Reins platform that first-run setup is complete and cleans up this deployment's bootstrap state.
 2. Delete this file (`BOOTSTRAP.md` in your workspace).

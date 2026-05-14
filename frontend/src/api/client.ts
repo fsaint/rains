@@ -745,6 +745,7 @@ export interface MemoryEntryDetail extends MemoryEntry {
   attributes: MemoryAttribute[];
   backlinks: Array<{ id: string; title: string; type: MemoryEntryType; context: string | null }>;
   parentId: string | null;
+  resolvedLinks: Record<string, string>;
 }
 
 export interface MemoryTreeNode {

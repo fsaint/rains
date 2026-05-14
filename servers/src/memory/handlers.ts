@@ -99,14 +99,23 @@ export async function handleCreate(
   context: ServerContext
 ): Promise<ToolResult> {
   try {
-    const entry = await apiPost(context, '/api/memory/entries', {
-      title: args.title,
-      type: args.type ?? 'note',
-      content: args.content ?? null,
-      parent_id: args.parent_id ?? null,
-      attributes: args.attributes ?? [],
+    const res = await memoryFetch(context, '/api/memory/entries', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: args.title,
+        type: args.type ?? 'note',
+        content: args.content ?? null,
+        parent_id: args.parent_id ?? null,
+        attributes: args.attributes ?? [],
+      }),
     });
-    return { success: true, data: entry };
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Memory API POST /api/memory/entries returned ${res.status}: ${text}`);
+    }
+    const json = await res.json() as { data: Record<string, unknown> };
+    const created = res.status === 201;
+    return { success: true, data: { ...json.data, created } };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }

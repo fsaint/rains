@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Brain,
   Plus,
@@ -100,8 +100,17 @@ function TreeNode({
 
 export default function Memory() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeType, setActiveType] = useState<MemoryEntryType | ''>('');
+  const [activeType, setActiveType] = useState<MemoryEntryType | ''>(
+    (searchParams.get('type') as MemoryEntryType) ?? ''
+  );
+
+  // Keep activeType in sync when URL changes (e.g. navigating from index section headings)
+  useEffect(() => {
+    const t = (searchParams.get('type') as MemoryEntryType) ?? '';
+    setActiveType(t);
+  }, [searchParams]);
 
   const { data: treeNodes = [], isLoading: treeLoading } = useQuery({
     queryKey: ['memory-tree'],
@@ -202,7 +211,10 @@ export default function Memory() {
               {typeFilters.map((f) => (
                 <button
                   key={f.value}
-                  onClick={() => setActiveType(f.value)}
+                  onClick={() => {
+                    setActiveType(f.value);
+                    setSearchParams(f.value ? { type: f.value } : {});
+                  }}
                   className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${
                     activeType === f.value
                       ? 'bg-trust-blue text-white'

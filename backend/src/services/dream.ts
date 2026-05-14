@@ -14,8 +14,11 @@ const DREAM_PROMPT = `You are entering a memory dream session. Work through your
 1. Call memory_dream to get the full manifest of your entries.
 2. Review the structure — identify entries that belong under a different parent, orphaned notes, and logical groupings.
 3. Use memory_set_parent to reorganize entries into a clear hierarchy.
-4. Search for duplicates or closely related entries with memory_search. Merge them by updating one with memory_update and deleting the other.
-5. Update the root index (Memory Index) with memory_update to reflect: key people, projects, and notes you know about, and a brief reflection on what you have learned recently.
+4. Search for duplicates or closely related entries with memory_search. Merge them by updating one with memory_update and deleting the other with memory_delete.
+5. Scan for probable aliases — entries of the same type whose titles are substrings, prefixes, or share ≥ 2 tokens with another entry (e.g. "Felipe" vs "Felipe Saint-Jean"). For each such pair:
+   - If you are confident they refer to the same real-world entity → merge them (memory_update the canonical one, memory_delete the other).
+   - If unsure → keep both, but call memory_add_attribute on the longer/more complete entry with type="label", name="alias", value=<the shorter name>. Future creates that mention either name will then resolve to the canonical entry automatically.
+6. Update the root index (Memory Index) with memory_update to reflect: key people, projects, and notes you know about, and a brief reflection on what you have learned recently.
 
 Be decisive. Work through all entries. When done, stop.`;
 
