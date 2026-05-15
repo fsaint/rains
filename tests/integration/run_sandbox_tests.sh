@@ -45,22 +45,30 @@ sandbox_tests() {
         -d "{\"email\":\"$REINS_ADMIN_EMAIL\",\"password\":\"$REINS_ADMIN_PASSWORD\"}" \
         > /dev/null
 
-    # ── Enable dev-sandbox ───────────────────────────────────────────────────
-    echo "Enabling dev-sandbox (access=true, level=full)..."
-    curl -s -b "$COOKIES" -X PUT "$REINS_URL/api/permissions/$AGENT_ID/dev-sandbox/access" \
+    # ── Create dev-sandbox service instance (triggers auto-redeploy) ─────────
+    # If instance already exists the call will return the existing one.
+    echo "Adding dev-sandbox service instance (triggers redeploy if first time)..."
+    curl -s -b "$COOKIES" -X POST "$REINS_URL/api/permissions/$AGENT_ID/instances" \
         -H "Content-Type: application/json" \
-        -d '{"enabled":true}' > /dev/null
-    curl -s -b "$COOKIES" -X PUT "$REINS_URL/api/permissions/$AGENT_ID/dev-sandbox/level" \
-        -H "Content-Type: application/json" \
-        -d '{"level":"full"}' > /dev/null
+        -d '{"serviceType":"dev-sandbox"}' > /dev/null
 
-    # ── Restart machine so OpenClaw picks up new tools ───────────────────────
-    echo "Restarting agent machine..."
-    curl -s -b "$COOKIES" -X POST "$REINS_URL/api/agents/$AGENT_ID/restart" \
-        -H "Content-Type: application/json" > /dev/null
+    # ── Wait for machine to return to running after the redeploy ─────────────
+    echo "Waiting for machine to return to running status..."
+    local deadline=$(( $(date +%s) + 120 ))
+    while true; do
+        local STATUS
+        STATUS=$(curl -s -b "$COOKIES" "$REINS_URL/api/agents/$AGENT_ID/deployment" 2>/dev/null | \
+            python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('status',''))" 2>/dev/null)
+        [[ "$STATUS" == "running" ]] && break
+        if (( $(date +%s) > deadline )); then
+            echo "ERROR: machine did not return to running within 120s" >&2
+            return 1
+        fi
+        sleep 5
+    done
 
-    echo "Waiting 20s for machine restart and Telegram reconnect..."
-    sleep 20
+    echo "Waiting 15s for Telegram reconnect..."
+    sleep 15
 
     local _TG_ENV=(
         "TELEGRAM_API_ID=$TELEGRAM_API_ID"
