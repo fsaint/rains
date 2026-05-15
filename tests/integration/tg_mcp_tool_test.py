@@ -123,7 +123,7 @@ async def main() -> None:
 
     deadline = time.monotonic() + timeout
     approval_handled = False
-    approval_poll_interval = 3.0
+    approval_poll_interval = 1.0
     last_poll = time.monotonic()
 
     while time.monotonic() < deadline:
