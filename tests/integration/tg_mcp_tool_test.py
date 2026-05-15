@@ -27,7 +27,7 @@ import time
 
 from telethon import TelegramClient, events
 
-SKIP_PREFIXES = ('🐍', '⚡', '📬', '⚙️')
+SKIP_PREFIXES = ('🐍', '⚡', '📬', '⚙️', '⏳')
 SETTLE_SECS = 3.0
 SESSION = os.path.expanduser('~/.reins_test_telethon')
 COOKIES_FILE = '/tmp/reins_test_cookies.txt'
