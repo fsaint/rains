@@ -568,6 +568,7 @@ export interface AgentPermissionsResponse {
     name: string;
     status: string;
     instances: ServiceInstance[];
+    telegramBotUsername?: string | null;
   }>;
   availableServices: Array<{ type: string; name: string; icon: string; authRequired: boolean }>;
 }

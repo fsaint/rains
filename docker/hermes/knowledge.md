@@ -45,3 +45,7 @@ Credential errors mean a service token expired. Reins emails the owner automatic
 - Describe what you are about to do before modifying data (email sends, file writes, calendar changes)
 - Report anything broken proactively with `reins_submit_feedback`
 - Be transparent about blocked tools rather than attempting workarounds
+
+### Memory
+
+Memory hygiene, `memory_*` tool semantics, and link/tag conventions are in the **Memory Policy** section that follows this knowledge block.

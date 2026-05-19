@@ -94,6 +94,22 @@ for cfg in configs:
 PYEOF
 fi
 
+# ── Pre-configure Telegram home channel ───────────────────────────────────────
+# TELEGRAM_ALLOWED_USERS holds the owner's Telegram user ID.
+# For a private DM the chat_id equals the user_id, so we can seed the home
+# channel without asking the user to /sethome manually on first boot.
+if [ -n "$TELEGRAM_ALLOWED_USERS" ]; then
+  cat >> ~/.hermes/config.yaml <<YAML
+
+platforms:
+  telegram:
+    home_channel:
+      platform: "telegram"
+      chat_id: "${TELEGRAM_ALLOWED_USERS}"
+      name: "Home"
+YAML
+fi
+
 # ── Persona (SOUL.md) ──────────────────────────────────────────────────────────
 if [ -n "$HERMES_PERSONA" ]; then
   printf '%s' "$HERMES_PERSONA" > ~/.hermes/SOUL.md
@@ -101,14 +117,10 @@ else
   : > ~/.hermes/SOUL.md
 fi
 
-# First-boot ritual: inject BOOTSTRAP.md into SOUL.md exactly once.
-# The marker file prevents re-injection on restarts, emulating OpenClaw's
-# native self-delete lifecycle for Hermes which has no built-in bootstrap loader.
-if [ ! -f ~/.hermes/.bootstrap-done ] && [ -f /agenthelm-templates/BOOTSTRAP.md ]; then
+# Append first-run instructions if this is the agent's first boot
+if [ -n "$INITIAL_PROMPT" ]; then
   printf '\n\n' >> ~/.hermes/SOUL.md
-  INITIAL_PROMPT="${INITIAL_PROMPT:-}" \
-    envsubst '${INITIAL_PROMPT}' < /agenthelm-templates/BOOTSTRAP.md >> ~/.hermes/SOUL.md
-  touch ~/.hermes/.bootstrap-done
+  printf '%s' "$INITIAL_PROMPT" >> ~/.hermes/SOUL.md
 fi
 
 # Append Reins platform knowledge so the agent can answer configuration and

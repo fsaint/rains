@@ -34,7 +34,7 @@ export class MemoryServer extends BaseServer {
 
   constructor(config: MemoryServerConfig) {
     super(config);
-    this.apiUrl = config.apiUrl ?? process.env.REINS_API_URL ?? 'https://app.agenthelm.mom';
+    this.apiUrl = config.apiUrl ?? process.env.REINS_API_URL ?? 'https://app.helm.mom';
     this.gatewayToken = config.gatewayToken ?? process.env.REINS_GATEWAY_TOKEN ?? '';
   }
 

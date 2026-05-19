@@ -68,15 +68,15 @@ URIs in Google Cloud Console:
 ### Authorized JavaScript Origins
 ```
 http://localhost:6175
-https://app.agenthelm.mom
+https://app.helm.mom
 ```
 
 ### Authorized Redirect URIs
 ```
 http://localhost:5001/api/auth/google/callback      <- Dashboard login (dev)
 http://localhost:5001/api/oauth/google/callback     <- Gmail credential flow (dev)
-https://app.agenthelm.mom/api/auth/google/callback  <- Dashboard login (prod)
-https://app.agenthelm.mom/api/oauth/google/callback <- Gmail credential flow (prod)
+https://app.helm.mom/api/auth/google/callback  <- Dashboard login (prod)
+https://app.helm.mom/api/oauth/google/callback <- Gmail credential flow (prod)
 ```
 
 > **Error 400: redirect_uri_mismatch** means a URI is missing from this list.

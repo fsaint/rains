@@ -11,6 +11,7 @@ import {
   Radio,
   Rocket,
   Loader2,
+  Send,
 } from 'lucide-react';
 import { agents, type PendingRegistration } from '../api/client';
 import { DeploymentPanel } from '../components/DeploymentPanel';
@@ -22,6 +23,8 @@ interface Agent {
   status: string;
   credentials: string[];
   createdAt: string;
+  telegramBotUsername?: string | null;
+  deploymentStatus?: string | null;
 }
 
 export default function Agents() {
@@ -212,6 +215,19 @@ export default function Agents() {
 
                   {/* Meta */}
                   <div className="hidden sm:flex items-center gap-6 shrink-0 text-xs text-gray-400">
+                    {agent.telegramBotUsername && (
+                      <a
+                        href={`https://t.me/${agent.telegramBotUsername}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="flex items-center gap-1.5 text-trust-blue hover:text-blue-600 transition-colors"
+                        title="Open in Telegram"
+                      >
+                        <Send className="w-3 h-3" />
+                        <span>@{agent.telegramBotUsername}</span>
+                      </a>
+                    )}
                     {agent.credentials.length > 0 && (
                       <div className="flex items-center gap-1.5">
                         <Key className="w-3 h-3 text-gray-300" />

@@ -196,7 +196,7 @@ PGPASSWORD=<pw> psql -h 127.0.0.1 -p 15432 -U fly-user -d fly-db \
 
 ```bash
 fly machines list --app reins-<id> --json | jq -r '.[0].config.env.OPENCLAW_WEBHOOK_URL'
-# Should be: https://app.agenthelm.mom/api/webhooks/agent-bot/<deploymentId>
+# Should be: https://app.helm.mom/api/webhooks/agent-bot/<deploymentId>
 # NOT:       https://reins-<id>.fly.dev/...
 ```
 
@@ -421,7 +421,7 @@ own fly.dev address instead of Reins), reset it manually:
 ```bash
 # Production
 curl "https://api.telegram.org/bot${REINS_TELEGRAM_BOT_TOKEN}/setWebhook" \
-  -d "url=https://app.agenthelm.mom/api/webhooks/shared-bot" \
+  -d "url=https://app.helm.mom/api/webhooks/shared-bot" \
   -d "secret_token=${SHARED_BOT_WEBHOOK_SECRET}"
 
 # Dev

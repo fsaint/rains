@@ -423,7 +423,7 @@ The entry point for new users. Users send `/start` to this bot to begin the onbo
   - `/approve_<userId>` — moves applicant to `gmail_oauth` state, sends them the Gmail OAuth link
   - `/reject_<userId>` — rejects the applicant
   - `/reset_<userId>` — wipes the applicant record (clean slate for re-testing)
-- **Webhook:** Telegram sends updates to `https://app.agenthelm.mom/telegram` (relayed from `agenthelm-onboarding`)
+- **Webhook:** Telegram sends updates to `https://app.helm.mom/telegram` (relayed from `agenthelm-onboarding`)
 
 ### 2. Approvals Bot — `@AgentHelmApprovalsBot`
 
@@ -437,7 +437,7 @@ Dual-purpose bot — used during onboarding AND by deployed agents.
 **After deployment (ongoing):**
 - All agent tool approval requests arrive here as Telegram messages with **Approve / Deny** inline buttons
 - Token secret: `REINS_TELEGRAM_BOT_TOKEN` on `agenthelm-core`
-- Webhook: `https://app.agenthelm.mom/api/webhooks/telegram`
+- Webhook: `https://app.helm.mom/api/webhooks/telegram`
 - The user must `/start` this bot at least once (during onboarding) so Telegram allows the bot to message them
 
 ### 3. Admin Notification Group — Agent Helm Verifications
@@ -472,7 +472,7 @@ Each user creates their own bot via `@BotFather` during onboarding and provides 
 
 - **Not owned by the platform** — created and owned by the end user
 - Token stored in `applicants.bot_token`, used to provision the OpenClaw/Hermes machine
-- The deployed agent (OpenClaw) registers a webhook with this bot token pointing to: `https://app.agenthelm.mom/api/webhooks/agent-bot/<deploymentId>`
+- The deployed agent (OpenClaw) registers a webhook with this bot token pointing to: `https://app.helm.mom/api/webhooks/agent-bot/<deploymentId>`
 
 ### Telegram Wiring Checklist (new deployment)
 
@@ -517,11 +517,11 @@ The backend reads `config/${NODE_ENV}.yaml` at startup via `backend/src/config/i
 
 | Setting | Development | Production |
 |---------|------------|------------|
-| `urls.dashboard_url` | `https://reins-dev.btv.pw` | `https://app.agenthelm.mom` |
+| `urls.dashboard_url` | `https://reins-dev.btv.pw` | `https://app.helm.mom` |
 | `fly.org` | `reins-dev` | `personal` |
 | `fly.openclaw_app` | `agentx-openclaw` | `reins-openclaw` |
 | `onboarding.notify_bot_username` | `reins_dev_bot` | `AgentHelmApprovalsBot` |
-| `oauth.google_redirect_uri` | `http://localhost:5001/...` | `https://app.agenthelm.mom/...` |
+| `oauth.google_redirect_uri` | `http://localhost:5001/...` | `https://app.helm.mom/...` |
 
 ### Fly Apps
 
@@ -567,10 +567,10 @@ No `max_machines_running` constraint needed — onboarding is stateless per requ
 | `REINS_ADMIN_EMAIL` / `REINS_ADMIN_PASSWORD` | Dashboard admin login |
 | `REINS_DASHBOARD_URL` / `REINS_PUBLIC_URL` | Public URL (overrides YAML) |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Gmail/Calendar OAuth app |
-| `GOOGLE_REDIRECT_URI` | `https://app.agenthelm.mom/api/oauth/google/callback` |
-| `GOOGLE_LOGIN_REDIRECT_URI` | `https://app.agenthelm.mom/api/auth/google/callback` |
+| `GOOGLE_REDIRECT_URI` | `https://app.helm.mom/api/oauth/google/callback` |
+| `GOOGLE_LOGIN_REDIRECT_URI` | `https://app.helm.mom/api/auth/google/callback` |
 | `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` | Outlook OAuth app |
-| `MICROSOFT_REDIRECT_URI` | `https://app.agenthelm.mom/api/oauth/microsoft/callback` |
+| `MICROSOFT_REDIRECT_URI` | `https://app.helm.mom/api/oauth/microsoft/callback` |
 | `REINS_TELEGRAM_BOT_TOKEN` | `@AgentHelmApprovalsBot` token (approval notifications) |
 | `ONBOARDING_API_KEY` | Shared key between onboarding bot and backend |
 | `ONBOARDING_BOT_WEBHOOK_SECRET` | Telegram webhook signature verification |
@@ -590,8 +590,8 @@ No `max_machines_running` constraint needed — onboarding is stateless per requ
 | `ONBOARDING_BOT_TOKEN` | `@SpecialAgentHelmBot` Telegram token |
 | `ONBOARDING_BOT_WEBHOOK_SECRET` | Webhook signature verification |
 | `AGENTHELM_API_KEY` | Same value as `ONBOARDING_API_KEY` on core |
-| `AGENTHELM_API_URL` | `https://app.agenthelm.mom` |
-| `DASHBOARD_URL` | `https://app.agenthelm.mom` |
+| `AGENTHELM_API_URL` | `https://app.helm.mom` |
+| `DASHBOARD_URL` | `https://app.helm.mom` |
 | `NOTIFY_BOT_USERNAME` | `AgentHelmApprovalsBot` (overrides YAML default `reins_dev_bot`) |
 | `ADMIN_TELEGRAM_ID` | Telegram user ID for the admin |
 | `ADMIN_CHAT_ID` | Chat ID for admin notifications |

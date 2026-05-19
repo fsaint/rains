@@ -6,7 +6,7 @@
  */
 
 import { db, client } from '../db/index.js';
-import { agentServiceAccess, agentToolPermissions, agentServiceCredentials, agentServiceInstances, agents, credentials } from '../db/schema.js';
+import { agentServiceAccess, agentToolPermissions, agentServiceCredentials, agentServiceInstances, agents, credentials, deployedAgents } from '../db/schema.js';
 import { eq, and, inArray } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { serverManager } from '../mcp/server-manager.js';
@@ -878,6 +878,7 @@ export interface AgentPermissionsResponse {
     name: string;
     status: string;
     instances: ServiceInstance[];
+    telegramBotUsername?: string | null;
   }>;
   availableServices: Array<{ type: string; name: string; icon: string; authRequired: boolean }>;
 }
@@ -1477,12 +1478,19 @@ export async function getAgentPermissions(userId?: string): Promise<AgentPermiss
 
   const agentResults: AgentPermissionsResponse['agents'] = [];
   for (const agent of allAgents) {
-    const instances = await getAgentInstances(agent.id);
+    const [instances, deployments] = await Promise.all([
+      getAgentInstances(agent.id),
+      db.select({ telegramBotUsername: deployedAgents.telegramBotUsername })
+        .from(deployedAgents)
+        .where(and(eq(deployedAgents.agentId, agent.id)))
+        .limit(1),
+    ]);
     agentResults.push({
       id: agent.id,
       name: agent.name,
       status: agent.status,
       instances,
+      telegramBotUsername: deployments[0]?.telegramBotUsername ?? null,
     });
   }
 

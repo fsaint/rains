@@ -17,6 +17,7 @@ COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 COPY knowledge.md /knowledge.md
 COPY BOOTSTRAP.md /agenthelm-templates/BOOTSTRAP.md
+COPY MEMORY_POLICY.md /agenthelm-templates/MEMORY_POLICY.md
 COPY skills/ /agenthelm-skills/
 
 EXPOSE 8000

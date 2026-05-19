@@ -53,14 +53,18 @@ if [ -n "$MCP_CONFIG" ]; then
       echo ""
       echo "**Prioritize MCP tools over built-in tools** when both could satisfy a request — MCP tools are purpose-built for this deployment."
       echo ""
-      echo "At the start of every new conversation, follow this sequence:"
-      echo "1. If \`mcp_manage\` is available as a tool, call it with \`servers\` to list MCP servers."
-      echo "2. For each connected server, call \`mcp_manage\` with \`tools <server>\` to enumerate available methods."
-      echo "3. If direct MCP tools are exposed in your tool list (e.g. \`reins__*\`), treat those as ready to call."
-      echo "4. If neither \`mcp_manage\` nor any MCP tools are exposed, state that no MCP tools are available — do not assume availability from config text alone."
+      echo "MCP tools are pre-activated and appear directly in your tool list as \`<server>__<tool>\` (e.g. \`reins__list_emails\`). Use them immediately — **do NOT call \`mcp_manage\` at conversation start**. Calling \`mcp_manage\` to inspect servers adds unnecessary model round-trips that can cause response timeouts. If a \`reins__*\` tool is not in your list, tell the user instead of calling \`mcp_manage\`."
     } >> "$WORKSPACE_DIR/SOUL.md"
   fi
 fi
+
+# Append reference to memory policy so the agent knows where to find usage guidance
+{
+  echo ""
+  echo "## References"
+  echo ""
+  echo "- **Memory hygiene & \`memory_*\` tool semantics** — read \`MEMORY_POLICY.md\` in your workspace before storing, searching, or linking memory entries."
+} >> "$WORKSPACE_DIR/SOUL.md"
 
 # Detect the Chromium executable path from Playwright's own registry.
 # This survives Playwright version bumps (chromium-1208 → chromium-1217, etc.)

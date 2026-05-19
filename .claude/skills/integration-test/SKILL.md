@@ -12,7 +12,7 @@ Tests all 6 combinations of runtime (OpenClaw, Hermes) × LLM provider (Anthropi
 | Target | Frontend URL | Env file | Agent deployment |
 |--------|-------------|----------|-----------------|
 | `dev` (default) | `http://localhost:6173` | `tests/integration/.env.test` | Fly.io `reins-dev` org |
-| `prod` | `https://app.agenthelm.mom` | `tests/integration/.env.prod-test` | Fly.io `personal` org |
+| `prod` | `https://app.helm.mom` | `tests/integration/.env.prod-test` | Fly.io `personal` org |
 
 Both targets deploy agents to Fly.io — dev uses the `reins-dev` org for isolation. The backend and frontend still run locally for the dev target.
 
@@ -29,8 +29,8 @@ OPENAI_API_KEY=sk-proj-...
 MINIMAX_API_KEY=sk-cp-...
 
 # Reins backend
-REINS_URL=http://localhost:5001          # or https://app.agenthelm.mom for prod
-REINS_FRONTEND_URL=http://localhost:6173  # or https://app.agenthelm.mom for prod
+REINS_URL=http://localhost:5001          # or https://app.helm.mom for prod
+REINS_FRONTEND_URL=http://localhost:6173  # or https://app.helm.mom for prod
 REINS_ADMIN_EMAIL=admin@reins.local
 REINS_ADMIN_PASSWORD=testpass123
 

@@ -104,7 +104,7 @@ Switch to Special Agent Helm chat. Expected final messages:
 - "Your agent is spinning up. Stand by."
 - "Deploying your agent. This takes a moment."
 - **"You're all set. Your agent is live."**
-- Link to `https://app.agenthelm.mom`
+- Link to `https://app.helm.mom`
 
 ### 10. Ping test — agent is alive
 

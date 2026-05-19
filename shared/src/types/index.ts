@@ -157,7 +157,7 @@ export interface DeferredJobResult {
 // Audit Types
 // ============================================================================
 
-export type AuditEventType = 'tool_call' | 'approval' | 'policy_change' | 'auth' | 'connection' | 'agent_event';
+export type AuditEventType = 'tool_call' | 'approval' | 'policy_change' | 'auth' | 'connection' | 'agent_event' | 'fly_lifecycle' | 'fly_action';
 export type AuditResult = 'success' | 'blocked' | 'error' | 'pending';
 
 export interface AuditEntry {

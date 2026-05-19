@@ -8,7 +8,7 @@
 import type { ServerContext, ToolResult } from '../common/types.js';
 
 function getApiBase(): string {
-  return (process.env.REINS_API_URL ?? 'https://app.agenthelm.mom').replace(/\/$/, '');
+  return (process.env.REINS_API_URL ?? 'https://app.helm.mom').replace(/\/$/, '');
 }
 
 function getGatewayToken(context: ServerContext): string {

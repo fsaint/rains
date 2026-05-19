@@ -233,6 +233,57 @@ export class AuditLogger {
     return Number(result.rows[0].count);
   }
 
+
+  /**
+   * Log a Fly.io machine lifecycle event observed via polling.
+   */
+  async logFlyLifecycle(params: {
+    app: string;
+    machineId: string;
+    agentId?: string;
+    flyEventType: string;
+    flyEventId: string;
+    source: string;
+    timestampMs: number;
+    exit?: { oomKilled: boolean; exitCode: number | null; signal: string | null };
+  }): Promise<void> {
+    await this.log({
+      eventType: 'fly_lifecycle',
+      agentId: params.agentId,
+      result: params.flyEventType === 'vanished' ? 'error' : 'success',
+      metadata: {
+        app: params.app,
+        machine_id: params.machineId,
+        fly_event_type: params.flyEventType,
+        fly_event_id: params.flyEventId,
+        source: params.source,
+        fly_timestamp_ms: params.timestampMs,
+        ...(params.exit ? { exit: params.exit } : {}),
+      },
+    });
+  }
+
+  /**
+   * Log a backend-initiated Fly.io machine action (create / restart / destroy / redeploy).
+   */
+  async logFlyAction(params: {
+    agentId?: string;
+    action: 'create' | 'restart' | 'destroy' | 'redeploy';
+    app?: string;
+    machineId?: string;
+  }): Promise<void> {
+    await this.log({
+      eventType: 'fly_action',
+      agentId: params.agentId,
+      result: 'success',
+      metadata: {
+        action: params.action,
+        ...(params.app ? { app: params.app } : {}),
+        ...(params.machineId ? { machine_id: params.machineId } : {}),
+      },
+    });
+  }
+
   private mapToEntry(row: Record<string, unknown>): AuditEntry {
     return {
       id: Number(row.id),

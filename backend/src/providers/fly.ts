@@ -321,7 +321,7 @@ async function buildHermesMachineConfig(opts: CreateMachineOpts) {
       ...(opts.soulMd ? { HERMES_PERSONA: opts.soulMd } : {}),
       ...(opts.modelProvider ? { MODEL_PROVIDER: opts.modelProvider } : {}),
       ...(opts.modelName ? { MODEL_NAME: opts.modelName } : {}),
-      ...(opts.modelProvider === 'minimax' && opts.openaiApiKey ? { MINIMAX_API_KEY: opts.openaiApiKey } : {}),
+      ...(opts.modelProvider === 'minimax' ? { MINIMAX_API_KEY: opts.openaiApiKey || process.env.MINIMAX_API_KEY || '' } : {}),
       ...(opts.modelProvider === 'openai' && opts.openaiApiKey ? { OPENAI_API_KEY: opts.openaiApiKey } : {}),
       ANTHROPIC_API_KEY: (opts.modelProvider === 'anthropic' && opts.openaiApiKey) ? opts.openaiApiKey : (process.env.ANTHROPIC_API_KEY ?? ''),
       MCP_CONFIG: JSON.stringify(opts.mcpConfigs),

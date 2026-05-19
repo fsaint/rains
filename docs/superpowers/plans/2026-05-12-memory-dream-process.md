@@ -685,7 +685,7 @@ describe('handleDream', () => {
     await handleDream({}, mockContext);
 
     const [url, opts] = mockFetch.mock.calls[0];
-    expect(url).toBe('https://test.agenthelm.mom/api/memory/dream');
+    expect(url).toBe('https://test.helm.mom/api/memory/dream');
     expect(opts?.headers?.['x-reins-agent-secret']).toBe('test-gateway-token');
   });
 
@@ -724,7 +724,7 @@ describe('handleSetParent', () => {
     await handleSetParent({ entry_id: 'e1', parent_id: 'root-1' }, mockContext);
 
     const [url, opts] = mockFetch.mock.calls[0];
-    expect(url).toBe('https://test.agenthelm.mom/api/memory/entries/e1/parent');
+    expect(url).toBe('https://test.helm.mom/api/memory/entries/e1/parent');
     expect(opts?.method).toBe('PUT');
     const body = JSON.parse(opts?.body as string);
     expect(body.parent_id).toBe('root-1');

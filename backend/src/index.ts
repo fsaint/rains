@@ -7,6 +7,7 @@ import { startTokenRefreshLoop, stopTokenRefreshLoop } from './credentials/vault
 import { startBackupLoop, stopBackupLoop } from './services/agent-backup.js';
 import { startTokenMonitor, stopTokenMonitor } from './services/token-monitor.js';
 import { startDreamScheduler } from './services/dream.js';
+import { flyLifecycleMonitor } from './services/fly-lifecycle-monitor.js';
 import { telegramNotifier } from './notifications/telegram.js';
 import { initializeNotificationHandlers } from './notifications/handlers.js';
 import { shutdownPostHog } from './analytics/posthog.js';
@@ -64,6 +65,12 @@ app.log.info('Token monitor started');
 startDreamScheduler();
 app.log.info('Dream scheduler started (nightly at 2am UTC)');
 
+// Start Fly.io machine lifecycle monitor (polls every 60 s; requires FLY_LIFECYCLE_MONITOR_ENABLED=1)
+if (process.env.FLY_LIFECYCLE_MONITOR_ENABLED === '1') {
+  flyLifecycleMonitor.start();
+  app.log.info('Fly lifecycle monitor started');
+}
+
 // Wire approval queue events to notification services
 initializeNotificationHandlers();
 
@@ -97,6 +104,7 @@ const shutdown = async () => {
   stopTokenRefreshLoop();
   stopBackupLoop();
   stopTokenMonitor();
+  flyLifecycleMonitor.stop();
   await shutdownNativeServers();
   await shutdownPostHog();
   await app.close();

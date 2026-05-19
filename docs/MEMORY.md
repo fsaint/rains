@@ -165,7 +165,7 @@ Memory handlers call back into the backend via HTTP. In local dev, set:
 REINS_API_URL=http://localhost:5001
 ```
 
-Without this, handlers default to `https://app.agenthelm.mom` (production).
+Without this, handlers default to `https://app.helm.mom` (production).
 
 Enable memory for an agent (dev convenience — normally done via dashboard):
 ```sql

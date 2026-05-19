@@ -27,7 +27,7 @@ const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
 // Set a predictable API base URL
-process.env.REINS_API_URL = 'https://test.agenthelm.mom';
+process.env.REINS_API_URL = 'https://test.helm.mom';
 
 const mockContext = {
   requestId: 'test-request-id',
@@ -69,7 +69,7 @@ describe('Memory Handlers', () => {
 
       expect(mockFetch).toHaveBeenCalledOnce();
       const [url, opts] = mockFetch.mock.calls[0];
-      expect(url).toBe('https://test.agenthelm.mom/api/memory/root');
+      expect(url).toBe('https://test.helm.mom/api/memory/root');
       expect(opts?.headers?.['x-reins-agent-secret']).toBe('test-gateway-token');
     });
 
@@ -106,7 +106,7 @@ describe('Memory Handlers', () => {
       );
 
       const [url, opts] = mockFetch.mock.calls[0];
-      expect(url).toBe('https://test.agenthelm.mom/api/memory/entries');
+      expect(url).toBe('https://test.helm.mom/api/memory/entries');
       expect(opts?.method).toBe('POST');
       const body = JSON.parse(opts?.body as string);
       expect(body).toMatchObject({ title: 'My Note', type: 'note', content: 'content', parent_id: 'root-1' });
@@ -153,7 +153,7 @@ describe('Memory Handlers', () => {
       await handleUpdate({ id: 'entry-1', title: 'Updated', content: 'new content' }, mockContext);
 
       const [url, opts] = mockFetch.mock.calls[0];
-      expect(url).toBe('https://test.agenthelm.mom/api/memory/entries/entry-1');
+      expect(url).toBe('https://test.helm.mom/api/memory/entries/entry-1');
       expect(opts?.method).toBe('PUT');
       const body = JSON.parse(opts?.body as string);
       expect(body.title).toBe('Updated');
@@ -269,7 +269,7 @@ describe('Memory Handlers', () => {
       await handleGet({ id: 'e1' }, mockContext);
 
       const [url] = mockFetch.mock.calls[0];
-      expect(url).toBe('https://test.agenthelm.mom/api/memory/entries/e1');
+      expect(url).toBe('https://test.helm.mom/api/memory/entries/e1');
     });
 
     it('searches by title when only title provided', async () => {
@@ -320,7 +320,7 @@ describe('Memory Handlers', () => {
       await handleRelate({ source_id: 'e1', relation: 'knows', target_id: 'e2' }, mockContext);
 
       const [url, opts] = mockFetch.mock.calls[0];
-      expect(url).toBe('https://test.agenthelm.mom/api/memory/entries/e1/attributes');
+      expect(url).toBe('https://test.helm.mom/api/memory/entries/e1/attributes');
       expect(opts?.method).toBe('POST');
       const body = JSON.parse(opts?.body as string);
       expect(body.type).toBe('relation');
@@ -350,7 +350,7 @@ describe('Memory Handlers', () => {
       await handleDelete({ id: 'e1' }, mockContext);
 
       const [url, opts] = mockFetch.mock.calls[0];
-      expect(url).toBe('https://test.agenthelm.mom/api/memory/entries/e1');
+      expect(url).toBe('https://test.helm.mom/api/memory/entries/e1');
       expect(opts?.method).toBe('DELETE');
     });
 
@@ -384,7 +384,7 @@ describe('Memory Handlers', () => {
       await handleDream({}, mockContext);
 
       const [url, opts] = mockFetch.mock.calls[0];
-      expect(url).toBe('https://test.agenthelm.mom/api/memory/dream');
+      expect(url).toBe('https://test.helm.mom/api/memory/dream');
       expect(opts?.headers?.['x-reins-agent-secret']).toBe('test-gateway-token');
     });
 
@@ -423,7 +423,7 @@ describe('Memory Handlers', () => {
       await handleSetParent({ entry_id: 'e1', parent_id: 'root-1' }, mockContext);
 
       const [url, opts] = mockFetch.mock.calls[0];
-      expect(url).toBe('https://test.agenthelm.mom/api/memory/entries/e1/parent');
+      expect(url).toBe('https://test.helm.mom/api/memory/entries/e1/parent');
       expect(opts?.method).toBe('PUT');
       const body = JSON.parse(opts?.body as string);
       expect(body.parent_id).toBe('root-1');
@@ -475,7 +475,7 @@ describe('Memory Handlers', () => {
       await handleListTags({}, mockContext);
 
       const [url, opts] = mockFetch.mock.calls[0];
-      expect(url).toBe('https://test.agenthelm.mom/api/memory/tags');
+      expect(url).toBe('https://test.helm.mom/api/memory/tags');
       expect(opts?.headers?.['x-reins-agent-secret']).toBe('test-gateway-token');
     });
 
@@ -510,7 +510,7 @@ describe('Memory Handlers', () => {
       await handleAddAttribute({ entry_id: 'e1', type: 'label', name: 'source', value: 'conversation' }, mockContext);
 
       const [url, opts] = mockFetch.mock.calls[0];
-      expect(url).toBe('https://test.agenthelm.mom/api/memory/entries/e1/attributes');
+      expect(url).toBe('https://test.helm.mom/api/memory/entries/e1/attributes');
       expect(opts?.method).toBe('POST');
       const body = JSON.parse(opts?.body as string);
       expect(body.type).toBe('label');
@@ -554,7 +554,7 @@ describe('Memory Handlers', () => {
       await handleRemoveAttribute({ attribute_id: 'attr-1' }, mockContext);
 
       const [url, opts] = mockFetch.mock.calls[0];
-      expect(url).toBe('https://test.agenthelm.mom/api/memory/attributes/attr-1');
+      expect(url).toBe('https://test.helm.mom/api/memory/attributes/attr-1');
       expect(opts?.method).toBe('DELETE');
     });
 

@@ -16,12 +16,16 @@ case "$runtime" in
   openclaw)
     cp "$REPO_ROOT/shared/BOOTSTRAP.md" "$REPO_ROOT/docker/workspace/BOOTSTRAP.md"
     echo "[build] Copied shared/BOOTSTRAP.md → docker/workspace/BOOTSTRAP.md"
+    cp "$REPO_ROOT/shared/MEMORY_POLICY.md" "$REPO_ROOT/docker/workspace/MEMORY_POLICY.md"
+    echo "[build] Copied shared/MEMORY_POLICY.md → docker/workspace/MEMORY_POLICY.md"
     cd "$REPO_ROOT/docker"
     fly deploy
     ;;
   hermes)
     cp "$REPO_ROOT/shared/BOOTSTRAP.md" "$REPO_ROOT/docker/hermes/BOOTSTRAP.md"
     echo "[build] Copied shared/BOOTSTRAP.md → docker/hermes/BOOTSTRAP.md"
+    cp "$REPO_ROOT/shared/MEMORY_POLICY.md" "$REPO_ROOT/docker/hermes/MEMORY_POLICY.md"
+    echo "[build] Copied shared/MEMORY_POLICY.md → docker/hermes/MEMORY_POLICY.md"
     cd "$REPO_ROOT/docker/hermes"
     fly deploy
     ;;

@@ -35,7 +35,6 @@ import {
   // Instance-based functions
   getAgentPermissions,
   createServiceInstance,
-  enableDefaultServices,
   getInstanceConfig,
   updateServiceInstance,
   deleteServiceInstance,
@@ -67,7 +66,7 @@ import { sendReauthEmail } from '../services/email.js';
 import { performBackup, listBackups, getBackup, restoreBackup } from '../services/agent-backup.js';
 import { isCodexTokenExpired } from '../services/token-monitor.js';
 import { forwardToOpenclaw, handleMyChatMember } from '../services/agent-bot-relay.js';
-import { parseWikilinkRefs, updateLinkIndex, updateTagIndex, ensureMemoryRoot, getDreamManifest, setEntryParent, resolveOrCreate, parseTransclusions, lookupEntryByTitleOrAlias } from '../services/memory.js';
+import { parseWikilinks, updateLinkIndex, ensureMemoryRoot, getDreamManifest, setEntryParent } from '../services/memory.js';
 import * as provider from '../providers/index.js';
 import { nanoid } from 'nanoid';
 import jwt from 'jsonwebtoken';
@@ -126,11 +125,18 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     const agentsWithCredentials = await Promise.all(
       result.rows.map(async (agent) => {
-        const credsResult = await client.execute({
-          sql: `SELECT credential_id FROM agent_credentials WHERE agent_id = ?`,
-          args: [agent.id as string],
-        });
+        const [credsResult, deployResult] = await Promise.all([
+          client.execute({
+            sql: `SELECT credential_id FROM agent_credentials WHERE agent_id = ?`,
+            args: [agent.id as string],
+          }),
+          client.execute({
+            sql: `SELECT telegram_bot_username, status FROM deployed_agents WHERE agent_id = ? AND status NOT IN ('destroyed', 'error') ORDER BY created_at DESC LIMIT 1`,
+            args: [agent.id as string],
+          }),
+        ]);
 
+        const deployment = deployResult.rows[0];
         return {
           id: agent.id,
           name: agent.name,
@@ -140,6 +146,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           credentials: credsResult.rows.map((c) => c.credential_id),
           createdAt: agent.created_at,
           updatedAt: agent.updated_at,
+          telegramBotUsername: deployment?.telegram_bot_username ?? null,
+          deploymentStatus: deployment?.status ?? null,
         };
       })
     );
@@ -292,7 +300,6 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     await auditLogger.logAgentEvent(id, 'created', { name: parsed.data.name });
     getPostHog()?.capture({ distinctId: userId, event: 'agent_created', properties: { source: 'dashboard' } });
-    await enableDefaultServices(id);
 
     return reply.code(201).send({ data: result.rows[0] });
   });
@@ -2926,8 +2933,6 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       args: [deploymentId, agentId, gatewayToken, body.soulMd || null, now, now],
     });
 
-    await enableDefaultServices(agentId);
-
     return reply.code(201).send({
       data: {
         id: agentId,
@@ -3186,6 +3191,24 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       ? (config.sharedBotWebhookSecret ?? webhookRelaySecret)
       : webhookRelaySecret;
 
+    // Fire-and-forget: tell the user deployment has started via the approvals bot.
+    // Fires immediately (before the ~2min provision call), so they know it's in progress.
+    if (body.onboardingTelegramUserId && config.sharedBotToken) {
+      client.execute({
+        sql: `SELECT notify_chat_id FROM applicants WHERE telegram_user_id = ? LIMIT 1`,
+        args: [body.onboardingTelegramUserId],
+      }).then(r => {
+        const chatId = r.rows[0]?.notify_chat_id as string | null;
+        if (chatId) {
+          fetch(`https://api.telegram.org/bot${config.sharedBotToken}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text: '⏳ Deploying your agent — it will be ready in about 2 minutes.' }),
+          }).catch(() => {});
+        }
+      }).catch(() => {});
+    }
+
     try {
       const result = await provider.provision({
         instanceId: deploymentId,
@@ -3242,8 +3265,6 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           now, now,
         ],
       });
-
-      await enableDefaultServices(agentId);
 
       // Auto-connect Gmail, Calendar, and Drive for onboarding users
       if (body.onboardingTelegramUserId && validateOnboardingApiKey(request)) {
@@ -4952,7 +4973,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const userId = await resolveMemoryUserId(request);
     if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
 
-    const { q, type, parent_id, limit: lim = '50', tag, since, order } = request.query as Record<string, string>;
+    const { q, type, parent_id, limit: lim = '50' } = request.query as Record<string, string>;
     const maxLimit = Math.min(parseInt(lim, 10) || 50, 200);
 
     let rows;
@@ -4981,38 +5002,14 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       });
       rows = result.rows;
     } else {
-      const args: unknown[] = [];
-
-      let fromClause = 'FROM memory_entries e';
-      if (tag) {
-        fromClause += ' JOIN memory_tags mt ON mt.entry_id = e.id AND mt.tag = ?';
-        args.push(tag);
-      }
-
-      let whereClause = `WHERE e.user_id = ? AND e.is_deleted = false`;
-      args.push(userId);
-
-      if (type) {
-        whereClause += ` AND e.type = ?`;
-        args.push(type);
-      }
-
-      if (since) {
-        whereClause += ` AND e.updated_at >= ?`;
-        args.push(since);
-      }
-
-      const orderCol = order === 'created' ? 'e.created_at' : order === 'title' ? 'e.title' : 'e.updated_at';
-      const orderDir = order === 'title' ? 'ASC' : 'DESC';
-
-      args.push(maxLimit);
       const result = await client.execute({
-        sql: `SELECT e.id, e.type, e.title, e.content, e.created_at, e.updated_at
-              ${fromClause}
-              ${whereClause}
-              ORDER BY ${orderCol} ${orderDir}
+        sql: `SELECT id, type, title, content, created_at, updated_at
+              FROM memory_entries
+              WHERE user_id = ? AND is_deleted = false
+                ${type ? `AND type = '${type.replace(/'/g, "''")}'` : ''}
+              ORDER BY updated_at DESC
               LIMIT ?`,
-        args,
+        args: [userId, maxLimit],
       });
       rows = result.rows;
     }
@@ -5035,27 +5032,16 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const content = (body.content as string | undefined) ?? null;
     const parentId = (body.parent_id as string | undefined) ?? null;
 
-    const { row, created } = await resolveOrCreate({ userId, type, title, content });
+    const id = nanoid();
+    const now = new Date().toISOString();
 
-    // If an existing entry was matched (exact/alias/fuzzy), return it immediately
-    if (!created) {
-      return reply.status(200).send({
-        data: {
-          id: row.id,
-          userId: row.user_id,
-          type: row.type,
-          title: row.title,
-          content: row.content,
-          createdAt: row.created_at,
-          updatedAt: row.updated_at,
-        },
-      });
-    }
+    await client.execute({
+      sql: `INSERT INTO memory_entries (id, user_id, type, title, content, is_deleted, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, false, ?, ?)`,
+      args: [id, userId, type, title, content, now, now],
+    });
 
-    const { id } = row;
-    const now = row.created_at;
-
-    // Create branch record for newly inserted entry
+    // Create branch record
     const branchId = nanoid();
     let position = 0;
     if (parentId) {
@@ -5083,7 +5069,6 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
 
     await updateLinkIndex(id, userId, content);
-    await updateTagIndex(id, content);
 
     return reply.status(201).send({ data: { id, userId, type, title, content, createdAt: now, updatedAt: now } });
   });
@@ -5125,103 +5110,14 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       args: [id],
     });
 
-    const tagsResult = await client.execute({
-      sql: `SELECT tag FROM memory_tags WHERE entry_id = ? ORDER BY tag ASC`,
-      args: [id],
-    });
-    const tags = tagsResult.rows.map((r) => r.tag as string);
-
-    // Resolve [[wikilinks]] in the content to entry IDs for clickable rendering
-    const wikilinkRefs = parseWikilinkRefs((entry.content as string | null) ?? '');
-    const referencedTitles = [...new Set(wikilinkRefs.map((r) => r.title))];
-    const resolvedLinks: Record<string, string> = {};
-    if (referencedTitles.length > 0) {
-      const placeholders = referencedTitles.map(() => '?').join(', ');
-      const titleRows = await client.execute({
-        sql: `SELECT id, title FROM memory_entries
-              WHERE user_id = ? AND is_deleted = false AND title IN (${placeholders})`,
-        args: [userId, ...referencedTitles],
-      });
-      for (const r of titleRows.rows) {
-        resolvedLinks[r.title as string] = r.id as string;
-      }
-      // Fall back to alias resolution for any unresolved titles
-      const unresolved = referencedTitles.filter((t) => !(t in resolvedLinks));
-      if (unresolved.length > 0) {
-        const aliasPlaceholders = unresolved.map(() => '?').join(', ');
-        const aliasRows = await client.execute({
-          sql: `SELECT e.id, a.value AS alias
-                FROM memory_attributes a
-                JOIN memory_entries e ON e.id = a.entry_id
-                WHERE e.user_id = ? AND a.name = 'alias' AND a.is_deleted = false
-                  AND a.value IN (${aliasPlaceholders})`,
-          args: [userId, ...unresolved],
-        });
-        for (const r of aliasRows.rows) {
-          resolvedLinks[r.alias as string] = r.id as string;
-        }
-      }
-    }
-
-    const resolvedHeadings: Record<string, string | null> = {};
-    for (const ref of wikilinkRefs) {
-      if (ref.title in resolvedLinks && ref.heading) {
-        resolvedHeadings[ref.title] = ref.heading;
-      }
-    }
-
-    // Resolve ![[Title]] transclusions (max depth 2, cycle-safe)
-    const transRefs = parseTransclusions((entry.content as string | null) ?? '');
-    const transclusions: Record<string, { id: string; title: string; content: string }> = {};
-    const seen = new Set<string>([id]);
-    const transclusionUserId: string = userId;
-
-    if (transRefs.length > 0) {
-      async function resolveTransclusion(title: string, depth: number): Promise<void> {
-        if (depth > 2 || title in transclusions) return;
-        const target = await lookupEntryByTitleOrAlias(transclusionUserId, title);
-        if (!target || seen.has(target.id)) return;
-        seen.add(target.id);
-        transclusions[title] = { id: target.id, title: target.title, content: target.content ?? '' };
-        // Recurse into nested transclusions
-        const nested = parseTransclusions(target.content ?? '');
-        for (const sub of nested) await resolveTransclusion(sub, depth + 1);
-      }
-      for (const t of transRefs) await resolveTransclusion(t, 0);
-    }
-
     return reply.send({
       data: {
         ...entry,
         attributes: attrsResult.rows,
         backlinks: backlinksResult.rows,
         parentId: branchResult.rows[0]?.parent_entry_id ?? null,
-        resolvedLinks,
-        resolvedHeadings,
-        tags,
-        transclusions,
       },
     });
-  });
-
-  // -------------------------------------------------------------------------
-  // GET /api/memory/tags — list all distinct tags with counts
-  // -------------------------------------------------------------------------
-  app.get('/api/memory/tags', async (request, reply) => {
-    const userId = await resolveMemoryUserId(request);
-    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
-
-    const result = await client.execute({
-      sql: `SELECT mt.tag, COUNT(*) AS count
-            FROM memory_tags mt
-            JOIN memory_entries e ON e.id = mt.entry_id
-            WHERE e.user_id = ? AND e.is_deleted = false
-            GROUP BY mt.tag
-            ORDER BY COUNT(*) DESC, mt.tag ASC`,
-      args: [userId],
-    });
-
-    return reply.send({ data: result.rows.map((r) => ({ tag: r.tag as string, count: Number(r.count) })) });
   });
 
   // -------------------------------------------------------------------------
@@ -5262,7 +5158,6 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     if (body.content !== undefined) {
       await updateLinkIndex(id, userId, body.content as string | null);
-      await updateTagIndex(id, body.content as string | null);
     }
 
     const updated = await client.execute({

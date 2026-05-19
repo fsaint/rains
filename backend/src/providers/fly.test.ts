@@ -139,6 +139,73 @@ describe('Fly Provider', () => {
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
       expect(body.region).toBe('lhr');
     });
+
+    describe('hermes minimax key fallback', () => {
+      beforeEach(() => {
+        process.env.HERMES_IMAGE = 'registry.fly.io/reins-hermes:test';
+      });
+
+      it('should use user-supplied key when both user and platform keys are set', async () => {
+        process.env.MINIMAX_API_KEY = 'platform-key';
+        const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true, json: () => ({ id: 'm1' }) });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const { createMachine } = await import('./fly.js');
+        await createMachine({
+          appName: 'app',
+          instanceId: 'i',
+          telegramToken: 't',
+          mcpConfigs: [],
+          gatewayToken: 'g',
+          modelProvider: 'minimax',
+          openaiApiKey: 'user-key',
+          runtime: 'hermes',
+        });
+
+        const env = JSON.parse(fetchMock.mock.calls[0][1].body).config.env;
+        expect(env.MINIMAX_API_KEY).toBe('user-key');
+      });
+
+      it('should fall back to platform MINIMAX_API_KEY when user key is absent', async () => {
+        process.env.MINIMAX_API_KEY = 'platform-key';
+        const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true, json: () => ({ id: 'm1' }) });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const { createMachine } = await import('./fly.js');
+        await createMachine({
+          appName: 'app',
+          instanceId: 'i',
+          telegramToken: 't',
+          mcpConfigs: [],
+          gatewayToken: 'g',
+          modelProvider: 'minimax',
+          runtime: 'hermes',
+        });
+
+        const env = JSON.parse(fetchMock.mock.calls[0][1].body).config.env;
+        expect(env.MINIMAX_API_KEY).toBe('platform-key');
+      });
+
+      it('should not inject MINIMAX_API_KEY for non-minimax providers', async () => {
+        process.env.MINIMAX_API_KEY = 'platform-key';
+        const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true, json: () => ({ id: 'm1' }) });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const { createMachine } = await import('./fly.js');
+        await createMachine({
+          appName: 'app',
+          instanceId: 'i',
+          telegramToken: 't',
+          mcpConfigs: [],
+          gatewayToken: 'g',
+          modelProvider: 'anthropic',
+          runtime: 'hermes',
+        });
+
+        const env = JSON.parse(fetchMock.mock.calls[0][1].body).config.env;
+        expect(env).not.toHaveProperty('MINIMAX_API_KEY');
+      });
+    });
   });
 
   describe('lifecycle operations', () => {

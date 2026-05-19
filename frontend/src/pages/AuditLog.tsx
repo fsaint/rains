@@ -133,6 +133,8 @@ export default function AuditLog() {
             <option value="agent_event">Agent Events</option>
             <option value="auth">Authentication</option>
             <option value="connection">Connections</option>
+            <option value="fly_lifecycle">Fly Events (observed)</option>
+            <option value="fly_action">Fly Actions (initiated)</option>
           </select>
           <select
             value={filters.result}

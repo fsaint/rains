@@ -33,6 +33,7 @@ import {
   PowerOff,
   Loader2,
   Radio,
+  Send,
 } from 'lucide-react';
 import { DeploymentPanel } from '../components/DeploymentPanel';
 
@@ -362,6 +363,20 @@ export default function Permissions() {
                   </div>
                 </button>
                 <div className="flex items-center gap-1 shrink-0">
+                  {/* Telegram bot link */}
+                  {agent.telegramBotUsername && (
+                    <a
+                      href={`https://t.me/${agent.telegramBotUsername}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="hidden sm:flex items-center gap-1.5 mr-2 text-xs text-trust-blue hover:text-blue-600 transition-colors"
+                      title="Open in Telegram"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      <span>@{agent.telegramBotUsername}</span>
+                    </a>
+                  )}
                   {/* Service type icons summary */}
                   <div className="hidden sm:flex items-center gap-1.5 mr-3">
                     {[...new Set(agent.instances.map((i) => i.serviceType))].map((st) => (
