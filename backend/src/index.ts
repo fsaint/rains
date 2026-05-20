@@ -1,6 +1,6 @@
 import { buildApp } from './app.js';
 import { config } from './config/index.js';
-import { initializeDatabase } from './db/index.js';
+import { initializeDatabase, client } from './db/index.js';
 import { approvalQueue } from './approvals/queue.js';
 import { initializeNativeServers, shutdownNativeServers } from './mcp/init-servers.js';
 import { startTokenRefreshLoop, stopTokenRefreshLoop } from './credentials/vault.js';
@@ -89,6 +89,41 @@ if (config.sharedBotToken) {
     .then((res) => res.json())
     .then((data) => app.log.info(`Shared bot webhook set: ${webhookUrl} — ${JSON.stringify(data)}`))
     .catch((err) => app.log.error('Shared bot setWebhook failed:', err));
+}
+
+// Re-register Telegram webhooks for all active user-owned bots (non-fatal).
+// Covers the case where agenthelm-core or an agent machine restarts and the
+// Telegram webhook gets cleared — ensures messages are never silently dropped.
+{
+  const reinsUrl = config.publicUrl || config.dashboardUrl;
+  client.execute({
+    sql: `SELECT id, telegram_token, webhook_relay_secret, is_shared_bot
+          FROM deployed_agents
+          WHERE status = 'running'
+            AND telegram_token IS NOT NULL
+            AND is_shared_bot = 0`,
+    args: [],
+  }).then(async (result) => {
+    const rows = result.rows as Array<{ id: string; telegram_token: string; webhook_relay_secret: string | null; is_shared_bot: number }>;
+    app.log.info(`Re-registering Telegram webhooks for ${rows.length} active user bot(s)`);
+    for (const row of rows) {
+      const webhookUrl = `${reinsUrl}/api/webhooks/agent-bot/${row.id}`;
+      const params: Record<string, string> = { url: webhookUrl };
+      if (row.webhook_relay_secret) params.secret_token = row.webhook_relay_secret;
+      try {
+        const res = await fetch(`https://api.telegram.org/bot${row.telegram_token}/setWebhook`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(params),
+        });
+        const data = await res.json() as { ok: boolean };
+        if (!data.ok) app.log.warn(`setWebhook failed for deployment ${row.id}: ${JSON.stringify(data)}`);
+      } catch (err) {
+        app.log.warn(`setWebhook error for deployment ${row.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    app.log.info('User bot webhook re-registration complete');
+  }).catch((err) => app.log.error('User bot webhook re-registration failed:', err));
 }
 
 // Graceful shutdown
