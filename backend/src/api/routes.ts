@@ -80,6 +80,29 @@ import {
   AuditFilterSchema,
 } from '@reins/shared';
 
+async function registerAgentBotWebhook(
+  telegramToken: string,
+  deploymentId: string,
+  webhookRelaySecret: string | null,
+  reinsUrl: string,
+): Promise<void> {
+  const webhookUrl = `${reinsUrl}/api/webhooks/agent-bot/${deploymentId}`;
+  const params: Record<string, string> = { url: webhookUrl };
+  if (webhookRelaySecret) params.secret_token = webhookRelaySecret;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${telegramToken}/setWebhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    const data = await res.json() as { ok: boolean };
+    if (!data.ok) console.warn(`[deploy] setWebhook failed for ${deploymentId}: ${JSON.stringify(data)}`);
+    else console.info(`[deploy] Telegram webhook set for deployment ${deploymentId}`);
+  } catch (err) {
+    console.warn(`[deploy] setWebhook error for ${deploymentId}:`, err);
+  }
+}
+
 export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // Helper to get userId from authenticated request
   function getUserId(request: any): string {
@@ -3266,6 +3289,11 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         ],
       });
 
+      // Register Telegram webhook for user-owned bots (non-fatal)
+      if (!isSharedBot && effectiveTelegramToken) {
+        await registerAgentBotWebhook(effectiveTelegramToken, deploymentId, effectiveWebhookSecret, reinsUrl);
+      }
+
       // Auto-connect Gmail, Calendar, and Drive for onboarding users
       if (body.onboardingTelegramUserId && validateOnboardingApiKey(request)) {
         try {
@@ -3472,6 +3500,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         sql: `UPDATE agents SET status = 'active', updated_at = ? WHERE id = ?`,
         args: [now, id],
       });
+
+      // Register Telegram webhook for user-owned bots (non-fatal)
+      if (body.telegramToken) {
+        const reinsUrl = config.publicUrl || config.dashboardUrl;
+        await registerAgentBotWebhook(body.telegramToken, deploymentId, webhookRelaySecret, reinsUrl);
+      }
 
       getPostHog()?.capture({ distinctId: deployUserId, event: 'agent_deployed', properties: { runtime: body.runtime ?? 'openclaw', region: body.region ?? 'iad' } });
 
