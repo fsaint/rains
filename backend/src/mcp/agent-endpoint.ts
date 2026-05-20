@@ -851,6 +851,22 @@ async function handleCallTool(
           console.warn('[mark_onboarded] updateMachineEnv failed (non-fatal):', err instanceof Error ? err.message : err);
         }
       }
+      // Fire-and-forget: notify the user via the shared approvals bot that their agent
+      // finished first-run setup and is now ready to chat.
+      if (config.sharedBotToken) {
+        client.execute({
+          sql: `SELECT u.telegram_chat_id FROM users u JOIN agents a ON a.user_id = u.id WHERE a.id = ? LIMIT 1`,
+          args: [agentId],
+        }).then((r) => {
+          const chatId = r.rows[0]?.telegram_chat_id as string | null;
+          if (!chatId) return;
+          fetch(`https://api.telegram.org/bot${config.sharedBotToken}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text: '✅ Your agent is ready! You can start chatting now.' }),
+          }).catch(() => {});
+        }).catch(() => {});
+      }
     }
     return {
       jsonrpc: '2.0', id: requestId,
