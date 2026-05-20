@@ -385,9 +385,9 @@ async function main() {
     if (!botUsername) throw new Error('Bot username required: set TEST_BOT_USERNAME or pass --bot-username');
 
     // 4b. Send /new once to reset session history and trigger Chrome CDP init,
-    // then wait 70s for Chrome to fully reconnect. All subsequent calls use
-    // --no-new so they don't re-trigger the expensive CDP reconnect cycle.
-    console.log('\nSending /new and waiting 70s for Chrome CDP to reconnect...');
+    // then poll until Chrome reconnects instead of sleeping unconditionally.
+    // Chrome typically reconnects in 40–60s; polling exits as soon as it responds.
+    console.log('\nSending /new and polling for Chrome CDP reconnect (max 80s)...');
     const tgScript = path.join(path.dirname(import.meta.url.replace('file://', '')), 'tg-browser-test.py');
     const sendNewScript = `
 import asyncio, os
@@ -407,9 +407,35 @@ asyncio.run(send_new())
       timeout: 15_000,
       env: { ...process.env, _RESET_BOT_USERNAME: botUsername },
     });
-    // Chrome drops its CDP connection on /new and needs ~60s to reconnect.
-    // Waiting 70s here ensures Chrome is accepting connections before warmup.
-    await new Promise((r) => setTimeout(r, 70_000));
+    // Poll for Chrome CDP reconnect: probe every ~15s, exit as soon as the agent
+    // confirms the browser opened. Falls through gracefully on timeout.
+    const CDP_POLL_MAX_MS = 80_000;
+    const cdpPollStart = Date.now();
+    let cdpReady = false;
+    await new Promise<void>((r) => setTimeout(r, 15_000)); // minimum before first probe
+    while (!cdpReady && Date.now() - cdpPollStart < CDP_POLL_MAX_MS) {
+      const elapsed = Math.round((Date.now() - cdpPollStart) / 1000);
+      process.stdout.write(`  [+${elapsed}s] probing Chrome...`);
+      const probe = spawnSync(
+        'python3',
+        [tgScript, '--no-new', botUsername,
+         'Open about:blank. Reply "ready" when done, or "unavailable" if the browser is not working.',
+         '10', runDir],
+        { encoding: 'utf8', timeout: 18_000, env: process.env },
+      );
+      let probeResult: { ok?: boolean; reply?: string } = {};
+      try { probeResult = JSON.parse(probe.stdout || '{}'); } catch { /* ignore */ }
+      if (probeResult.ok && /\bready\b/i.test(probeResult.reply ?? '')) {
+        console.log(` ready (+${elapsed}s)`);
+        cdpReady = true;
+      } else {
+        console.log(` not ready — ${(probeResult.reply ?? '').slice(0, 50) || 'no reply'}`);
+        await new Promise<void>((r) => setTimeout(r, 5_000));
+      }
+    }
+    if (!cdpReady) {
+      console.log(`Chrome not responsive after ${Math.round(CDP_POLL_MAX_MS / 1000)}s — proceeding anyway.`);
+    }
 
     // 4c. Warm-up: confirm Chrome is responding before running real scenarios.
     // Uses --no-new so it doesn't trigger another CDP disconnect cycle.

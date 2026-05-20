@@ -472,10 +472,12 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
     echo "[entrypoint] models.json: $MODEL_NAME already registered, skipping Phase 1"
   else
     echo "[entrypoint] models.json: $MODEL_NAME not found, running Phase 1 to initialize workspace"
-    # Phase 1: start briefly so doctor creates workspace + default models.json
+    # Phase 1: start briefly so doctor creates workspace + default models.json.
+    # Poll for models.json to appear (ready in ~3-5s) instead of sleeping 8s unconditionally.
     node /app/openclaw.mjs gateway --port 18789 &
     GATEWAY_PID=$!
-    sleep 8
+    PHASE1_DEADLINE=$((SECONDS + 12))
+    until [ -f "$MODELS_PATH" ] || [ $SECONDS -gt $PHASE1_DEADLINE ]; do sleep 0.3; done
     kill $GATEWAY_PID 2>/dev/null
     wait $GATEWAY_PID 2>/dev/null || true
 
