@@ -18,9 +18,28 @@
 import { mkdir, readdir, writeFile, readFile, unlink, stat } from 'fs/promises';
 import { join } from 'path';
 import { client, sql } from '../db/index.js';
+import { execOnMachine } from '../providers/fly.js';
 
-const BACKUP_VERSION = '1';
+const BACKUP_VERSION = '2';
 const INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
+ * Base directory for agent-side file snapshots (the .openclaw config dir).
+ * The Fly volume is mounted at $OPENCLAW_STATE_DIR/agents/ only — everything
+ * else in this directory (including cron/) is ephemeral and must be backed up.
+ */
+const OPENCLAW_DIR = '/home/node/.openclaw';
+
+/**
+ * Paths relative to OPENCLAW_DIR to include in the cron file snapshot.
+ * jobs.json is the live cron store; jobs.json.bak is its last-good backup.
+ * Discovered by reading /app/dist/store-0nH_zmSJ.js on a live agent machine:
+ *   resolveDefaultCronStorePath() → path.join(resolveConfigDir(), 'cron', 'jobs.json')
+ */
+const CRON_PATHS = [
+  'cron/jobs.json',
+  'cron/jobs.json.bak',
+] as const;
 
 let backupInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -42,6 +61,12 @@ export interface AgentBackup {
   agentServiceCredentials: unknown[];
   credentials: unknown[];
   policies: unknown[];
+  /**
+   * Agent-side file snapshots keyed by deployment ID.
+   * Value is a base64-encoded tar.gz of CRON_PATHS from the agent's state dir.
+   * Only present in backups with version >= '2'.
+   */
+  agentFiles?: Record<string, string>;
 }
 
 function getBackupDir(): string {
@@ -81,6 +106,35 @@ export async function performBackup(): Promise<BackupMetadata> {
   const createdAt = new Date().toISOString();
   const id = createdAt.replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
 
+  // Snapshot cron files from each running agent machine
+  const agentFiles: Record<string, string> = {};
+  for (const row of deployedAgentsResult.rows) {
+    const da = row as Record<string, unknown>;
+    const deploymentId = da['id'] as string | undefined;
+    const appName = da['fly_app_name'] as string | undefined;
+    const machineId = da['fly_machine_id'] as string | undefined;
+    if (!deploymentId || !appName || !machineId) continue;
+
+    try {
+      const { stdout, exitCode } = await execOnMachine(
+        appName,
+        machineId,
+        [
+          'sh', '-c',
+          `tar czf - --ignore-failed-read -C ${OPENCLAW_DIR} ${CRON_PATHS.join(' ')} 2>/dev/null | base64`,
+        ],
+        { timeout: 30 }
+      );
+      if (exitCode !== 0 || !stdout.trim()) {
+        console.warn(`[backup] No cron files found for deployment ${deploymentId} (exit ${exitCode})`);
+        continue;
+      }
+      agentFiles[deploymentId] = stdout.trim();
+    } catch (err) {
+      console.warn(`[backup] Skipping cron snapshot for deployment ${deploymentId}: ${(err as Error).message}`);
+    }
+  }
+
   const backup: AgentBackup = {
     version: BACKUP_VERSION,
     createdAt,
@@ -91,6 +145,7 @@ export async function performBackup(): Promise<BackupMetadata> {
     agentServiceCredentials: serviceCredsResult.rows,
     credentials: credentialsResult.rows,
     policies: policiesResult.rows,
+    ...(Object.keys(agentFiles).length > 0 ? { agentFiles } : {}),
   };
 
   const filename = `backup-${id}.json`;
@@ -250,6 +305,50 @@ export async function restoreBackup(id: string): Promise<RestoreResult> {
     await insertRows(tx, 'agent_tool_permissions',    backup.agentToolPermissions);
     await insertRows(tx, 'agent_service_credentials', backup.agentServiceCredentials);
   });
+
+  // Restore cron files to agent machines (version 2+ backups only)
+  if (backup.agentFiles && Object.keys(backup.agentFiles).length > 0) {
+    for (const [deploymentId, bundle] of Object.entries(backup.agentFiles)) {
+      const da = (backup.deployedAgents as Array<Record<string, unknown>>)
+        .find((r) => r['id'] === deploymentId);
+      const appName = da?.['fly_app_name'] as string | undefined;
+      const machineId = da?.['fly_machine_id'] as string | undefined;
+      if (!appName || !machineId) {
+        console.warn(`[backup] No machine info for deployment ${deploymentId} — skipping cron restore`);
+        continue;
+      }
+
+      // Wait up to 60s for the machine to be started before pushing files
+      let ready = false;
+      for (let attempt = 0; attempt < 12; attempt++) {
+        try {
+          const { exitCode } = await execOnMachine(appName, machineId, ['true'], { timeout: 5 });
+          if (exitCode === 0) { ready = true; break; }
+        } catch { /* not ready yet */ }
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+      if (!ready) {
+        console.warn(`[backup] Machine ${machineId} not ready after 60s — skipping cron restore for ${deploymentId}`);
+        continue;
+      }
+
+      try {
+        const { exitCode, stderr } = await execOnMachine(
+          appName,
+          machineId,
+          ['sh', '-c', `base64 -d | tar xzf - -C ${OPENCLAW_DIR}`],
+          { timeout: 30, stdin: bundle }
+        );
+        if (exitCode !== 0) {
+          console.warn(`[backup] Cron restore failed for ${deploymentId} (exit ${exitCode}): ${stderr}`);
+        } else {
+          console.log(`[backup] Restored cron files for deployment ${deploymentId}`);
+        }
+      } catch (err) {
+        console.warn(`[backup] Cron restore error for ${deploymentId}: ${(err as Error).message}`);
+      }
+    }
+  }
 
   console.log(`[backup] Restored from ${id} (safety backup: ${safety.id})`);
 

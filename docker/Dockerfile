@@ -53,10 +53,11 @@ COPY chromium-wrapper.sh /usr/local/bin/chromium-wrapper
 COPY write-codex-auth.js /write-codex-auth.js
 COPY workspace/ /workspace-template/
 
-# Bundle Reins knowledge skill so agents can answer platform questions on demand
-RUN mkdir -p /app/skills/reins
+# Bundle skills: Reins platform knowledge + inbox distillation
+RUN mkdir -p /app/skills/reins /app/skills/inbox-distillation
 COPY skills/reins/SKILL.md /app/skills/reins/SKILL.md
-RUN chmod +x /entrypoint.sh /usr/local/bin/chromium-wrapper && chown -R node:node /workspace-template /app/skills/reins
+COPY skills/inbox-distillation/SKILL.md /app/skills/inbox-distillation/SKILL.md
+RUN chmod +x /entrypoint.sh /usr/local/bin/chromium-wrapper && chown -R node:node /workspace-template /app/skills/reins /app/skills/inbox-distillation
 
 # Ensure Xvfb socket directory is writable by node user
 RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix

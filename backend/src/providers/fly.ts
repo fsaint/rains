@@ -101,6 +101,32 @@ async function flyFetch(path: string, options: RequestInit = {}) {
   return res;
 }
 
+/**
+ * Execute a command inside a running Fly machine and return its output.
+ * Used by the backup service to read/write agent-side files.
+ */
+export async function execOnMachine(
+  appName: string,
+  machineId: string,
+  command: string[],
+  opts: { timeout?: number; stdin?: string } = {}
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const res = await flyFetch(`/apps/${appName}/machines/${machineId}/exec`, {
+    method: 'POST',
+    body: JSON.stringify({
+      command,
+      timeout: opts.timeout ?? 30,
+      ...(opts.stdin !== undefined ? { stdin: opts.stdin } : {}),
+    }),
+  });
+  const body = await res.json() as { stdout?: string; stderr?: string; exit_code?: number };
+  return {
+    stdout: body.stdout ?? '',
+    stderr: body.stderr ?? '',
+    exitCode: body.exit_code ?? 0,
+  };
+}
+
 async function flyGraphQL(query: string, variables: Record<string, unknown>) {
   const res = await fetch('https://api.fly.io/graphql', {
     method: 'POST',

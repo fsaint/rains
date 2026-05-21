@@ -26,11 +26,11 @@ Check your memory for the user's preferred schedule (set during first-run setup)
 
 ## VIP List
 
-Check your memory for **IMPORTANT_PEOPLE.md** — this was created during your first-run setup and contains the contacts identified as high priority.
+Call `memory_list({ tag: "vip" })` to retrieve your VIP contacts — people the user has designated as high priority. Each VIP is a `person` entry in memory tagged `#vip`, with their email address stored as a label attribute.
 
-Emails from senders listed in IMPORTANT_PEOPLE.md are **high priority** and must ALWAYS be surfaced to the user immediately — never auto-marked as read.
+Emails from any address matching a VIP person are **high priority** and must ALWAYS be surfaced to the user immediately — never auto-marked as read.
 
-If IMPORTANT_PEOPLE.md is not in memory yet (first-run setup not complete), treat emails from the user's own domain as high priority and surface any email requiring a reply.
+If no `#vip` persons exist yet (first-run setup not complete), treat emails from the user's own domain as high priority and surface any email requiring a reply.
 
 ---
 
