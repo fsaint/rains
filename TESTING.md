@@ -4,6 +4,42 @@ This document covers all test tiers in the Reins project: unit/integration tests
 
 ---
 
+## Environment Rules
+
+These rules are **non-negotiable**. Violating them risks corrupting real user data or breaking the live product for paying users.
+
+### Development Environment (`reins-dev` org)
+
+| Rule | Requirement |
+|------|-------------|
+| **Fly org** | `FLY_ORG=reins-dev` always. **Never `personal`.** Any test that provisions machines must go to `reins-dev`. `FLY_TEST_ORG` must be set explicitly — the code refuses to default to `personal`. |
+| **Telegram bots** | Dev bots only: `@AgentHelmDevOnboarding_bot` (onboarding), `@reins_dev_bot` (approvals). Never use prod bot tokens in dev tests. |
+| **Unit & E2E tests** | Must run against a local backend (`localhost:5001` / `localhost:6173`). Never point Playwright or Vitest at `app.helm.mom`. |
+| **Cleanup** | Every test run **must tear down** all machines it created in `reins-dev`. Check for orphans before and after: `fly machine list --org reins-dev`. |
+
+### Production Environment (`personal` org / `app.helm.mom`)
+
+| Rule | Requirement |
+|------|-------------|
+| **Explicit confirmation** | **Ask the user before running any live test that touches production.** Wait for an explicit "yes, run against prod". |
+| **No agent lifecycle changes** | Tests must not create, redeploy, or destroy agents in the `personal` org. Production machines belong to real users. |
+| **No shared bot webhook changes** | Tests must not call `setWebhook` with prod bot tokens (`REINS_TELEGRAM_BOT_TOKEN`, `ONBOARDING_BOT_TOKEN`). Doing so would break the webhook for all users. |
+| **Unit tests** | Always safe — no environment dependency. Run freely. |
+| **E2E tests (Playwright)** | Must target local or `reins-dev.btv.pw`. Never `app.helm.mom`. |
+| **Live integration tests** | Restricted. Only with explicit confirmation and only for read-only observation (e.g. checking webhook status, querying DB). No agent provisioning. |
+
+### At a Glance
+
+| Test tier | Development | Production |
+|-----------|-------------|------------|
+| Unit (Vitest) | ✅ Free | ✅ Free |
+| E2E (Playwright) | ✅ Local backend only | ❌ Not allowed |
+| Live integration | ✅ Full (reins-dev org) | ⚠️ Read-only, explicit confirmation |
+| Onboarding flow | ✅ Dev bots | ⚠️ Explicit confirmation |
+| Image test | ✅ With FLY_TEST_ORG set | ⚠️ Explicit confirmation |
+
+---
+
 ## Table of Contents
 
 1. [Unit & Integration Tests (Vitest)](#1-unit--integration-tests-vitest)

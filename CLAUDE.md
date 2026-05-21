@@ -42,6 +42,29 @@ If you are unsure whether a command touches production, assume it does and ask.
 
 ---
 
+## ⛔ Production Testing — Explicit Confirmation Required
+
+**NEVER run live tests against production without explicit confirmation from the user.**
+
+The following are forbidden without an explicit "yes, run against prod":
+
+- Running `/integration-test prod` or any live test that provisions agents on the `personal` org
+- Calling `setWebhook` on prod bot tokens (`REINS_TELEGRAM_BOT_TOKEN`, `ONBOARDING_BOT_TOKEN`) — this breaks the webhook for all active users
+- Creating or destroying machines in the `personal` org as part of a test
+- Pointing Playwright or any E2E test at `app.helm.mom`
+
+**Development testing rules (always enforced, no confirmation needed):**
+
+- `FLY_ORG` must be `reins-dev` for all test runs — never `personal`
+- `FLY_TEST_ORG` must be set explicitly; image-test helpers now refuse to default to `personal`
+- Telegram tests use dev bots only: `@AgentHelmDevOnboarding_bot`, `@reins_dev_bot`
+- Unit (Vitest) and E2E (Playwright) tests run against `localhost` only
+- Clean up all test machines from `reins-dev` after every run
+
+See `TESTING.md` → **Environment Rules** for the full matrix.
+
+---
+
 ## Development Workflow
 
 ### Planning First
