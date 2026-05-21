@@ -55,11 +55,17 @@ The following are forbidden without an explicit "yes, run against prod":
 
 **Development testing rules (always enforced, no confirmation needed):**
 
-- `FLY_ORG` must be `reins-dev` for all test runs — never `personal`
-- `FLY_TEST_ORG` must be set explicitly; image-test helpers now refuse to default to `personal`
+- `FLY_ORG` must be `development-808` for all local test runs — never `personal`
+- The local `.env` only contains a `development-808`-scoped `FLY_API_TOKEN` — the `personal` org token lives only in GitHub Actions secrets
 - Telegram tests use dev bots only: `@AgentHelmDevOnboarding_bot`, `@reins_dev_bot`
 - Unit (Vitest) and E2E (Playwright) tests run against `localhost` only
-- Clean up all test machines from `reins-dev` after every run
+- Clean up all test machines from `development-808` after every run
+
+**CI/CD (`.github/workflows/deploy.yml`):**
+
+- Deploys `agenthelm-core` and `agenthelm-onboarding` automatically on every push to `main`
+- Uses `FLY_API_TOKEN` from GitHub Actions secrets (scoped to production orgs)
+- Never run `fly deploy` manually for these apps — let CI handle it
 
 See `TESTING.md` → **Environment Rules** for the full matrix.
 
