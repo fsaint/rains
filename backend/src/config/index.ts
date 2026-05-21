@@ -100,6 +100,9 @@ const ConfigSchema = z.object({
   openclawImage: z.string().optional(),
   hermesImage: z.string().optional(),
 
+  // Admin API — optional Bearer-token for programmatic admin access
+  adminApiKey: z.string().min(32).optional(),
+
   // Telegram notification bot
   reisTelegramBotToken: z.string().optional(),
   reisTelegramWebhookSecret: z.string().optional(),
@@ -161,6 +164,8 @@ function loadConfig(): Config {
     openclawApp: process.env.OPENCLAW_APP ?? yaml.fly?.openclaw_app,
     openclawImage: process.env.OPENCLAW_IMAGE || yaml.fly?.openclaw_image || undefined,
     hermesImage: process.env.HERMES_IMAGE || yaml.fly?.hermes_image || undefined,
+    // Admin API key
+    adminApiKey: process.env.REINS_ADMIN_API_KEY,
     // Telegram
     reisTelegramBotToken: process.env.REINS_TELEGRAM_BOT_TOKEN,
     reisTelegramWebhookSecret: process.env.REINS_TELEGRAM_WEBHOOK_SECRET,
@@ -176,6 +181,16 @@ function loadConfig(): Config {
     posthogApiKey: process.env.POSTHOG_API_KEY,
     posthogHost: process.env.POSTHOG_HOST,
   };
+
+  // Guard: refuse to start with personal-org token outside production.
+  // This prevents dev-machine mistakes from reaching production agents.
+  const flyOrg = raw.flyOrg as string | undefined;
+  if (raw.nodeEnv !== 'production' && flyOrg === 'personal') {
+    console.error('\n⛔  FATAL: FLY_ORG=personal is not allowed in non-production environments.');
+    console.error('   Use the dev org (reins-dev) for local development.');
+    console.error('   The personal-org token lives only in production Fly secrets.\n');
+    process.exit(1);
+  }
 
   const result = ConfigSchema.safeParse(raw);
 

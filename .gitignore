@@ -60,6 +60,9 @@ ios/.xcode.env.local
 tests/integration/.env.test
 tests/integration/.env.prod-test
 
+# Admin tools secrets
+admin/.env.admin
+
 # Image test secrets and run artifacts
 tests/image-test/.env.image-test
 tests/image-test/results/
