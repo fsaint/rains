@@ -602,6 +602,45 @@ export class TelegramNotifier {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Broadcast
+  // -------------------------------------------------------------------------
+
+  async broadcast(message: string, parseMode?: 'Markdown' | 'HTML'): Promise<{
+    sent: number;
+    failed: number;
+    skipped: number;
+    errors: Array<{ chatId: string; email: string; error: string }>;
+  }> {
+    const result = await client.execute(
+      `SELECT id, email, telegram_chat_id FROM users WHERE status = 'active' AND telegram_chat_id IS NOT NULL`
+    );
+
+    let sent = 0;
+    let failed = 0;
+    let skipped = 0;
+    const errors: Array<{ chatId: string; email: string; error: string }> = [];
+
+    for (const row of result.rows) {
+      const chatId = row.telegram_chat_id as string | null;
+      const email = row.email as string;
+
+      if (!chatId) { skipped++; continue; }
+
+      try {
+        await this.sendMessage(chatId, message, parseMode ? { parse_mode: parseMode } : {});
+        sent++;
+      } catch (err) {
+        failed++;
+        errors.push({ chatId, email, error: err instanceof Error ? err.message : String(err) });
+        console.error(`[broadcast] failed to send to ${email} (${chatId}):`, err);
+      }
+    }
+
+    console.log(`[broadcast] done: ${sent} sent, ${failed} failed, ${skipped} skipped`);
+    return { sent, failed, skipped, errors };
+  }
+
   private async getOwner(agentId: string): Promise<{ chatId: string; userId: string } | null> {
     const result = await client.execute({
       sql: `SELECT u.telegram_chat_id, u.id as user_id FROM users u JOIN agents a ON a.user_id = u.id WHERE a.id = ?`,

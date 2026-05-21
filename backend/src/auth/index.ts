@@ -473,6 +473,30 @@ export async function registerAuth(app: FastifyInstance) {
     return { data: { success: true } };
   });
 
+  // --- Broadcast ---
+
+  app.post('/api/admin/broadcast', async (request, reply) => {
+    const session = getSession(request);
+    if (!session || session.role !== 'admin') {
+      return reply.code(403).send({ error: { code: 'FORBIDDEN', message: 'Admin access required' } });
+    }
+
+    const body = request.body as { message?: string; parseMode?: string } | undefined;
+    if (!body?.message?.trim()) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'message is required' } });
+    }
+
+    const parseMode = body.parseMode === 'HTML' ? 'HTML' : body.parseMode === 'Markdown' ? 'Markdown' : undefined;
+
+    const { telegramNotifier } = await import('../notifications/telegram.js');
+    if (!telegramNotifier.isConfigured()) {
+      return reply.code(503).send({ error: { code: 'UNAVAILABLE', message: 'Telegram bot not configured' } });
+    }
+
+    const results = await telegramNotifier.broadcast(body.message.trim(), parseMode);
+    return { data: results };
+  });
+
   // --- Auth guard on /api/* routes ---
 
   app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {

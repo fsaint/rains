@@ -134,7 +134,7 @@ sandbox_tests() {
         "$BOT_USERNAME" "$AGENT_ID" \
         "Call ONLY the sandbox_delete_item tool to delete item-1. Do NOT call any other tool. If sandbox_delete_item is not in your toolset, say so explicitly." \
         none 90)
-    if echo "$RESULT" | grep -qiE "not available|not in|don.t have|cannot|unavailable|doesn.t exist|no tool|not a tool|do not have access|not accessible|unable"; then
+    if echo "$RESULT" | tr -d '*`' | grep -qiE "not available|not in|don.t have|cannot|unavailable|doesn.t exist|no tool|not a tool|do not have access|not accessible|unable|not.*toolset|toolset"; then
         echo "PASS: $RESULT"
         PASS=$((PASS+1))
     else

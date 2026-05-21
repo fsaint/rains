@@ -44,7 +44,9 @@ function getFlyToken(): string {
 }
 
 function getTestOrg(): string {
-  return process.env.FLY_TEST_ORG || 'personal';
+  const org = process.env.FLY_TEST_ORG;
+  if (!org) throw new Error('FLY_TEST_ORG is not set — refusing to default to personal (production) org. Set FLY_TEST_ORG in .env.image-test');
+  return org;
 }
 
 // ---------------------------------------------------------------------------

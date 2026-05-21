@@ -4,6 +4,7 @@
  */
 
 import * as fly from './fly.js';
+import { auditLogger } from '../audit/logger.js';
 
 export interface ProvisionResult {
   machineId: string;
@@ -129,9 +130,12 @@ export async function updateEnv(
   return fly.updateMachineEnv(appName, machineId, envUpdates);
 }
 
-export async function destroy(appName: string, machineId: string) {
+export async function destroy(appName: string, machineId: string, agentId?: string) {
+  console.log(`[destroy] Deleting Fly app ${appName} / machine ${machineId}${agentId ? ` (agent ${agentId})` : ''}`);
   try { await fly.destroyMachine(appName, machineId); } catch { /* ignore */ }
   try { await fly.destroyApp(appName); } catch { /* ignore */ }
+  console.log(`[destroy] Deleted Fly app ${appName}`);
+  await auditLogger.logFlyAction({ agentId, action: 'destroy', app: appName, machineId }).catch(() => {});
 }
 
 export interface LogEntry {

@@ -399,7 +399,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     for (const dep of deployResult.rows) {
       if (dep.fly_app_name && dep.fly_machine_id) {
         try {
-          await provider.destroy(dep.fly_app_name as string, dep.fly_machine_id as string);
+          await provider.destroy(dep.fly_app_name as string, dep.fly_machine_id as string, id);
         } catch (err) {
           console.warn(`Failed to destroy deployment ${dep.fly_app_name}:`, err);
         }
@@ -3120,7 +3120,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     // Shared bot: enforce one-per-user limit — second agent must use their own token
     if (isSharedBot && telegramUserId) {
       const existing = await client.execute({
-        sql: `SELECT id FROM deployed_agents WHERE telegram_user_id = ? AND is_shared_bot = 1 LIMIT 1`,
+        sql: `SELECT id FROM deployed_agents WHERE telegram_user_id = ? AND is_shared_bot = 1 AND status NOT IN ('destroyed', 'error') LIMIT 1`,
         args: [telegramUserId],
       });
       if (existing.rows.length > 0) {
@@ -4332,7 +4332,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     try {
       await provider.destroy(
         deployment.fly_app_name as string,
-        deployment.fly_machine_id as string
+        deployment.fly_machine_id as string,
+        id
       );
 
       const now = new Date().toISOString();
