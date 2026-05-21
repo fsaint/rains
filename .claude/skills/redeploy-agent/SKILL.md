@@ -70,6 +70,8 @@ npx tsx /tmp/do-backup.mts 2>&1
 
 Capture the backup `id` from the output (e.g. `2026-04-09_21-36-39`). If the backup fails, **stop** — do not redeploy.
 
+The backup now also snapshots agent cron/schedule files from each running machine and stores them in the JSON backup under `agentFiles`. The restore step (step 5) will push them back automatically.
+
 ### 4. Redeploy
 
 ```bash
