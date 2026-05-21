@@ -16,6 +16,9 @@ function getFlyToken(): string {
 function getFlyOrg(): string {
   const org = config.flyOrg;
   if (!org) throw new Error('FLY_ORG is required (set via env var or config/production.yaml)');
+  if (config.nodeEnv !== 'production' && org === 'personal') {
+    throw new Error('Refusing to provision: FLY_ORG=personal is not allowed in non-production environments.');
+  }
   return org;
 }
 

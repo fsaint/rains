@@ -1,5 +1,20 @@
 # Production Setup Checklist
 
+## Three-Token Fly Permission Model
+
+Fly access is split across three lanes. Each token is scoped to exactly what its lane needs.
+
+| Lane | Token | Org | Holder | Powers |
+|------|-------|-----|--------|--------|
+| Local dev | `.env` `FLY_API_TOKEN` | `reins-dev` only | Developer laptop | Provision dev agents only |
+| CI/CD deploy | GitHub Actions secret `FLY_API_TOKEN` | `core-191` | GitHub Actions | Deploy `agenthelm-core` + `agenthelm-onboarding` |
+| Production runtime | `agenthelm-core` Fly secret `FLY_API_TOKEN` | `personal` | Running `agenthelm-core` | Provision/destroy agent machines |
+| Admin tools | `admin/.env.admin` `FLY_ADMIN_TOKEN` | `personal` + `core-191` read-only | Developer laptop | Inspect + restart + recover (no destroy) |
+
+**Critical:** the `personal`-org token never lives on a developer's laptop `.env`. It lives only as a Fly secret on the deployed `agenthelm-core`. If the developer needs production ops access, they use the admin tools lane (read-only Fly token + backend API key).
+
+---
+
 ## Google OAuth (GCP)
 
 OAuth client: the same client ID used for dev, or a separate prod client.

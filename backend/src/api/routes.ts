@@ -60,7 +60,7 @@ import {
   deletePendingOAuthFlow,
 } from '../oauth/pending-flows.js';
 import { handleMCPRequest, type MCPRequest } from '../mcp/agent-endpoint.js';
-import { getSession, type SessionPayload } from '../auth/index.js';
+import { getSession, requireAdmin, type SessionPayload } from '../auth/index.js';
 import { getPostHog } from '../analytics/posthog.js';
 import { sendReauthEmail } from '../services/email.js';
 import { performBackup, listBackups, getBackup, restoreBackup } from '../services/agent-backup.js';
@@ -4742,6 +4742,43 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   });
 
   // =========================================================================
+  // ============================================================================
+  // Admin — Agent Fleet View
+  // ============================================================================
+
+  // Joined view of agents + deployed_agents for admin tools and scripts.
+  // Accepts either an admin session cookie or Authorization: Bearer <REINS_ADMIN_API_KEY>.
+  app.get('/api/admin/agents', async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+
+    const result = await client.execute(`
+      SELECT
+        a.id,
+        a.name,
+        a.status AS agent_status,
+        da.id            AS deployment_id,
+        da.fly_app_name,
+        da.fly_machine_id,
+        da.fly_volume_id,
+        da.status        AS deployment_status,
+        da.runtime,
+        da.is_shared_bot,
+        da.region,
+        da.telegram_user_id,
+        da.model_provider,
+        da.model_name,
+        da.management_url,
+        da.created_at    AS deployed_at,
+        da.updated_at    AS deployment_updated_at
+      FROM agents a
+      LEFT JOIN deployed_agents da ON da.agent_id = a.id
+        AND da.status NOT IN ('destroyed', 'error')
+      ORDER BY a.name, da.created_at DESC
+    `);
+
+    return { data: result.rows };
+  });
+
   // Telegram notification link/unlink
   // =========================================================================
 

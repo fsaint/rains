@@ -1,6 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import { timingSafeEqual } from 'crypto';
 import { config } from '../config/index.js';
 import { client } from '../db/index.js';
 import { nanoid } from 'nanoid';
@@ -61,6 +62,36 @@ export function getSession(request: FastifyRequest): SessionPayload | null {
   const token = request.cookies[COOKIE_NAME];
   if (!token) return null;
   return verifySession(token);
+}
+
+/**
+ * Returns true if the request carries admin privileges via either:
+ *  1. A valid admin session cookie, OR
+ *  2. An Authorization: Bearer <REINS_ADMIN_API_KEY> header (when key is configured).
+ *
+ * Use this in admin route handlers instead of a bare getSession() check so that
+ * Python admin scripts can authenticate without a browser session.
+ */
+export function requireAdmin(request: FastifyRequest, reply: FastifyReply): boolean {
+  const session = getSession(request);
+  if (session?.role === 'admin') return true;
+
+  const configuredKey = config.adminApiKey;
+  if (configuredKey) {
+    const authHeader = request.headers.authorization ?? '';
+    const match = authHeader.match(/^Bearer (.+)$/i);
+    if (match) {
+      // Constant-time compare to prevent timing attacks.
+      const provided = Buffer.from(match[1]);
+      const expected = Buffer.from(configuredKey);
+      if (provided.length === expected.length && timingSafeEqual(provided, expected)) {
+        return true;
+      }
+    }
+  }
+
+  reply.code(403).send({ error: { code: 'FORBIDDEN', message: 'Admin access required' } });
+  return false;
 }
 
 /**
@@ -335,10 +366,7 @@ export async function registerAuth(app: FastifyInstance) {
   // --- Admin user management ---
 
   app.get('/api/admin/users', async (request, reply) => {
-    const session = getSession(request);
-    if (!session || session.role !== 'admin') {
-      return reply.code(403).send({ error: { code: 'FORBIDDEN', message: 'Admin access required' } });
-    }
+    if (!requireAdmin(request, reply)) return;
 
     const result = await client.execute(
       `SELECT id, email, name, role, status, created_at, updated_at FROM users WHERE status != 'deleted' ORDER BY created_at DESC`
@@ -348,10 +376,7 @@ export async function registerAuth(app: FastifyInstance) {
   });
 
   app.post('/api/admin/users', async (request, reply) => {
-    const session = getSession(request);
-    if (!session || session.role !== 'admin') {
-      return reply.code(403).send({ error: { code: 'FORBIDDEN', message: 'Admin access required' } });
-    }
+    if (!requireAdmin(request, reply)) return;
 
     const body = request.body as { email?: string; name?: string; password?: string; role?: string } | undefined;
     if (!body?.email || !body?.name || !body?.password) {
@@ -388,10 +413,7 @@ export async function registerAuth(app: FastifyInstance) {
   });
 
   app.patch<{ Params: { id: string } }>('/api/admin/users/:id', async (request, reply) => {
-    const session = getSession(request);
-    if (!session || session.role !== 'admin') {
-      return reply.code(403).send({ error: { code: 'FORBIDDEN', message: 'Admin access required' } });
-    }
+    if (!requireAdmin(request, reply)) return;
 
     const { id } = request.params;
     const body = request.body as { name?: string; role?: string; status?: string } | undefined;
@@ -431,15 +453,13 @@ export async function registerAuth(app: FastifyInstance) {
   });
 
   app.delete<{ Params: { id: string } }>('/api/admin/users/:id', async (request, reply) => {
-    const session = getSession(request);
-    if (!session || session.role !== 'admin') {
-      return reply.code(403).send({ error: { code: 'FORBIDDEN', message: 'Admin access required' } });
-    }
+    if (!requireAdmin(request, reply)) return;
 
     const { id } = request.params;
 
-    // Prevent deleting yourself
-    if (id === session.userId) {
+    // Prevent session users from deleting themselves; Bearer-auth scripts have no userId.
+    const session = getSession(request);
+    if (session && id === session.userId) {
       return reply.code(400).send({ error: { code: 'CANNOT_DELETE_SELF', message: 'Cannot delete your own account' } });
     }
 
@@ -452,10 +472,7 @@ export async function registerAuth(app: FastifyInstance) {
   });
 
   app.post<{ Params: { id: string } }>('/api/admin/users/:id/reset-password', async (request, reply) => {
-    const session = getSession(request);
-    if (!session || session.role !== 'admin') {
-      return reply.code(403).send({ error: { code: 'FORBIDDEN', message: 'Admin access required' } });
-    }
+    if (!requireAdmin(request, reply)) return;
 
     const { id } = request.params;
     const body = request.body as { password?: string } | undefined;
@@ -476,10 +493,7 @@ export async function registerAuth(app: FastifyInstance) {
   // --- Broadcast ---
 
   app.post('/api/admin/broadcast', async (request, reply) => {
-    const session = getSession(request);
-    if (!session || session.role !== 'admin') {
-      return reply.code(403).send({ error: { code: 'FORBIDDEN', message: 'Admin access required' } });
-    }
+    if (!requireAdmin(request, reply)) return;
 
     const body = request.body as { message?: string; parseMode?: string } | undefined;
     if (!body?.message?.trim()) {

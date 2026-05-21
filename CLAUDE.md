@@ -20,6 +20,23 @@ reins/
 └── scripts/           # Build, test, deployment scripts
 ```
 
+## Three-Tier Fly Permission Model
+
+Fly.io access is split across four lanes — each token is scoped to exactly what it needs. Never upgrade a token's scope without updating the table below.
+
+| Lane | Token location | Org access | Can destroy production? |
+|------|---------------|------------|------------------------|
+| **Local dev** | `.env` `FLY_API_TOKEN` | `reins-dev` only | No |
+| **CI/CD** | GitHub Actions `FLY_API_TOKEN` | `core-191` (deploy only) | No |
+| **Production runtime** | `agenthelm-core` Fly secret `FLY_API_TOKEN` | `personal` | Yes — only via dashboard |
+| **Admin tools** | `admin/.env.admin` `FLY_ADMIN_TOKEN` | `personal` + `core-191` read-only | **No — by design** |
+
+**Local `.env` must have `FLY_ORG=reins-dev`.** The backend refuses to start if `FLY_ORG=personal` is set outside production (`NODE_ENV !== production`). Run `scripts/check-local-env.sh` as a pre-flight check.
+
+For production ops/recovery, use the admin tools path: `python3 admin/list_agents.py`, `admin/recover_agent.py`, etc. See `admin/README.md` and `docs/ops/ADMIN_TOOLS.md`.
+
+---
+
 ## ⛔ Production Deployment — Explicit Confirmation Required
 
 **NEVER deploy to production without explicit confirmation from the user.**
@@ -55,16 +72,16 @@ The following are forbidden without an explicit "yes, run against prod":
 
 **Development testing rules (always enforced, no confirmation needed):**
 
-- `FLY_ORG` must be `development-808` for all local test runs — never `personal`
-- The local `.env` only contains a `development-808`-scoped `FLY_API_TOKEN` — the `personal` org token lives only in GitHub Actions secrets
+- `FLY_ORG` must be `reins-dev` for all local test runs — never `personal`
+- The local `.env` only contains a `reins-dev`-scoped `FLY_API_TOKEN` — the `personal`-org token lives only as a Fly secret on `agenthelm-core`
 - Telegram tests use dev bots only: `@AgentHelmDevOnboarding_bot`, `@reins_dev_bot`
 - Unit (Vitest) and E2E (Playwright) tests run against `localhost` only
-- Clean up all test machines from `development-808` after every run
+- Clean up all test machines from `reins-dev` after every run
 
 **CI/CD (`.github/workflows/deploy.yml`):**
 
 - Deploys `agenthelm-core` and `agenthelm-onboarding` automatically on every push to `main`
-- Uses `FLY_API_TOKEN` from GitHub Actions secrets (scoped to production orgs)
+- Uses `FLY_API_TOKEN` from GitHub Actions secrets (scoped to `core-191` org only — not `personal`)
 - Never run `fly deploy` manually for these apps — let CI handle it
 
 See `TESTING.md` → **Environment Rules** for the full matrix.
@@ -460,6 +477,19 @@ VITE_API_URL=http://localhost:3000
 | `/onboarding-flow-test` | "test the onboarding flow", "run the onboarding test", "test signup" | E2E test of Telegram onboarding bot via Playwright MCP on Telegram Web |
 | `/image-test` | "test the image", "test browser", "image test", "verify the browser stack" | Build image variants, deploy ephemeral Fly machines, test browser via Telegram, tear down |
 
+## Admin Tools (Python)
+
+Python scripts for read-mostly production management. See `admin/README.md` and `docs/ops/ADMIN_TOOLS.md`.
+
+```bash
+python3 admin/list_agents.py          # all agents + deployment state
+python3 admin/list_users.py           # all platform users
+python3 admin/exec_machine.py <app> <id> -- <cmd>   # no WireGuard needed
+python3 admin/recover_agent.py <agent_id>            # recreate destroyed Fly machine
+```
+
+Credentials live in `admin/.env.admin` (gitignored). The `FLY_ADMIN_TOKEN` is read-only scoped — **it cannot destroy apps or machines in production**.
+
 ## Telegram Accounts
 
 Five Telegram entities must be wired for a full deployment. Four are bots you own; one is a group.
@@ -785,6 +815,7 @@ fly secrets set --app agenthelm-core \
 | [`docs/ops/PROD_SETUP.md`](docs/ops/PROD_SETUP.md) | Production setup checklist: Google OAuth, Fly secrets, DNS, deployment steps |
 | [`docs/ops/UPDATE_API_KEY.md`](docs/ops/UPDATE_API_KEY.md) | How to update a user's LLM API key in both the DB and the running Fly machine |
 | [`docs/ops/COMMON_ERRORS.md`](docs/ops/COMMON_ERRORS.md) | Recurring operational issues: bot not responding, MiniMax startup, webhook relay 404 |
+| [`docs/ops/ADMIN_TOOLS.md`](docs/ops/ADMIN_TOOLS.md) | Python admin scripts: setup, usage, hard-guard verification, token rotation |
 | [`docs/ops/DNS.md`](docs/ops/DNS.md) | DNS configuration: Vercel records, Fly app hostnames, common mistakes, fix runbook |
 | [`TESTING.md`](TESTING.md) | All test tiers: unit (Vitest), E2E (Playwright), live integration (Telegram/Telethon), onboarding flow |
 | [`docs/TESTING_GUIDE.md`](docs/TESTING_GUIDE.md) | Guide for validating the first operational version of Reins end-to-end |
