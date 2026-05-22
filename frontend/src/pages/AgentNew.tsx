@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Loader2, ChevronDown, ChevronUp, Mail, MessageCircle } from 'lucide-react';
-import { agents, initialPromptTemplates, config as apiConfig, auth, oauth, credentials, permissions, type CreateAndDeployData, type Credential } from '../api/client';
+import { agents, initialPromptTemplates, config as apiConfig, auth, oauth, credentials, permissions, billing, type CreateAndDeployData, type Credential } from '../api/client';
 
 const DEFAULT_SOUL = `You are a helpful AI assistant. Be concise, friendly, and thoughtful in your responses.`;
 
@@ -161,6 +161,12 @@ export default function AgentNew() {
       update({ telegramUserId: knownTelegramUserId });
     }
   }, [knownTelegramUserId]);
+
+  const { data: billingStatus } = useQuery({
+    queryKey: ['billing-status'],
+    queryFn: () => billing.status(),
+  });
+  const canDeploy = billingStatus?.subscribed ?? false;
 
   // When email-calendar is chosen, wire up the soul + initial prompt template
   useEffect(() => {
@@ -1127,17 +1133,31 @@ export default function AgentNew() {
           </button>
 
           {isLastStep ? (
-            <button
-              type="button"
-              onClick={handleSubmit}
-              disabled={createMutation.isPending || createManualMutation.isPending || !canAdvance()}
-              className="flex items-center gap-2 px-6 py-2.5 bg-trust-blue text-white rounded-xl hover:bg-blue-600 transition-colors disabled:opacity-50 text-sm font-medium shadow-sm shadow-trust-blue/20"
-            >
-              {(createMutation.isPending || createManualMutation.isPending) && <Loader2 className="w-4 h-4 animate-spin" />}
-              {agentType === 'manual'
-                ? createManualMutation.isPending ? 'Creating…' : 'Create Agent'
-                : createMutation.isPending ? 'Deploying…' : 'Create & Deploy'}
-            </button>
+            !canDeploy ? (
+              <div className="text-center py-2">
+                <p className="text-sm text-gray-500 mb-3">
+                  A subscription is required to deploy agents.
+                </p>
+                <a
+                  href="/pricing"
+                  className="inline-block bg-indigo-600 text-white px-5 py-2.5 rounded-lg font-semibold hover:bg-indigo-700 transition-colors"
+                >
+                  View plans
+                </a>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={handleSubmit}
+                disabled={createMutation.isPending || createManualMutation.isPending || !canAdvance()}
+                className="flex items-center gap-2 px-6 py-2.5 bg-trust-blue text-white rounded-xl hover:bg-blue-600 transition-colors disabled:opacity-50 text-sm font-medium shadow-sm shadow-trust-blue/20"
+              >
+                {(createMutation.isPending || createManualMutation.isPending) && <Loader2 className="w-4 h-4 animate-spin" />}
+                {agentType === 'manual'
+                  ? createManualMutation.isPending ? 'Creating…' : 'Create Agent'
+                  : createMutation.isPending ? 'Deploying…' : 'Create & Deploy'}
+              </button>
+            )
           ) : (
             <button
               type="button"
