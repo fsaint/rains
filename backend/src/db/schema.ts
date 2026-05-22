@@ -108,6 +108,9 @@ export const spendRecords = pgTable('spend_records', {
   serviceId: text('service_id').notNull(),
   amount: real('amount').notNull(),
   currency: text('currency').default('USD').notNull(),
+  inputTokens: integer('input_tokens').default(0),
+  outputTokens: integer('output_tokens').default(0),
+  billingPeriod: text('billing_period'), // e.g. '2026-05' for monthly grouping
   recordedAt: text('recorded_at').default(sql`now()`).notNull(),
 });
 
@@ -267,6 +270,25 @@ export const deployedAgents = pgTable('deployed_agents', {
   initialPrompt: text('initial_prompt'),
   hasOnboarded: integer('has_onboarded').default(0),
   flyVolumeId: text('fly_volume_id'),
+  // Spend cap config
+  spendLimitDollars: real('spend_limit_dollars'), // monthly dollar cap (BYOK tier)
+  spendLimitTokens: integer('spend_limit_tokens'), // monthly token cap (Managed tier)
+  spendSoftStopped: integer('spend_soft_stopped').default(0), // 1 = tool calls blocked until user intervenes
+  spendAlerted80: integer('spend_alerted_80').default(0), // 1 = 80% alert sent this billing period
+  createdAt: text('created_at').default(sql`now()`).notNull(),
+  updatedAt: text('updated_at').default(sql`now()`).notNull(),
+});
+
+// Stripe subscriptions — one row per user
+export const subscriptions = pgTable('subscriptions', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().unique(),
+  stripeCustomerId: text('stripe_customer_id').notNull(),
+  stripeSubscriptionId: text('stripe_subscription_id'),
+  plan: text('plan').notNull(), // 'byok' | 'managed'
+  status: text('status').notNull().default('active'), // 'active' | 'past_due' | 'canceled'
+  currentPeriodEnd: text('current_period_end'), // ISO-8601
+  graceUntil: text('grace_until'),               // ISO-8601, set on payment failure
   createdAt: text('created_at').default(sql`now()`).notNull(),
   updatedAt: text('updated_at').default(sql`now()`).notNull(),
 });

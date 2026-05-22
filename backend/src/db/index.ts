@@ -217,6 +217,27 @@ export async function initializeDatabase() {
 
   await sql`CREATE INDEX IF NOT EXISTS idx_spend_agent_date ON spend_records(agent_id, recorded_at)`;
 
+  // Spend cap columns on spend_records (migration)
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE spend_records ADD COLUMN IF NOT EXISTS input_tokens INTEGER DEFAULT 0;
+      ALTER TABLE spend_records ADD COLUMN IF NOT EXISTS output_tokens INTEGER DEFAULT 0;
+      ALTER TABLE spend_records ADD COLUMN IF NOT EXISTS billing_period TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
+
+  // Spend cap config on deployed_agents (migration)
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS spend_limit_dollars REAL;
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS spend_limit_tokens INTEGER;
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS spend_soft_stopped INTEGER DEFAULT 0;
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS spend_alerted_80 INTEGER DEFAULT 0;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
+
   await sql`
     CREATE TABLE IF NOT EXISTS mcp_servers (
       id TEXT PRIMARY KEY,
@@ -712,6 +733,24 @@ export async function initializeDatabase() {
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_memory_tags_tag ON memory_tags(tag)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_memory_tags_entry ON memory_tags(entry_id)`;
+
+  // Stripe subscriptions table
+  await sql`
+    CREATE TABLE IF NOT EXISTS subscriptions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL UNIQUE,
+      stripe_customer_id TEXT NOT NULL,
+      stripe_subscription_id TEXT,
+      plan TEXT NOT NULL DEFAULT 'byok',
+      status TEXT NOT NULL DEFAULT 'active',
+      current_period_end TEXT,
+      grace_until TEXT,
+      created_at TEXT DEFAULT now() NOT NULL,
+      updated_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id)`;
 
   // Seed: create admin user if no users exist
   const userCount = await sql`SELECT COUNT(*) as count FROM users`;
