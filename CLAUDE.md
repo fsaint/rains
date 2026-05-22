@@ -728,6 +728,10 @@ No `max_machines_running` constraint needed — onboarding is stateless per requ
 | `OPENCLAW_IMAGE` | Full image ref — set automatically by image-test runner |
 | `HERMES_IMAGE` | Full image ref — set automatically by image-test runner |
 | `ANTHROPIC_API_KEY` | Claude API for any backend LLM calls |
+| `STRIPE_SECRET_KEY` | Stripe API secret key (`sk_test_...` in dev, `sk_live_...` in prod) |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret from the Stripe dashboard (`whsec_...`) |
+| `STRIPE_BYOK_PRICE_ID` | Stripe Price ID for the $19/mo BYOK plan (`price_...`) |
+| `STRIPE_MANAGED_PRICE_ID` | Stripe Price ID for the $119/mo Managed MiniMax plan (`price_...`) |
 
 ### Fly Secrets — agenthelm-onboarding
 
@@ -822,6 +826,7 @@ fly secrets set --app agenthelm-core \
 | [`docs/TESTING_GUIDE.md`](docs/TESTING_GUIDE.md) | Guide for validating the first operational version of Reins end-to-end |
 | [`docs/TELEGRAM_AGENTS.md`](docs/TELEGRAM_AGENTS.md) | Telegram bot assignments and wiring for all platform bots |
 | [`docs/MEMORY.md`](docs/MEMORY.md) | Memory system: architecture, DB schema, MCP tools, REST API, auth, dream process, local dev setup |
+| [`docs/AGENT_MARKET_RESEARCH.md`](docs/AGENT_MARKET_RESEARCH.md) | Reddit market research (May 2026): OpenClaw/Hermes pain points, agent frustrations, competitive dynamics, messaging insights |
 
 ### API Reference
 

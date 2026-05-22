@@ -156,3 +156,19 @@ via Fly secrets and are never touched locally.
 Vite auto-increments the port if the default (5173) is in use. After starting the
 frontend, check the terminal output for the actual port and make sure
 `REINS_DASHBOARD_URL` in `.env` matches it. Common values: `5173`, `6173`, `6174`, `6175`.
+
+---
+
+## 8. Stripe (billing)
+
+1. Create a Stripe account at https://dashboard.stripe.com (use test mode)
+2. Create two Products with monthly recurring Prices:
+   - "BYOK" — $19/mo → copy the Price ID to `STRIPE_BYOK_PRICE_ID` in `.env`
+   - "Managed MiniMax" — $119/mo → copy the Price ID to `STRIPE_MANAGED_PRICE_ID` in `.env`
+3. Copy the test secret key (`sk_test_...`) → `STRIPE_SECRET_KEY` in `.env`
+4. Forward webhooks locally using the Stripe CLI:
+   ```bash
+   stripe listen --forward-to localhost:5001/api/webhooks/stripe
+   ```
+   Copy the webhook signing secret (`whsec_...`) → `STRIPE_WEBHOOK_SECRET` in `.env`
+5. Events handled: `checkout.session.completed`, `invoice.payment_succeeded`, `invoice.payment_failed`, `customer.subscription.deleted`
