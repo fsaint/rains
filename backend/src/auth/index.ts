@@ -541,6 +541,8 @@ export async function registerAuth(app: FastifyInstance) {
       if (!session) {
         // Allow agent gateway tokens to pass through — route handlers validate them
         if (request.headers['x-reins-agent-secret']) return;
+        // Allow Bearer tokens through — requireAdmin() in route handlers validates the key
+        if (config.adminApiKey && request.headers.authorization?.startsWith('Bearer ')) return;
         return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Not authenticated' } });
       }
 
