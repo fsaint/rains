@@ -816,6 +816,7 @@ fly secrets set --app agenthelm-core \
 | [`docs/ops/UPDATE_API_KEY.md`](docs/ops/UPDATE_API_KEY.md) | How to update a user's LLM API key in both the DB and the running Fly machine |
 | [`docs/ops/COMMON_ERRORS.md`](docs/ops/COMMON_ERRORS.md) | Recurring operational issues: bot not responding, MiniMax startup, webhook relay 404 |
 | [`docs/ops/ADMIN_TOOLS.md`](docs/ops/ADMIN_TOOLS.md) | Python admin scripts: setup, usage, hard-guard verification, token rotation |
+| [`docs/ops/ADMIN_PROJECT_HANDOVER.md`](docs/ops/ADMIN_PROJECT_HANDOVER.md) | Full architecture handover for a standalone admin project with core+personal Fly access |
 | [`docs/ops/DNS.md`](docs/ops/DNS.md) | DNS configuration: Vercel records, Fly app hostnames, common mistakes, fix runbook |
 | [`TESTING.md`](TESTING.md) | All test tiers: unit (Vitest), E2E (Playwright), live integration (Telegram/Telethon), onboarding flow |
 | [`docs/TESTING_GUIDE.md`](docs/TESTING_GUIDE.md) | Guide for validating the first operational version of Reins end-to-end |
