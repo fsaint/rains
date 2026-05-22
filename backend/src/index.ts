@@ -8,6 +8,7 @@ import { startBackupLoop, stopBackupLoop } from './services/agent-backup.js';
 import { startTokenMonitor, stopTokenMonitor } from './services/token-monitor.js';
 import { startDreamScheduler } from './services/dream.js';
 import { flyLifecycleMonitor } from './services/fly-lifecycle-monitor.js';
+import { startLapseCron } from './services/billing.js';
 import { telegramNotifier } from './notifications/telegram.js';
 import { initializeNotificationHandlers } from './notifications/handlers.js';
 import { shutdownPostHog } from './analytics/posthog.js';
@@ -64,6 +65,10 @@ app.log.info('Token monitor started');
 // Start nightly dream scheduler (2am UTC)
 startDreamScheduler();
 app.log.info('Dream scheduler started (nightly at 2am UTC)');
+
+// Start billing lapse cron (checks for past_due subscriptions past grace period)
+startLapseCron();
+app.log.info('Billing lapse cron started');
 
 // Start Fly.io machine lifecycle monitor (polls every 60 s; requires FLY_LIFECYCLE_MONITOR_ENABLED=1)
 if (process.env.FLY_LIFECYCLE_MONITOR_ENABLED === '1') {

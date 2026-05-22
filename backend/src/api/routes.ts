@@ -63,11 +63,29 @@ import { handleMCPRequest, type MCPRequest } from '../mcp/agent-endpoint.js';
 import { getSession, requireAdmin, type SessionPayload } from '../auth/index.js';
 import { getPostHog } from '../analytics/posthog.js';
 import { sendReauthEmail } from '../services/email.js';
+import {
+  estimateCost,
+  currentBillingPeriod,
+  checkSpendCap,
+  markSoftStopped,
+  markAlerted80,
+  resetSpendCap,
+  notifySpend80,
+  notifySoftStop,
+} from '../services/spend.js';
 import { performBackup, listBackups, getBackup, restoreBackup } from '../services/agent-backup.js';
 import { isCodexTokenExpired } from '../services/token-monitor.js';
 import { forwardToOpenclaw, handleMyChatMember } from '../services/agent-bot-relay.js';
 import { parseWikilinks, updateLinkIndex, ensureMemoryRoot, getDreamManifest, setEntryParent } from '../services/memory.js';
 import * as provider from '../providers/index.js';
+import Stripe from 'stripe';
+import {
+  getSubscription,
+  upsertSubscription,
+  applyGracePeriod,
+  clearGrace,
+  cancelSubscription,
+} from '../services/billing.js';
 import { nanoid } from 'nanoid';
 import jwt from 'jsonwebtoken';
 import {
@@ -117,6 +135,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
   const OPENAI_AUTH_BASE = 'https://auth.openai.com';
   const OPENAI_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
+
+  function getStripe(): Stripe {
+    const key = process.env.STRIPE_SECRET_KEY;
+    if (!key) throw new Error('STRIPE_SECRET_KEY not set');
+    return new Stripe(key, { apiVersion: '2026-04-22.dahlia' });
+  }
 
   // ========================================================================
   // Health check
@@ -2523,6 +2547,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
 
     const approval = await approvalQueue.get(id);
+
+    // Audit the resolution — approvalId links back to the tool_call 'pending' row
+    if (approval) {
+      auditLogger.logApproval(approval.agentId, approval.tool, 'success', approver, id).catch(() => {});
+    }
+
     return { data: approval };
   });
 
@@ -2539,6 +2569,11 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
 
     const approval = await approvalQueue.get(id);
+
+    if (approval) {
+      auditLogger.logApproval(approval.agentId, approval.tool, 'blocked', approver, id).catch(() => {});
+    }
+
     return { data: approval };
   });
 
@@ -2667,6 +2702,64 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         hasMore: filter.offset + filter.limit < total,
       },
     };
+  });
+
+  /**
+   * Export audit log as CSV — same filters as /api/audit, capped at 10,000 rows.
+   * Returns Content-Disposition: attachment so browsers download immediately.
+   */
+  app.get('/api/audit/export.csv', async (request, reply) => {
+    const query = request.query as Record<string, string>;
+    const userId = getUserId(request);
+
+    const userAgents = await client.execute({
+      sql: `SELECT id FROM agents WHERE user_id = ?`,
+      args: [userId],
+    });
+    const userAgentIds = userAgents.rows.map((r) => r.id as string);
+
+    if (userAgentIds.length === 0) {
+      reply.header('Content-Type', 'text/csv');
+      reply.header('Content-Disposition', 'attachment; filename="audit-log.csv"');
+      return 'id,timestamp,event_type,agent_id,tool,result,duration_ms,metadata\n';
+    }
+
+    const scopedAgentId = query.agentId && userAgentIds.includes(query.agentId) ? query.agentId : null;
+
+    let whereSql = scopedAgentId
+      ? `WHERE agent_id = ?`
+      : `WHERE (agent_id IS NULL OR agent_id IN (${userAgentIds.map(() => '?').join(',')}))`;
+    const whereArgs: (string | number)[] = scopedAgentId ? [scopedAgentId] : [...userAgentIds];
+
+    if (query.eventType) { whereSql += ` AND event_type = ?`; whereArgs.push(query.eventType); }
+    if (query.tool)      { whereSql += ` AND tool = ?`;       whereArgs.push(query.tool); }
+    if (query.result)    { whereSql += ` AND result = ?`;     whereArgs.push(query.result); }
+    if (query.startDate) { whereSql += ` AND timestamp >= ?`; whereArgs.push(query.startDate); }
+    if (query.endDate)   { whereSql += ` AND timestamp <= ?`; whereArgs.push(query.endDate); }
+
+    const rows = await client.execute({
+      sql: `SELECT id, timestamp, event_type, agent_id, tool, result, duration_ms, metadata_json
+            FROM audit_log ${whereSql} ORDER BY timestamp DESC LIMIT 10000`,
+      args: whereArgs,
+    });
+
+    const escape = (v: unknown) => {
+      if (v == null) return '';
+      const s = String(v).replace(/"/g, '""');
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s}"` : s;
+    };
+
+    const lines = [
+      'id,timestamp,event_type,agent_id,tool,result,duration_ms,metadata',
+      ...rows.rows.map((r: any) =>
+        [r.id, r.timestamp, r.event_type, r.agent_id, r.tool, r.result, r.duration_ms, r.metadata_json]
+          .map(escape).join(',')
+      ),
+    ];
+
+    reply.header('Content-Type', 'text/csv');
+    reply.header('Content-Disposition', 'attachment; filename="audit-log.csv"');
+    return lines.join('\n');
   });
 
   // ========================================================================
@@ -4603,38 +4696,93 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   });
 
   /**
-   * Usage webhook — receives token usage reports from deployed agents
+   * Usage webhook — receives token usage reports from deployed agents.
+   * Accepts two formats:
+   *   OpenClaw: { userId: string, inputTokens: number, outputTokens: number }
+   *   Hermes:   { instanceId: string, tokens: number, source: 'hermes' }
+   *             where tokens is an estimated total (input+output combined)
    */
   app.post('/api/webhooks/usage', async (request) => {
-    const body = request.body as {
-      userId: string; // deployment ID
-      inputTokens: number;
-      outputTokens: number;
-    };
+    const body = request.body as Record<string, unknown>;
 
-    if (body?.userId && (body.inputTokens || body.outputTokens)) {
-      // Look up which agent this deployment belongs to
-      const deployment = await client.execute({
-        sql: `SELECT agent_id FROM deployed_agents WHERE id = ?`,
-        args: [body.userId],
-      });
+    // Normalise both formats to a common shape
+    const deploymentId = (body?.userId ?? body?.instanceId) as string | undefined;
+    let inputTokens: number;
+    let outputTokens: number;
 
-      if (deployment.rows.length > 0) {
-        const agentId = deployment.rows[0].agent_id as string;
-        const now = new Date().toISOString();
-
-        // Rough cost estimate (Sonnet pricing)
-        const inputCost = (body.inputTokens / 1_000_000) * 3;
-        const outputCost = (body.outputTokens / 1_000_000) * 15;
-        const totalCost = inputCost + outputCost;
-
-        await client.execute({
-          sql: `INSERT INTO spend_records (agent_id, service_id, amount, currency, recorded_at) VALUES (?, ?, ?, 'USD', ?)`,
-          args: [agentId, 'llm', totalCost, now],
-        });
-      }
+    if (body?.source === 'hermes' && typeof body?.tokens === 'number') {
+      // Hermes sends an estimated total; split 40/60 input/output (typical chat ratio)
+      const total = body.tokens as number;
+      inputTokens  = Math.round(total * 0.4);
+      outputTokens = Math.round(total * 0.6);
+    } else {
+      inputTokens  = Number(body?.inputTokens  ?? 0);
+      outputTokens = Number(body?.outputTokens ?? 0);
     }
 
+    if (!deploymentId || (inputTokens === 0 && outputTokens === 0)) {
+      return { ok: true };
+    }
+
+    // Look up agent and model for this deployment
+    const deployment = await client.execute({
+      sql: `SELECT agent_id, model_provider, model_name FROM deployed_agents WHERE id = ?`,
+      args: [deploymentId],
+    });
+
+    if (deployment.rows.length === 0) return { ok: true };
+
+    const agentId       = deployment.rows[0].agent_id       as string;
+    const modelProvider = deployment.rows[0].model_provider as string | null;
+    const modelName     = deployment.rows[0].model_name     as string | null;
+    const now           = new Date().toISOString();
+    const bp            = currentBillingPeriod();
+
+    const totalCost = estimateCost(inputTokens, outputTokens, modelProvider, modelName);
+
+    await client.execute({
+      sql: `INSERT INTO spend_records
+              (agent_id, service_id, amount, currency, input_tokens, output_tokens, billing_period, recorded_at)
+            VALUES (?, 'llm', ?, 'USD', ?, ?, ?, ?)`,
+      args: [agentId, totalCost, inputTokens, outputTokens, bp, now],
+    });
+
+    // Enforce spend caps asynchronously — don't block the response
+    setImmediate(async () => {
+      try {
+        const cap = await checkSpendCap(client, agentId);
+        if (cap.shouldSoftStop) {
+          await markSoftStopped(client, agentId);
+          await notifySoftStop(client, config, agentId);
+        } else if (cap.shouldAlert80) {
+          await markAlerted80(client, agentId);
+          await notifySpend80(client, config, agentId, cap.percentUsed);
+        }
+      } catch (err) {
+        console.warn('[spend] cap enforcement error (non-fatal):', err instanceof Error ? err.message : err);
+      }
+    });
+
+    return { ok: true };
+  });
+
+  /**
+   * Reset spend cap soft-stop for an agent (user raises their budget or resets)
+   */
+  app.post('/api/agents/:agentId/spend/reset', async (request, reply) => {
+    const session = await getSession(request);
+    if (!session) return reply.code(401).send({ error: 'Unauthorized' });
+
+    const { agentId } = request.params as { agentId: string };
+
+    // Verify ownership
+    const ownership = await client.execute({
+      sql: `SELECT id FROM agents WHERE id = ? AND user_id = ?`,
+      args: [agentId, session.userId],
+    });
+    if (ownership.rows.length === 0) return reply.code(403).send({ error: 'Forbidden' });
+
+    await resetSpendCap(client, agentId);
     return { ok: true };
   });
 
@@ -5420,5 +5568,147 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.status(status).send({ error: result.error });
     }
     return reply.send({ data: result });
+  });
+
+  // ========================================================================
+  // Billing endpoints
+  // ========================================================================
+
+  app.get('/api/billing/status', async (request, reply) => {
+    const session = getSession(request);
+    if (!session) return reply.code(401).send({ error: 'Unauthorized' });
+    const sub = await getSubscription(session.userId);
+    if (!sub) return reply.send({ data: { subscribed: false } });
+    const withinGrace = sub.status === 'past_due' && !!sub.graceUntil && new Date(sub.graceUntil) > new Date();
+    return reply.send({
+      data: {
+        subscribed: sub.status === 'active' || withinGrace,
+        plan: sub.plan,
+        status: sub.status,
+        currentPeriodEnd: sub.currentPeriodEnd,
+        graceUntil: sub.graceUntil,
+      },
+    });
+  });
+
+  app.post('/api/billing/checkout', async (request, reply) => {
+    const session = getSession(request);
+    if (!session) return reply.code(401).send({ error: 'Unauthorized' });
+    const body = request.body as { plan: 'byok' | 'managed'; successUrl: string; cancelUrl: string };
+    if (body.plan !== 'byok' && body.plan !== 'managed') {
+      return reply.code(400).send({ error: 'plan must be byok or managed' });
+    }
+    const priceId = body.plan === 'byok'
+      ? process.env.STRIPE_BYOK_PRICE_ID
+      : process.env.STRIPE_MANAGED_PRICE_ID;
+    if (!priceId) return reply.code(500).send({ error: `STRIPE_${body.plan.toUpperCase()}_PRICE_ID not configured` });
+
+    const existingSub = await getSubscription(session.userId);
+    const userRow = await client.execute({ sql: `SELECT email FROM users WHERE id = ?`, args: [session.userId] });
+    const userEmail = userRow.rows[0]?.email as string | undefined;
+
+    const stripe = getStripe();
+    const checkoutSession = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      line_items: [{ price: priceId, quantity: 1 }],
+      ...(existingSub?.stripeCustomerId
+        ? { customer: existingSub.stripeCustomerId }
+        : { customer_email: userEmail }),
+      client_reference_id: session.userId,
+      success_url: body.successUrl,
+      cancel_url: body.cancelUrl,
+      metadata: { userId: session.userId, plan: body.plan },
+      subscription_data: { metadata: { userId: session.userId, plan: body.plan } },
+    });
+
+    return reply.send({ data: { url: checkoutSession.url } });
+  });
+
+  app.post('/api/billing/portal', async (request, reply) => {
+    const session = getSession(request);
+    if (!session) return reply.code(401).send({ error: 'Unauthorized' });
+    const body = request.body as { returnUrl: string };
+    const sub = await getSubscription(session.userId);
+    if (!sub) return reply.code(404).send({ error: 'No subscription found' });
+    const stripe = getStripe();
+    const portalSession = await stripe.billingPortal.sessions.create({
+      customer: sub.stripeCustomerId,
+      return_url: body.returnUrl,
+    });
+    return reply.send({ data: { url: portalSession.url } });
+  });
+
+  // Stripe webhook — raw body required for signature verification
+  app.register(async (instance) => {
+    instance.addContentTypeParser('application/json', { parseAs: 'buffer' }, (_req, body, done) => {
+      done(null, body);
+    });
+
+    instance.post('/api/webhooks/stripe', async (request, reply) => {
+      const sig = request.headers['stripe-signature'] as string;
+      const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+      if (!webhookSecret) return reply.code(500).send({ error: 'STRIPE_WEBHOOK_SECRET not set' });
+
+      let event: Stripe.Event;
+      try {
+        const stripe = getStripe();
+        event = stripe.webhooks.constructEvent(request.body as Buffer, sig, webhookSecret);
+      } catch (err) {
+        return reply.code(400).send({ error: `Webhook signature verification failed: ${err instanceof Error ? err.message : err}` });
+      }
+
+      try {
+        switch (event.type) {
+          case 'checkout.session.completed': {
+            const cs = event.data.object as Stripe.Checkout.Session;
+            if (cs.mode !== 'subscription') break;
+            const userId = cs.metadata?.userId ?? cs.client_reference_id;
+            const plan = (cs.metadata?.plan ?? 'byok') as 'byok' | 'managed';
+            if (!userId) { console.warn('[stripe-webhook] checkout.session.completed missing userId'); break; }
+            const stripe2 = getStripe();
+            const stripeSub = await stripe2.subscriptions.retrieve(cs.subscription as string);
+            const periodEnd = stripeSub.items.data[0]?.current_period_end ?? 0;
+            await upsertSubscription({
+              userId,
+              stripeCustomerId: cs.customer as string,
+              stripeSubscriptionId: cs.subscription as string,
+              plan,
+              status: 'active',
+              currentPeriodEnd: new Date(periodEnd * 1000).toISOString(),
+            });
+            break;
+          }
+          case 'invoice.payment_succeeded': {
+            const inv = event.data.object as Stripe.Invoice;
+            const subIdSucceeded = inv.parent?.subscription_details?.subscription;
+            const subIdSucceededStr = typeof subIdSucceeded === 'string' ? subIdSucceeded : subIdSucceeded?.id;
+            if (subIdSucceededStr) await clearGrace(subIdSucceededStr);
+            break;
+          }
+          case 'invoice.payment_failed': {
+            const inv = event.data.object as Stripe.Invoice;
+            const subIdFailed = inv.parent?.subscription_details?.subscription;
+            const subIdFailedStr = typeof subIdFailed === 'string' ? subIdFailed : subIdFailed?.id;
+            if (subIdFailedStr) {
+              await applyGracePeriod(subIdFailedStr);
+              console.warn(`[stripe-webhook] payment failed for sub ${subIdFailedStr} — grace period started`);
+            }
+            break;
+          }
+          case 'customer.subscription.deleted': {
+            const stripeSub = event.data.object as Stripe.Subscription;
+            await cancelSubscription(stripeSub.id);
+            break;
+          }
+          default:
+            break;
+        }
+      } catch (err) {
+        console.error('[stripe-webhook] handler error:', err instanceof Error ? err.stack : err);
+        return reply.code(500).send({ error: 'Handler error' });
+      }
+
+      return reply.send({ received: true });
+    });
   });
 };
