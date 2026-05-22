@@ -85,6 +85,7 @@ import {
   applyGracePeriod,
   clearGrace,
   cancelSubscription,
+  checkDeployGate,
 } from '../services/billing.js';
 import { nanoid } from 'nanoid';
 import jwt from 'jsonwebtoken';
@@ -3176,6 +3177,17 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Not authenticated' } });
       }
       userId = session.userId;
+
+      // Subscription gate — only for dashboard users (onboarding bot bypasses this)
+      const gate = await checkDeployGate(userId);
+      if (!gate.allowed) {
+        const msg = gate.reason === 'no_subscription'
+          ? 'A subscription is required to deploy agents. Visit /pricing to subscribe.'
+          : gate.reason === 'lapsed'
+          ? 'Your subscription has lapsed. Please renew to deploy agents.'
+          : 'Your subscription is inactive. Please renew at /billing.';
+        return reply.code(402).send({ error: msg, reason: gate.reason });
+      }
     }
 
     // Validate telegram group chat IDs (must be numeric) and topic prompts
