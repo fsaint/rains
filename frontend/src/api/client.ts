@@ -823,3 +823,44 @@ export const memory = {
   removeAttribute: (attrId: string) =>
     request<{ ok: boolean }>(`/memory/attributes/${attrId}`, { method: 'DELETE' }),
 };
+
+export const billing = {
+  async status(): Promise<{
+    subscribed: boolean;
+    plan?: 'byok' | 'managed';
+    status?: string;
+    currentPeriodEnd?: string;
+    graceUntil?: string;
+  }> {
+    const res = await fetch('/api/billing/status');
+    if (!res.ok) throw new Error('Failed to fetch billing status');
+    const body = await res.json() as { data: { subscribed: boolean; plan?: 'byok' | 'managed'; status?: string; currentPeriodEnd?: string; graceUntil?: string } };
+    return body.data;
+  },
+
+  async startCheckout(plan: 'byok' | 'managed'): Promise<string> {
+    const res = await fetch('/api/billing/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        plan,
+        successUrl: `${window.location.origin}/billing?success=1`,
+        cancelUrl: `${window.location.origin}/pricing`,
+      }),
+    });
+    if (!res.ok) throw new Error('Failed to create checkout session');
+    const body = await res.json() as { data: { url: string } };
+    return body.data.url;
+  },
+
+  async openPortal(): Promise<string> {
+    const res = await fetch('/api/billing/portal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ returnUrl: `${window.location.origin}/billing` }),
+    });
+    if (!res.ok) throw new Error('Failed to create portal session');
+    const body = await res.json() as { data: { url: string } };
+    return body.data.url;
+  },
+};
