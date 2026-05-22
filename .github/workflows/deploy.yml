@@ -18,7 +18,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Build agenthelm-onboarding
+        run: npm install && npm run build
+        working-directory: onboarding
 
       - name: Deploy agenthelm-core (backend + frontend)
         run: flyctl deploy --app agenthelm-core --dockerfile Dockerfile --remote-only
