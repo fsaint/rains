@@ -22,22 +22,24 @@ The admin toolset is structurally incapable of destroying production apps or mac
 
 ### 1. Mint the Fly token
 
+Fly.io has a `readonly` token type (`fly tokens create readonly`) that limits access to reading an org and its resources:
+
 ```bash
 # Read-only token for personal org (agent machines)
-fly tokens create org-read --org personal \
-  --name "admin-tools-personal-read" --expiry 720h
+fly tokens create readonly --org personal \
+  --name "admin-tools-personal" --expiry 720h
 
 # Read-only token for core-191 org (platform apps)
-fly tokens create org-read --org core-191 \
-  --name "admin-tools-core191-read" --expiry 720h
+fly tokens create readonly --org core-191 \
+  --name "admin-tools-core191" --expiry 720h
 ```
 
 Combine both output token strings, comma-separated, as `FLY_ADMIN_TOKEN`.
 
-> If Fly's `org-read` scope does not allow machine exec or restart, you may need
-> a scoped `deploy` token instead. Always verify with the hard-guard test below
-> before shipping: `curl -X DELETE -H "Authorization: Bearer $FLY_ADMIN_TOKEN" ...`
-> must return 403.
+> **Note on exec/restart:** `readonly` tokens may not permit `POST /exec` or `POST /restart`.
+> If those return 403, use `fly tokens create deploy --app <app>` for specific apps where
+> you need exec/restart access. The code-side allowlist in `admin/lib/fly.py` (Layer B)
+> is the primary no-destroy guarantee regardless of token scope.
 
 ### 2. Set up credentials file
 
