@@ -43,7 +43,15 @@ All Fly API calls require:
 Authorization: Bearer <FLY_ADMIN_TOKEN>
 ```
 
-The admin project token needs access to both `personal` (agent machines) and `core-191` (platform apps). Unlike the read-only token used in the main repo's `admin/` scripts, this project's token needs full write access for machine creation and app destruction.
+The admin project token needs access to both `personal` (agent machines) and `core-191` (platform apps). Unlike the read-only token used in the main repo's `admin/` scripts, this project's token needs write access for machine creation and, optionally, app destruction.
+
+Fly.io token types (verified via `fly tokens create --help`):
+- `fly tokens create readonly --org <slug>` — read-only org access (list/describe, no mutations)
+- `fly tokens create deploy --app <app>` — deploy a specific app
+- `fly tokens create org --org <slug>` — full org access (create, destroy, deploy)
+- `fly tokens create machine-exec --app <app>` — scoped to exec on a specific app's machines
+
+For the admin project, start with `readonly` and add `org` scope only if destruction capability is explicitly required.
 
 Fly API base: `https://api.machines.dev/v1`
 Fly GraphQL: `https://api.fly.io/graphql`
