@@ -24,6 +24,8 @@ import { sendReauthEmail } from '../services/email.js';
 import { config } from '../config/index.js';
 import { getPostHog } from '../analytics/posthog.js';
 import type { DeferredJobResult } from '@reins/shared';
+import { checkSpendCap } from '../services/spend.js';
+import { checkUsageGate } from '../services/billing.js';
 
 // ============================================================================
 // Types
@@ -890,6 +892,53 @@ async function handleCallTool(
         content: [{ type: 'text', text: 'First-run setup marked complete. These instructions will not appear again.' }],
       },
     };
+  }
+
+  // Subscription lapse gate (lenient: only blocks if subscription explicitly lapsed/canceled)
+  {
+    const agentOwner = await client.execute({
+      sql: `SELECT a.user_id FROM agents a
+            JOIN deployed_agents da ON da.agent_id = a.id
+            WHERE da.id = ?
+            LIMIT 1`,
+      args: [agentId],
+    });
+    const ownerId = agentOwner.rows[0]?.user_id as string | undefined;
+    if (ownerId) {
+      const subGate = await checkUsageGate(ownerId);
+      if (!subGate.allowed) {
+        await auditLogger.logToolCall(agentId, toolName, args, 'blocked', Date.now() - startTime, { reason: 'subscription_lapsed' });
+        return {
+          jsonrpc: '2.0',
+          id: requestId,
+          result: {
+            content: [{ type: 'text', text: 'Your subscription has lapsed. Your agent cannot make tool calls until you renew. Visit the dashboard to manage your billing.' }],
+            isError: true,
+          },
+        };
+      }
+    }
+  }
+
+  // Check spend cap — block external tool calls when agent is soft-stopped
+  {
+    const cap = await checkSpendCap(client, agentId);
+    if (!cap.allowed) {
+      await auditLogger.logToolCall(agentId, toolName, args, 'blocked', Date.now() - startTime, {
+        reason: 'spend_cap_exceeded',
+      });
+      return {
+        jsonrpc: '2.0',
+        id: requestId,
+        result: {
+          content: [{
+            type: 'text',
+            text: 'Your agent has reached its monthly spend cap and cannot execute tools. Please inform the user and ask them to raise the cap in the AgentHelm dashboard.',
+          }],
+          isError: true,
+        },
+      };
+    }
   }
 
   // Determine service type from tool name
