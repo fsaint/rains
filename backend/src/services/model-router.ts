@@ -27,7 +27,10 @@ const PROVIDER_BASE_URL: Partial<Record<Provider, string>> = {
 };
 
 export function encryptKey(plaintext: string): string {
-  const key = Buffer.from(process.env.REINS_ENCRYPTION_KEY!, 'hex');
+  const keyHex = process.env.REINS_ENCRYPTION_KEY;
+  if (!keyHex) throw new Error('REINS_ENCRYPTION_KEY not set');
+  const key = Buffer.from(keyHex, 'hex');
+  if (key.length !== 32) throw new Error(`Encryption key must be 32 bytes, got ${key.length}`);
   const iv = randomBytes(16);
   const cipher = createCipheriv('aes-256-gcm', key, iv);
   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
@@ -36,11 +39,15 @@ export function encryptKey(plaintext: string): string {
 }
 
 export function decryptKey(ciphertext: string): string {
-  const [ivHex, encHex, tagHex] = ciphertext.split(':');
-  const key = Buffer.from(process.env.REINS_ENCRYPTION_KEY!, 'hex');
+  const parts = ciphertext.split(':');
+  if (parts.length !== 3) throw new Error('Invalid ciphertext format');
+  const [ivHex, encHex, tagHex] = parts;
+  const keyHex = process.env.REINS_ENCRYPTION_KEY;
+  if (!keyHex) throw new Error('REINS_ENCRYPTION_KEY not set');
+  const key = Buffer.from(keyHex, 'hex');
   const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'));
   decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
-  return decipher.update(Buffer.from(encHex, 'hex')).toString() + decipher.final('utf8');
+  return decipher.update(Buffer.from(encHex, 'hex')).toString('utf8') + decipher.final('utf8');
 }
 
 function maskKey(key: string): string {
@@ -59,7 +66,10 @@ export async function listModelConfigs(agentId: string): Promise<ModelConfig[]> 
     provider: r.provider as Provider,
     modelName: r.model_name as string,
     role: r.role as ModelRole,
-    apiKeyMasked: maskKey(decryptKey(r.api_key_encrypted as string)),
+    apiKeyMasked: (() => {
+      try { return maskKey(decryptKey(r.api_key_encrypted as string)); }
+      catch { return '***'; }
+    })(),
     createdAt: r.created_at as string,
   }));
 }
