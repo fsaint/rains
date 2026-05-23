@@ -87,6 +87,7 @@ import {
   cancelSubscription,
   checkDeployGate,
 } from '../services/billing.js';
+import { listModelConfigs, upsertModelConfig, deleteModelConfig } from '../services/model-router.js';
 import { nanoid } from 'nanoid';
 import jwt from 'jsonwebtoken';
 import {
@@ -465,6 +466,65 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     return reply.code(204).send();
   });
+
+  // ========================================================================
+  // Agent Model Configuration
+  // ========================================================================
+
+  app.get('/api/agents/:id/models', async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+
+    const { id } = request.params as { id: string };
+    const configs = await listModelConfigs(id);
+    return reply.send(configs);
+  });
+
+  app.put(
+    '/api/agents/:id/models',
+    async (request, reply) => {
+      if (!requireAdmin(request, reply)) return;
+
+      const { id } = request.params as { id: string };
+      const { provider, modelName, role, apiKey } = request.body as {
+        provider: string;
+        modelName: string;
+        role: string;
+        apiKey: string;
+      };
+
+      if (!['anthropic', 'openai', 'minimax', 'google'].includes(provider)) {
+        return reply.status(400).send({ error: 'Invalid provider' });
+      }
+      if (!['strong', 'weak'].includes(role)) {
+        return reply.status(400).send({ error: 'role must be strong or weak' });
+      }
+      if (!modelName || !apiKey) {
+        return reply.status(400).send({ error: 'modelName and apiKey are required' });
+      }
+
+      await upsertModelConfig({
+        agentId: id,
+        provider: provider as any,
+        modelName,
+        role: role as any,
+        apiKey,
+      });
+
+      const configs = await listModelConfigs(id);
+      return reply.send(configs);
+    }
+  );
+
+  app.delete(
+    '/api/agents/:id/models/:configId',
+    async (request, reply) => {
+      if (!requireAdmin(request, reply)) return;
+
+      const { id, configId } = request.params as { id: string; configId: string };
+      await deleteModelConfig(configId, id);
+      return reply.send({ ok: true });
+    }
+  );
 
   // ========================================================================
   // Agent Self-Registration
