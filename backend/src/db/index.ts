@@ -766,6 +766,7 @@ export async function initializeDatabase() {
       UNIQUE(agent_id, role)
     )
   `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_agent_model_configs_agent ON agent_model_configs(agent_id)`;
 
   // Seed: create admin user if no users exist
   const userCount = await sql`SELECT COUNT(*) as count FROM users`;
