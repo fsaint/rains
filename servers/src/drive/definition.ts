@@ -18,7 +18,7 @@ export const definition: ServiceDefinitionWithTools = {
   },
   tools: driveTools,
   permissions: {
-    read: ['drive_list_files', 'drive_get_file', 'drive_read_file', 'drive_search'],
+    read: ['drive_list_files', 'drive_get_file', 'drive_read_file', 'drive_search', 'drive_list_shared_drives'],
     write: ['drive_create_file', 'drive_update_file'],
     blocked: ['drive_share_file', 'drive_delete_file'],
   },

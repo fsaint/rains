@@ -31,6 +31,12 @@ export const definition: ServiceDefinitionWithTools = {
     write: [
       'github_create_issue',
       'github_comment_on_issue',
+      'github_create_branch',
+      'github_create_or_update_file',
+      'github_create_tree',
+      'github_create_commit',
+      'github_update_ref',
+      'github_create_pull_request',
     ],
     blocked: [],
   },
