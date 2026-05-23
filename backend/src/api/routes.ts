@@ -1870,6 +1870,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       serviceScopes = [
         'https://www.googleapis.com/auth/gmail.readonly',
         'https://www.googleapis.com/auth/gmail.compose',
+        'https://www.googleapis.com/auth/gmail.modify',
         'https://www.googleapis.com/auth/drive.readonly',
         'https://www.googleapis.com/auth/calendar.events',
       ];
@@ -1942,7 +1943,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       client_id: config.googleClientId,
       redirect_uri: config.googleRedirectUri,
       response_type: 'code',
-      scope: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.readonly',
+      scope: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.readonly',
       state,
       access_type: 'offline',
       prompt: 'consent',

@@ -15,6 +15,7 @@ export const definition: ServiceDefinitionWithTools = {
     oauthScopes: [
       'https://www.googleapis.com/auth/gmail.readonly',
       'https://www.googleapis.com/auth/gmail.compose',
+      'https://www.googleapis.com/auth/gmail.modify',
     ],
   },
   tools: gmailTools,

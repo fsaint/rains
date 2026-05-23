@@ -81,6 +81,7 @@ export class GmailServer extends BaseServer {
     const defaultScopes = [
       GoogleScopes.Gmail.READONLY,
       GoogleScopes.Gmail.COMPOSE,
+      GoogleScopes.Gmail.MODIFY,
     ];
 
     return this.oauthHandler.getAuthUrl(
