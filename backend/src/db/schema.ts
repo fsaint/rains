@@ -292,3 +292,15 @@ export const subscriptions = pgTable('subscriptions', {
   createdAt: text('created_at').default(sql`now()`).notNull(),
   updatedAt: text('updated_at').default(sql`now()`).notNull(),
 });
+
+// Agent model configurations — per-agent model routing
+export const agentModelConfigs = pgTable('agent_model_configs', {
+  id: text('id').primaryKey(),
+  agentId: text('agent_id').notNull(),
+  provider: text('provider').notNull(),    // 'anthropic' | 'openai' | 'minimax' | 'google'
+  modelName: text('model_name').notNull(), // e.g. 'claude-opus-4-7', 'gpt-4o'
+  role: text('role').notNull(),            // 'strong' | 'weak'
+  apiKeyEncrypted: text('api_key_encrypted').notNull(),
+  createdAt: text('created_at').default(sql`now()`).notNull(),
+  updatedAt: text('updated_at').default(sql`now()`).notNull(),
+});

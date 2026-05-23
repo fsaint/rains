@@ -752,6 +752,21 @@ export async function initializeDatabase() {
 
   await sql`CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id)`;
 
+  // Agent model configs table — per-agent model routing
+  await sql`
+    CREATE TABLE IF NOT EXISTS agent_model_configs (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      model_name TEXT NOT NULL,
+      role TEXT NOT NULL,
+      api_key_encrypted TEXT NOT NULL,
+      created_at TEXT DEFAULT now() NOT NULL,
+      updated_at TEXT DEFAULT now() NOT NULL,
+      UNIQUE(agent_id, role)
+    )
+  `;
+
   // Seed: create admin user if no users exist
   const userCount = await sql`SELECT COUNT(*) as count FROM users`;
   const count = Number(userCount[0]?.count ?? 0);
