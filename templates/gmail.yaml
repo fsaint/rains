@@ -11,6 +11,8 @@ tools:
     - gmail_get_message
     - gmail_search
     - gmail_list_labels
+    - gmail_create_label
+    - gmail_delete_label
     - gmail_create_draft
 
   # Operations requiring human approval
