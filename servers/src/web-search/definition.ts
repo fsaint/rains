@@ -16,7 +16,7 @@ export const definition: ServiceDefinitionWithTools = {
   },
   tools: webSearchTools,
   permissions: {
-    read: ['web_search', 'web_search_news', 'web_search_images'],
+    read: ['web_search', 'web_search_news', 'web_search_images', 'web_search_suggest'],
     write: [],
     blocked: [],
   },

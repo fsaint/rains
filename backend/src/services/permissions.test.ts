@@ -120,8 +120,14 @@ import {
   getCredentialsForService,
   setPermissionLevel,
   getPermissionLevel,
-  PERMISSION_PRESETS,
 } from './permissions.js';
+
+// Tool lists mirroring the vi.mock('@reins/servers') registry above
+const MOCK_GMAIL_PERMISSIONS = {
+  read: ['gmail_list_accounts', 'gmail_list_messages', 'gmail_get_message', 'gmail_search', 'gmail_list_labels'],
+  write: ['gmail_create_draft', 'gmail_send_draft'],
+  blocked: ['gmail_send_message', 'gmail_delete_message'],
+};
 
 // Helper to create mock query chain
 function mockQueryChain(result: unknown, hasWhere = true) {
@@ -524,25 +530,6 @@ describe('Permission Service', () => {
     });
   });
 
-  describe('PERMISSION_PRESETS', () => {
-    it('should have presets for all services', () => {
-      expect(PERMISSION_PRESETS.gmail).toBeDefined();
-      expect(PERMISSION_PRESETS.drive).toBeDefined();
-      expect(PERMISSION_PRESETS.calendar).toBeDefined();
-      expect(PERMISSION_PRESETS['web-search']).toBeDefined();
-      expect(PERMISSION_PRESETS.browser).toBeDefined();
-    });
-
-    it('should categorize gmail tools correctly', () => {
-      const gmail = PERMISSION_PRESETS.gmail;
-      expect(gmail.read).toContain('gmail_list_messages');
-      expect(gmail.read).toContain('gmail_get_message');
-      expect(gmail.write).toContain('gmail_create_draft');
-      expect(gmail.blocked).toContain('gmail_send_message');
-      expect(gmail.blocked).toContain('gmail_delete_message');
-    });
-  });
-
   describe('setPermissionLevel', () => {
     it('should throw error for custom level', async () => {
       await expect(setPermissionLevel('agent-1', 'gmail', 'custom'))
@@ -562,7 +549,7 @@ describe('Permission Service', () => {
       // setServiceAccess now uses client.execute (no db.select/insert needed for it)
 
       // Mock setToolPermission calls - need multiple mocks for each tool
-      const gmailTools = [...PERMISSION_PRESETS.gmail.read, ...PERMISSION_PRESETS.gmail.write, ...PERMISSION_PRESETS.gmail.blocked];
+      const gmailTools = [...MOCK_GMAIL_PERMISSIONS.read, ...MOCK_GMAIL_PERMISSIONS.write, ...MOCK_GMAIL_PERMISSIONS.blocked];
       for (let i = 0; i < gmailTools.length; i++) {
         vi.mocked(db.select).mockReturnValueOnce({
           from: vi.fn().mockReturnValue({
@@ -595,17 +582,17 @@ describe('Permission Service', () => {
     });
 
     it('should return read if write tools are blocked', async () => {
-      const readTools = PERMISSION_PRESETS.gmail.read.reduce((acc, tool) => {
+      const readTools = MOCK_GMAIL_PERMISSIONS.read.reduce((acc, tool) => {
         acc[tool] = 'allow';
         return acc;
       }, {} as Record<string, string>);
 
-      const writeTools = PERMISSION_PRESETS.gmail.write.reduce((acc, tool) => {
+      const writeTools = MOCK_GMAIL_PERMISSIONS.write.reduce((acc, tool) => {
         acc[tool] = 'block';
         return acc;
       }, {} as Record<string, string>);
 
-      const blockedTools = PERMISSION_PRESETS.gmail.blocked.reduce((acc, tool) => {
+      const blockedTools = MOCK_GMAIL_PERMISSIONS.blocked.reduce((acc, tool) => {
         acc[tool] = 'block';
         return acc;
       }, {} as Record<string, string>);
@@ -634,17 +621,17 @@ describe('Permission Service', () => {
     });
 
     it('should return full if write tools require approval', async () => {
-      const readTools = PERMISSION_PRESETS.gmail.read.reduce((acc, tool) => {
+      const readTools = MOCK_GMAIL_PERMISSIONS.read.reduce((acc, tool) => {
         acc[tool] = 'allow';
         return acc;
       }, {} as Record<string, string>);
 
-      const writeTools = PERMISSION_PRESETS.gmail.write.reduce((acc, tool) => {
+      const writeTools = MOCK_GMAIL_PERMISSIONS.write.reduce((acc, tool) => {
         acc[tool] = 'require_approval';
         return acc;
       }, {} as Record<string, string>);
 
-      const blockedTools = PERMISSION_PRESETS.gmail.blocked.reduce((acc, tool) => {
+      const blockedTools = MOCK_GMAIL_PERMISSIONS.blocked.reduce((acc, tool) => {
         acc[tool] = 'block';
         return acc;
       }, {} as Record<string, string>);

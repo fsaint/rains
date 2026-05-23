@@ -14,8 +14,8 @@ export const definition: ServiceDefinitionWithTools = {
   },
   tools: browserTools,
   permissions: {
-    read: ['browser_navigate', 'browser_screenshot', 'browser_get_content', 'browser_close'],
-    write: ['browser_click', 'browser_type'],
+    read: ['browser_navigate', 'browser_screenshot', 'browser_get_content', 'browser_close', 'browser_list_sessions', 'browser_wait_for_selector'],
+    write: ['browser_click', 'browser_type', 'browser_create_session', 'browser_scroll', 'browser_close_session'],
     blocked: ['browser_evaluate'],
   },
   permissionDescriptions: {

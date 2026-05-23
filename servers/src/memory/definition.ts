@@ -20,12 +20,15 @@ export const definition: ServiceDefinitionWithTools = {
       'memory_list',
       'memory_get',
       'memory_dream',
+      'memory_list_tags',
     ],
     write: [
       'memory_create',
       'memory_update',
       'memory_relate',
       'memory_set_parent',
+      'memory_add_attribute',
+      'memory_remove_attribute',
     ],
     defaultWritePermission: 'allow',
     blocked: [

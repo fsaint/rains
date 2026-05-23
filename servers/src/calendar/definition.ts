@@ -18,7 +18,7 @@ export const definition: ServiceDefinitionWithTools = {
   },
   tools: calendarTools,
   permissions: {
-    read: ['calendar_list_events', 'calendar_get_event', 'calendar_search_events', 'calendar_list_calendars'],
+    read: ['calendar_list_events', 'calendar_get_event', 'calendar_search_events', 'calendar_list_calendars', 'calendar_get_free_busy'],
     write: ['calendar_create_event', 'calendar_update_event'],
     blocked: ['calendar_delete_event'],
   },
