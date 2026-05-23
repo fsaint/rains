@@ -583,3 +583,63 @@ export async function handleListLabels(
     data: { labels },
   };
 }
+
+/**
+ * Create label handler
+ */
+export async function handleCreateLabel(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const gmail = getGmailClient(context);
+
+  const name = args.name as string;
+  const messageListVisibility = (args.messageListVisibility as string) ?? 'show';
+  const labelListVisibility = (args.labelListVisibility as string) ?? 'labelShow';
+
+  const response = await gmail.users.labels.create({
+    userId: 'me',
+    requestBody: {
+      name,
+      messageListVisibility: messageListVisibility as 'hide' | 'show',
+      labelListVisibility: labelListVisibility as 'labelHide' | 'labelShow' | 'labelShowIfUnread',
+    },
+  });
+
+  return {
+    success: true,
+    data: {
+      id: response.data.id,
+      name: response.data.name,
+      type: response.data.type,
+      messageListVisibility: response.data.messageListVisibility,
+      labelListVisibility: response.data.labelListVisibility,
+      message: `Label "${name}" created successfully`,
+    },
+  };
+}
+
+/**
+ * Delete label handler
+ */
+export async function handleDeleteLabel(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const gmail = getGmailClient(context);
+
+  const labelId = args.labelId as string;
+
+  await gmail.users.labels.delete({
+    userId: 'me',
+    id: labelId,
+  });
+
+  return {
+    success: true,
+    data: {
+      labelId,
+      message: 'Label deleted successfully',
+    },
+  };
+}

@@ -13,6 +13,8 @@ import {
   handleSendMessage,
   handleDeleteMessage,
   handleListLabels,
+  handleCreateLabel,
+  handleDeleteLabel,
   handleListAccounts,
   handleMarkRead,
   handleArchive,
@@ -392,6 +394,57 @@ export const modifyLabelsTool: ToolDefinition = {
 };
 
 /**
+ * Create a label
+ */
+export const createLabelTool: ToolDefinition = {
+  name: 'gmail_create_label',
+  description: 'Create a new label in the mailbox.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      ...accountProperty,
+      name: {
+        type: 'string',
+        description: 'The display name of the label',
+      },
+      messageListVisibility: {
+        type: 'string',
+        enum: ['show', 'hide'],
+        description: 'Whether to show messages with this label in the message list (default: show)',
+      },
+      labelListVisibility: {
+        type: 'string',
+        enum: ['labelShow', 'labelShowIfUnread', 'labelHide'],
+        description: 'Visibility of the label in the label list (default: labelShow)',
+      },
+    },
+    required: ['name'],
+  },
+  handler: handleCreateLabel,
+};
+
+/**
+ * Delete a label
+ */
+export const deleteLabelTool: ToolDefinition = {
+  name: 'gmail_delete_label',
+  description:
+    'Delete a label from the mailbox. System labels (INBOX, SENT, etc.) cannot be deleted. Use gmail_list_labels to get label IDs.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      ...accountProperty,
+      labelId: {
+        type: 'string',
+        description: 'The ID of the label to delete',
+      },
+    },
+    required: ['labelId'],
+  },
+  handler: handleDeleteLabel,
+};
+
+/**
  * All Gmail tools
  */
 export const gmailTools: ToolDefinition[] = [
@@ -405,6 +458,8 @@ export const gmailTools: ToolDefinition[] = [
   sendMessageTool,
   deleteMessageTool,
   listLabelsTool,
+  createLabelTool,
+  deleteLabelTool,
   markReadTool,
   archiveTool,
   modifyLabelsTool,

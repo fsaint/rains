@@ -10,6 +10,8 @@
  * - gmail_send_message: Send email directly (blocked by default)
  * - gmail_delete_message: Delete a message (blocked by default)
  * - gmail_list_labels: List all labels
+ * - gmail_create_label: Create a new label
+ * - gmail_delete_label: Delete a label
  */
 
 import { BaseServer } from '../common/base-server.js';
