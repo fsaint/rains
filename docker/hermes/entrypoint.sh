@@ -24,9 +24,31 @@ fi
 PROVIDER="${MODEL_PROVIDER:-anthropic}"
 MODEL_ID="${MODEL_NAME:-claude-sonnet-4-5}"
 
+# OpenAI-compatible endpoint — includes RouteLLM sidecar (localhost:4001) and other custom endpoints
+if [ -n "$OPENAI_BASE_URL" ] && [ -n "$OPENAI_API_KEY" ]; then
+  PROVIDER="custom"
+  cat > ~/.hermes/config.yaml <<YAML
+model:
+  provider: "custom"
+  default: "${MODEL_NAME:-router-mf-0.11785}"
+  base_url: "${OPENAI_BASE_URL}"
+  api_key: "${OPENAI_API_KEY}"
+
+terminal:
+  backend: "local"
+  timeout: 180
+
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+
+agent:
+  max_turns: 60
+  reasoning_effort: "none"
+YAML
 # OpenAI requires the 'custom' provider (Hermes has no plain 'openai' provider).
 # Reasoning must be disabled so standard GPT models work without org verification.
-if [ "$MODEL_PROVIDER" = "openai" ] && [ -n "$OPENAI_API_KEY" ]; then
+elif [ "$MODEL_PROVIDER" = "openai" ] && [ -n "$OPENAI_API_KEY" ]; then
   PROVIDER="custom"
   cat > ~/.hermes/config.yaml <<YAML
 model:
@@ -130,17 +152,14 @@ if [ -f /knowledge.md ]; then
   cat /knowledge.md >> ~/.hermes/SOUL.md
 fi
 
-# ── Usage reporter (background) ────────────────────────────────────────────────
+# ── Usage reporter hook (agent:end) ────────────────────────────────────────────
+# Install the usage_reporter hook so Hermes fires it after each agent turn.
+# The hook estimates token usage from message/response length and reports to
+# the AgentHelm backend, which enforces spend caps.
 if [ -n "$USAGE_CALLBACK_URL" ] && [ -n "$INSTANCE_USER_ID" ]; then
-  (
-    while true; do
-      sleep 300
-      curl -sf -X POST "$USAGE_CALLBACK_URL" \
-        -H "Content-Type: application/json" \
-        -d "{\"instanceId\":\"${INSTANCE_USER_ID}\",\"tokens\":0,\"source\":\"hermes\"}" \
-        >/dev/null 2>&1 || true
-    done
-  ) &
+  mkdir -p ~/.hermes/hooks/usage_reporter
+  cp /agenthelm-hooks/usage_reporter/HOOK.yaml ~/.hermes/hooks/usage_reporter/HOOK.yaml
+  cp /agenthelm-hooks/usage_reporter/handler.py ~/.hermes/hooks/usage_reporter/handler.py
 fi
 
 # ── Health check server (background) ───────────────────────────────────────────
@@ -161,5 +180,46 @@ with socketserver.TCPServer(('0.0.0.0', 8000), H) as s:
 echo "[hermes] config.yaml:"
 cat ~/.hermes/config.yaml
 echo ""
+
+# ── Model router sidecar (LiteLLM + RouteLLM) ──────────────────────────────
+if [ -n "$LITELLM_CONFIG_B64" ]; then
+  echo "[model-router] Decoding LiteLLM config..."
+  echo "$LITELLM_CONFIG_B64" | base64 -d > /tmp/litellm_config.json
+
+  python3 - <<'PYEOF'
+import json
+with open('/tmp/litellm_config.json') as f:
+    config = json.load(f)
+lines = ['model_list:']
+for m in config.get('model_list', []):
+    lines.append(f"  - model_name: {m['model_name']}")
+    lines.append(f"    litellm_params:")
+    for k, v in m.get('litellm_params', {}).items():
+        lines.append(f"      {k}: \"{v}\"")
+with open('/tmp/litellm_config.yaml', 'w') as f:
+    f.write('\n'.join(lines) + '\n')
+PYEOF
+
+  python3 -m litellm --config /tmp/litellm_config.yaml --port 4000 --host 127.0.0.1 &
+  for i in $(seq 1 30); do
+    curl -sf http://127.0.0.1:4000/health > /dev/null 2>&1 && break
+    sleep 1
+  done
+  echo "[model-router] LiteLLM ready"
+
+  OPENAI_API_KEY=routellm-internal OPENAI_API_BASE=http://127.0.0.1:4000/v1 \
+    python3 -m routellm.openai_server \
+      --routers mf \
+      --strong-model openai/strong \
+      --weak-model openai/weak \
+      --host 127.0.0.1 --port 4001 &
+  for i in $(seq 1 30); do
+    curl -sf http://127.0.0.1:4001/health > /dev/null 2>&1 && break
+    sleep 1
+  done
+  echo "[model-router] RouteLLM ready"
+fi
+# ───────────────────────────────────────────────────────────────────────────
+
 echo "[hermes] Starting gateway..."
 exec hermes gateway run --accept-hooks

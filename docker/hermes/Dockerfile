@@ -13,12 +13,16 @@ RUN git clone https://github.com/NousResearch/hermes-agent.git /hermes
 WORKDIR /hermes
 RUN uv pip install --system -e ".[all]"
 
+# Install LiteLLM + RouteLLM for the per-agent model routing sidecar
+RUN uv pip install --system litellm routellm
+
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 COPY knowledge.md /knowledge.md
 COPY BOOTSTRAP.md /agenthelm-templates/BOOTSTRAP.md
 COPY MEMORY_POLICY.md /agenthelm-templates/MEMORY_POLICY.md
 COPY skills/ /agenthelm-skills/
+COPY hooks/ /agenthelm-hooks/
 
 EXPOSE 8000
 EXPOSE 8787
