@@ -824,6 +824,27 @@ export const memory = {
     request<{ ok: boolean }>(`/memory/attributes/${attrId}`, { method: 'DELETE' }),
 };
 
+// Model Router types
+export interface ModelConfig {
+  id: string;
+  agentId: string;
+  provider: string;
+  modelName: string;
+  role: 'strong' | 'weak';
+  apiKeyMasked: string;
+  createdAt: string;
+}
+
+// Model Router API
+export const models = {
+  list: (agentId: string) =>
+    request<ModelConfig[]>(`/agents/${agentId}/models`),
+  upsert: (agentId: string, data: { provider: string; modelName: string; role: string; apiKey: string }) =>
+    request<ModelConfig[]>(`/agents/${agentId}/models`, { method: 'PUT', body: JSON.stringify(data) }),
+  delete: (agentId: string, configId: string) =>
+    request<{ ok: boolean }>(`/agents/${agentId}/models/${configId}`, { method: 'DELETE' }),
+};
+
 export const billing = {
   async status(): Promise<{
     subscribed: boolean;

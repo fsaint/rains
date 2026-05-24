@@ -23,10 +23,133 @@ import {
   ChevronRight,
   Hash,
 } from 'lucide-react';
-import { agents, type AgentDetail as AgentDetailType, type TelegramGroup } from '../api/client';
+import { agents, models as modelsApi, type AgentDetail as AgentDetailType, type TelegramGroup } from '../api/client';
 import LogViewer from '../components/LogViewer';
 import ChatModal from '../components/ChatModal';
 import { CodexDeviceFlow } from '../components/CodexDeviceFlow';
+
+// ─── Model Router Section ─────────────────────────────────────────────────────
+
+const PROVIDERS = [
+  { value: 'anthropic', label: 'Anthropic (Claude)' },
+  { value: 'openai',    label: 'OpenAI (GPT-4o)' },
+  { value: 'minimax',   label: 'MiniMax (M2.7)' },
+  { value: 'google',    label: 'Google (Gemini)' },
+] as const;
+
+const MODEL_SUGGESTIONS: Record<string, string[]> = {
+  anthropic: ['claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
+  openai:    ['gpt-4o', 'o3-mini'],
+  minimax:   ['MiniMax-M2.7'],
+  google:    ['gemini-2.5-flash', 'gemini-2.5-pro'],
+};
+
+function ModelsSection({ agentId }: { agentId: string }) {
+  const queryClient = useQueryClient();
+  const { data: configs = [] } = useQuery({
+    queryKey: ['agent-models', agentId],
+    queryFn: () => modelsApi.list(agentId),
+  });
+  const [form, setForm] = useState({ provider: 'anthropic', modelName: '', role: 'strong', apiKey: '' });
+
+  const upsertMutation = useMutation({
+    mutationFn: () => modelsApi.upsert(agentId, form),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['agent-models', agentId], data);
+      setForm((f) => ({ ...f, apiKey: '' }));
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (configId: string) => modelsApi.delete(agentId, configId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agent-models', agentId] }),
+  });
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="text-sm font-semibold text-gray-900">Model Router</h3>
+        <p className="text-xs text-gray-500 mt-0.5">
+          Configure a <strong>strong</strong> model (complex queries) and a <strong>weak</strong> model (simple queries).
+          RouteLLM routes automatically. One model handles everything.{' '}
+          <strong className="text-amber-600">Requires redeploy to activate.</strong>
+        </p>
+      </div>
+
+      {configs.length > 0 && (
+        <div className="space-y-1.5">
+          {configs.map((c) => (
+            <div key={c.id} className="flex items-center justify-between rounded border border-gray-200 px-3 py-2 text-sm bg-gray-50">
+              <div className="flex items-center gap-2.5">
+                <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${c.role === 'strong' ? 'bg-violet-100 text-violet-700' : 'bg-sky-100 text-sky-700'}`}>
+                  {c.role}
+                </span>
+                <span className="font-mono text-gray-800 text-xs">{c.provider}/{c.modelName}</span>
+                <span className="font-mono text-gray-400 text-xs">{c.apiKeyMasked}</span>
+              </div>
+              <button onClick={() => deleteMutation.mutate(c.id)} className="text-xs text-gray-400 hover:text-red-500">
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="rounded border border-dashed border-gray-300 p-3 space-y-3">
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Role</label>
+            <select value={form.role} onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))}
+              className="w-full text-sm rounded border border-gray-300 px-2 py-1.5">
+              <option value="strong">Strong (complex)</option>
+              <option value="weak">Weak (simple)</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Provider</label>
+            <select value={form.provider}
+              onChange={(e) => setForm((f) => ({ ...f, provider: e.target.value, modelName: '' }))}
+              className="w-full text-sm rounded border border-gray-300 px-2 py-1.5">
+              {PROVIDERS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Model name</label>
+            <input list={`models-${form.provider}`} value={form.modelName}
+              onChange={(e) => setForm((f) => ({ ...f, modelName: e.target.value }))}
+              placeholder={MODEL_SUGGESTIONS[form.provider]?.[0] ?? 'model-name'}
+              className="w-full text-sm font-mono rounded border border-gray-300 px-2 py-1.5" />
+            <datalist id={`models-${form.provider}`}>
+              {MODEL_SUGGESTIONS[form.provider]?.map((m) => <option key={m} value={m} />)}
+            </datalist>
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">API key</label>
+            <input type="password" value={form.apiKey}
+              onChange={(e) => setForm((f) => ({ ...f, apiKey: e.target.value }))}
+              placeholder="sk-..."
+              className="w-full text-sm font-mono rounded border border-gray-300 px-2 py-1.5" />
+          </div>
+        </div>
+        <div className="flex justify-end">
+          <button onClick={() => upsertMutation.mutate()}
+            disabled={!form.modelName || !form.apiKey || upsertMutation.isPending}
+            className="rounded bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50">
+            {upsertMutation.isPending ? 'Saving...' : 'Save model'}
+          </button>
+        </div>
+      </div>
+
+      {configs.length > 0 && (
+        <p className="text-xs text-gray-400">
+          Redeploy the agent to activate the updated model configuration.
+        </p>
+      )}
+    </div>
+  );
+}
 
 // ─── Telegram Groups Section ──────────────────────────────────────────────────
 
@@ -669,6 +792,13 @@ export default function AgentDetail() {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Model Router */}
+        {dep && (
+          <div className="bg-white rounded-xl border border-gray-100 p-5">
+            <ModelsSection agentId={agent.id} />
           </div>
         )}
 
