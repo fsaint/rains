@@ -28,6 +28,7 @@ export interface TelegramGroup {
 
 export interface ProvisionOpts {
   instanceId: string;
+  agentId?: string;
   telegramToken: string;
   telegramUserId?: string;
   mcpConfigs: object[];

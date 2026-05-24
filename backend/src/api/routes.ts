@@ -3414,6 +3414,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     try {
       const result = await provider.provision({
         instanceId: deploymentId,
+        agentId,
         telegramToken: effectiveTelegramToken,
         telegramUserId: telegramUserId ?? undefined,
         mcpConfigs,

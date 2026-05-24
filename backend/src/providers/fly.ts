@@ -4,6 +4,7 @@
  */
 
 import { config } from '../config/index.js';
+import { getLiteLLMConfigB64 } from '../services/model-router.js';
 
 const FLY_API_BASE = 'https://api.machines.dev/v1';
 
@@ -189,6 +190,7 @@ export async function createApp(instanceId: string): Promise<string> {
 export interface CreateMachineOpts {
   appName: string;
   instanceId: string;
+  agentId?: string;
   telegramToken: string;
   telegramUserId?: string;
   mcpConfigs: object[];
@@ -253,6 +255,7 @@ export async function updateMachine(
 
 async function buildMachineConfig(opts: CreateMachineOpts) {
   const reinsUrl = config.publicUrl || config.dashboardUrl || '';
+  const liteLLMConfigB64 = opts.agentId ? await getLiteLLMConfigB64(opts.agentId) : null;
 
   return {
     image: await getOpenClawImage(),
@@ -272,14 +275,25 @@ async function buildMachineConfig(opts: CreateMachineOpts) {
       NODE_OPTIONS: '--max-old-space-size=3072 --dns-result-order=ipv4first',
       ...(opts.soulMd ? { SOUL_MD: opts.soulMd } : {}),
       ...(opts.telegramUserId ? { TELEGRAM_TRUSTED_USER: opts.telegramUserId } : {}),
-      ...(opts.modelName ? { MODEL_NAME: opts.modelName } : {}),
-      // MiniMax via OpenAI-compatible API: translate to 'openai' provider + base URL
-      // (OpenClaw's native minimax extension uses /anthropic endpoint that doesn't support M2.7+)
-      ...(opts.modelProvider === 'minimax'
-        ? { MODEL_PROVIDER: 'openai', OPENAI_BASE_URL: 'https://api.minimax.io/v1', OPENAI_API_KEY: opts.openaiApiKey || process.env.MINIMAX_API_KEY || '' }
-        : { ...(opts.modelProvider ? { MODEL_PROVIDER: opts.modelProvider } : {}), ...(opts.openaiApiKey ? { OPENAI_API_KEY: opts.openaiApiKey } : {}) }),
+      ...(liteLLMConfigB64
+        ? {
+            LITELLM_CONFIG_B64: liteLLMConfigB64,
+            ROUTELLM_THRESHOLD: '0.11785',
+            MODEL_PROVIDER: 'openai',
+            MODEL_NAME: 'router-mf-0.11785',
+            OPENAI_BASE_URL: 'http://127.0.0.1:4001/v1',
+            OPENAI_API_KEY: 'reins-router',
+          }
+        : {
+            ...(opts.modelName ? { MODEL_NAME: opts.modelName } : {}),
+            // MiniMax via OpenAI-compatible API: translate to 'openai' provider + base URL
+            // (OpenClaw's native minimax extension uses /anthropic endpoint that doesn't support M2.7+)
+            ...(opts.modelProvider === 'minimax'
+              ? { MODEL_PROVIDER: 'openai', OPENAI_BASE_URL: 'https://api.minimax.io/v1', OPENAI_API_KEY: opts.openaiApiKey || process.env.MINIMAX_API_KEY || '' }
+              : { ...(opts.modelProvider ? { MODEL_PROVIDER: opts.modelProvider } : {}), ...(opts.openaiApiKey ? { OPENAI_API_KEY: opts.openaiApiKey } : {}) }),
+            ...(opts.modelCredentials ? { OPENAI_CODEX_TOKENS: opts.modelCredentials } : {}),
+          }),
       ...(opts.telegramGroups && opts.telegramGroups.length > 0 ? { TELEGRAM_GROUPS_JSON: JSON.stringify(opts.telegramGroups) } : {}),
-      ...(opts.modelCredentials ? { OPENAI_CODEX_TOKENS: opts.modelCredentials } : {}),
       THINKING_DEFAULT: opts.thinkingDefault ?? 'medium',
       // Webhook relay: OpenClaw registers with Telegram pointing to Reins; Reins forwards back here on port 8443
       // Shared bot: all machines point to the shared-bot endpoint instead of per-deployment URL
@@ -329,6 +343,7 @@ async function buildMachineConfig(opts: CreateMachineOpts) {
 
 async function buildHermesMachineConfig(opts: CreateMachineOpts) {
   const reinsUrl = config.publicUrl || config.dashboardUrl || '';
+  const liteLLMConfigB64 = opts.agentId ? await getLiteLLMConfigB64(opts.agentId) : null;
 
   return {
     image: getHermesImage(),
@@ -348,10 +363,21 @@ async function buildHermesMachineConfig(opts: CreateMachineOpts) {
         TELEGRAM_WEBHOOK_PORT: '8787',
       } : {}),
       ...(opts.soulMd ? { HERMES_PERSONA: opts.soulMd } : {}),
-      ...(opts.modelProvider ? { MODEL_PROVIDER: opts.modelProvider } : {}),
-      ...(opts.modelName ? { MODEL_NAME: opts.modelName } : {}),
-      ...(opts.modelProvider === 'minimax' ? { MINIMAX_API_KEY: opts.openaiApiKey || process.env.MINIMAX_API_KEY || '' } : {}),
-      ...(opts.modelProvider === 'openai' && opts.openaiApiKey ? { OPENAI_API_KEY: opts.openaiApiKey } : {}),
+      ...(liteLLMConfigB64
+        ? {
+            LITELLM_CONFIG_B64: liteLLMConfigB64,
+            ROUTELLM_THRESHOLD: '0.11785',
+            MODEL_PROVIDER: 'openai',
+            MODEL_NAME: 'router-mf-0.11785',
+            OPENAI_BASE_URL: 'http://127.0.0.1:4001/v1',
+            OPENAI_API_KEY: 'reins-router',
+          }
+        : {
+            ...(opts.modelProvider ? { MODEL_PROVIDER: opts.modelProvider } : {}),
+            ...(opts.modelName ? { MODEL_NAME: opts.modelName } : {}),
+            ...(opts.modelProvider === 'minimax' ? { MINIMAX_API_KEY: opts.openaiApiKey || process.env.MINIMAX_API_KEY || '' } : {}),
+            ...(opts.modelProvider === 'openai' && opts.openaiApiKey ? { OPENAI_API_KEY: opts.openaiApiKey } : {}),
+          }),
       ANTHROPIC_API_KEY: (opts.modelProvider === 'anthropic' && opts.openaiApiKey) ? opts.openaiApiKey : (process.env.ANTHROPIC_API_KEY ?? ''),
       MCP_CONFIG: JSON.stringify(opts.mcpConfigs),
       HERMES_GATEWAY_TOKEN: opts.gatewayToken,
