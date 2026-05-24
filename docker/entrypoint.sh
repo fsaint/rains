@@ -511,7 +511,12 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
     fs.mkdirSync(path.dirname(modelsPath), { recursive: true });
     fs.writeFileSync(modelsPath, JSON.stringify(data, null, 2));
     console.log('[entrypoint] models.json: registered openai/' + modelName + ' at ' + baseUrl);
-  " 2>&1 || true
+  " 2>&1
+  INJECT_EXIT=$?
+  if [ $INJECT_EXIT -ne 0 ]; then
+    echo "[entrypoint] FATAL: models.json injection failed (exit $INJECT_EXIT). Agent cannot start with an unregistered model." >&2
+    exit 1
+  fi
 
   exec node /app/openclaw.mjs gateway --port 18789
 else
