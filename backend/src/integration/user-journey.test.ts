@@ -91,6 +91,24 @@ vi.mock('@reins/servers', () => ({
   serviceRegistry: new Map(),
   getServiceTypeFromToolName: () => null,
 }));
+vi.mock('../services/billing.js', () => ({
+  getSubscription: vi.fn().mockResolvedValue(null),
+  upsertSubscription: vi.fn().mockResolvedValue(undefined),
+  applyGracePeriod: vi.fn().mockResolvedValue(undefined),
+  clearGrace: vi.fn().mockResolvedValue(undefined),
+  cancelSubscription: vi.fn().mockResolvedValue(undefined),
+  checkDeployGate: vi.fn().mockResolvedValue({ allowed: true }),
+}));
+vi.mock('../services/spend.js', () => ({
+  checkSpendCap: vi.fn().mockResolvedValue({ allowed: true }),
+  recordUsage: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('../services/model-router.js', () => ({
+  listModelConfigs: vi.fn().mockResolvedValue([]),
+  upsertModelConfig: vi.fn().mockResolvedValue(undefined),
+  deleteModelConfig: vi.fn().mockResolvedValue(undefined),
+  getLiteLLMConfigB64: vi.fn().mockResolvedValue(null),
+}));
 
 // ── Import app factory after mocks are in place ───────────────────────────────
 

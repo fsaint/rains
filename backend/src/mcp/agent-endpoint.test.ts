@@ -192,6 +192,18 @@ vi.mock('../credentials/vault.js', () => ({
     getValidAccessToken: vi.fn().mockResolvedValue('test-access-token'),
   },
 }));
+vi.mock('../services/spend.js', () => ({
+  checkSpendCap: vi.fn().mockResolvedValue({ allowed: true }),
+  recordUsage: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('../services/billing.js', () => ({
+  getSubscription: vi.fn().mockResolvedValue(null),
+  upsertSubscription: vi.fn().mockResolvedValue(undefined),
+  applyGracePeriod: vi.fn().mockResolvedValue(undefined),
+  clearGrace: vi.fn().mockResolvedValue(undefined),
+  cancelSubscription: vi.fn().mockResolvedValue(undefined),
+  checkDeployGate: vi.fn().mockResolvedValue({ allowed: true }),
+}));
 
 // Trigger ensureRegistry() so _getServiceType is populated before synchronous tests run
 beforeAll(async () => {
