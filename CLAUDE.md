@@ -476,6 +476,7 @@ VITE_API_URL=http://localhost:3000
 | `/new-mcp-server` | "add a server", "create an MCP server", "scaffold a server" | Scaffold a new native MCP server in the servers package |
 | `/onboarding-flow-test` | "test the onboarding flow", "run the onboarding test", "test signup" | E2E test of Telegram onboarding bot via Playwright MCP on Telegram Web |
 | `/image-test` | "test the image", "test browser", "image test", "verify the browser stack" | Build image variants, deploy ephemeral Fly machines, test browser via Telegram, tear down |
+| `/agent-core-docs` | "add agent instruction", "update agent docs", "add to agent base docs", "add core instruction" | Add or edit core instructions in OpenClaw/Hermes base documents (AGENTS.md, SOUL.md, TOOLS.md, knowledge.md) |
 
 ## Admin Tools (Python)
 

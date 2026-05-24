@@ -33,6 +33,10 @@ Screenshot taken, no path in tool result text. Navigate to `file:///home/node/.o
 message(action=send, to=987654, message="Screenshot:", media=/home/node/.openclaw/media/browser/snap-1746000000000.jpg)
 ```
 
+## Gmail MCP
+
+**Saving a draft does NOT send the email.** `create_draft` (or equivalent draft-save tools) only stores the message — it is never delivered to the recipient. To actually send the email you must call `send_email` or `send_draft` as a separate, explicit step. Always confirm with the user before sending.
+
 ## MCP Servers
 You may have access to additional tools via MCP servers. Their tools appear as `<server>__<tool>` (e.g., `reins__list_sessions`).
 

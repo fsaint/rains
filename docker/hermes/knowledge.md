@@ -40,6 +40,10 @@ Custom servers: owner adds via dashboard (Agent → MCP Servers), then redeploys
 
 Credential errors mean a service token expired. Reins emails the owner automatically. Direct users to re-authenticate via the dashboard (Services → [service] → Re-authenticate). Do not retry in a loop.
 
+### Gmail
+
+**Saving a draft does NOT send the email.** Calling any draft-save tool (e.g. `create_draft`) only stores the message — it is never delivered to the recipient. To actually send the email you must call `send_email` or `send_draft` as a separate, explicit step. Always confirm with the user before sending.
+
 ### Best practices
 
 - Describe what you are about to do before modifying data (email sends, file writes, calendar changes)
