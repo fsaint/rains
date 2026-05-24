@@ -639,6 +639,88 @@ Also update your local `.env` for dev.
 
 ---
 
+## Model Router
+
+Each deployed agent optionally runs a two-sidecar model routing stack inside its container. When a user configures custom model providers for their agent, Reins injects the necessary env vars at deploy time and the Dockerfile entrypoints start the sidecars before the main agent process.
+
+### Architecture
+
+```
+Agent → RouteLLM (localhost:4001) → LiteLLM (localhost:4000) → Provider
+```
+
+- **LiteLLM** (port 4000) — unified proxy that normalizes requests across providers (Anthropic, OpenAI, MiniMax, Google, etc.)
+- **RouteLLM** (port 4001) — OpenAI-compatible gateway that classifies each request and routes it to either the `strong` or `weak` model using the MF classifier
+
+### How It Works
+
+The router is a **per-agent sidecar** — it runs inside the agent's Fly machine, not on `agenthelm-core`. It only starts when `LITELLM_CONFIG_B64` is set. Both sidecars are launched in the Dockerfile entrypoints before the main agent process (OpenClaw or Hermes) starts.
+
+When no model configs are configured for an agent, `LITELLM_CONFIG_B64` is not set, the sidecars do not start, and the agent uses its default model provider and API key as before.
+
+### Sidecar Startup Order
+
+1. LiteLLM starts on port 4000 — entrypoint polls `/health` for up to 30 seconds
+2. RouteLLM starts on port 4001 — entrypoint polls `/health` for up to 30 seconds
+3. Main agent process starts (OpenClaw or Hermes)
+
+If either sidecar fails its health check within 30 seconds, the container exits.
+
+### DB Table: `agent_model_configs`
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID | Primary key |
+| `agent_id` | UUID | FK → agents |
+| `provider` | string | `anthropic`, `openai`, `minimax`, `google` |
+| `model_name` | string | Model identifier (e.g. `claude-opus-4-5`, `gpt-4o`) |
+| `role` | string | `strong` or `weak` |
+| `api_key_encrypted` | string | AES-256-GCM encrypted API key |
+| `created_at` | timestamp | |
+| `updated_at` | timestamp | |
+
+Unique constraint: `(agent_id, role)` — each agent has at most one strong and one weak model.
+
+**Single-model aliasing:** if only one model is configured for an agent, it is aliased as both `strong` and `weak` in the LiteLLM config so RouteLLM always has a valid target for both slots.
+
+### Env Vars Injected at Deploy Time
+
+Reins sets these on the agent's Fly machine when model configs exist:
+
+| Env Var | Value | Purpose |
+|---------|-------|---------|
+| `LITELLM_CONFIG_B64` | base64-encoded JSON `{ "model_list": [...] }` | LiteLLM model list for this agent |
+| `ROUTELLM_THRESHOLD` | `0.11785` (default) | MF classifier threshold for strong/weak routing |
+| `MODEL_PROVIDER` | `openai` | RouteLLM exposes an OpenAI-compatible API |
+| `MODEL_NAME` | `router-mf-0.11785` | RouteLLM model alias |
+| `OPENAI_BASE_URL` | `http://127.0.0.1:4001/v1` | Points the agent at the RouteLLM sidecar |
+| `OPENAI_API_KEY` | `reins-router` | Internal placeholder (not sent to any provider) |
+
+### Supported Providers
+
+| Provider | LiteLLM model prefix | Notes |
+|----------|---------------------|-------|
+| `anthropic` | `anthropic/<model_name>` | |
+| `openai` | `openai/<model_name>` | |
+| `minimax` | `openai/<model_name>` | Also sets `api_base: https://api.minimax.io/v1` |
+| `google` | `gemini/<model_name>` | |
+
+### API Endpoints
+
+All endpoints require `requireAdmin()`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/agents/:id/models` | List model configs for an agent |
+| `PUT` | `/api/agents/:id/models` | Create or replace model configs for an agent |
+| `DELETE` | `/api/agents/:id/models/:configId` | Remove a specific model config |
+
+### Service File
+
+`backend/src/services/model-router.ts` — handles building the LiteLLM config JSON, base64-encoding it, and assembling the env var set to inject at provision/redeploy time.
+
+---
+
 ## Deployment Configuration
 
 ### How Configuration Enters the System
