@@ -829,6 +829,7 @@ fly secrets set --app agenthelm-core \
 |------|-------------|
 | [`docs/api/HERMENEUTIX_MCP_SERVER.md`](docs/api/HERMENEUTIX_MCP_SERVER.md) | MCP server spec for Hermeneutix meeting transcription platform |
 | [`docs/api/MOBILE_AUTHORIZATION_API.md`](docs/api/MOBILE_AUTHORIZATION_API.md) | API endpoints for mobile apps to authorize agent requests |
+| [`servers/ADDING_TOOLS.md`](servers/ADDING_TOOLS.md) | Six-step checklist for adding tools to any MCP server — covers handler, definition, permissions, policy template, and OAuth scopes |
 
 ### Specs
 

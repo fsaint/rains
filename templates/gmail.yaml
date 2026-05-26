@@ -19,6 +19,10 @@ tools:
   require_approval:
     - gmail_send_message
     - gmail_send_draft
+    - gmail_mark_read
+    - gmail_archive
+    - gmail_modify_labels
+    - gmail_label_message
 
   # Blocked by default - uncomment to enable with approval
   block:

@@ -19,6 +19,7 @@ import {
   handleMarkRead,
   handleArchive,
   handleModifyLabels,
+  handleLabelMessage,
 } from './handlers.js';
 
 /**
@@ -445,6 +446,31 @@ export const deleteLabelTool: ToolDefinition = {
 };
 
 /**
+ * Apply a single label to a message
+ */
+export const labelMessageTool: ToolDefinition = {
+  name: 'gmail_label_message',
+  description:
+    'Apply a label to an email. Use gmail_list_labels to get available label IDs. To remove a label or apply multiple labels at once, use gmail_modify_labels.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      ...accountProperty,
+      messageId: {
+        type: 'string',
+        description: 'The ID of the message to label',
+      },
+      labelId: {
+        type: 'string',
+        description: 'The ID of the label to apply (e.g., "Label_123" or "STARRED")',
+      },
+    },
+    required: ['messageId', 'labelId'],
+  },
+  handler: handleLabelMessage,
+};
+
+/**
  * All Gmail tools
  */
 export const gmailTools: ToolDefinition[] = [
@@ -463,4 +489,5 @@ export const gmailTools: ToolDefinition[] = [
   markReadTool,
   archiveTool,
   modifyLabelsTool,
+  labelMessageTool,
 ];

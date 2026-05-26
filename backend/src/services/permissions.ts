@@ -30,8 +30,8 @@ export type PermissionLevel = 'none' | 'read' | 'full' | 'custom';
  */
 export const PERMISSION_PRESETS: Record<string, { read: string[]; write: string[]; blocked: string[] }> = {
   gmail: {
-    read: ['gmail_list_accounts', 'gmail_list_messages', 'gmail_get_message', 'gmail_search', 'gmail_list_labels', 'gmail_create_label', 'gmail_delete_label'],
-    write: ['gmail_create_draft', 'gmail_send_draft'],
+    read: ['gmail_list_accounts', 'gmail_list_messages', 'gmail_get_message', 'gmail_get_attachment', 'gmail_search', 'gmail_list_labels', 'gmail_create_label', 'gmail_delete_label'],
+    write: ['gmail_create_draft', 'gmail_send_draft', 'gmail_mark_read', 'gmail_archive', 'gmail_modify_labels', 'gmail_label_message'],
     blocked: ['gmail_send_message', 'gmail_delete_message'],
   },
   drive: {

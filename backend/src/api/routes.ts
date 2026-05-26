@@ -2031,10 +2031,16 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         // Calculate expiration date
         const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);
 
-        // Build token data
+        // Build token data — preserve existing refresh token if Google omits it (e.g. reconnect)
+        let existingRefreshToken: string | undefined;
+        if (pendingFlow.reconnectCredentialId && !tokens.refresh_token) {
+          const existing = await credentialVault.retrieve(pendingFlow.reconnectCredentialId);
+          existingRefreshToken = (existing?.data as { refreshToken?: string } | undefined)?.refreshToken;
+        }
+
         const tokenData = {
           accessToken: tokens.access_token,
-          refreshToken: tokens.refresh_token,
+          refreshToken: tokens.refresh_token ?? existingRefreshToken,
           expiresAt,
           tokenType: tokens.token_type,
         };
@@ -2373,9 +2379,16 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         const email = userInfo.mail || userInfo.userPrincipalName;
         const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);
 
+        // Preserve existing refresh token if Microsoft omits it (reconnect path)
+        let existingRefreshToken: string | undefined;
+        if (pendingFlow.reconnectCredentialId && !tokens.refresh_token) {
+          const existing = await credentialVault.retrieve(pendingFlow.reconnectCredentialId);
+          existingRefreshToken = (existing?.data as { refreshToken?: string } | undefined)?.refreshToken;
+        }
+
         const tokenData = {
           accessToken: tokens.access_token,
-          refreshToken: tokens.refresh_token,
+          refreshToken: tokens.refresh_token ?? existingRefreshToken,
           expiresAt,
           tokenType: tokens.token_type,
         };

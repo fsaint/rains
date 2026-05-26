@@ -643,3 +643,31 @@ export async function handleDeleteLabel(
     },
   };
 }
+
+/**
+ * Apply a label to a message handler
+ */
+export async function handleLabelMessage(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const gmail = getGmailClient(context);
+
+  const messageId = args.messageId as string;
+  const labelId = args.labelId as string;
+
+  const response = await gmail.users.messages.modify({
+    userId: 'me',
+    id: messageId,
+    requestBody: { addLabelIds: [labelId] },
+  });
+
+  return {
+    success: true,
+    data: {
+      messageId,
+      labelIds: response.data.labelIds,
+      message: `Label ${labelId} applied to message`,
+    },
+  };
+}
