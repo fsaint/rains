@@ -4,8 +4,16 @@ set -e
 CONFIG_DIR="${HOME}/.openclaw"
 WORKSPACE_DIR="${CONFIG_DIR}/workspace"
 
-mkdir -p "$CONFIG_DIR" "$WORKSPACE_DIR" "$CONFIG_DIR/agents/main/sessions" "$CONFIG_DIR/agents/main/agent"
+mkdir -p "$CONFIG_DIR" "$WORKSPACE_DIR" "$CONFIG_DIR/agents/main/sessions" "$CONFIG_DIR/agents/main/agent" "$CONFIG_DIR/agents/cron"
 chmod 700 "$CONFIG_DIR"
+
+# One-time migration: move cron store from ephemeral location into the Fly volume.
+# Safe to run on every boot — the guard prevents re-runs once migration is done.
+if [ -f "$CONFIG_DIR/cron/jobs.json" ] && [ ! -f "$CONFIG_DIR/agents/cron/jobs.json" ]; then
+  echo "Migrating cron store to volume-backed path"
+  mv "$CONFIG_DIR/cron/jobs.json"     "$CONFIG_DIR/agents/cron/jobs.json"     2>/dev/null || true
+  mv "$CONFIG_DIR/cron/jobs.json.bak" "$CONFIG_DIR/agents/cron/jobs.json.bak" 2>/dev/null || true
+fi
 
 # Copy workspace templates if not already present
 if [ ! -f "$WORKSPACE_DIR/SOUL.md" ]; then
@@ -219,6 +227,12 @@ const config = {
       },
     },
   } : {}),
+  // Redirect cron store into the Fly volume (mounted at ~/.openclaw/agents/).
+  // Without this, OpenClaw defaults to ~/.openclaw/cron/ which is a sibling of
+  // the volume mount and lives on the ephemeral container layer — lost on redeploy.
+  cron: {
+    store: '${HOME}/.openclaw/agents/cron/jobs.json',
+  },
   // Configure plugins including MCP bridge for HTTP/stdio MCP servers
   plugins: {
     enabled: true,

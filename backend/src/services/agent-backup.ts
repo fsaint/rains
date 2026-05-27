@@ -25,20 +25,20 @@ const INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /**
  * Base directory for agent-side file snapshots (the .openclaw config dir).
- * The Fly volume is mounted at $OPENCLAW_STATE_DIR/agents/ only — everything
- * else in this directory (including cron/) is ephemeral and must be backed up.
+ * The Fly volume is mounted at $OPENCLAW_STATE_DIR/agents/ — cron/ lives inside
+ * the volume (agents/cron/) so it survives redeploys. This backup is a secondary
+ * safety net against volume detachment, corruption, or machines without a volume.
  */
 const OPENCLAW_DIR = '/home/node/.openclaw';
 
 /**
- * Paths relative to OPENCLAW_DIR to include in the cron file snapshot.
+ * Paths relative to OPENCLAW_DIR for the cron file snapshot.
+ * cron.store is set in openclaw.json to agents/cron/jobs.json (inside the Fly volume).
  * jobs.json is the live cron store; jobs.json.bak is its last-good backup.
- * Discovered by reading /app/dist/store-0nH_zmSJ.js on a live agent machine:
- *   resolveDefaultCronStorePath() → path.join(resolveConfigDir(), 'cron', 'jobs.json')
  */
 const CRON_PATHS = [
-  'cron/jobs.json',
-  'cron/jobs.json.bak',
+  'agents/cron/jobs.json',
+  'agents/cron/jobs.json.bak',
 ] as const;
 
 let backupInterval: ReturnType<typeof setInterval> | null = null;
