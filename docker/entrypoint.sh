@@ -528,7 +528,65 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
     exit 1
   fi
 
-  exec node /app/openclaw.mjs gateway --port 18789
+  # Phase 2: run gateway in foreground and catch exit 78 from the doctor.
+  # The doctor rewrites openclaw.json (removing gateway.mode=local) then exits 78.
+  # Use set +e to correctly capture exit code ($? inside `if ! cmd` is always 0, not the real code).
+  set +e
+  node /app/openclaw.mjs gateway --port 18789
+  PHASE2_EXIT=$?
+  set -e
+  if [ "$PHASE2_EXIT" -eq 78 ]; then
+    # Doctor completed: openclaw.json is now in Doctor's format (no gateway.mode).
+    # Do NOT call generate_config here — it would re-add gateway.mode=local, causing another
+    # exit-78 loop. The Doctor's config is complete; start Phase 3 with --allow-unconfigured
+    # so the gateway accepts the Doctor-rewritten config without requiring a mode field.
+    # Also re-inject models.json in case the Doctor stripped the MiniMax model entry.
+    node -e "
+      const fs = require('fs'), path = require('path');
+      const modelsPath = (process.env.HOME || '/home/node') + '/.openclaw/agents/main/agent/models.json';
+      const modelName = process.env.MODEL_NAME;
+      const baseUrl = process.env.OPENAI_BASE_URL;
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!modelName || !baseUrl) { console.log('[entrypoint] Phase 3: no model re-inject needed'); process.exit(0); }
+      let data = { providers: {} };
+      try { data = JSON.parse(fs.readFileSync(modelsPath, 'utf8')); } catch (e) {}
+      const provider = data.providers['openai'] || { models: [] };
+      if (provider.models.find(m => m.id === modelName)) {
+        console.log('[entrypoint] Phase 3: models.json ' + modelName + ' still present');
+        process.exit(0);
+      }
+      provider.models.push({
+        id: modelName, name: modelName, api: 'openai-completions', input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1000000, maxTokens: 40000, compat: { supportsTools: true }
+      });
+      if (baseUrl) provider.baseUrl = baseUrl;
+      if (apiKey) provider.apiKey = apiKey;
+      data.providers['openai'] = provider;
+      fs.mkdirSync(path.dirname(modelsPath), { recursive: true });
+      fs.writeFileSync(modelsPath, JSON.stringify(data, null, 2));
+      console.log('[entrypoint] Phase 3: re-injected ' + modelName + ' into models.json');
+    " 2>&1 || true
+    # Fly Firecracker VMs are IPv6-only — no IPv4 interfaces exist. The gateway's default
+    # loopback bind (127.0.0.1) is unreachable from Fly's health checker, which connects
+    # via the machine's private IPv6 address. A tiny Node.js TCP proxy bridges the gap:
+    # listens on :::18789 (all IPv6 interfaces) and forwards to the gateway on 127.0.0.1:18790.
+    # The proxy is started in the background before exec so it survives the shell replacement.
+    node -e "
+      const net = require('net');
+      const server = net.createServer(sock => {
+        const dst = net.connect(18790, '127.0.0.1');
+        sock.pipe(dst); dst.pipe(sock);
+        sock.on('error', e => dst.destroy(e));
+        dst.on('error', e => sock.destroy(e));
+      });
+      server.listen(18789, '::', () => process.stderr.write('[proxy] :::18789 -> 127.0.0.1:18790\n'));
+    " &
+    echo "[entrypoint] Phase 3: starting gateway on internal port 18790 (proxy on :::18789)"
+    exec node /app/openclaw.mjs gateway --port 18790 --allow-unconfigured
+  elif [ "$PHASE2_EXIT" -ne 0 ]; then
+    exit "$PHASE2_EXIT"
+  fi
 else
   # Anthropic path: 3-phase startup to survive the OpenClaw doctor rewrite.
   #
@@ -554,15 +612,32 @@ else
   fi
 
   # Phase 2: run gateway in foreground; catch exit 78 from the doctor.
-  # With set -e in effect, the `if !` construct prevents premature exit on non-zero.
-  if ! node /app/openclaw.mjs gateway --port 18789; then
-    PHASE2_EXIT=$?
-    if [ "$PHASE2_EXIT" -eq 78 ]; then
-      echo "[entrypoint] Phase 2 exited 78 (doctor rewrote config), regenerating for Phase 3"
-      generate_config
-      echo "[entrypoint] Phase 3: starting stable gateway"
-      exec node /app/openclaw.mjs gateway --port 18789
-    fi
+  # Use set +e to correctly capture exit code ($? inside `if ! cmd` is always 0, not the real code).
+  set +e
+  node /app/openclaw.mjs gateway --port 18789
+  PHASE2_EXIT=$?
+  set -e
+  if [ "$PHASE2_EXIT" -eq 78 ]; then
+    # Doctor completed: openclaw.json is in Doctor's format (no gateway.mode).
+    # Do NOT call generate_config — it re-adds gateway.mode=local causing another exit-78 loop.
+    # Fly Firecracker VMs are IPv6-only — no IPv4 interfaces exist. The gateway's default
+    # loopback bind (127.0.0.1) is unreachable from Fly's health checker, which connects
+    # via the machine's private IPv6 address. A tiny Node.js TCP proxy bridges the gap:
+    # listens on :::18789 (all IPv6 interfaces) and forwards to the gateway on 127.0.0.1:18790.
+    # The proxy is started in the background before exec so it survives the shell replacement.
+    node -e "
+      const net = require('net');
+      const server = net.createServer(sock => {
+        const dst = net.connect(18790, '127.0.0.1');
+        sock.pipe(dst); dst.pipe(sock);
+        sock.on('error', e => dst.destroy(e));
+        dst.on('error', e => sock.destroy(e));
+      });
+      server.listen(18789, '::', () => process.stderr.write('[proxy] :::18789 -> 127.0.0.1:18790\n'));
+    " &
+    echo "[entrypoint] Phase 3: starting gateway on internal port 18790 (proxy on :::18789)"
+    exec node /app/openclaw.mjs gateway --port 18790 --allow-unconfigured
+  elif [ "$PHASE2_EXIT" -ne 0 ]; then
     exit "$PHASE2_EXIT"
   fi
 fi
