@@ -19,12 +19,12 @@ oauth:
 
 fly:
   org: reins-dev
-  openclaw_app: agentx-openclaw
+  openclaw_app: reins-openclaw-dev
   # OPENCLAW_IMAGE and HERMES_IMAGE are promoted automatically by the image-test
   # runner (applyPromotion in tests/image-test/lib/read-promoted.ts). Override
   # via env var or set here for a pinned dev image.
-  openclaw_image: agentx-openclaw:latest
-  hermes_image: reins-hermes:latest
+  openclaw_image: registry.fly.io/reins-openclaw-dev:latest
+  hermes_image: registry.fly.io/reins-hermes-dev:latest
 
 browser:
   max_instances: 5
