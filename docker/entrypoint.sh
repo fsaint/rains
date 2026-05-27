@@ -530,20 +530,39 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
 
   exec node /app/openclaw.mjs gateway --port 18789
 else
-  # Anthropic path: same Phase 1 initialization as Codex/MiniMax.
-  # The doctor rewrites openclaw.json on first boot (stripping gateway.mode), causing exit 78.
-  # Killing after 10s lets the doctor create workspace dirs, then we regenerate config and
-  # exec the final gateway which starts cleanly because the workspace is already initialized.
+  # Anthropic path: 3-phase startup to survive the OpenClaw doctor rewrite.
+  #
+  # Every boot: the doctor runs, rewrites openclaw.json (removing gateway.mode), and
+  # exits 78 as a "restart me" signal. We must catch that exit, regenerate the config,
+  # and start the final gateway (Phase 3) — which starts cleanly because workspace is
+  # already initialized from Phase 2.
+  #
+  # Phase 1 (10s kick-start): same as Codex/MiniMax — creates workspace dirs early so
+  #   Phase 2's doctor run is shorter (reduces total first-boot time).
+  # Phase 2 (foreground): doctor runs to completion, exits 78.
+  # Phase 3 (exec): regenerated config + initialized workspace → stable start.
   AGENT_DIR="${HOME:-/home/node}/.openclaw/agents/main"
   if [ ! -d "$AGENT_DIR/agent" ] || [ -z "$(ls -A "$AGENT_DIR/agent" 2>/dev/null)" ]; then
-    echo "[entrypoint] Phase 1: initializing workspace for Anthropic gateway"
+    echo "[entrypoint] Phase 1: kick-starting workspace initialization"
     node /app/openclaw.mjs gateway --port 18789 &
     GATEWAY_PID=$!
     sleep 10
     kill $GATEWAY_PID 2>/dev/null
     wait $GATEWAY_PID 2>/dev/null || true
     generate_config
-    echo "[entrypoint] Phase 1 complete"
+    echo "[entrypoint] Phase 1 complete, starting Phase 2 (doctor run)"
   fi
-  exec node /app/openclaw.mjs gateway --port 18789
+
+  # Phase 2: run gateway in foreground; catch exit 78 from the doctor.
+  # With set -e in effect, the `if !` construct prevents premature exit on non-zero.
+  if ! node /app/openclaw.mjs gateway --port 18789; then
+    PHASE2_EXIT=$?
+    if [ "$PHASE2_EXIT" -eq 78 ]; then
+      echo "[entrypoint] Phase 2 exited 78 (doctor rewrote config), regenerating for Phase 3"
+      generate_config
+      echo "[entrypoint] Phase 3: starting stable gateway"
+      exec node /app/openclaw.mjs gateway --port 18789
+    fi
+    exit "$PHASE2_EXIT"
+  fi
 fi
