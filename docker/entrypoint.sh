@@ -7,12 +7,14 @@ WORKSPACE_DIR="${CONFIG_DIR}/workspace"
 mkdir -p "$CONFIG_DIR" "$WORKSPACE_DIR" "$CONFIG_DIR/agents/main/sessions" "$CONFIG_DIR/agents/main/agent" "$CONFIG_DIR/agents/cron"
 chmod 700 "$CONFIG_DIR"
 
-# One-time migration: move cron store from ephemeral location into the Fly volume.
-# Safe to run on every boot — the guard prevents re-runs once migration is done.
-if [ -f "$CONFIG_DIR/cron/jobs.json" ] && [ ! -f "$CONFIG_DIR/agents/cron/jobs.json" ]; then
-  echo "Migrating cron store to volume-backed path"
-  mv "$CONFIG_DIR/cron/jobs.json"     "$CONFIG_DIR/agents/cron/jobs.json"     2>/dev/null || true
-  mv "$CONFIG_DIR/cron/jobs.json.bak" "$CONFIG_DIR/agents/cron/jobs.json.bak" 2>/dev/null || true
+# Symlink the default cron path into the Fly volume.
+# OpenClaw writes to ~/.openclaw/cron/ by default (hardcoded in resolveDefaultCronStorePath).
+# The volume is mounted at ~/.openclaw/agents/, so the real files live at agents/cron/.
+# Recreated on every boot — the symlink itself is ephemeral but the target is on the volume.
+if [ ! -L "$CONFIG_DIR/cron" ]; then
+  rm -rf "$CONFIG_DIR/cron"
+  ln -sf "$CONFIG_DIR/agents/cron" "$CONFIG_DIR/cron"
+  echo "Linked cron store → agents/cron/ (volume-backed)"
 fi
 
 # Copy workspace templates if not already present
@@ -227,12 +229,6 @@ const config = {
       },
     },
   } : {}),
-  // Redirect cron store into the Fly volume (mounted at ~/.openclaw/agents/).
-  // Without this, OpenClaw defaults to ~/.openclaw/cron/ which is a sibling of
-  // the volume mount and lives on the ephemeral container layer — lost on redeploy.
-  cron: {
-    store: '${HOME}/.openclaw/agents/cron/jobs.json',
-  },
   // Configure plugins including MCP bridge for HTTP/stdio MCP servers
   plugins: {
     enabled: true,
@@ -534,5 +530,20 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
 
   exec node /app/openclaw.mjs gateway --port 18789
 else
+  # Anthropic path: same Phase 1 initialization as Codex/MiniMax.
+  # The doctor rewrites openclaw.json on first boot (stripping gateway.mode), causing exit 78.
+  # Killing after 10s lets the doctor create workspace dirs, then we regenerate config and
+  # exec the final gateway which starts cleanly because the workspace is already initialized.
+  AGENT_DIR="${HOME:-/home/node}/.openclaw/agents/main"
+  if [ ! -d "$AGENT_DIR/agent" ] || [ -z "$(ls -A "$AGENT_DIR/agent" 2>/dev/null)" ]; then
+    echo "[entrypoint] Phase 1: initializing workspace for Anthropic gateway"
+    node /app/openclaw.mjs gateway --port 18789 &
+    GATEWAY_PID=$!
+    sleep 10
+    kill $GATEWAY_PID 2>/dev/null
+    wait $GATEWAY_PID 2>/dev/null || true
+    generate_config
+    echo "[entrypoint] Phase 1 complete"
+  fi
   exec node /app/openclaw.mjs gateway --port 18789
 fi

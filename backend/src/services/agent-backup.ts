@@ -33,8 +33,8 @@ const OPENCLAW_DIR = '/home/node/.openclaw';
 
 /**
  * Paths relative to OPENCLAW_DIR for the cron file snapshot.
- * cron.store is set in openclaw.json to agents/cron/jobs.json (inside the Fly volume).
- * jobs.json is the live cron store; jobs.json.bak is its last-good backup.
+ * cron/ is a symlink → agents/cron/ (inside the Fly volume) created by entrypoint.sh.
+ * Backing up from agents/cron/ reads the volume-backed files directly.
  */
 const CRON_PATHS = [
   'agents/cron/jobs.json',

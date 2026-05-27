@@ -18,7 +18,7 @@ oauth:
   microsoft_tenant_id: common
 
 fly:
-  org: reins-dev
+  org: development-808
   openclaw_app: reins-openclaw-dev
   # OPENCLAW_IMAGE and HERMES_IMAGE are promoted automatically by the image-test
   # runner (applyPromotion in tests/image-test/lib/read-promoted.ts). Override
