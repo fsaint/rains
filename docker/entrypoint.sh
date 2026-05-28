@@ -92,6 +92,16 @@ export CHROMIUM_REAL_PATH="${CHROMIUM_PATH}"
 CHROMIUM_PATH=/usr/local/bin/chromium-wrapper
 echo "Using Chromium wrapper: ${CHROMIUM_PATH}"
 
+# Create /usr/bin symlinks for the OpenClaw browser tool detection code.
+# The browser tool's findChromeExecutableLinux() only checks hardcoded /usr/bin/ paths
+# (google-chrome, chrome, chromium, chromium-browser) — it does NOT search PATH or
+# /usr/local/bin/. Without these symlinks, the browser tool fails with "No supported
+# browser found" even when Chromium is installed via Playwright and the wrapper is in PATH.
+for _name in google-chrome chrome chromium chromium-browser; do
+  ln -sf /usr/local/bin/chromium-wrapper /usr/bin/$_name 2>/dev/null || true
+done
+unset _name
+
 # Generate openclaw.json from environment variables
 generate_config() {
 node -e "
@@ -567,6 +577,50 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
       fs.writeFileSync(modelsPath, JSON.stringify(data, null, 2));
       console.log('[entrypoint] Phase 3: re-injected ' + modelName + ' into models.json');
     " 2>&1 || true
+    # Re-inject Telegram settings stripped by the doctor.
+    # The doctor clears channels.telegram.allowFrom, webhookUrl, and gateway.controlUi on every
+    # boot. Re-applying them here (before Phase 3 exec) means Phase 3 starts with the correct
+    # config without requiring a gateway restart. Do NOT set gateway.port — Phase 3 uses the
+    # --port 18790 CLI flag; adding gateway.port here would conflict with the proxy on 18789.
+    node -e "
+      const fs = require('fs');
+      const configPath = (process.env.HOME || '/home/node') + '/.openclaw/openclaw.json';
+      const trustedUser = process.env.TELEGRAM_TRUSTED_USER;
+      const webhookUrl = process.env.OPENCLAW_WEBHOOK_URL || '';
+      const webhookSecret = process.env.OPENCLAW_WEBHOOK_SECRET || '';
+      const modelProvider = process.env.MODEL_PROVIDER || 'anthropic';
+      const modelName = process.env.MODEL_NAME || (modelProvider === 'minimax' ? 'MiniMax-M2.7' : '');
+      const openclawProvider = modelProvider === 'minimax' ? 'openai' : modelProvider;
+      const primaryModel = modelName ? (openclawProvider + '/' + modelName) : null;
+      try {
+        const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        cfg.channels = cfg.channels || {};
+        cfg.channels.telegram = cfg.channels.telegram || {};
+        if (trustedUser) {
+          cfg.channels.telegram.dmPolicy = 'allowlist';
+          cfg.channels.telegram.allowFrom = [trustedUser];
+        }
+        if (webhookUrl) {
+          cfg.channels.telegram.webhookUrl = webhookUrl;
+          cfg.channels.telegram.webhookSecret = webhookSecret;
+          cfg.channels.telegram.webhookHost = '0.0.0.0';
+          cfg.channels.telegram.webhookPort = 8787;
+        }
+        cfg.gateway = cfg.gateway || {};
+        cfg.gateway.controlUi = cfg.gateway.controlUi || {};
+        cfg.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
+        cfg.gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback = true;
+        if (primaryModel) {
+          cfg.agents = cfg.agents || {};
+          cfg.agents.defaults = cfg.agents.defaults || {};
+          cfg.agents.defaults.model = { primary: primaryModel };
+        }
+        fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
+        console.log('[entrypoint] Phase 3: re-injected Telegram + controlUi + model settings into openclaw.json');
+      } catch (e) {
+        process.stderr.write('[entrypoint] Phase 3: failed to re-inject Telegram settings: ' + e.message + '\n');
+      }
+    " 2>&1 || true
     # Fly Firecracker VMs are IPv6-only — no IPv4 interfaces exist. The gateway's default
     # loopback bind (127.0.0.1) is unreachable from Fly's health checker, which connects
     # via the machine's private IPv6 address. A tiny Node.js TCP proxy bridges the gap:
@@ -620,6 +674,46 @@ else
   if [ "$PHASE2_EXIT" -eq 78 ]; then
     # Doctor completed: openclaw.json is in Doctor's format (no gateway.mode).
     # Do NOT call generate_config — it re-adds gateway.mode=local causing another exit-78 loop.
+    # Re-inject Telegram settings stripped by the doctor (same as MiniMax path above).
+    node -e "
+      const fs = require('fs');
+      const configPath = (process.env.HOME || '/home/node') + '/.openclaw/openclaw.json';
+      const trustedUser = process.env.TELEGRAM_TRUSTED_USER;
+      const webhookUrl = process.env.OPENCLAW_WEBHOOK_URL || '';
+      const webhookSecret = process.env.OPENCLAW_WEBHOOK_SECRET || '';
+      const modelProvider = process.env.MODEL_PROVIDER || 'anthropic';
+      const modelName = process.env.MODEL_NAME || '';
+      const openclawProvider = modelProvider === 'minimax' ? 'openai' : modelProvider;
+      const primaryModel = modelName ? (openclawProvider + '/' + modelName) : null;
+      try {
+        const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        cfg.channels = cfg.channels || {};
+        cfg.channels.telegram = cfg.channels.telegram || {};
+        if (trustedUser) {
+          cfg.channels.telegram.dmPolicy = 'allowlist';
+          cfg.channels.telegram.allowFrom = [trustedUser];
+        }
+        if (webhookUrl) {
+          cfg.channels.telegram.webhookUrl = webhookUrl;
+          cfg.channels.telegram.webhookSecret = webhookSecret;
+          cfg.channels.telegram.webhookHost = '0.0.0.0';
+          cfg.channels.telegram.webhookPort = 8787;
+        }
+        cfg.gateway = cfg.gateway || {};
+        cfg.gateway.controlUi = cfg.gateway.controlUi || {};
+        cfg.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
+        cfg.gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback = true;
+        if (primaryModel) {
+          cfg.agents = cfg.agents || {};
+          cfg.agents.defaults = cfg.agents.defaults || {};
+          cfg.agents.defaults.model = { primary: primaryModel };
+        }
+        fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
+        console.log('[entrypoint] Phase 3: re-injected Telegram + controlUi + model settings into openclaw.json');
+      } catch (e) {
+        process.stderr.write('[entrypoint] Phase 3: failed to re-inject Telegram settings: ' + e.message + '\n');
+      }
+    " 2>&1 || true
     # Fly Firecracker VMs are IPv6-only — no IPv4 interfaces exist. The gateway's default
     # loopback bind (127.0.0.1) is unreachable from Fly's health checker, which connects
     # via the machine's private IPv6 address. A tiny Node.js TCP proxy bridges the gap:
