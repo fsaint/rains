@@ -151,6 +151,8 @@ export interface DeferredJobResult {
   result?: unknown;
   /** Present when status === 'rejected' */
   reason?: string;
+  /** Present when status === 'pending' — user-facing guidance to relay to the end user */
+  message?: string;
 }
 
 // ============================================================================

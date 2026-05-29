@@ -345,6 +345,8 @@ describe('handleMCPRequest', () => {
       const text = result.content[0].text;
       expect(text).toContain('APPROVAL_PENDING');
       expect(text).toContain('reins_get_result');
+      expect(text).toContain('USER_MESSAGE:');
+      expect(text).toContain('http://localhost:5173/approvals');
 
       // Extract jobId from "jobId: <id>" in the text
       const jobIdMatch = text.match(/jobId[":]+\s*"?([a-zA-Z0-9_-]+)"?/);
@@ -400,6 +402,7 @@ describe('reins_get_result tool', () => {
     const content = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text);
     expect(content.status).toBe('pending');
     expect(content.jobId).toBe('job-1');
+    expect(content.message).toContain('http://localhost:5173/approvals');
   });
 
   it('returns completed status with result when job is approved and executed', async () => {
@@ -504,6 +507,7 @@ describe('reins_get_result tool', () => {
     const content = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text);
     expect(content.status).toBe('pending');
     expect(content.jobId).toBe('job-1');
+    expect(content.message).toContain('http://localhost:5173/approvals');
   });
 });
 

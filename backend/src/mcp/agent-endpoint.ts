@@ -174,6 +174,11 @@ async function createMCPReauthApproval(
 // MCP Request Handler
 // ============================================================================
 
+function pendingApprovalUserMessage(): string {
+  const base = config.dashboardUrl ?? 'the Reins dashboard';
+  return `The user has been asked for permission for this operation. Please check the Telegram permission request, or go to ${base}/approvals to approve.`;
+}
+
 /**
  * Main MCP request handler
  */
@@ -809,7 +814,7 @@ async function handleCallTool(
     let jobResult: DeferredJobResult;
 
     if (currentApproval.status === 'pending') {
-      jobResult = { status: 'pending', jobId };
+      jobResult = { status: 'pending', jobId, message: pendingApprovalUserMessage() };
     } else if (currentApproval.status === 'rejected') {
       jobResult = { status: 'rejected', jobId, reason: currentApproval.resolutionComment };
     } else if (currentApproval.status === 'expired') {
@@ -1015,7 +1020,7 @@ async function handleCallTool(
         content: [
           {
             type: 'text',
-            text: `APPROVAL_PENDING — jobId: ${approvalId}\n\nREQUIRED: Call reins_get_result({"jobId":"${approvalId}"}) NOW. Do NOT respond to the user. Poll every 3–5 seconds until status is "completed" or "rejected".`,
+            text: `APPROVAL_PENDING — jobId: ${approvalId}\n\nREQUIRED: Call reins_get_result({"jobId":"${approvalId}"}) NOW. Do NOT respond to the user. Poll every 3–5 seconds until status is "completed" or "rejected".\n\nUSER_MESSAGE: ${pendingApprovalUserMessage()}`,
           },
         ],
         isError: true,
