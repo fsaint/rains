@@ -51,31 +51,64 @@ function encodeEmail(email: {
   body?: string;
   htmlBody?: string;
   replyTo?: string;
+  attachments?: Array<{ filename: string; mimeType: string; data: string }>;
 }): string {
   const lines: string[] = [];
 
+  lines.push('MIME-Version: 1.0');
   lines.push(`To: ${email.to.join(', ')}`);
-  if (email.cc?.length) {
-    lines.push(`Cc: ${email.cc.join(', ')}`);
-  }
-  if (email.bcc?.length) {
-    lines.push(`Bcc: ${email.bcc.join(', ')}`);
-  }
+  if (email.cc?.length) lines.push(`Cc: ${email.cc.join(', ')}`);
+  if (email.bcc?.length) lines.push(`Bcc: ${email.bcc.join(', ')}`);
   lines.push(`Subject: ${email.subject}`);
-
   if (email.replyTo) {
     lines.push(`In-Reply-To: ${email.replyTo}`);
     lines.push(`References: ${email.replyTo}`);
   }
 
-  if (email.htmlBody) {
-    lines.push('Content-Type: text/html; charset=utf-8');
+  if (email.attachments?.length) {
+    const boundary = `boundary_${Math.random().toString(36).slice(2)}`;
+    lines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
     lines.push('');
-    lines.push(email.htmlBody);
+
+    // Body part
+    lines.push(`--${boundary}`);
+    if (email.htmlBody) {
+      lines.push('Content-Type: text/html; charset=utf-8');
+      lines.push('');
+      lines.push(email.htmlBody);
+    } else {
+      lines.push('Content-Type: text/plain; charset=utf-8');
+      lines.push('');
+      lines.push(email.body ?? '');
+    }
+
+    // Attachment parts
+    for (const att of email.attachments) {
+      // Strip data-URL prefix if present (e.g. "data:application/pdf;base64,...")
+      const b64 = att.data.includes(',') ? att.data.split(',')[1] : att.data;
+      // RFC 2045: fold base64 at 76 characters
+      const folded = (b64.match(/.{1,76}/g) ?? [b64]).join('\r\n');
+      lines.push('');
+      lines.push(`--${boundary}`);
+      lines.push(`Content-Type: ${att.mimeType}`);
+      lines.push(`Content-Disposition: attachment; filename="${att.filename}"`);
+      lines.push('Content-Transfer-Encoding: base64');
+      lines.push('');
+      lines.push(folded);
+    }
+
+    lines.push('');
+    lines.push(`--${boundary}--`);
   } else {
-    lines.push('Content-Type: text/plain; charset=utf-8');
-    lines.push('');
-    lines.push(email.body ?? '');
+    if (email.htmlBody) {
+      lines.push('Content-Type: text/html; charset=utf-8');
+      lines.push('');
+      lines.push(email.htmlBody);
+    } else {
+      lines.push('Content-Type: text/plain; charset=utf-8');
+      lines.push('');
+      lines.push(email.body ?? '');
+    }
   }
 
   const raw = lines.join('\r\n');
@@ -341,8 +374,11 @@ export async function handleCreateDraft(
   const htmlBody = args.htmlBody as string | undefined;
   const replyTo = args.replyTo as string | undefined;
   const threadId = args.threadId as string | undefined;
+  const attachments = args.attachments as
+    | Array<{ filename: string; mimeType: string; data: string }>
+    | undefined;
 
-  const raw = encodeEmail({ to, cc, bcc, subject, body, htmlBody, replyTo });
+  const raw = encodeEmail({ to, cc, bcc, subject, body, htmlBody, replyTo, attachments });
 
   const response = await gmail.users.drafts.create({
     userId: 'me',

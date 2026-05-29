@@ -193,6 +193,29 @@ export const createDraftTool: ToolDefinition = {
         type: 'string',
         description: 'Thread ID to add the message to',
       },
+      attachments: {
+        type: 'array',
+        description: 'Files to attach to the draft',
+        items: {
+          type: 'object',
+          properties: {
+            filename: {
+              type: 'string',
+              description: 'File name including extension (e.g. "report.pdf")',
+            },
+            mimeType: {
+              type: 'string',
+              description: 'MIME type of the file (e.g. "application/pdf", "image/png")',
+            },
+            data: {
+              type: 'string',
+              description:
+                'File content as standard base64 or a data-URL (data:<mimeType>;base64,<data>)',
+            },
+          },
+          required: ['filename', 'mimeType', 'data'],
+        },
+      },
     },
     required: ['to', 'subject'],
   },
