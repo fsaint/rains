@@ -373,7 +373,7 @@ async function main() {
       machineId = await createTestMachine(appName, image, {
         TELEGRAM_BOT_TOKEN: botToken,
         ANTHROPIC_API_KEY: anthropicKey,
-        OPENCLAW_MODEL: process.env.OPENCLAW_MODEL || 'claude-sonnet-4-5',
+        MODEL_NAME: process.env.OPENCLAW_MODEL || 'claude-sonnet-4-6',
         XVFB_RESOLUTION: variant.build_args.XVFB_RESOLUTION,
         // Hermes uses TELEGRAM_ALLOWED_USERS; OpenClaw uses TELEGRAM_TRUSTED_USER.
         // Both need the test account's Telegram user ID so the bot accepts messages.
@@ -442,11 +442,13 @@ asyncio.run(send_new())
         );
         let probeResult: { ok?: boolean; reply?: string } = {};
         try { probeResult = JSON.parse(probe.stdout || '{}'); } catch { /* ignore */ }
-        if (probeResult.ok && /\bready\b/i.test(probeResult.reply ?? '')) {
+        // Accept "ready" (explicit reply) or "Browser: running" (OpenClaw status indicator).
+        const replyText = probeResult.reply ?? '';
+        if (probeResult.ok && (/\bready\b/i.test(replyText) || /browser[:\s]*running/i.test(replyText))) {
           console.log(` ready (+${elapsed}s)`);
           cdpReady = true;
         } else {
-          console.log(` not ready — ${(probeResult.reply ?? '').slice(0, 50) || 'no reply'}`);
+          console.log(` not ready — ${replyText.slice(0, 50) || 'no reply'}`);
           await new Promise<void>((r) => setTimeout(r, 5_000));
         }
       }
@@ -458,12 +460,16 @@ asyncio.run(send_new())
       // Uses --no-new so it doesn't trigger another CDP disconnect cycle.
       console.log('\nWarming up browser (sending pre-flight ping)...');
       const warmupScript = path.join(path.dirname(import.meta.url.replace('file://', '')), 'tg-browser-test.py');
-      spawnSync('python3', [warmupScript, '--no-new', botUsername, 'Open your browser and navigate to about:blank. Reply with the word "ready" when the browser is open.', '90', runDir], {
+      const warmupProc = spawnSync('python3', [warmupScript, '--no-new', botUsername, 'Open your browser and navigate to about:blank. Reply with the word "ready" when the browser is open.', '90', runDir], {
         encoding: 'utf8',
         timeout: 120_000,
         env: process.env,
       });
-      console.log('Chrome warmed up. Starting scenarios.\n');
+      let warmupReply = '';
+      try { warmupReply = (JSON.parse(warmupProc.stdout || '{}') as { reply?: string }).reply ?? ''; } catch { /* ignore */ }
+      const warmupOk = /\bready\b/i.test(warmupReply) || /browser[:\s]*running/i.test(warmupReply);
+      console.log(`Chrome warmup reply: ${warmupReply.slice(0, 80) || '(none)'} — ${warmupOk ? 'confirmed ready' : 'uncertain (proceeding anyway)'}`);
+      console.log('Starting scenarios.\n');
     }
 
     // 5. Run scenarios

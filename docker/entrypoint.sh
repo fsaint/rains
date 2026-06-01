@@ -137,7 +137,7 @@ const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN || 'reins-' + Math.rando
 const webhookUrl = process.env.OPENCLAW_WEBHOOK_URL || '';
 const webhookSecret = process.env.OPENCLAW_WEBHOOK_SECRET || '';
 const modelProvider = process.env.MODEL_PROVIDER || 'anthropic';
-const defaultModelName = modelProvider === 'openai-codex' ? 'gpt-5.4' : modelProvider === 'minimax' ? 'MiniMax-M2.7' : 'claude-sonnet-4-5';
+const defaultModelName = modelProvider === 'openai-codex' ? 'gpt-5.4' : modelProvider === 'minimax' ? 'MiniMax-M2.7' : 'claude-sonnet-4-6';
 const modelName = process.env.MODEL_NAME || defaultModelName;
 // OpenClaw 2026.5.27+ schema requires provider/model format.
 // Codex auto-enable is prevented by setting models.providers.openai.baseUrl in openclaw.json

@@ -214,6 +214,14 @@ async def run(bot_username: str, prompt: str, timeout_secs: int, results_dir: Pa
             if history:
                 baseline_msg_id = history[0].id
 
+        # Re-baseline to the absolute latest bot message right before sending.
+        # Closes the race where a late warmup or probe reply lands after the
+        # initial/post-/new baseline is recorded, causing it to be captured as
+        # the answer to our prompt instead.
+        _pre_send = await client.get_messages(bot_entity, limit=1)
+        if _pre_send:
+            baseline_msg_id = max(baseline_msg_id, _pre_send[0].id)
+
         # Send the prompt
         await client.send_message(bot_entity, prompt)
 

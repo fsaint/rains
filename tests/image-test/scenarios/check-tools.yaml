@@ -1,0 +1,12 @@
+name: check-tools
+description: List available tools/MCP servers to confirm the agent has its expected capabilities
+timeout_seconds: 90
+prompt: |
+  List all the tools and capabilities you have available right now.
+  For each one, give a short description. Be explicit — I want to know
+  if you have browser access, file system access, or any MCP servers connected.
+assertions:
+  - type: reply_min_length
+    value: 50
+  - type: reply_not_contains
+    values: ["cannot respond", "I don't have", "no tools available"]
