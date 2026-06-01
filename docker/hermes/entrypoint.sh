@@ -156,7 +156,7 @@ fi
 # Install the usage_reporter hook so Hermes fires it after each agent turn.
 # The hook estimates token usage from message/response length and reports to
 # the AgentHelm backend, which enforces spend caps.
-if [ -n "$USAGE_CALLBACK_URL" ] && [ -n "$INSTANCE_USER_ID" ]; then
+if [ -n "$USAGE_CALLBACK_URL" ] && [ -n "$INSTANCE_USER_ID" ] && [ -f "/agenthelm-hooks/usage_reporter/HOOK.yaml" ]; then
   mkdir -p ~/.hermes/hooks/usage_reporter
   cp /agenthelm-hooks/usage_reporter/HOOK.yaml ~/.hermes/hooks/usage_reporter/HOOK.yaml
   cp /agenthelm-hooks/usage_reporter/handler.py ~/.hermes/hooks/usage_reporter/handler.py

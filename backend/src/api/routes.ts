@@ -929,10 +929,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       });
     }
 
-    const instance = await createServiceInstance(agentId, serviceType, label, credentialId);
-    autoRedeployIfDeployed(agentId).catch((err) =>
-      console.error('[autoRedeploy] Failed after instance create:', err)
-    );
+    const { instance, created } = await createServiceInstance(agentId, serviceType, label, credentialId);
+    if (created) {
+      autoRedeployIfDeployed(agentId).catch((err) =>
+        console.error('[autoRedeploy] Failed after instance create:', err)
+      );
+    }
     return { data: instance };
   });
 
@@ -3008,7 +3010,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     let provider: ReauthProvider = 'unknown';
     if (isAuth) {
-      if (modelProvider === 'openai-codex' || /codex/.test(msg)) {
+      // Check Fly first — a Fly 401 always means the platform token, regardless of modelProvider.
+      if (/fly\.io|fly api/i.test(msg)) {
+        provider = 'fly';
+      } else if (modelProvider === 'openai-codex' || /codex/.test(msg)) {
         provider = 'openai-codex';
       } else if (modelProvider === 'openai' || /openai/.test(msg)) {
         provider = 'openai';
@@ -3016,12 +3021,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         provider = 'minimax';
       } else if (modelProvider === 'anthropic' || /anthropic|claude/.test(msg)) {
         provider = 'anthropic';
-      } else if (/fly\.io|fly api/.test(msg)) {
-        provider = 'fly';
       } else {
         provider = modelProvider as ReauthProvider ?? 'unknown';
       }
-    } else if (/fly\.io|fly api/.test(msg)) {
+    } else if (/fly\.io|fly api/i.test(msg)) {
       provider = 'fly';
     }
 
@@ -4038,7 +4041,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     };
 
     // Validate telegram group chat IDs (must be numeric) and topic prompts
-    if (body.telegramGroups) {
+    if (body?.telegramGroups) {
       for (const g of body.telegramGroups) {
         if (!/^-?\d+$/.test(g.chatId)) {
           return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: `Invalid chatId "${g.chatId}": must be a numeric Telegram chat ID` } });
@@ -5064,6 +5067,28 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     return reply.send({ ok: true });
   });
 
+  // Onboarding bot webhook relay — Telegram → backend → local onboarding service
+  // Used in dev (tunnel only covers 5001; onboarding runs on 3001)
+  app.post('/telegram', async (request, reply) => {
+    const expectedSecret = config.onboardingBotWebhookSecret;
+    if (expectedSecret) {
+      const received = request.headers['x-telegram-bot-api-secret-token'];
+      if (received !== expectedSecret) return reply.status(401).send({ error: 'Invalid secret token' });
+    }
+    const target = config.onboardingBotWebhookUrl;
+    if (!target) return reply.status(503).send({ error: 'Onboarding service not configured' });
+    try {
+      await fetch(`${target}/telegram`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request.body),
+      });
+    } catch (err) {
+      console.error('[telegram-relay] forward failed:', err);
+    }
+    return reply.send({ ok: true });
+  });
+
   // ========================================================================
   // Public config endpoint (no auth)
   // ========================================================================
@@ -5650,6 +5675,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.get('/api/billing/status', async (request, reply) => {
     const session = getSession(request);
     if (!session) return reply.code(401).send({ error: 'Unauthorized' });
+    if (process.env.BYPASS_BILLING === 'true') {
+      return reply.send({ data: { subscribed: true, plan: 'byok', status: 'active' } });
+    }
     const sub = await getSubscription(session.userId);
     if (!sub) return reply.send({ data: { subscribed: false } });
     const withinGrace = sub.status === 'past_due' && !!sub.graceUntil && new Date(sub.graceUntil) > new Date();

@@ -106,6 +106,9 @@ export async function checkSpendCap(
   client: DatabaseClient,
   agentId: string,
 ): Promise<CapCheckResult> {
+  if (process.env.BYPASS_BILLING === 'true') {
+    return { allowed: true, percentUsed: 0, shouldAlert80: false, shouldSoftStop: false };
+  }
   // Load deployment config
   const depResult = await client.execute({
     sql: `SELECT spend_limit_dollars, spend_limit_tokens, spend_soft_stopped, spend_alerted_80

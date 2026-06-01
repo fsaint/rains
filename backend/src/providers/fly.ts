@@ -244,10 +244,12 @@ export async function updateMachine(
   opts: Omit<CreateMachineOpts, 'appName'>
 ) {
   const isHermes = opts.runtime === 'hermes';
+  // Strip volumeId — Fly rejects mounts changes on existing machines (volume already attached).
+  const { volumeId: _v, ...updateOpts } = { ...opts, appName };
   const res = await flyFetch(`/apps/${appName}/machines/${machineId}`, {
     method: 'POST',
     body: JSON.stringify({
-      config: isHermes ? await buildHermesMachineConfig({ ...opts, appName }) : await buildMachineConfig({ ...opts, appName }),
+      config: isHermes ? await buildHermesMachineConfig(updateOpts) : await buildMachineConfig(updateOpts),
     }),
   });
   return res.json();
@@ -382,8 +384,8 @@ async function buildHermesMachineConfig(opts: CreateMachineOpts) {
       MCP_CONFIG: JSON.stringify(opts.mcpConfigs),
       HERMES_GATEWAY_TOKEN: opts.gatewayToken,
       REINS_API_URL: reinsUrl,
-      INSTANCE_USER_ID: opts.instanceId,
-      USAGE_CALLBACK_URL: `${reinsUrl}/api/webhooks/usage`,
+      // INSTANCE_USER_ID and USAGE_CALLBACK_URL omitted until usage_reporter hook
+      // files are baked into the Hermes image (docker/hermes/hooks/usage_reporter/)
       ...(opts.initialPrompt ? { INITIAL_PROMPT: opts.initialPrompt } : {}),
     },
     // Hermes runs as root. Full ~/.hermes mount is safe (no pre-installed files there).

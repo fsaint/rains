@@ -369,11 +369,20 @@ async function main() {
       if (!anthropicKey) throw new Error('ANTHROPIC_API_KEY is required in .env.image-test');
 
       appName = await createTestApp(variant.name);
+      const telegramUserId = process.env.TELEGRAM_USER_ID;
       machineId = await createTestMachine(appName, image, {
         TELEGRAM_BOT_TOKEN: botToken,
         ANTHROPIC_API_KEY: anthropicKey,
         OPENCLAW_MODEL: process.env.OPENCLAW_MODEL || 'claude-sonnet-4-5',
         XVFB_RESOLUTION: variant.build_args.XVFB_RESOLUTION,
+        // Hermes uses TELEGRAM_ALLOWED_USERS; OpenClaw uses TELEGRAM_TRUSTED_USER.
+        // Both need the test account's Telegram user ID so the bot accepts messages.
+        ...(telegramUserId && variant.runtime === 'hermes'
+          ? { TELEGRAM_ALLOWED_USERS: telegramUserId }
+          : {}),
+        ...(telegramUserId && variant.runtime !== 'hermes'
+          ? { TELEGRAM_TRUSTED_USER: telegramUserId }
+          : {}),
       });
 
       // 3. Wait for healthy
@@ -384,12 +393,20 @@ async function main() {
     const botUsername = botUsernameOverride || process.env.TEST_BOT_USERNAME;
     if (!botUsername) throw new Error('Bot username required: set TEST_BOT_USERNAME or pass --bot-username');
 
-    // 4b. Send /new once to reset session history and trigger Chrome CDP init,
-    // then poll until Chrome reconnects instead of sleeping unconditionally.
-    // Chrome typically reconnects in 40–60s; polling exits as soon as it responds.
-    console.log('\nSending /new and polling for Chrome CDP reconnect (max 80s)...');
     const tgScript = path.join(path.dirname(import.meta.url.replace('file://', '')), 'tg-browser-test.py');
-    const sendNewScript = `
+
+    if (variant.runtime === 'hermes') {
+      // Hermes has no browser — skip Chrome CDP warmup entirely.
+      // Just wait for the bot to be ready to accept messages.
+      console.log('\nHermes runtime: waiting 30s for bot to connect to Telegram...');
+      await new Promise<void>((r) => setTimeout(r, 30_000));
+      console.log('Ready. Starting scenarios.\n');
+    } else {
+      // 4b. Send /new once to reset session history and trigger Chrome CDP init,
+      // then poll until Chrome reconnects instead of sleeping unconditionally.
+      // Chrome typically reconnects in 40–60s; polling exits as soon as it responds.
+      console.log('\nSending /new and polling for Chrome CDP reconnect (max 80s)...');
+      const sendNewScript = `
 import asyncio, os
 from pathlib import Path
 async def send_new():
@@ -402,51 +419,52 @@ async def send_new():
         await client.send_message(bot, "/new")
 asyncio.run(send_new())
 `;
-    spawnSync('python3', ['-c', sendNewScript], {
-      encoding: 'utf8',
-      timeout: 15_000,
-      env: { ...process.env, _RESET_BOT_USERNAME: botUsername },
-    });
-    // Poll for Chrome CDP reconnect: probe every ~15s, exit as soon as the agent
-    // confirms the browser opened. Falls through gracefully on timeout.
-    const CDP_POLL_MAX_MS = 80_000;
-    const cdpPollStart = Date.now();
-    let cdpReady = false;
-    await new Promise<void>((r) => setTimeout(r, 15_000)); // minimum before first probe
-    while (!cdpReady && Date.now() - cdpPollStart < CDP_POLL_MAX_MS) {
-      const elapsed = Math.round((Date.now() - cdpPollStart) / 1000);
-      process.stdout.write(`  [+${elapsed}s] probing Chrome...`);
-      const probe = spawnSync(
-        'python3',
-        [tgScript, '--no-new', botUsername,
-         'Open about:blank. Reply "ready" when done, or "unavailable" if the browser is not working.',
-         '10', runDir],
-        { encoding: 'utf8', timeout: 18_000, env: process.env },
-      );
-      let probeResult: { ok?: boolean; reply?: string } = {};
-      try { probeResult = JSON.parse(probe.stdout || '{}'); } catch { /* ignore */ }
-      if (probeResult.ok && /\bready\b/i.test(probeResult.reply ?? '')) {
-        console.log(` ready (+${elapsed}s)`);
-        cdpReady = true;
-      } else {
-        console.log(` not ready — ${(probeResult.reply ?? '').slice(0, 50) || 'no reply'}`);
-        await new Promise<void>((r) => setTimeout(r, 5_000));
+      spawnSync('python3', ['-c', sendNewScript], {
+        encoding: 'utf8',
+        timeout: 15_000,
+        env: { ...process.env, _RESET_BOT_USERNAME: botUsername },
+      });
+      // Poll for Chrome CDP reconnect: probe every ~15s, exit as soon as the agent
+      // confirms the browser opened. Falls through gracefully on timeout.
+      const CDP_POLL_MAX_MS = 80_000;
+      const cdpPollStart = Date.now();
+      let cdpReady = false;
+      await new Promise<void>((r) => setTimeout(r, 15_000)); // minimum before first probe
+      while (!cdpReady && Date.now() - cdpPollStart < CDP_POLL_MAX_MS) {
+        const elapsed = Math.round((Date.now() - cdpPollStart) / 1000);
+        process.stdout.write(`  [+${elapsed}s] probing Chrome...`);
+        const probe = spawnSync(
+          'python3',
+          [tgScript, '--no-new', botUsername,
+           'Open about:blank. Reply "ready" when done, or "unavailable" if the browser is not working.',
+           '10', runDir],
+          { encoding: 'utf8', timeout: 18_000, env: process.env },
+        );
+        let probeResult: { ok?: boolean; reply?: string } = {};
+        try { probeResult = JSON.parse(probe.stdout || '{}'); } catch { /* ignore */ }
+        if (probeResult.ok && /\bready\b/i.test(probeResult.reply ?? '')) {
+          console.log(` ready (+${elapsed}s)`);
+          cdpReady = true;
+        } else {
+          console.log(` not ready — ${(probeResult.reply ?? '').slice(0, 50) || 'no reply'}`);
+          await new Promise<void>((r) => setTimeout(r, 5_000));
+        }
       }
-    }
-    if (!cdpReady) {
-      console.log(`Chrome not responsive after ${Math.round(CDP_POLL_MAX_MS / 1000)}s — proceeding anyway.`);
-    }
+      if (!cdpReady) {
+        console.log(`Chrome not responsive after ${Math.round(CDP_POLL_MAX_MS / 1000)}s — proceeding anyway.`);
+      }
 
-    // 4c. Warm-up: confirm Chrome is responding before running real scenarios.
-    // Uses --no-new so it doesn't trigger another CDP disconnect cycle.
-    console.log('\nWarming up browser (sending pre-flight ping)...');
-    const warmupScript = path.join(path.dirname(import.meta.url.replace('file://', '')), 'tg-browser-test.py');
-    spawnSync('python3', [warmupScript, '--no-new', botUsername, 'Open your browser and navigate to about:blank. Reply with the word "ready" when the browser is open.', '90', runDir], {
-      encoding: 'utf8',
-      timeout: 120_000,
-      env: process.env,
-    });
-    console.log('Chrome warmed up. Starting scenarios.\n');
+      // 4c. Warm-up: confirm Chrome is responding before running real scenarios.
+      // Uses --no-new so it doesn't trigger another CDP disconnect cycle.
+      console.log('\nWarming up browser (sending pre-flight ping)...');
+      const warmupScript = path.join(path.dirname(import.meta.url.replace('file://', '')), 'tg-browser-test.py');
+      spawnSync('python3', [warmupScript, '--no-new', botUsername, 'Open your browser and navigate to about:blank. Reply with the word "ready" when the browser is open.', '90', runDir], {
+        encoding: 'utf8',
+        timeout: 120_000,
+        env: process.env,
+      });
+      console.log('Chrome warmed up. Starting scenarios.\n');
+    }
 
     // 5. Run scenarios
     for (const scenario of scenarios) {

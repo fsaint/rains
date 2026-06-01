@@ -358,9 +358,9 @@ The `GET /api/approvals` endpoint allows admin users to see approvals for any ag
 [ ] FLY_ORG=reins-dev and FLY_API_TOKEN set in root .env
 [ ] Backend running (npm run dev:backend)
 [ ] Frontend running (npm run dev:frontend)
-[ ] fly CLI authenticated (fly auth whoami)
 [ ] Telethon session exists (~/.reins_test_telethon.session)
 [ ] No orphan Fly machines from previous runs (fly machine list --org reins-dev)
+[ ] **Do NOT authenticate the fly CLI** — tests use FLY_API_TOKEN from root .env directly. The fly CLI has access to production and is dangerous to use during local testing.
 [ ] tests/integration/run_sandbox_tests.sh, tg_mcp_tool_test.py, tg_send_and_wait_filtered.py present (committed to repo)
 ```
 
@@ -369,7 +369,6 @@ The `GET /api/approvals` endpoint allows admin users to see approvals for any ag
 [ ] tests/integration/.env.prod-test exists and has all keys (incl. SHARED_BOT_TOKEN)
 [ ] SHARED_BOT_TOKEN + SHARED_BOT_WEBHOOK_SECRET set on agenthelm-core (prod: @AgentHelmPilot_bot)
 [ ] Telethon session exists (~/.reins_test_telethon.session)
-[ ] fly CLI authenticated (fly auth whoami)
 [ ] tests/integration/run_sandbox_tests.sh, tg_mcp_tool_test.py, tg_send_and_wait_filtered.py present (committed to repo)
 ```
 

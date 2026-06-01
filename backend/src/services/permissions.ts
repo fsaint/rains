@@ -883,7 +883,7 @@ export async function createServiceInstance(
   serviceType: string,
   label?: string,
   credentialId?: string
-): Promise<ServiceInstance> {
+): Promise<{ instance: ServiceInstance; created: boolean }> {
   const registry = await getRegistry();
   const def = registry.serviceRegistry.get(serviceType);
   if (!def) throw new Error(`Unknown service type: ${serviceType}`);
@@ -894,7 +894,13 @@ export async function createServiceInstance(
     .from(agentServiceInstances)
     .where(and(eq(agentServiceInstances.agentId, agentId), eq(agentServiceInstances.serviceType, serviceType)));
 
-  const isDefault = existing.length === 0;
+  // Idempotent: return the existing instance without creating a duplicate or triggering a redeploy.
+  // The `created: false` flag tells the caller to skip autoRedeployIfDeployed.
+  if (existing.length > 0) {
+    return { instance: (await getInstanceById(existing[0].id)) as ServiceInstance, created: false };
+  }
+
+  const isDefault = true; // first instance (existing was empty)
   const id = nanoid();
   const now = new Date().toISOString();
 
@@ -939,7 +945,7 @@ export async function createServiceInstance(
     }
   }
 
-  return getInstanceById(id) as Promise<ServiceInstance>;
+  return { instance: (await getInstanceById(id)) as ServiceInstance, created: true };
 }
 
 /**

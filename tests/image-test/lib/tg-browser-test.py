@@ -56,8 +56,9 @@ async def run(bot_username: str, prompt: str, timeout_secs: int, results_dir: Pa
         str(Path.home() / ".reins_imgtest_telethon.session"),
     ))
 
-    # Progress/welcome prefixes to skip (same as integration-test skill)
-    SKIP_PREFIXES = ("🐍", "⚡", "📬", "⚙️")
+    # Progress/welcome prefixes to skip (same as integration-test skill).
+    # ⏳ is Hermes's "Working" indicator.
+    SKIP_PREFIXES = ("🐍", "⚡", "📬", "⚙️", "⏳")
     # Bot replies with [SILENT] after sending a Telegram media message to avoid
     # sending a duplicate text response. Treat it as a non-content message so it
     # doesn't override the last substantive reply captured for assertions.

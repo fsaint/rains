@@ -17,9 +17,8 @@ Send Telegram prompt → Assert on reply/screenshots → Tear down machine
 ## Prerequisites
 
 - `tests/image-test/.env.image-test` exists with all required keys (see `.env.image-test.example`)
-- Docker is running
-- `flyctl` is authenticated (`fly auth whoami`)
 - `python3` with `telethon` installed (`pip3 install telethon`)
+- Images live on Fly.io registry — no local Docker required. Pass `--build` only to force a local rebuild. Do NOT authenticate the fly CLI (it has production access); the runner uses `FLY_API_TOKEN` from `.env.image-test` directly.
 - Telethon session exists (run once interactively if not):
   ```bash
   cd tests/image-test
@@ -49,47 +48,42 @@ Send Telegram prompt → Assert on reply/screenshots → Tear down machine
 
 ## Running Tests
 
-### Single scenario against baseline
+### Smoke test OpenClaw
 
 ```bash
-npx tsx tests/image-test/lib/runner.ts \
-  --variant tests/image-test/variants/baseline.yaml \
-  --scenario tests/image-test/scenarios/basic-browser.yaml
+./test_image.sh -v baseline -s ping
+```
+
+### Smoke test Hermes
+
+```bash
+./test_image.sh -v hermes-baseline -s ping
 ```
 
 ### Multiple scenarios
 
 ```bash
-npx tsx tests/image-test/lib/runner.ts \
-  --variant tests/image-test/variants/baseline.yaml \
-  --scenario tests/image-test/scenarios/basic-browser.yaml \
-  --scenario tests/image-test/scenarios/opentable-search.yaml
+./test_image.sh -v baseline -s ping -s basic-browser
 ```
 
-### Skip rebuild (reuse previously pushed image)
+### Force a local Docker rebuild
 
 ```bash
-npx tsx tests/image-test/lib/runner.ts \
-  --variant tests/image-test/variants/high-res-xvfb.yaml \
-  --scenario tests/image-test/scenarios/basic-browser.yaml \
-  --skip-build
+./test_image.sh -v baseline -s ping --build
 ```
 
-### Compare both variants
+### Test both runtimes
 
 ```bash
-for variant in baseline high-res-xvfb; do
-  npx tsx tests/image-test/lib/runner.ts \
-    --variant "tests/image-test/variants/${variant}.yaml" \
-    --scenario tests/image-test/scenarios/basic-browser.yaml \
-    --scenario tests/image-test/scenarios/opentable-search.yaml
+for variant in baseline hermes-baseline; do
+  ./test_image.sh -v $variant -s ping
 done
 ```
 
 ## Procedure
 
-1. Ask the user which variant(s) to test: `baseline`, `high-res-xvfb`, or both
-2. Ask which scenario(s): `basic-browser`, `opentable-search`, or both
+1. Ask the user which variant(s) to test: `baseline` (OpenClaw), `hermes-baseline` (Hermes), `high-res-xvfb`, or all
+2. Ask which scenario(s): `ping`, `basic-browser`, `opentable-search`, or more
 3. Confirm `.env.image-test` exists; if not, ask user to copy from `.env.image-test.example`
 4. Run the runner command
 5. Report pass/fail with assertion details

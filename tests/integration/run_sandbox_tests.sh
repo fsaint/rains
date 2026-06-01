@@ -67,8 +67,11 @@ sandbox_tests() {
         sleep 5
     done
 
-    echo "Waiting 15s for Telegram reconnect..."
-    sleep 15
+    # The Fly health check passes during OpenClaw Phase 2 (doctor run, ~30s after boot),
+    # but the MCP bridge doesn't connect until Phase 3 is fully started (~3-4 min later).
+    # Wait 300s to clear Phase 2 → Phase 3 transition and MCP bridge startup.
+    echo "Waiting 300s for Phase 3 MCP bridge startup..."
+    sleep 300
 
     local _TG_ENV=(
         "TELEGRAM_API_ID=$TELEGRAM_API_ID"
@@ -89,7 +92,7 @@ sandbox_tests() {
         "$BOT_USERNAME" "$AGENT_ID" \
         "Call the sandbox_echo tool with message ping-allowed. Report the tool result." \
         none 90)
-    if echo "$RESULT" | grep -qi "ping-allowed"; then
+    if echo "$RESULT" | grep -qiE "ping-allowed|pong-allowed"; then
         echo "PASS: $RESULT"
         PASS=$((PASS+1))
     else
@@ -102,7 +105,7 @@ sandbox_tests() {
     echo "--- [2/4] APPROVE (sandbox_send_message) ---"
     RESULT=$(env "${_TG_ENV[@]}" python3 "$_TOOL_SCRIPT" \
         "$BOT_USERNAME" "$AGENT_ID" \
-        "Call sandbox_send_message: to=ops@reins.io, subject=approve-test, body=please approve. Report result." \
+        "Call sandbox_send_message: to=ops@reins.io, subject=approve-test, body=please approve. If you receive APPROVAL_PENDING, immediately call reins_get_result to poll for the decision and report the final status." \
         approve 120)
     if echo "$RESULT" | grep -qiE "sent|delivered|success|approved|confirm|message.*sent"; then
         echo "PASS: $RESULT"

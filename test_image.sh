@@ -5,19 +5,21 @@
 # Usage: ./test_image.sh [options]
 #
 # Options:
-#   -v, --variant <name>    Variant to test (e.g. baseline, high-res-xvfb)
+#   -v, --variant <name>    Variant to test (e.g. baseline, hermes-baseline)
 #   -s, --scenario <name>   Scenario to run (repeatable, e.g. -s ping -s basic-browser)
 #   --promote               Write to promoted.yaml if all tests pass
-#   --skip-build            Skip docker build (reuse previously pushed image)
+#   --build                 Force a local Docker rebuild before testing
 #   --list                  List available variants and scenarios
 #   --clear                 Delete all test apps and images in the dev org
 #   --dry-run               (with --clear) show what would be deleted
 #   --help                  Show this help
 #
+# Images run on Fly.io — no local Docker required by default.
+#
 # Examples:
 #   ./test_image.sh                                      # interactive
-#   ./test_image.sh -v baseline -s ping                  # quick smoke test
-#   ./test_image.sh -v baseline -s ping --skip-build     # reuse existing image
+#   ./test_image.sh -v baseline -s ping                  # quick smoke test (OpenClaw)
+#   ./test_image.sh -v hermes-baseline -s ping           # quick smoke test (Hermes)
 #   ./test_image.sh -v high-res-xvfb -s ping --promote   # test and promote
 #   ./test_image.sh --list                               # show all options
 #   ./test_image.sh --clear                              # clean up dev org

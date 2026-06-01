@@ -139,12 +139,10 @@ const webhookSecret = process.env.OPENCLAW_WEBHOOK_SECRET || '';
 const modelProvider = process.env.MODEL_PROVIDER || 'anthropic';
 const defaultModelName = modelProvider === 'openai-codex' ? 'gpt-5.4' : modelProvider === 'minimax' ? 'MiniMax-M2.7' : 'claude-sonnet-4-5';
 const modelName = process.env.MODEL_NAME || defaultModelName;
-// Always include provider prefix. For MiniMax, the 2-phase startup pre-injects models.json
-// with supportsTools:true and the custom base URL before the gateway starts, so
-// openai/MiniMax-M2.7 resolves correctly without triggering the "specified without provider"
-// fallback warning on every model call.
-const openclawProvider = modelProvider === 'minimax' ? 'openai' : modelProvider;
-const primaryModel = openclawProvider + '/' + modelName;
+// OpenClaw 2026.5.27+ schema requires provider/model format.
+// Codex auto-enable is prevented by setting models.providers.openai.baseUrl in openclaw.json
+// (see the models: {} section below) — not by the provider name or any env var.
+const primaryModel = modelProvider + '/' + modelName;
 const thinkingDefault = process.env.THINKING_DEFAULT || 'medium';
 
 // Build MCP servers object from array
@@ -225,6 +223,19 @@ const config = {
     remoteCdpTimeoutMs: 60000,
     remoteCdpHandshakeTimeoutMs: 60000,
   },
+  // For custom OpenAI-compatible endpoints (e.g. MiniMax), set models.providers.openai.baseUrl
+  // in openclaw.json. OpenClaw's codex auto-enable checks this field: if it is absent or points
+  // to api.openai.com, codex is enabled; any other URL bypasses codex. This is the only config
+  // field that controls codex selection — env vars and models.json do NOT affect this check.
+  ...(process.env.OPENAI_BASE_URL ? {
+    models: {
+      providers: {
+        openai: {
+          baseUrl: process.env.OPENAI_BASE_URL,
+        },
+      },
+    },
+  } : {}),
   // Configure audio transcription (Whisper) when OPENAI_API_KEY is available
   // Skip when using a custom base URL (e.g. MiniMax) — those endpoints don't support Whisper
   ...(process.env.OPENAI_API_KEY && !process.env.OPENAI_BASE_URL ? {
@@ -246,12 +257,6 @@ const config = {
       'openclaw-mcp-bridge',
       ...(useThreadPromptPlugin ? ['reins-thread-prompt'] : []),
     ],
-    load: {
-      paths: [
-        '${HOME}/.openclaw/plugins/openclaw-mcp-bridge/node_modules/openclaw-mcp-bridge',
-        ...(useThreadPromptPlugin ? ['${HOME}/.openclaw/plugins/reins-thread-prompt/node_modules/reins-thread-prompt'] : []),
-      ],
-    },
     ...(Object.keys(mcpServers).length > 0 || useThreadPromptPlugin ? {
       entries: {
         ...(Object.keys(mcpServers).length > 0 ? {
@@ -514,7 +519,8 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
     const apiKey = process.env.OPENAI_API_KEY;
     let data = { providers: {} };
     try { data = JSON.parse(fs.readFileSync(modelsPath, 'utf8')); } catch (e) {}
-    const provider = data.providers['openai'] || { models: [] };
+    const providerKey = 'openai';
+    const provider = data.providers[providerKey] || { models: [] };
     if (!provider.models.find(m => m.id === modelName)) {
       provider.models.push({
         id: modelName, name: modelName,
@@ -527,10 +533,10 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
     }
     provider.baseUrl = baseUrl;
     provider.apiKey = apiKey;
-    data.providers['openai'] = provider;
+    data.providers[providerKey] = provider;
     fs.mkdirSync(path.dirname(modelsPath), { recursive: true });
     fs.writeFileSync(modelsPath, JSON.stringify(data, null, 2));
-    console.log('[entrypoint] models.json: registered openai/' + modelName + ' at ' + baseUrl);
+    console.log('[entrypoint] models.json: registered openai/' + modelName + (baseUrl ? ' at ' + baseUrl : ''));
   " 2>&1
   INJECT_EXIT=$?
   if [ $INJECT_EXIT -ne 0 ]; then
@@ -538,12 +544,94 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
     exit 1
   fi
 
-  # Phase 2: run gateway in foreground and catch exit 78 from the doctor.
-  # The doctor rewrites openclaw.json (removing gateway.mode=local) then exits 78.
-  # Use set +e to correctly capture exit code ($? inside `if ! cmd` is always 0, not the real code).
+  # Strip browser.enabled from the MiniMax config so --allow-unconfigured does NOT enter
+  # "auto-enable mode". When browser.enabled:true is present, OpenClaw auto-enables browser
+  # and telegram from env/config but silently skips plugins.entries — so mcp-bridge never
+  # loads. Without browser.enabled, the gateway starts in lazy mode (same as Anthropic Phase
+  # 3 after doctor): extensions are auto-discovered per session, plugins.entries is processed,
+  # and mcp-bridge loads with synchronous tool registration from the pre-cache.
+  # Also remove gateway.mode+port — mode:'local' triggers doctor exit-78 and port is
+  # overridden by the --port 18790 CLI flag anyway.
+  node -e "
+    const fs = require('fs');
+    const configPath = (process.env.HOME || '/home/node') + '/.openclaw/openclaw.json';
+    try {
+      const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      let changed = false;
+      if (cfg.browser !== undefined) { delete cfg.browser; changed = true; }
+      if (cfg.gateway) {
+        if (cfg.gateway.mode !== undefined) { delete cfg.gateway.mode; changed = true; }
+        if (cfg.gateway.port !== undefined) { delete cfg.gateway.port; changed = true; }
+      }
+      if (changed) {
+        fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
+        console.log('[entrypoint] Stripped browser+gateway.mode+port from config (enables lazy plugin loading)');
+      }
+    } catch(e) { process.stderr.write('[entrypoint] Failed to strip config fields: ' + e.message + '\n'); }
+  " 2>&1 || true
+
+  # Pre-fetch MCP tool definitions so the patched plugin can register them synchronously
+  # in register(). Without the cache at gateway start, the async .then() fires too late.
+  if [ -n "$MCP_CONFIG" ]; then
+    timeout 20 node -e "
+(async () => {
+  try {
+    const config = JSON.parse(process.env.MCP_CONFIG || '[]');
+    const servers = {};
+    for (const s of config) { if (s.name && s.url) servers[s.name] = { url: s.url }; }
+    if (!Object.keys(servers).length) { console.log('[pre-cache] No HTTP MCP servers'); return; }
+    const { MCPManager } = await import('/app/dist/extensions/openclaw-mcp-bridge/dist/manager/mcp-manager.js');
+    const manager = new MCPManager({ servers });
+    await manager.connectAll();
+    const tools = manager.getRegisteredTools();
+    if (tools.length > 0) {
+      const cache = tools.map(t => ({ namespacedName: t.namespacedName, description: t.description, inputSchema: t.inputSchema }));
+      require('fs').writeFileSync('/tmp/mcp-tools-cache.json', JSON.stringify(cache));
+      console.log('[pre-cache] Cached', tools.length, 'MCP tools');
+    } else {
+      console.log('[pre-cache] No tools discovered from MCP server');
+    }
+    await manager.disconnectAll();
+  } catch(err) { process.stderr.write('[pre-cache] failed: ' + err.message + '\n'); }
+})();
+" 2>&1 || true
+    if [ -f "/tmp/mcp-tools-cache.json" ]; then
+      node -e "
+        try {
+          const fs = require('fs');
+          const cache = JSON.parse(fs.readFileSync('/tmp/mcp-tools-cache.json', 'utf8'));
+          const toolNames = cache.map(t => t.namespacedName);
+          if (toolNames.length > 0) {
+            const manifestPath = '/app/dist/extensions/openclaw-mcp-bridge/openclaw.plugin.json';
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            manifest.contracts = { tools: ['mcp_manage', ...toolNames] };
+            fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+            console.log('[pre-cache] Patched manifest contracts.tools:', toolNames.length + 1, 'tools');
+          }
+        } catch(e) { process.stderr.write('[pre-cache] manifest patch failed: ' + e.message + '\n'); }
+      " 2>&1 || true
+    fi
+  fi
+
+  # Start TCP proxy so Fly IPv6 health checks reach the gateway on 127.0.0.1:18790.
+  node -e "
+    const net = require('net');
+    const server = net.createServer(sock => {
+      const dst = net.connect(18790, '127.0.0.1');
+      sock.pipe(dst); dst.pipe(sock);
+      sock.on('error', e => dst.destroy(e));
+      dst.on('error', e => sock.destroy(e));
+    });
+    server.listen(18789, '::', () => process.stderr.write('[proxy] :::18789 -> 127.0.0.1:18790\n'));
+  " &
+
+  echo "[entrypoint] Starting gateway with --allow-unconfigured on internal port 18790 (TCP proxy on :::18789)"
+  exec node /app/openclaw.mjs gateway --port 18790 --allow-unconfigured
+
+  # Unreachable — exec replaces the shell. The exit-78 branch below is kept as dead
+  # code for the unlikely case where the gateway exits unexpectedly.
   set +e
-  node /app/openclaw.mjs gateway --port 18789
-  PHASE2_EXIT=$?
+  PHASE2_EXIT=0
   set -e
   if [ "$PHASE2_EXIT" -eq 78 ]; then
     # Doctor completed: openclaw.json is now in Doctor's format (no gateway.mode).
@@ -555,27 +643,30 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
       const fs = require('fs'), path = require('path');
       const modelsPath = (process.env.HOME || '/home/node') + '/.openclaw/agents/main/agent/models.json';
       const modelName = process.env.MODEL_NAME;
-      const baseUrl = process.env.OPENAI_BASE_URL;
       const apiKey = process.env.OPENAI_API_KEY;
-      if (!modelName || !baseUrl) { console.log('[entrypoint] Phase 3: no model re-inject needed'); process.exit(0); }
+      if (!modelName) { console.log('[entrypoint] Phase 3: no custom model, skipping re-inject'); process.exit(0); }
       let data = { providers: {} };
       try { data = JSON.parse(fs.readFileSync(modelsPath, 'utf8')); } catch (e) {}
-      const provider = data.providers['openai'] || { models: [] };
-      if (provider.models.find(m => m.id === modelName)) {
+      const providerKey = 'openai';
+      const provider = data.providers[providerKey] || { models: [] };
+      const baseUrl = process.env.OPENAI_BASE_URL || provider.baseUrl || '';
+      if (!provider.models.find(m => m.id === modelName)) {
+        provider.models.push({
+          id: modelName, name: modelName, api: 'openai-completions', input: ['text'],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1000000, maxTokens: 40000, compat: { supportsTools: true }
+        });
+        console.log('[entrypoint] Phase 3: re-injected ' + modelName + ' into models.json');
+      } else {
         console.log('[entrypoint] Phase 3: models.json ' + modelName + ' still present');
-        process.exit(0);
       }
-      provider.models.push({
-        id: modelName, name: modelName, api: 'openai-completions', input: ['text'],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 1000000, maxTokens: 40000, compat: { supportsTools: true }
-      });
       if (baseUrl) provider.baseUrl = baseUrl;
       if (apiKey) provider.apiKey = apiKey;
-      data.providers['openai'] = provider;
+      data.providers[providerKey] = provider;
+      // Remove openai-codex provider entry if the doctor injected it.
+      delete data.providers['openai-codex'];
       fs.mkdirSync(path.dirname(modelsPath), { recursive: true });
       fs.writeFileSync(modelsPath, JSON.stringify(data, null, 2));
-      console.log('[entrypoint] Phase 3: re-injected ' + modelName + ' into models.json');
     " 2>&1 || true
     # Re-inject Telegram settings stripped by the doctor.
     # The doctor clears channels.telegram.allowFrom, webhookUrl, and gateway.controlUi on every
@@ -585,17 +676,33 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
     node -e "
       const fs = require('fs');
       const configPath = (process.env.HOME || '/home/node') + '/.openclaw/openclaw.json';
+      const telegramToken = process.env.TELEGRAM_BOT_TOKEN || '';
       const trustedUser = process.env.TELEGRAM_TRUSTED_USER;
       const webhookUrl = process.env.OPENCLAW_WEBHOOK_URL || '';
       const webhookSecret = process.env.OPENCLAW_WEBHOOK_SECRET || '';
       const modelProvider = process.env.MODEL_PROVIDER || 'anthropic';
       const modelName = process.env.MODEL_NAME || (modelProvider === 'minimax' ? 'MiniMax-M2.7' : '');
-      const openclawProvider = modelProvider === 'minimax' ? 'openai' : modelProvider;
-      const primaryModel = modelName ? (openclawProvider + '/' + modelName) : null;
+      const openaiBaseUrl = process.env.OPENAI_BASE_URL || '';
+      const primaryModel = modelName ? (modelProvider + '/' + modelName) : null;
       try {
-        const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        let cfg = {};
+        try {
+          cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        } catch (readErr) {
+          if (readErr.code !== 'ENOENT') throw readErr;
+          // First boot: doctor didn't create config yet; bootstrap from scratch.
+          const path = require('path');
+          fs.mkdirSync(path.dirname(configPath), { recursive: true });
+          console.log('[entrypoint] Phase 3: config missing, bootstrapping from env vars');
+        }
         cfg.channels = cfg.channels || {};
         cfg.channels.telegram = cfg.channels.telegram || {};
+        // The doctor strips botToken and enabled from the telegram channel on each run.
+        // Re-inject both so the gateway can poll or relay Telegram messages in Phase 3.
+        if (telegramToken) {
+          cfg.channels.telegram.enabled = true;
+          cfg.channels.telegram.botToken = telegramToken;
+        }
         if (trustedUser) {
           cfg.channels.telegram.dmPolicy = 'allowlist';
           cfg.channels.telegram.allowFrom = [trustedUser];
@@ -610,17 +717,93 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
         cfg.gateway.controlUi = cfg.gateway.controlUi || {};
         cfg.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
         cfg.gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback = true;
+        const mcpConfig = JSON.parse(process.env.MCP_CONFIG || '[]');
+        const mcpServers = {};
+        for (const s of mcpConfig) {
+          if (s.name && s.url) {
+            mcpServers[s.name] = { url: s.url, ...(s.transport ? { transport: s.transport } : {}) };
+          } else if (s.name && s.command) {
+            mcpServers[s.name] = { command: s.command, args: s.args || [], env: s.env || {} };
+          }
+        }
+        if (Object.keys(mcpServers).length) {
+          cfg.plugins = cfg.plugins || {};
+          cfg.plugins.enabled = true;
+          cfg.plugins.allow = cfg.plugins.allow || [];
+          if (!cfg.plugins.allow.includes('openclaw-mcp-bridge')) cfg.plugins.allow.push('openclaw-mcp-bridge');
+          cfg.plugins.entries = cfg.plugins.entries || {};
+          cfg.plugins.entries['openclaw-mcp-bridge'] = { enabled: true, config: { servers: mcpServers } };
+        }
         if (primaryModel) {
           cfg.agents = cfg.agents || {};
           cfg.agents.defaults = cfg.agents.defaults || {};
           cfg.agents.defaults.model = { primary: primaryModel };
         }
+        // Re-add models.providers.openai.baseUrl so codex is not auto-enabled.
+        // OpenClaw checks this field (not env vars) to decide whether the openai provider
+        // uses a custom endpoint; any non-official URL bypasses codex auto-enable.
+        if (openaiBaseUrl) {
+          cfg.models = cfg.models || {};
+          cfg.models.providers = cfg.models.providers || {};
+          cfg.models.providers.openai = cfg.models.providers.openai || {};
+          cfg.models.providers.openai.baseUrl = openaiBaseUrl;
+        }
         fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
-        console.log('[entrypoint] Phase 3: re-injected Telegram + controlUi + model settings into openclaw.json');
+        console.log('[entrypoint] Phase 3: re-injected Telegram + controlUi + plugins + model settings into openclaw.json');
       } catch (e) {
         process.stderr.write('[entrypoint] Phase 3: failed to re-inject Telegram settings: ' + e.message + '\n');
       }
     " 2>&1 || true
+    # Pre-fetch MCP tool definitions so the plugin can register them synchronously.
+    # openclaw drops api.registerTool() calls made after register() returns — the plugin's
+    # async .then() fires too late. We write /tmp/mcp-tools-cache.json here (before exec)
+    # and the patched plugin reads it synchronously in register().
+    if [ -n "$MCP_CONFIG" ]; then
+      timeout 20 node -e "
+(async () => {
+  try {
+    const config = JSON.parse(process.env.MCP_CONFIG || '[]');
+    const servers = {};
+    for (const s of config) { if (s.name && s.url) servers[s.name] = { url: s.url }; }
+    if (!Object.keys(servers).length) { console.log('[pre-cache] No HTTP MCP servers'); return; }
+    const { MCPManager } = await import('/app/dist/extensions/openclaw-mcp-bridge/dist/manager/mcp-manager.js');
+    const manager = new MCPManager({ servers });
+    await manager.connectAll();
+    const tools = manager.getRegisteredTools();
+    if (tools.length > 0) {
+      const cache = tools.map(t => ({ namespacedName: t.namespacedName, description: t.description, inputSchema: t.inputSchema }));
+      require('fs').writeFileSync('/tmp/mcp-tools-cache.json', JSON.stringify(cache));
+      console.log('[pre-cache] Cached', tools.length, 'MCP tools');
+    } else {
+      console.log('[pre-cache] No tools discovered from MCP server');
+    }
+    await manager.disconnectAll();
+  } catch(err) { process.stderr.write('[pre-cache] failed: ' + err.message + '\n'); }
+})();
+" 2>&1 || true
+    fi
+    # Patch openclaw-mcp-bridge manifest with discovered tool names as contracts.tools.
+    # resolvePluginToolRuntimePluginIds only includes plugins that have non-empty contracts.tools
+    # in their manifest — if absent, the plugin ID never enters scopedPluginIds and all its
+    # registered tools are silently skipped during tool list construction.
+    if [ -f "/tmp/mcp-tools-cache.json" ]; then
+      node -e "
+        try {
+          const fs = require('fs');
+          const cache = JSON.parse(fs.readFileSync('/tmp/mcp-tools-cache.json', 'utf8'));
+          const toolNames = cache.map(t => t.namespacedName);
+          if (toolNames.length > 0) {
+            const manifestPath = '/app/dist/extensions/openclaw-mcp-bridge/openclaw.plugin.json';
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            // Include mcp_manage (the plugin's built-in meta-tool) alongside the MCP server tools.
+            // tools-Ciw2IILF.js rejects any tool not listed in contracts.tools at compile time.
+            manifest.contracts = { tools: ['mcp_manage', ...toolNames] };
+            fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+            console.log('[pre-cache] Patched manifest contracts.tools:', toolNames.length + 1, 'tools');
+          }
+        } catch(e) { process.stderr.write('[pre-cache] manifest patch failed: ' + e.message + '\n'); }
+      " 2>&1 || true
+    fi
     # Fly Firecracker VMs are IPv6-only — no IPv4 interfaces exist. The gateway's default
     # loopback bind (127.0.0.1) is unreachable from Fly's health checker, which connects
     # via the machine's private IPv6 address. A tiny Node.js TCP proxy bridges the gap:
@@ -661,9 +844,11 @@ else
     sleep 10
     kill $GATEWAY_PID 2>/dev/null
     wait $GATEWAY_PID 2>/dev/null || true
-    generate_config
     echo "[entrypoint] Phase 1 complete, starting Phase 2 (doctor run)"
   fi
+  # Always regenerate openclaw.json before Phase 2 — the config lives outside the volume
+  # and is absent on every restart if Phase 1 was skipped.
+  generate_config
 
   # Phase 2: run gateway in foreground; catch exit 78 from the doctor.
   # Use set +e to correctly capture exit code ($? inside `if ! cmd` is always 0, not the real code).
@@ -678,17 +863,33 @@ else
     node -e "
       const fs = require('fs');
       const configPath = (process.env.HOME || '/home/node') + '/.openclaw/openclaw.json';
+      const telegramToken = process.env.TELEGRAM_BOT_TOKEN || '';
       const trustedUser = process.env.TELEGRAM_TRUSTED_USER;
       const webhookUrl = process.env.OPENCLAW_WEBHOOK_URL || '';
       const webhookSecret = process.env.OPENCLAW_WEBHOOK_SECRET || '';
       const modelProvider = process.env.MODEL_PROVIDER || 'anthropic';
       const modelName = process.env.MODEL_NAME || '';
-      const openclawProvider = modelProvider === 'minimax' ? 'openai' : modelProvider;
-      const primaryModel = modelName ? (openclawProvider + '/' + modelName) : null;
+      const openaiBaseUrl = process.env.OPENAI_BASE_URL || '';
+      const primaryModel = modelName ? (modelProvider + '/' + modelName) : null;
       try {
-        const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        let cfg = {};
+        try {
+          cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        } catch (readErr) {
+          if (readErr.code !== 'ENOENT') throw readErr;
+          // First boot: doctor didn't create config yet; bootstrap from scratch.
+          const path = require('path');
+          fs.mkdirSync(path.dirname(configPath), { recursive: true });
+          console.log('[entrypoint] Phase 3: config missing, bootstrapping from env vars');
+        }
         cfg.channels = cfg.channels || {};
         cfg.channels.telegram = cfg.channels.telegram || {};
+        // The doctor strips botToken and enabled from the telegram channel on each run.
+        // Re-inject both so the gateway can poll or relay Telegram messages in Phase 3.
+        if (telegramToken) {
+          cfg.channels.telegram.enabled = true;
+          cfg.channels.telegram.botToken = telegramToken;
+        }
         if (trustedUser) {
           cfg.channels.telegram.dmPolicy = 'allowlist';
           cfg.channels.telegram.allowFrom = [trustedUser];
@@ -703,17 +904,93 @@ else
         cfg.gateway.controlUi = cfg.gateway.controlUi || {};
         cfg.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
         cfg.gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback = true;
+        const mcpConfig = JSON.parse(process.env.MCP_CONFIG || '[]');
+        const mcpServers = {};
+        for (const s of mcpConfig) {
+          if (s.name && s.url) {
+            mcpServers[s.name] = { url: s.url, ...(s.transport ? { transport: s.transport } : {}) };
+          } else if (s.name && s.command) {
+            mcpServers[s.name] = { command: s.command, args: s.args || [], env: s.env || {} };
+          }
+        }
+        if (Object.keys(mcpServers).length) {
+          cfg.plugins = cfg.plugins || {};
+          cfg.plugins.enabled = true;
+          cfg.plugins.allow = cfg.plugins.allow || [];
+          if (!cfg.plugins.allow.includes('openclaw-mcp-bridge')) cfg.plugins.allow.push('openclaw-mcp-bridge');
+          cfg.plugins.entries = cfg.plugins.entries || {};
+          cfg.plugins.entries['openclaw-mcp-bridge'] = { enabled: true, config: { servers: mcpServers } };
+        }
         if (primaryModel) {
           cfg.agents = cfg.agents || {};
           cfg.agents.defaults = cfg.agents.defaults || {};
           cfg.agents.defaults.model = { primary: primaryModel };
         }
+        // Re-add models.providers.openai.baseUrl so codex is not auto-enabled.
+        // OpenClaw checks this field (not env vars) to decide whether the openai provider
+        // uses a custom endpoint; any non-official URL bypasses codex auto-enable.
+        if (openaiBaseUrl) {
+          cfg.models = cfg.models || {};
+          cfg.models.providers = cfg.models.providers || {};
+          cfg.models.providers.openai = cfg.models.providers.openai || {};
+          cfg.models.providers.openai.baseUrl = openaiBaseUrl;
+        }
         fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
-        console.log('[entrypoint] Phase 3: re-injected Telegram + controlUi + model settings into openclaw.json');
+        console.log('[entrypoint] Phase 3: re-injected Telegram + controlUi + plugins + model settings into openclaw.json');
       } catch (e) {
         process.stderr.write('[entrypoint] Phase 3: failed to re-inject Telegram settings: ' + e.message + '\n');
       }
     " 2>&1 || true
+    # Pre-fetch MCP tool definitions so the plugin can register them synchronously.
+    # openclaw drops api.registerTool() calls made after register() returns — the plugin's
+    # async .then() fires too late. We write /tmp/mcp-tools-cache.json here (before exec)
+    # and the patched plugin reads it synchronously in register().
+    if [ -n "$MCP_CONFIG" ]; then
+      timeout 20 node -e "
+(async () => {
+  try {
+    const config = JSON.parse(process.env.MCP_CONFIG || '[]');
+    const servers = {};
+    for (const s of config) { if (s.name && s.url) servers[s.name] = { url: s.url }; }
+    if (!Object.keys(servers).length) { console.log('[pre-cache] No HTTP MCP servers'); return; }
+    const { MCPManager } = await import('/app/dist/extensions/openclaw-mcp-bridge/dist/manager/mcp-manager.js');
+    const manager = new MCPManager({ servers });
+    await manager.connectAll();
+    const tools = manager.getRegisteredTools();
+    if (tools.length > 0) {
+      const cache = tools.map(t => ({ namespacedName: t.namespacedName, description: t.description, inputSchema: t.inputSchema }));
+      require('fs').writeFileSync('/tmp/mcp-tools-cache.json', JSON.stringify(cache));
+      console.log('[pre-cache] Cached', tools.length, 'MCP tools');
+    } else {
+      console.log('[pre-cache] No tools discovered from MCP server');
+    }
+    await manager.disconnectAll();
+  } catch(err) { process.stderr.write('[pre-cache] failed: ' + err.message + '\n'); }
+})();
+" 2>&1 || true
+    fi
+    # Patch openclaw-mcp-bridge manifest with discovered tool names as contracts.tools.
+    # resolvePluginToolRuntimePluginIds only includes plugins that have non-empty contracts.tools
+    # in their manifest — if absent, the plugin ID never enters scopedPluginIds and all its
+    # registered tools are silently skipped during tool list construction.
+    if [ -f "/tmp/mcp-tools-cache.json" ]; then
+      node -e "
+        try {
+          const fs = require('fs');
+          const cache = JSON.parse(fs.readFileSync('/tmp/mcp-tools-cache.json', 'utf8'));
+          const toolNames = cache.map(t => t.namespacedName);
+          if (toolNames.length > 0) {
+            const manifestPath = '/app/dist/extensions/openclaw-mcp-bridge/openclaw.plugin.json';
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            // Include mcp_manage (the plugin's built-in meta-tool) alongside the MCP server tools.
+            // tools-Ciw2IILF.js rejects any tool not listed in contracts.tools at compile time.
+            manifest.contracts = { tools: ['mcp_manage', ...toolNames] };
+            fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+            console.log('[pre-cache] Patched manifest contracts.tools:', toolNames.length + 1, 'tools');
+          }
+        } catch(e) { process.stderr.write('[pre-cache] manifest patch failed: ' + e.message + '\n'); }
+      " 2>&1 || true
+    fi
     # Fly Firecracker VMs are IPv6-only — no IPv4 interfaces exist. The gateway's default
     # loopback bind (127.0.0.1) is unreachable from Fly's health checker, which connects
     # via the machine's private IPv6 address. A tiny Node.js TCP proxy bridges the gap:

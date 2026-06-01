@@ -5,13 +5,13 @@
  * Usage:
  *   npx tsx tests/image-test/cli.ts                          # interactive
  *   npx tsx tests/image-test/cli.ts -v baseline -s ping      # direct
- *   npx tsx tests/image-test/cli.ts -v baseline -s ping -s basic-browser --promote --skip-build
+ *   npx tsx tests/image-test/cli.ts -v baseline -s ping -s basic-browser --promote
  *
  * Flags:
  *   -v, --variant <name>      Variant name (e.g. baseline)
  *   -s, --scenario <name>     Scenario name (repeatable)
  *   --promote                 Promote to promoted.yaml if all pass
- *   --skip-build              Skip docker build (reuse pushed image)
+ *   --build                   Force a local Docker rebuild before testing
  *   --list                    List available variants and scenarios
  */
 
@@ -124,7 +124,9 @@ async function main() {
   let variantName = '';
   const scenarioNames: string[] = [];
   let promote = args.includes('--promote');
-  let skipBuild = args.includes('--skip-build');
+  // Images live on Fly.io registry — skip local Docker build by default.
+  // Pass --build to force a local rebuild.
+  const skipBuild = !args.includes('--build');
 
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === '-v' || args[i] === '--variant') && args[i + 1]) {
@@ -154,10 +156,6 @@ async function main() {
 
     if (!promote) {
       promote = await confirm(rl, '\nPromote to production if all tests pass?');
-    }
-
-    if (!skipBuild) {
-      skipBuild = await confirm(rl, 'Skip build (reuse already-pushed image)?');
     }
   } finally {
     rl.close();

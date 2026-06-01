@@ -788,3 +788,644 @@ fly:
 The local `.env` must also have `FLY_ORG=development-808` and a `FLY_API_TOKEN` scoped to
 `development-808`. The backend enforces `FLY_ORG !== 'personal'` in non-production
 environments and will refuse to start if the wrong org is set.
+
+---
+
+## `fly deploy --build-only` does not push the image to the Fly registry
+
+### Symptom
+
+`fly deploy --build-only` completes successfully and reports `image: registry.fly.io/<app>:<tag>`,
+but when an ephemeral machine tries to pull that image it fails with:
+
+```
+MANIFEST_UNKNOWN: manifest unknown
+```
+
+### Root Cause
+
+`--build-only` builds in the remote Depot cache but does not create a release, so the image
+is never pushed to the persistent Fly registry. Only a full deploy (`--remote-only` without
+`--build-only`) writes the image to `registry.fly.io/<app>`.
+
+### Fix
+
+Use a real deploy followed by an immediate scale-to-0 to keep the image without leaving a
+running machine:
+
+```bash
+fly deploy --remote-only --app reins-imgtest --dockerfile <path> --image-label <tag>
+fly scale count 0 --app reins-imgtest --yes
+```
+
+The image is now in the registry and can be referenced as `registry.fly.io/reins-imgtest:<tag>`.
+
+---
+
+## OpenClaw health check stays `critical` during phases 1 & 2 (image test runner)
+
+### Symptom
+
+Image test runner waits for the machine health check to pass (`servicecheck-00-http` → `passing`)
+but it stays `critical: "connect: connection refused"` for the full 180 s timeout.
+
+### Root Cause
+
+OpenClaw has a 3-phase startup:
+- Phase 1 and 2 bind only to `127.0.0.1` (IPv4 loopback, port 18789).
+- Fly's health checker reaches the machine over IPv6 and gets `connection refused` on both phases.
+- Only Phase 3 creates a `:::18789` IPv6-aware TCP proxy; the health check only passes then.
+
+Waiting on the Fly health check means always timing out for phases 1 & 2.
+
+### Fix
+
+In `tests/image-test/lib/lifecycle.ts`, `waitForHealthy` returns as soon as `machine.state === 'started'`
+instead of waiting for the health check `status === 'passing'`. The test runner's own warmup
+(sending `/new` and polling for a bot reply) confirms the bot is actually up.
+
+---
+
+## Hermes uses `TELEGRAM_ALLOWED_USERS`; OpenClaw uses `TELEGRAM_TRUSTED_USER`
+
+### Symptom
+
+Hermes bot rejects all incoming messages with "Hi~ I don't recognize you yet!" even though
+the correct Telegram account is sending messages. OpenClaw works fine with the same setup.
+
+### Root Cause
+
+The two runtimes use different env var names for the same concept (trusted user IDs):
+
+| Runtime | Env var | Format |
+|---------|---------|--------|
+| Hermes | `TELEGRAM_ALLOWED_USERS` | comma-separated user IDs |
+| OpenClaw | `TELEGRAM_TRUSTED_USER` | single user ID |
+
+### Fix
+
+`tests/image-test/lib/runner.ts` now injects the correct var based on `variant.runtime`:
+
+```typescript
+...(telegramUserId && variant.runtime === 'hermes'
+  ? { TELEGRAM_ALLOWED_USERS: telegramUserId }
+  : {}),
+...(telegramUserId && variant.runtime !== 'hermes'
+  ? { TELEGRAM_TRUSTED_USER: telegramUserId }
+  : {}),
+```
+
+Add `TELEGRAM_USER_ID=<numeric_id>` to `tests/image-test/.env.image-test`.
+
+---
+
+## Chrome CDP warmup messages sent to Hermes corrupt subsequent responses
+
+### Symptom
+
+Hermes ping test times out or returns a browser-navigation reply ("⏳ Working — 3 min — terminal")
+instead of the expected arithmetic answer.
+
+### Root Cause
+
+The image test runner's Chrome warmup sequence sends "Open about:blank" (and similar probe
+messages) to the bot before starting scenarios. OpenClaw ignores these as Chrome CDP commands;
+Hermes treats them as user prompts, queues browser-finding tasks, and those in-flight tasks
+corrupt the context when the real scenario prompt arrives.
+
+### Fix
+
+In `tests/image-test/lib/runner.ts`, the Chrome warmup block is skipped entirely for Hermes:
+
+```typescript
+if (variant.runtime === 'hermes') {
+  console.log('\nHermes runtime: waiting 30s for bot to connect to Telegram...');
+  await new Promise<void>((r) => setTimeout(r, 30_000));
+  console.log('Ready. Starting scenarios.\n');
+} else {
+  // full Chrome /new + CDP polling + warmup sequence for OpenClaw
+}
+```
+
+---
+
+## `⏳` is Hermes's "Working" progress prefix — must be filtered in test scripts
+
+### Symptom
+
+Telethon test script captures `⏳ Working — 3 min — terminal` (or similar) as the final
+reply, causing assertion failures even though the bot eventually sends a correct answer.
+
+### Root Cause
+
+Hermes emits `⏳ <status>` messages while long-running tasks (terminal, browser) are in
+progress. The test scripts only filtered OpenClaw prefixes (`🐍`, `⚡`, `📬`, `⚙️`).
+
+### Fix
+
+Added `"⏳"` to `SKIP_PREFIXES` in `tests/image-test/lib/tg-browser-test.py`:
+
+```python
+SKIP_PREFIXES = ("🐍", "⚡", "📬", "⚙️", "⏳")
+```
+
+Apply the same addition to any other Telethon helper that filters progress messages.
+
+---
+
+## `source .env.file` without `set -a` does not export vars to child processes
+
+### Symptom
+
+A shell script `source`s a `.env` file but child processes (e.g. `fly deploy`) cannot see
+the variables, resulting in "no access token available. Please login with 'flyctl auth login'".
+
+### Root Cause
+
+`source` (`.`) evaluates the file in the current shell but does not mark variables for
+export. Child processes inherit only exported variables.
+
+### Fix
+
+Wrap the source call with `set -a` / `set +a`:
+
+```bash
+set -a
+source /path/to/.env.file
+set +a
+```
+
+`set -a` causes every variable assignment to be automatically exported until `set +a` is called.
+
+---
+
+## `reins-imgtest` registry app must be created once before image tests
+
+### Symptom
+
+`fly deploy --remote-only --app reins-imgtest ...` fails with `app not found` or
+`Could not find App`.
+
+### Root Cause
+
+The `reins-imgtest` app in the `development-808` org is the shared registry app for all
+image test variants. It does not exist by default and must be created once.
+
+### Fix
+
+```bash
+FLY_API_TOKEN=<development-808 token> fly apps create reins-imgtest --org development-808
+```
+
+After creation, all image test builds and pulls use `registry.fly.io/reins-imgtest:<variant-tag>`.
+The app itself never runs machines in normal operation — it is a registry-only app that is
+scaled to 0 after each build.
+
+---
+
+## `tg_mcp_tool_test.py`: stale cached Telegram messages captured as test reply
+
+### Symptom
+
+Sandbox test scenarios 1–3 return old bot messages from a previous session ("I do not have
+a `sandbox_echo` tool", "NONE", etc.) instead of the actual response to the test prompt.
+The bot's OpenClaw log shows no inbound message for the current test, confirming the reply
+was never actually sent by the bot.
+
+### Root Cause
+
+When Telethon calls `await client.start()` to connect, Telegram delivers all pending updates
+that the user's account has not yet seen. These include old bot messages from previous test
+runs. The `NewMessage` handler is registered immediately after `client.start()` and fires for
+these cached messages before the test prompt is even sent.
+
+### Fix (implemented — `tests/integration/tg_mcp_tool_test.py`)
+
+Before sending the test message, snapshot the latest bot message ID:
+
+```python
+baseline_msgs = await client.get_messages(bot, limit=1)
+baseline_id = baseline_msgs[0].id if baseline_msgs else 0
+```
+
+Then filter in both handlers:
+
+```python
+@client.on(events.NewMessage(from_users=bot_id))
+async def on_new(event):
+    if event.message.id <= baseline_id:
+        return  # stale cached message, ignore
+    ...
+```
+
+---
+
+## `tg_mcp_tool_test.py`: approval poller stops after first streaming bot message
+
+### Symptom
+
+Sandbox APPROVE/DENY scenarios time out on an intermediate streaming response such as
+`Scuttling\n\n🧩 Reins Reins Get Result: running`. The approval remains `pending` in the
+DB even though the test action was `approve` or `reject`. The model is stuck polling
+`reins__reins_get_result` and getting "still pending" forever.
+
+### Root Cause
+
+The approval poller runs inside the outer `while time.monotonic() < deadline` loop, which
+breaks once `got_reply.is_set()`. For MCP tool approval scenarios, OpenClaw streams an
+intermediate message (tool progress indicator) **before** the approval request is created in
+the DB. The `got_reply` event fires for this intermediate message, the loop exits, and the
+approval poller never runs again — leaving the approval unresolved.
+
+The settle timer then waits 3 seconds with no edits and returns the intermediate response.
+
+### Fix (implemented — `tests/integration/tg_mcp_tool_test.py`)
+
+Two changes:
+
+1. **Run approval polling as a concurrent asyncio task** so it continues throughout the entire
+   test, including during the settle timer:
+
+```python
+async def approval_poller():
+    nonlocal approval_handled
+    while time.monotonic() < deadline and not approval_handled:
+        approval_id = get_pending_approval(agent_id)
+        if approval_id:
+            take_action(approval_id, action)
+            approval_handled = True
+            return
+        await asyncio.sleep(1.0)
+
+if action != 'none':
+    poller_task = asyncio.create_task(approval_poller())
+```
+
+2. **Increase `SETTLE_SECS` from 3 to 8** — the gap between an intermediate tool-running
+   update and the final result (after approval resolution → `reins_get_result` returns →
+   model composes final reply) can exceed 3 seconds.
+
+---
+
+## Per-agent bot Telegram webhook cleared periodically during dev testing
+
+### Symptom
+
+After registering the Telegram webhook for a dev agent bot, the webhook is cleared roughly
+every 25–30 seconds. `getWebhookInfo` shows `"url": ""`. OpenClaw's log shows no webhook
+operations after initial registration, ruling out OpenClaw as the cause.
+
+### Root Cause
+
+`backend/src/index.ts` re-registers Telegram webhooks for all `status='running'` deployments
+on every backend startup. When `tsx watch` hot-reloads the backend (e.g. due to file saves or
+a second `tsx` process being spawned), the startup block runs repeatedly. If any re-registration
+attempt fails silently or uses a mismatched URL, the webhook may end up in an inconsistent state.
+
+The exact clearing mechanism is periodic but not fully isolated — both the tsx watch worker
+restart cycle and any competing backend process contribute.
+
+### Workaround (dev testing only)
+
+Run a background webhook keepalive loop before starting sandbox tests:
+
+```bash
+BOT_TOKEN="<bot_token>"
+WEBHOOK_URL="https://reins-dev.btv.pw/api/webhooks/agent-bot/<deploymentId>"
+SECRET="<webhookRelaySecret>"
+
+python3 - <<'EOF' > /tmp/webhook-keepalive.log 2>&1 &
+import time, urllib.request, urllib.parse, json
+bot_token = '$BOT_TOKEN'
+webhook_url = '$WEBHOOK_URL'
+secret = '$SECRET'
+while True:
+    data = urllib.parse.urlencode({'url': webhook_url, 'secret_token': secret}).encode()
+    req = urllib.request.Request(f'https://api.telegram.org/bot{bot_token}/setWebhook', data=data)
+    urllib.request.urlopen(req, timeout=10)
+    time.sleep(15)
+EOF
+KEEPALIVE_PID=$!
+# ... run tests ...
+kill $KEEPALIVE_PID
+```
+
+Note: `run_sandbox_tests.sh` does NOT need this workaround when the machine has just been
+redeployed (the machine itself re-registers the webhook at boot). The workaround is only
+needed when testing against a long-running machine without redeploying.
+
+---
+
+## Hermes machine crashes immediately on startup: `cp: cannot stat '/agenthelm-hooks/...'`
+
+### Symptom
+
+A newly provisioned Hermes machine starts, logs one or two lines, then prints:
+
+```
+cp: cannot stat '/agenthelm-hooks/usage_reporter/HOOK.yaml': No such file or directory
+Main child exited normally with code: 1
+```
+
+The machine restarts in a tight loop. Status never reaches `running`.
+
+### Root Cause
+
+`docker/hermes/entrypoint.sh` runs with `set -e`. When `USAGE_CALLBACK_URL` and
+`INSTANCE_USER_ID` are both set (injected by the backend), it tries to `cp` the
+usage-reporter hook files from `/agenthelm-hooks/usage_reporter/` — a directory that
+does not exist in the current Hermes image because those files have never been baked
+in. The `cp` exits non-zero, `set -e` kills the script, and the machine dies.
+
+### Fix
+
+Two changes were applied:
+
+**1. `docker/hermes/entrypoint.sh`** — added a file-existence guard so the copy only
+runs when the hook files are actually present in the image:
+
+```sh
+# Before (crashes when files missing):
+if [ -n "$USAGE_CALLBACK_URL" ] && [ -n "$INSTANCE_USER_ID" ]; then
+  cp /agenthelm-hooks/usage_reporter/HOOK.yaml ...
+
+# After (safe):
+if [ -n "$USAGE_CALLBACK_URL" ] && [ -n "$INSTANCE_USER_ID" ] && [ -f "/agenthelm-hooks/usage_reporter/HOOK.yaml" ]; then
+  cp /agenthelm-hooks/usage_reporter/HOOK.yaml ...
+```
+
+**2. `backend/src/providers/fly.ts`** — `INSTANCE_USER_ID` and `USAGE_CALLBACK_URL`
+are no longer injected into Hermes machine configs until the hook files are baked into
+the image:
+
+```typescript
+// Omitted from Hermes env until usage_reporter hook is in the image:
+// INSTANCE_USER_ID: opts.instanceId,
+// USAGE_CALLBACK_URL: `${reinsUrl}/api/webhooks/usage`,
+```
+
+The entrypoint fix protects future image builds; the fly.ts fix was the immediate
+unblock for the currently deployed image.
+
+---
+
+## Backend not taking effect after `pkill -f "tsx watch"` — old child process still serves requests
+
+### Symptom
+
+`pkill -f "tsx watch"` appears to succeed, a new `npm run dev:backend` is started, but
+the backend continues to serve the old code. Code changes have no effect. `lsof -i :5001`
+reveals a Node.js process still bound to the port that was not killed.
+
+### Root Cause
+
+`tsx watch` spawns a **child Node.js process** to run the actual server. Killing the
+parent `tsx watch` process does not send SIGTERM to the child. The child continues
+listening on port 5001 and the new backend process fails to bind (or binds on a different
+port). The old binary keeps running.
+
+### Fix
+
+Find and kill all relevant PIDs explicitly:
+
+```bash
+# Find everything touching port 5001
+lsof -i :5001
+
+# Kill the tsx parent(s) and any Node.js child processes
+kill <tsx-pid> <node-child-pid>
+
+# Verify the port is free
+lsof -i :5001   # should be empty
+
+# Then start the backend
+npm run dev:backend
+```
+
+Alternatively, kill by name to catch all spawned children:
+
+```bash
+pkill -f "tsx watch" || true
+pkill -f "node.*backend" || true
+# Wait a moment, then verify
+lsof -i :5001
+```
+
+---
+
+## OpenClaw + MiniMax (or any custom OpenAI-compatible endpoint): codex runtime auto-enabled, agent silent or MCP tools missing
+
+### Symptom
+
+OpenClaw agents using MiniMax (or any provider with `OPENAI_BASE_URL` set) either:
+
+- Return no reply at all, with logs showing:
+  ```
+  FailoverError: Unknown model: openai-codex/MiniMax-M2.7
+  Embedded agent failed before reply: Unknown model: openai-codex/MiniMax-M2.7
+  ```
+- Or respond but without MCP tools, with logs showing:
+  ```
+  gateway: auto-enabled plugins for this runtime without writing config:
+    openai/MiniMax-M2.7 model configured, enabled automatically.
+    codex agent runtime configured, enabled automatically.
+  ```
+
+Port 8787 (webhook receiver) may also refuse connections as a secondary symptom when the agent fails to initialize properly.
+
+### Root Cause
+
+OpenClaw ≥ 2026.5.x auto-enables the **codex agent runtime** whenever
+`agents.defaults.model.primary` starts with `openai/`. The codex runtime remaps the
+model to `openai-codex/<name>` and calls OpenAI's Responses API — which MiniMax (and
+any custom endpoint) does not support → hard failure on every inference.
+
+The backend maps MiniMax agents to `MODEL_PROVIDER=openai` + `OPENAI_BASE_URL=https://api.minimax.io/v1`.
+The entrypoint was previously writing `openai/MiniMax-M2.7` as the primary model, which
+triggered codex. The condition `modelProvider === 'minimax'` never fired because
+`MODEL_PROVIDER` is `openai`, not `minimax`.
+
+This behavior was introduced between OpenClaw 2026.4.14 (unaffected) and 2026.5.x
+(affected). It recurs whenever the base image is upgraded.
+
+### Fix
+
+In `docker/entrypoint.sh`, all three `openclawProvider` assignments must use
+`OPENAI_BASE_URL` as the signal — not `modelProvider === 'minimax'`:
+
+```javascript
+// WRONG — modelProvider is 'openai' for MiniMax, so this never fires
+const openclawProvider = modelProvider === 'minimax' ? '' : modelProvider;
+
+// CORRECT — OPENAI_BASE_URL means custom endpoint; bare name avoids codex trigger
+const openclawProvider = process.env.OPENAI_BASE_URL ? '' : modelProvider;
+const primaryModel = openclawProvider ? openclawProvider + '/' + modelName : modelName;
+```
+
+The three locations to update (all in `docker/entrypoint.sh`):
+1. `generate_config()` function (line ~147)
+2. MiniMax/OpenAI Phase 3 re-inject block (line ~591)
+3. Anthropic Phase 3 re-inject block (line ~772)
+
+`models.json` registers the model as bare id `MiniMax-M2.7` under the `openai` provider
+with `baseUrl` set to `OPENAI_BASE_URL`, so OpenClaw resolves the bare name correctly
+without the `openai/` prefix. This fix is also correct for RouteLLM and any future
+custom-endpoint provider.
+
+After fixing, the gateway log should show:
+```
+agent model: MiniMax-M2.7 (thinking=medium, fast=off)
+```
+with **no** "codex agent runtime configured" line.
+
+### What does NOT work
+
+- Checking `MODEL_PROVIDER === 'minimax'` — the backend sends `MODEL_PROVIDER=openai` for MiniMax.
+- Targeting the condition based on `MODEL_NAME` containing "MiniMax" — fragile and misses future providers.
+- Downgrading to OpenClaw 2026.4.14 — avoids the issue but loses new features and will recur on the next upgrade.
+
+---
+
+## OpenClaw `--allow-unconfigured` + `browser.enabled: true` silently skips `plugins.entries`
+
+### Symptom
+
+An OpenClaw agent using MiniMax (or any custom OpenAI-compatible endpoint) has MCP tools
+missing even though `plugins.entries` in `openclaw.json` correctly configures `openclaw-mcp-bridge`.
+Gateway log shows:
+
+```
+gateway: auto-enabled plugins for this runtime without writing config:
+- openai/MiniMax-M2.7 model configured, enabled automatically.
+- browser configured, enabled automatically.
+http server listening (2 plugins: browser, telegram; 5.9s)
+```
+
+Session logs never show `mcp-bridge: pre-registered N cached tools synchronously`.
+
+### Root Cause
+
+When both `--allow-unconfigured` is passed to the gateway AND `browser.enabled: true` exists
+in `openclaw.json`, OpenClaw enters **"auto-enable mode"**. In this mode it auto-enables
+browser and telegram from the config without processing `plugins.entries`. Extension-based
+plugins like `openclaw-mcp-bridge` are silently ignored — the plugin count is only the
+auto-enabled built-ins.
+
+Contrast: when `--allow-unconfigured` is used WITHOUT `browser.enabled: true` in config
+(e.g. Anthropic Phase 3 after the doctor strips `browser`), OpenClaw starts in lazy mode
+("0 plugins" at boot) and discovers extension plugins lazily at session start. In that
+mode, `plugins.entries` IS processed and mcp-bridge registers tools synchronously via
+the pre-cache.
+
+### Fix (implemented — `docker/entrypoint.sh`)
+
+Before starting the gateway with `--allow-unconfigured`, strip the `browser` section from
+`openclaw.json`. The browser extension auto-discovers from `/app/dist/extensions/` at
+session start regardless — removing `browser.enabled: true` does not disable the browser tool:
+
+```javascript
+// In entrypoint.sh MiniMax path, after models.json injection:
+const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+if (cfg.browser !== undefined) { delete cfg.browser; }
+if (cfg.gateway) {
+  delete cfg.gateway.mode;
+  delete cfg.gateway.port;
+}
+fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
+```
+
+After this patch the gateway starts in lazy mode:
+```
+gateway: auto-enabled plugins for this runtime without writing config:
+- openai/MiniMax-M2.7 model configured, enabled automatically.
+http server listening (1 plugin: telegram; 5.9s)
+mcp-bridge: pre-registered 17 cached tools synchronously
+mcp-bridge: registered 17 tools from 1 server(s)
+```
+
+### What does NOT work
+
+- **Installing mcp-bridge as a user plugin via symlink** (`~/.openclaw/plugins/openclaw-mcp-bridge/` → `/app/dist/extensions/openclaw-mcp-bridge`): the symlink IS discoverable but `--allow-unconfigured` in auto-enable mode still skips `plugins.entries`, so even user plugins aren't loaded.
+- **Removing `--allow-unconfigured`** while keeping `browser.enabled: true`: the gateway then tries to start with `gateway.mode: 'local'` in the config, which causes the doctor to exit with code 78 and the machine to restart.
+
+---
+
+## MiniMax stops after APPROVAL_PENDING instead of auto-polling
+
+### Symptom
+
+The APPROVE sandbox test fails. The bot replies with something like "I need to poll for the
+result" after calling a tool that returns `APPROVAL_PENDING`, and then stops without
+calling `reins_get_result` to retrieve the final decision.
+
+The Anthropic model handles the same prompt correctly by continuing in the same turn.
+
+### Root Cause
+
+MiniMax models are less aggressive about autonomous multi-step execution. When a tool
+returns `APPROVAL_PENDING`, the model interprets it as a natural stopping point — it
+reports the pending state to the user instead of continuing to poll `reins_get_result`
+within the same agent turn.
+
+### Fix (implemented — `tests/integration/run_sandbox_tests.sh`)
+
+Explicitly instruct the model to poll for the result in the same prompt:
+
+```bash
+# Before:
+"Call sandbox_send_message: to=ops@reins.io, subject=approve-test, body=please approve. Report result."
+
+# After:
+"Call sandbox_send_message: to=ops@reins.io, subject=approve-test, body=please approve. \
+If you receive APPROVAL_PENDING, immediately call reins_get_result to poll for the \
+decision and report the final status."
+```
+
+Also increased `SETTLE_SECS` in `tg_mcp_tool_test.py` from 8.0 to 15.0 to give MiniMax
+enough time to complete the poll + compose a final reply in a second agent turn if it
+chooses not to stay in the same turn.
+
+---
+
+## Shared bot agent creation blocked by stale DB record from previous test run
+
+### Symptom
+
+Creating a new agent with the platform shared bot fails with:
+
+```
+You already have an agent on the shared bot. Provide your own Telegram bot token to create another.
+```
+
+The agent list in the UI shows no shared-bot agents. No active Fly machine exists for
+the old agent. The error code is `SHARED_BOT_LIMIT_REACHED`.
+
+### Root Cause
+
+The backend enforces one shared-bot agent per `telegram_user_id`. The check queries
+`deployed_agents` for rows with `is_shared_bot = 1` and `status NOT IN ('destroyed',
+'error')`. Previous test runs (onboarding flow tests, manual experiments) can leave rows
+in `running` status even after the Fly app was manually deleted or the agent record
+disappeared from the UI.
+
+### Fix
+
+Find the stale record and mark it destroyed:
+
+```bash
+# Find the blocking row
+psql "$DATABASE_URL" -c \
+  "SELECT id, agent_id, telegram_user_id, status, fly_app_name
+   FROM deployed_agents
+   WHERE telegram_user_id = '<user_id>' AND is_shared_bot = 1
+     AND status NOT IN ('destroyed', 'error');"
+
+# Mark it destroyed
+psql "$DATABASE_URL" -c \
+  "UPDATE deployed_agents SET status = 'destroyed' WHERE id = '<deployment_id>';"
+```
+
+If the Fly app still exists, destroy it too:
+```bash
+FLY_API_TOKEN=<dev-token> fly apps destroy reins-<appname> --org development-808 --yes
+```

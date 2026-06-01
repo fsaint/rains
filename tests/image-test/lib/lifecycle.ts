@@ -151,14 +151,13 @@ export async function waitForHealthy(
       };
 
       if (machine.state === 'started') {
-        // Check if health check is passing
-        const healthCheck = machine.checks?.find((c) => c.name === 'app' || c.status === 'passing');
-        if (healthCheck?.status === 'passing') {
-          console.log(`Machine ${machineId} is healthy`);
-          return;
-        }
-        // Machine started but checks not yet passing — keep waiting
-        console.log(`Machine started, waiting for health check...`);
+        // Machine OS is running. The OpenClaw gateway uses a 3-phase startup where
+        // phases 1 & 2 bind only to IPv4 loopback (unreachable by Fly's IPv6 checker)
+        // — the health check only passes in Phase 3. Rather than blocking on Fly's
+        // external health check, we just need the machine to be running. The runner's
+        // own warmup (sending /new + polling) verifies the bot is actually responding.
+        console.log(`Machine ${machineId} is running (state=started)`);
+        return;
       } else {
         console.log(`Machine state: ${machine.state}`);
       }

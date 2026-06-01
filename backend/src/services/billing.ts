@@ -99,6 +99,7 @@ export async function upsertSubscription(data: {
  * Used by POST /api/agents/create-and-deploy (session-auth path only).
  */
 export async function checkDeployGate(userId: string): Promise<GateResult> {
+  if (process.env.BYPASS_BILLING === 'true') return { allowed: true };
   const sub = await getSubscription(userId);
   if (!sub) return { allowed: false, reason: 'no_subscription' };
   if (sub.status === 'canceled') return { allowed: false, reason: 'canceled' };
@@ -117,6 +118,7 @@ export async function checkDeployGate(userId: string): Promise<GateResult> {
  * Used by handleCallTool.
  */
 export async function checkUsageGate(userId: string): Promise<GateResult> {
+  if (process.env.BYPASS_BILLING === 'true') return { allowed: true };
   const sub = await getSubscription(userId);
   if (!sub) return { allowed: true }; // no record = legacy user, allow through
   if (sub.status === 'active') return { allowed: true };

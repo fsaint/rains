@@ -28,7 +28,7 @@ import time
 from telethon import TelegramClient, events
 
 SKIP_PREFIXES = ('🐍', '⚡', '📬', '⚙️', '⏳')
-SETTLE_SECS = 3.0
+SETTLE_SECS = 15.0
 SESSION = os.path.expanduser('~/.reins_test_telethon')
 COOKIES_FILE = '/tmp/reins_test_cookies.txt'
 
@@ -100,11 +100,17 @@ async def main() -> None:
     bot = await client.get_entity(bot_username)
     bot_id = bot.id
 
+    # Snapshot the latest bot message ID before sending so we can ignore stale cached replies.
+    baseline_msgs = await client.get_messages(bot, limit=1)
+    baseline_id = baseline_msgs[0].id if baseline_msgs else 0
+
     state = {'text': None, 'msg_id': None, 'last_edit': 0.0}
     got_reply = asyncio.Event()
 
     @client.on(events.NewMessage(from_users=bot_id))
     async def on_new(event):
+        if event.message.id <= baseline_id:
+            return  # stale cached message, ignore
         text = event.message.text or ''
         if any(text.startswith(p) for p in SKIP_PREFIXES):
             return
@@ -115,6 +121,8 @@ async def main() -> None:
 
     @client.on(events.MessageEdited(from_users=bot_id))
     async def on_edit(event):
+        if event.message.id <= baseline_id:
+            return  # stale cached message, ignore
         if state['msg_id'] is not None and event.message.id == state['msg_id']:
             state['text'] = event.message.text or ''
             state['last_edit'] = time.monotonic()
@@ -123,39 +131,43 @@ async def main() -> None:
 
     deadline = time.monotonic() + timeout
     approval_handled = False
-    approval_poll_interval = 1.0
-    last_poll = time.monotonic()
 
-    while time.monotonic() < deadline:
-        remaining = deadline - time.monotonic()
+    # Run approval polling as a concurrent background task so it continues
+    # even after the first bot message arrives and we enter the settle timer.
+    async def approval_poller():
+        nonlocal approval_handled
+        while time.monotonic() < deadline and not approval_handled:
+            approval_id = get_pending_approval(agent_id)
+            if approval_id:
+                take_action(approval_id, action)
+                approval_handled = True
+                return
+            await asyncio.sleep(1.0)
 
-        # Poll for pending approval every few seconds
-        if action != 'none' and not approval_handled:
-            if time.monotonic() - last_poll >= approval_poll_interval:
-                approval_id = get_pending_approval(agent_id)
-                if approval_id:
-                    take_action(approval_id, action)
-                    approval_handled = True
-                last_poll = time.monotonic()
+    poller_task = None
+    if action != 'none':
+        poller_task = asyncio.create_task(approval_poller())
 
+    try:
+        # Wait for first non-skip bot reply
         try:
-            await asyncio.wait_for(got_reply.wait(), timeout=min(approval_poll_interval, remaining))
+            await asyncio.wait_for(got_reply.wait(), timeout=timeout)
         except asyncio.TimeoutError:
-            pass
-
-        if got_reply.is_set():
-            # Wait for streaming edits to settle
-            while True:
-                await asyncio.sleep(SETTLE_SECS)
-                if time.monotonic() - state['last_edit'] >= SETTLE_SECS:
-                    break
-            print(state['text'])
+            print('ERROR: Timeout waiting for bot reply', file=sys.stderr)
             await client.disconnect()
-            return
+            sys.exit(1)
 
-    print('ERROR: Timeout waiting for bot reply', file=sys.stderr)
+        # Wait for streaming edits to settle (approval poller still running in background)
+        while True:
+            await asyncio.sleep(SETTLE_SECS)
+            if time.monotonic() - state['last_edit'] >= SETTLE_SECS:
+                break
+
+        print(state['text'])
+    finally:
+        if poller_task and not poller_task.done():
+            poller_task.cancel()
     await client.disconnect()
-    sys.exit(1)
 
 
 asyncio.run(main())

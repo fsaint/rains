@@ -1,4 +1,4 @@
-FROM ghcr.io/openclaw/openclaw:2026.4.14
+FROM ghcr.io/openclaw/openclaw:2026.5.27
 
 # Switch to root to install browser dependencies
 USER root
@@ -26,13 +26,35 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 RUN node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
     chown -R node:node /home/node/.cache
 
-# Install openclaw-mcp-bridge plugin into OpenClaw's plugin directory
+# Install openclaw-mcp-bridge into openclaw's stock extensions directory so it is auto-discovered.
+# Copy the plugin and its @sinclair/typebox dependency into a self-contained directory.
+# The openclaw peer dep resolves via Node.js module lookup from /app/node_modules (if needed).
 COPY openclaw-mcp-bridge-0.3.5.tgz /tmp/openclaw-mcp-bridge-0.3.5.tgz
-RUN mkdir -p /home/node/.openclaw/plugins/openclaw-mcp-bridge && \
-    cd /home/node/.openclaw/plugins/openclaw-mcp-bridge && \
+RUN mkdir -p /tmp/mcp-bridge-build && \
+    cd /tmp/mcp-bridge-build && \
     npm init -y > /dev/null 2>&1 && \
     npm install /tmp/openclaw-mcp-bridge-0.3.5.tgz && \
-    chown -R node:node /home/node/.openclaw
+    cp -r /tmp/mcp-bridge-build/node_modules/openclaw-mcp-bridge \
+        /app/dist/extensions/openclaw-mcp-bridge && \
+    mkdir -p /app/dist/extensions/openclaw-mcp-bridge/node_modules && \
+    cp -r /tmp/mcp-bridge-build/node_modules/@sinclair \
+        /app/dist/extensions/openclaw-mcp-bridge/node_modules/ && \
+    cp -r /tmp/mcp-bridge-build/node_modules/openclaw \
+        /app/dist/extensions/openclaw-mcp-bridge/node_modules/ && \
+    rm -rf /tmp/mcp-bridge-build && \
+    chown -R node:node /app/dist/extensions/openclaw-mcp-bridge
+# Patch dist/index.js:
+# 1. Add id so the plugin is recognized (openclaw reads module.default.id at load time).
+# 2. Add synchronous tool registration from entrypoint-written cache — openclaw drops
+#    api.registerTool() calls made after register() returns (async .then() is too late).
+COPY patch-plugin.js /tmp/patch-plugin.js
+RUN node /tmp/patch-plugin.js
+# Patch openclaw loader to bypass contracts.tools requirement for extension plugins.
+# openclaw 2026.5.27 rejects api.registerTool() calls from plugins that don't declare
+# contracts.tools in their manifest. The mcp-bridge registers dynamic tools (names depend
+# on the MCP server's tool list), so it cannot declare them statically.
+COPY patch-loader.js /tmp/patch-loader.js
+RUN node /tmp/patch-loader.js
 
 # Pre-install reins-thread-prompt at build time to avoid the 4-minute cold-boot
 # npm install that was causing health check failures and restart loops.
