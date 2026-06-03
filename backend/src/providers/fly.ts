@@ -292,7 +292,15 @@ async function buildMachineConfig(opts: CreateMachineOpts) {
             // (OpenClaw's native minimax extension uses /anthropic endpoint that doesn't support M2.7+)
             ...(opts.modelProvider === 'minimax'
               ? { MODEL_PROVIDER: 'openai', OPENAI_BASE_URL: 'https://api.minimax.io/v1', OPENAI_API_KEY: opts.openaiApiKey || process.env.MINIMAX_API_KEY || '' }
-              : { ...(opts.modelProvider ? { MODEL_PROVIDER: opts.modelProvider } : {}), ...(opts.openaiApiKey ? { OPENAI_API_KEY: opts.openaiApiKey } : {}) }),
+              : {
+                  ...(opts.modelProvider ? { MODEL_PROVIDER: opts.modelProvider } : {}),
+                  // Plain OpenAI: set OPENAI_BASE_URL so the entrypoint takes the OPENAI_BASE_URL
+                  // path, which correctly injects the model into models.json before startup.
+                  // Without this, plain OpenAI falls into the Anthropic path which never registers
+                  // the model and OpenClaw returns "Something went wrong" on every request.
+                  ...(opts.modelProvider === 'openai' ? { OPENAI_BASE_URL: 'https://api.openai.com/v1' } : {}),
+                  ...(opts.openaiApiKey ? { OPENAI_API_KEY: opts.openaiApiKey } : {}),
+                }),
             ...(opts.modelCredentials ? { OPENAI_CODEX_TOKENS: opts.modelCredentials } : {}),
           }),
       ...(opts.telegramGroups && opts.telegramGroups.length > 0 ? { TELEGRAM_GROUPS_JSON: JSON.stringify(opts.telegramGroups) } : {}),

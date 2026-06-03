@@ -45,14 +45,20 @@ sandbox_tests() {
         -d "{\"email\":\"$REINS_ADMIN_EMAIL\",\"password\":\"$REINS_ADMIN_PASSWORD\"}" \
         > /dev/null
 
-    # ── Create dev-sandbox service instance (triggers auto-redeploy) ─────────
-    # If instance already exists the call will return the existing one.
-    echo "Adding dev-sandbox service instance (triggers redeploy if first time)..."
+    # ── Create dev-sandbox service instance ─────────────────────────────────
+    # If instance already exists the call returns the existing one (no auto-redeploy).
+    # We always restart after this call so the pre-cache re-runs with sandbox tools.
+    echo "Adding dev-sandbox service instance..."
     curl -s -b "$COOKIES" -X POST "$REINS_URL/api/permissions/$AGENT_ID/instances" \
         -H "Content-Type: application/json" \
         -d '{"serviceType":"dev-sandbox"}' > /dev/null
 
-    # ── Wait for machine to return to running after the redeploy ─────────────
+    # Always restart so the entrypoint pre-cache picks up the newly-enabled sandbox tools.
+    echo "Triggering machine restart to load sandbox tools..."
+    curl -s -b "$COOKIES" -X POST "$REINS_URL/api/agents/$AGENT_ID/restart" \
+        -H "Content-Type: application/json" > /dev/null
+
+    # ── Wait for machine to return to running after the restart ───────────────
     echo "Waiting for machine to return to running status..."
     local deadline=$(( $(date +%s) + 120 ))
     while true; do

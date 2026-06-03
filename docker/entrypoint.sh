@@ -143,7 +143,9 @@ const modelName = process.env.MODEL_NAME || defaultModelName;
 // Codex auto-enable is prevented by setting models.providers.openai.baseUrl in openclaw.json
 // (see the models: {} section below) — not by the provider name or any env var.
 const primaryModel = modelProvider + '/' + modelName;
-const thinkingDefault = process.env.THINKING_DEFAULT || 'medium';
+// Default to 'none' for non-Anthropic providers: OpenAI/MiniMax don't support extended thinking
+// (GPT-4.1 is not an o-series model; reasoning_effort would cause API errors)
+const thinkingDefault = process.env.THINKING_DEFAULT || (modelProvider === 'anthropic' ? 'medium' : 'none');
 
 // Build MCP servers object from array
 const mcpServers = {};
@@ -223,15 +225,18 @@ const config = {
     remoteCdpTimeoutMs: 60000,
     remoteCdpHandshakeTimeoutMs: 60000,
   },
-  // For custom OpenAI-compatible endpoints (e.g. MiniMax), set models.providers.openai.baseUrl
-  // in openclaw.json. OpenClaw's codex auto-enable checks this field: if it is absent or points
-  // to api.openai.com, codex is enabled; any other URL bypasses codex. This is the only config
-  // field that controls codex selection — env vars and models.json do NOT affect this check.
+  // For OpenAI-compatible endpoints, configure models.providers.openai in openclaw.json.
+  // The gateway uses baseUrl for all API calls — set it to the real endpoint URL.
+  // For native OpenAI (api.openai.com), the openai-responses transport is auto-selected
+  // for models like gpt-4.1 and uses standard Bearer token auth (OPENAI_API_KEY).
+  // The legacy codex mode (requiring OPENAI_CODEX_TOKENS) only triggers on providers["openai-codex"],
+  // not providers["openai"], so using api.openai.com here is safe.
   ...(process.env.OPENAI_BASE_URL ? {
     models: {
       providers: {
         openai: {
           baseUrl: process.env.OPENAI_BASE_URL,
+          ...(process.env.OPENAI_API_KEY ? { apiKey: process.env.OPENAI_API_KEY } : {}),
         },
       },
     },
@@ -256,6 +261,11 @@ const config = {
     allow: [
       'openclaw-mcp-bridge',
       ...(useThreadPromptPlugin ? ['reins-thread-prompt'] : []),
+      // Add 'openai' plugin only for non-native OpenAI endpoints (e.g. MiniMax at api.minimax.io).
+      // Native OpenAI (api.openai.com) uses openai-responses transport which handles MCP tool
+      // format conversion internally. The 'openai' plugin on api.openai.com triggers the codex
+      // agent runtime which registers tools as type:"custom", causing OpenAI API 400 errors.
+      ...(process.env.OPENAI_BASE_URL && !process.env.OPENAI_BASE_URL.includes('api.openai.com') ? ['openai'] : []),
     ],
     ...(Object.keys(mcpServers).length > 0 || useThreadPromptPlugin ? {
       entries: {
@@ -517,19 +527,29 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
     const modelName = process.env.MODEL_NAME;
     const baseUrl = process.env.OPENAI_BASE_URL;
     const apiKey = process.env.OPENAI_API_KEY;
+    // Native OpenAI uses the Responses API which correctly converts MCP tools (type:"custom")
+    // to type:"function". The Completions API path skips this conversion and sends type:"custom"
+    // directly to the API, causing 400 errors. MiniMax/other custom endpoints stay on completions.
+    const isNativeOpenAI = baseUrl && baseUrl.includes('api.openai.com');
     let data = { providers: {} };
     try { data = JSON.parse(fs.readFileSync(modelsPath, 'utf8')); } catch (e) {}
     const providerKey = 'openai';
     const provider = data.providers[providerKey] || { models: [] };
-    if (!provider.models.find(m => m.id === modelName)) {
+    if (!Array.isArray(provider.models)) provider.models = [];
+    const apiType = isNativeOpenAI ? 'openai-responses' : 'openai-completions';
+    const existing = provider.models.find(m => m.id === modelName);
+    if (!existing) {
       provider.models.push({
         id: modelName, name: modelName,
-        api: 'openai-completions',
+        api: apiType,
         input: ['text'],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 1000000, maxTokens: 40000,
         compat: { supportsTools: true }
       });
+    } else if (existing.api !== apiType) {
+      // Ensure correct api type even when doctor already registered the model
+      existing.api = apiType;
     }
     provider.baseUrl = baseUrl;
     provider.apiKey = apiKey;
@@ -573,7 +593,8 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
   # Pre-fetch MCP tool definitions so the patched plugin can register them synchronously
   # in register(). Without the cache at gateway start, the async .then() fires too late.
   if [ -n "$MCP_CONFIG" ]; then
-    timeout 20 node -e "
+    # node -e is broken in Node.js v24 for multi-line scripts — write to a file instead.
+    cat > /tmp/mcp-pre-cache.mjs << 'EOF_PRECACHE'
 (async () => {
   try {
     const config = JSON.parse(process.env.MCP_CONFIG || '[]');
@@ -586,7 +607,8 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
     const tools = manager.getRegisteredTools();
     if (tools.length > 0) {
       const cache = tools.map(t => ({ namespacedName: t.namespacedName, description: t.description, inputSchema: t.inputSchema }));
-      require('fs').writeFileSync('/tmp/mcp-tools-cache.json', JSON.stringify(cache));
+      const { writeFileSync } = await import('fs');
+      writeFileSync('/tmp/mcp-tools-cache.json', JSON.stringify(cache));
       console.log('[pre-cache] Cached', tools.length, 'MCP tools');
     } else {
       console.log('[pre-cache] No tools discovered from MCP server');
@@ -594,7 +616,15 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
     await manager.disconnectAll();
   } catch(err) { process.stderr.write('[pre-cache] failed: ' + err.message + '\n'); }
 })();
-" 2>&1 || true
+EOF_PRECACHE
+    for _attempt in 1 2 3; do
+      echo "[entrypoint] pre-cache attempt ${_attempt}/3..."
+      timeout 25 node /tmp/mcp-pre-cache.mjs 2>&1 || true
+      if [ -f "/tmp/mcp-tools-cache.json" ]; then
+        break
+      fi
+      [ "${_attempt}" -lt 3 ] && sleep 5
+    done
     if [ -f "/tmp/mcp-tools-cache.json" ]; then
       node -e "
         try {
@@ -626,7 +656,49 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
   " &
 
   echo "[entrypoint] Starting gateway with --allow-unconfigured on internal port 18790 (TCP proxy on :::18789)"
-  exec node /app/openclaw.mjs gateway --port 18790 --allow-unconfigured
+  node /app/openclaw.mjs gateway --port 18790 --allow-unconfigured &
+  GATEWAY_PID=$!
+
+  # Phase 3: wait for gateway health, then start a background re-injection loop.
+  # The OpenClaw doctor runs ~3 minutes after boot and rewrites models.json, stripping
+  # any custom model entry. We loop every 15s for 5 minutes (20 iterations) to ensure
+  # the custom model is always present — before, during, and after the doctor run.
+  for _i in $(seq 1 45); do
+    sleep 2
+    if curl -sf http://localhost:18790/healthz > /dev/null 2>&1; then
+      echo "[entrypoint] Gateway healthy after ${_i}x2s — starting models.json re-inject loop"
+      break
+    fi
+  done
+  (
+    for _j in $(seq 1 20); do
+      sleep 15
+      node -e "
+        const fs = require('fs');
+        const mp = (process.env.HOME||'/home/node') + '/.openclaw/agents/main/agent/models.json';
+        const mn = process.env.MODEL_NAME;
+        const bu = process.env.OPENAI_BASE_URL;
+        const ak = process.env.OPENAI_API_KEY;
+        if (!mn) process.exit(0);
+        let d = {providers: {}};
+        try { d = JSON.parse(fs.readFileSync(mp,'utf8')); } catch(e) {}
+        const p = d.providers['openai'] || {models: []};
+        if (!Array.isArray(p.models)) p.models = [];
+        if (!p.models.find(m => m.id === mn)) {
+          p.models.push({id:mn,name:mn,api:'openai-completions',input:['text'],
+            cost:{input:0,output:0,cacheRead:0,cacheWrite:0},
+            contextWindow:1000000,maxTokens:40000,compat:{supportsTools:true}});
+          if (bu) p.baseUrl = bu;
+          if (ak) p.apiKey = ak;
+          d.providers['openai'] = p;
+          fs.writeFileSync(mp, JSON.stringify(d,null,2));
+          console.log('[entrypoint] re-inject loop: added ' + mn);
+        }
+      " 2>&1 || true
+    done
+  ) &
+
+  wait $GATEWAY_PID
 
   # Unreachable — exec replaces the shell. The exit-78 branch below is kept as dead
   # code for the unlikely case where the gateway exits unexpectedly.
@@ -649,6 +721,7 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
       try { data = JSON.parse(fs.readFileSync(modelsPath, 'utf8')); } catch (e) {}
       const providerKey = 'openai';
       const provider = data.providers[providerKey] || { models: [] };
+      if (!Array.isArray(provider.models)) provider.models = [];
       const baseUrl = process.env.OPENAI_BASE_URL || provider.baseUrl || '';
       if (!provider.models.find(m => m.id === modelName)) {
         provider.models.push({
@@ -739,14 +812,14 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
           cfg.agents.defaults = cfg.agents.defaults || {};
           cfg.agents.defaults.model = { primary: primaryModel };
         }
-        // Re-add models.providers.openai.baseUrl so codex is not auto-enabled.
-        // OpenClaw checks this field (not env vars) to decide whether the openai provider
-        // uses a custom endpoint; any non-official URL bypasses codex auto-enable.
+        // Re-add models.providers.openai config so the openai plugin has the correct endpoint.
         if (openaiBaseUrl) {
           cfg.models = cfg.models || {};
           cfg.models.providers = cfg.models.providers || {};
           cfg.models.providers.openai = cfg.models.providers.openai || {};
           cfg.models.providers.openai.baseUrl = openaiBaseUrl;
+          const apiKey = process.env.OPENAI_API_KEY;
+          if (apiKey) cfg.models.providers.openai.apiKey = apiKey;
         }
         fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
         console.log('[entrypoint] Phase 3: re-injected Telegram + controlUi + plugins + model settings into openclaw.json');
@@ -759,7 +832,8 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
     # async .then() fires too late. We write /tmp/mcp-tools-cache.json here (before exec)
     # and the patched plugin reads it synchronously in register().
     if [ -n "$MCP_CONFIG" ]; then
-      timeout 20 node -e "
+      # node -e is broken in Node.js v24 for multi-line scripts — write to a file instead.
+      cat > /tmp/mcp-pre-cache.mjs << 'EOF_PRECACHE'
 (async () => {
   try {
     const config = JSON.parse(process.env.MCP_CONFIG || '[]');
@@ -772,7 +846,8 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
     const tools = manager.getRegisteredTools();
     if (tools.length > 0) {
       const cache = tools.map(t => ({ namespacedName: t.namespacedName, description: t.description, inputSchema: t.inputSchema }));
-      require('fs').writeFileSync('/tmp/mcp-tools-cache.json', JSON.stringify(cache));
+      const { writeFileSync } = await import('fs');
+      writeFileSync('/tmp/mcp-tools-cache.json', JSON.stringify(cache));
       console.log('[pre-cache] Cached', tools.length, 'MCP tools');
     } else {
       console.log('[pre-cache] No tools discovered from MCP server');
@@ -780,7 +855,15 @@ elif [ -n "$OPENAI_BASE_URL" ] && [ -n "$MODEL_NAME" ]; then
     await manager.disconnectAll();
   } catch(err) { process.stderr.write('[pre-cache] failed: ' + err.message + '\n'); }
 })();
-" 2>&1 || true
+EOF_PRECACHE
+      for _attempt in 1 2 3; do
+        echo "[entrypoint] pre-cache attempt ${_attempt}/3..."
+        timeout 25 node /tmp/mcp-pre-cache.mjs 2>&1 || true
+        if [ -f "/tmp/mcp-tools-cache.json" ]; then
+          break
+        fi
+        [ "${_attempt}" -lt 3 ] && sleep 5
+      done
     fi
     # Patch openclaw-mcp-bridge manifest with discovered tool names as contracts.tools.
     # resolvePluginToolRuntimePluginIds only includes plugins that have non-empty contracts.tools
@@ -849,6 +932,61 @@ else
   # Always regenerate openclaw.json before Phase 2 — the config lives outside the volume
   # and is absent on every restart if Phase 1 was skipped.
   generate_config
+
+  # Pre-fetch MCP tool definitions on every boot so the plugin can register them synchronously.
+  # Phase 3 (after doctor exit-78) also runs the pre-cache, but the doctor only exits 78 on the
+  # FIRST boot when the workspace is initialized. On subsequent restarts (e.g. after enabling
+  # sandbox tools), Phase 2 runs the gateway directly without exiting 78, so Phase 3 never runs.
+  # Running the pre-cache here (before Phase 2) ensures tools are always up-to-date on every restart.
+  if [ -n "$MCP_CONFIG" ]; then
+    cat > /tmp/mcp-pre-cache.mjs << 'EOF_PRECACHE'
+(async () => {
+  try {
+    const config = JSON.parse(process.env.MCP_CONFIG || '[]');
+    const servers = {};
+    for (const s of config) { if (s.name && s.url) servers[s.name] = { url: s.url }; }
+    if (!Object.keys(servers).length) { console.log('[pre-cache] No HTTP MCP servers'); return; }
+    const { MCPManager } = await import('/app/dist/extensions/openclaw-mcp-bridge/dist/manager/mcp-manager.js');
+    const manager = new MCPManager({ servers });
+    await manager.connectAll();
+    const tools = manager.getRegisteredTools();
+    if (tools.length > 0) {
+      const cache = tools.map(t => ({ namespacedName: t.namespacedName, description: t.description, inputSchema: t.inputSchema }));
+      const { writeFileSync } = await import('fs');
+      writeFileSync('/tmp/mcp-tools-cache.json', JSON.stringify(cache));
+      console.log('[pre-cache] Cached', tools.length, 'MCP tools');
+    } else {
+      console.log('[pre-cache] No tools discovered from MCP server');
+    }
+    await manager.disconnectAll();
+  } catch(err) { process.stderr.write('[pre-cache] failed: ' + err.message + '\n'); }
+})();
+EOF_PRECACHE
+    for _attempt in 1 2 3; do
+      echo "[entrypoint] pre-cache attempt ${_attempt}/3..."
+      timeout 25 node /tmp/mcp-pre-cache.mjs 2>&1 || true
+      if [ -f "/tmp/mcp-tools-cache.json" ]; then
+        break
+      fi
+      [ "${_attempt}" -lt 3 ] && sleep 5
+    done
+    if [ -f "/tmp/mcp-tools-cache.json" ]; then
+      node -e "
+        try {
+          const fs = require('fs');
+          const cache = JSON.parse(fs.readFileSync('/tmp/mcp-tools-cache.json', 'utf8'));
+          const toolNames = cache.map(t => t.namespacedName);
+          if (toolNames.length > 0) {
+            const manifestPath = '/app/dist/extensions/openclaw-mcp-bridge/openclaw.plugin.json';
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            manifest.contracts = { tools: ['mcp_manage', ...toolNames] };
+            fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+            console.log('[pre-cache] Patched manifest contracts.tools:', toolNames.length + 1, 'tools');
+          }
+        } catch(e) { process.stderr.write('[pre-cache] manifest patch failed: ' + e.message + '\n'); }
+      " 2>&1 || true
+    fi
+  fi
 
   # Phase 2: run gateway in foreground; catch exit 78 from the doctor.
   # Use set +e to correctly capture exit code ($? inside `if ! cmd` is always 0, not the real code).
@@ -926,14 +1064,14 @@ else
           cfg.agents.defaults = cfg.agents.defaults || {};
           cfg.agents.defaults.model = { primary: primaryModel };
         }
-        // Re-add models.providers.openai.baseUrl so codex is not auto-enabled.
-        // OpenClaw checks this field (not env vars) to decide whether the openai provider
-        // uses a custom endpoint; any non-official URL bypasses codex auto-enable.
+        // Re-add models.providers.openai config so the openai plugin has the correct endpoint.
         if (openaiBaseUrl) {
           cfg.models = cfg.models || {};
           cfg.models.providers = cfg.models.providers || {};
           cfg.models.providers.openai = cfg.models.providers.openai || {};
           cfg.models.providers.openai.baseUrl = openaiBaseUrl;
+          const apiKey = process.env.OPENAI_API_KEY;
+          if (apiKey) cfg.models.providers.openai.apiKey = apiKey;
         }
         fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
         console.log('[entrypoint] Phase 3: re-injected Telegram + controlUi + plugins + model settings into openclaw.json');
@@ -946,7 +1084,8 @@ else
     # async .then() fires too late. We write /tmp/mcp-tools-cache.json here (before exec)
     # and the patched plugin reads it synchronously in register().
     if [ -n "$MCP_CONFIG" ]; then
-      timeout 20 node -e "
+      # node -e is broken in Node.js v24 for multi-line scripts — write to a file instead.
+      cat > /tmp/mcp-pre-cache.mjs << 'EOF_PRECACHE'
 (async () => {
   try {
     const config = JSON.parse(process.env.MCP_CONFIG || '[]');
@@ -959,7 +1098,8 @@ else
     const tools = manager.getRegisteredTools();
     if (tools.length > 0) {
       const cache = tools.map(t => ({ namespacedName: t.namespacedName, description: t.description, inputSchema: t.inputSchema }));
-      require('fs').writeFileSync('/tmp/mcp-tools-cache.json', JSON.stringify(cache));
+      const { writeFileSync } = await import('fs');
+      writeFileSync('/tmp/mcp-tools-cache.json', JSON.stringify(cache));
       console.log('[pre-cache] Cached', tools.length, 'MCP tools');
     } else {
       console.log('[pre-cache] No tools discovered from MCP server');
@@ -967,7 +1107,15 @@ else
     await manager.disconnectAll();
   } catch(err) { process.stderr.write('[pre-cache] failed: ' + err.message + '\n'); }
 })();
-" 2>&1 || true
+EOF_PRECACHE
+      for _attempt in 1 2 3; do
+        echo "[entrypoint] pre-cache attempt ${_attempt}/3..."
+        timeout 25 node /tmp/mcp-pre-cache.mjs 2>&1 || true
+        if [ -f "/tmp/mcp-tools-cache.json" ]; then
+          break
+        fi
+        [ "${_attempt}" -lt 3 ] && sleep 5
+      done
     fi
     # Patch openclaw-mcp-bridge manifest with discovered tool names as contracts.tools.
     # resolvePluginToolRuntimePluginIds only includes plugins that have non-empty contracts.tools

@@ -1,4 +1,4 @@
-FROM ghcr.io/openclaw/openclaw:2026.5.27
+FROM ghcr.io/openclaw/openclaw:2026.5.28
 
 # Switch to root to install browser dependencies
 USER root
@@ -64,10 +64,6 @@ RUN mkdir -p /home/node/.openclaw/plugins/reins-thread-prompt && \
     npm init -y > /dev/null 2>&1 && \
     npm install --no-fund --no-audit /tmp/reins-thread-prompt-0.3.1.tgz && \
     chown -R node:node /home/node/.openclaw
-
-# Fix missing plugin runtime module (packaging gap in main image)
-RUN mkdir -p /app/dist/plugins/runtime
-COPY plugin-runtime-shim.mjs /app/dist/plugins/runtime/index.js
 
 # Copy entrypoint, auth helper, workspace templates, and Chromium wrapper
 COPY entrypoint.sh /entrypoint.sh
