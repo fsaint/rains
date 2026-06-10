@@ -38,3 +38,13 @@ def list_users() -> list[dict]:
 def list_agents() -> list[dict]:
     result = _request('GET', '/api/admin/agents')
     return (result or {}).get('data', [])
+
+
+def redeploy_agent(agent_id: str, model_name: str | None = None, model_provider: str | None = None) -> dict:
+    body: dict = {}
+    if model_name is not None:
+        body['modelName'] = model_name
+    if model_provider is not None:
+        body['modelProvider'] = model_provider
+    result = _request('POST', f'/api/agents/{agent_id}/redeploy', body=body)
+    return result or {}

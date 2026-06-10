@@ -40,6 +40,7 @@ Python scripts for read-mostly production management. These replace the ad-hoc N
 | `exec_machine.py <app> <id> -- <cmd>` | Run a diagnostic command on a machine (no WireGuard needed) |
 | `restart_machine.py <app> <id>` | Restart a Fly machine |
 | `recover_agent.py <agent_id>` | Recreate a destroyed Fly app/machine from the DB record |
+| `update_minimax_model.py [--model X] [--dry-run]` | Redeploy all MiniMax agents with a new model name |
 
 ## What this lane CANNOT do
 
