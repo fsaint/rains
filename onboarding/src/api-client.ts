@@ -85,7 +85,7 @@ export async function createAndDeploy(params: {
     ...(params.telegramToken ? { telegramToken: params.telegramToken } : {}),
     telegramUserId: params.telegramUserId,
     modelProvider: 'minimax',
-    modelName: 'MiniMax-M2.7',
+    modelName: 'MiniMax-M3',
     openaiApiKey: params.minimaxApiKey,
     runtime: 'openclaw',
     soulMd: DEFAULT_SOUL_MD,
