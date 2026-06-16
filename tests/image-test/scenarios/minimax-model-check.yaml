@@ -1,0 +1,10 @@
+name: minimax-model-check
+description: Verify the agent is running MiniMax M3 as its LLM model
+timeout_seconds: 90
+prompt: |
+  What LLM model are you currently using? Reply with ONLY the model name, nothing else.
+assertions:
+  - type: reply_contains
+    value: "MiniMax-M3"
+  - type: reply_not_contains
+    values: ["error", "cannot", "M2.7", "claude", "gpt"]

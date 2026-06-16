@@ -24,7 +24,10 @@ interface VariantYaml {
   runtime?: 'openclaw' | 'hermes';
   description?: string;
   dockerfile?: string;
+  image?: string;
   build_args: Record<string, string>;
+  env?: Record<string, string>;
+  browser?: boolean;
 }
 
 interface Assertion {
@@ -79,23 +82,42 @@ function parseVariantYaml(filePath: string): VariantYaml {
   const lines = content.split('\n');
   const result: VariantYaml = { name: '', build_args: {} };
   let inBuildArgs = false;
+  let inEnv = false;
 
   for (const line of lines) {
     if (line.startsWith('name:')) {
       result.name = line.split(':').slice(1).join(':').trim().replace(/^['"]|['"]$/g, '');
+      inBuildArgs = false; inEnv = false;
     } else if (line.startsWith('runtime:')) {
       result.runtime = line.split(':')[1].trim() as 'openclaw' | 'hermes';
+      inBuildArgs = false; inEnv = false;
+    } else if (line.startsWith('browser:')) {
+      result.browser = line.split(':')[1].trim() !== 'false';
+      inBuildArgs = false; inEnv = false;
     } else if (line.startsWith('description:')) {
       result.description = line.split(':').slice(1).join(':').trim().replace(/^['"]|['"]$/g, '');
+      inBuildArgs = false; inEnv = false;
     } else if (line.startsWith('dockerfile:')) {
       result.dockerfile = line.split(':').slice(1).join(':').trim().replace(/^['"]|['"]$/g, '');
+      inBuildArgs = false; inEnv = false;
+    } else if (line.startsWith('image:')) {
+      result.image = line.split(':').slice(1).join(':').trim().replace(/^['"]|['"]$/g, '');
+      inBuildArgs = false; inEnv = false;
     } else if (line.startsWith('build_args:')) {
-      inBuildArgs = true;
+      inBuildArgs = true; inEnv = false;
+    } else if (line.startsWith('env:')) {
+      inEnv = true; inBuildArgs = false;
     } else if (inBuildArgs && /^  \w/.test(line)) {
       const m = line.match(/^  (\w+):\s*['"]?(.*?)['"]?\s*$/);
       if (m) result.build_args[m[1]] = m[2];
-    } else if (/^\w/.test(line) && !line.startsWith('build_args:')) {
-      inBuildArgs = false;
+    } else if (inEnv && /^  \w/.test(line)) {
+      const m = line.match(/^  (\w+):\s*['"]?(.*?)['"]?\s*$/);
+      if (m) {
+        if (!result.env) result.env = {};
+        result.env[m[1]] = m[2];
+      }
+    } else if (/^\w/.test(line) && !line.startsWith('build_args:') && !line.startsWith('env:')) {
+      inBuildArgs = false; inEnv = false;
     }
   }
   return result;
@@ -352,7 +374,7 @@ async function main() {
   );
   fs.mkdirSync(runDir, { recursive: true });
 
-  const image = `registry.fly.io/reins-imgtest:${variant.name}`;
+  const image = variant.image ?? `registry.fly.io/reins-imgtest:${variant.name}`;
   let appName = '';
   let machineId = '';
   const allResults: ScenarioResult[] = [];
@@ -370,6 +392,13 @@ async function main() {
 
       appName = await createTestApp(variant.name);
       const telegramUserId = process.env.TELEGRAM_USER_ID;
+
+      // Resolve ${VAR} placeholders in variant env values from process.env
+      const resolvedVariantEnv: Record<string, string> = {};
+      for (const [k, v] of Object.entries(variant.env || {})) {
+        resolvedVariantEnv[k] = v.replace(/\$\{(\w+)\}/g, (_, name) => process.env[name] || '');
+      }
+
       machineId = await createTestMachine(appName, image, {
         TELEGRAM_BOT_TOKEN: botToken,
         ANTHROPIC_API_KEY: anthropicKey,
@@ -383,6 +412,8 @@ async function main() {
         ...(telegramUserId && variant.runtime !== 'hermes'
           ? { TELEGRAM_TRUSTED_USER: telegramUserId }
           : {}),
+        // Variant env overrides defaults (e.g. MODEL_PROVIDER, MODEL_NAME, OPENAI_BASE_URL)
+        ...resolvedVariantEnv,
       });
 
       // 3. Wait for healthy
@@ -395,10 +426,11 @@ async function main() {
 
     const tgScript = path.join(path.dirname(import.meta.url.replace('file://', '')), 'tg-browser-test.py');
 
-    if (variant.runtime === 'hermes') {
-      // Hermes has no browser — skip Chrome CDP warmup entirely.
+    if (variant.runtime === 'hermes' || variant.browser === false) {
+      // Hermes and browser-disabled variants have no browser — skip Chrome CDP warmup.
       // Just wait for the bot to be ready to accept messages.
-      console.log('\nHermes runtime: waiting 30s for bot to connect to Telegram...');
+      const label = variant.runtime === 'hermes' ? 'Hermes runtime' : `${variant.name} (browser: false)`;
+      console.log(`\n${label}: waiting 30s for bot to connect to Telegram...`);
       await new Promise<void>((r) => setTimeout(r, 30_000));
       console.log('Ready. Starting scenarios.\n');
     } else {

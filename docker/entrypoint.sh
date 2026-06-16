@@ -137,7 +137,7 @@ const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN || 'reins-' + Math.rando
 const webhookUrl = process.env.OPENCLAW_WEBHOOK_URL || '';
 const webhookSecret = process.env.OPENCLAW_WEBHOOK_SECRET || '';
 const modelProvider = process.env.MODEL_PROVIDER || 'anthropic';
-const defaultModelName = modelProvider === 'openai-codex' ? 'gpt-5.4' : modelProvider === 'minimax' ? 'MiniMax-M2.7' : 'claude-sonnet-4-6';
+const defaultModelName = modelProvider === 'openai-codex' ? 'gpt-5.4' : modelProvider === 'minimax' ? 'MiniMax-M3' : 'claude-sonnet-4-6';
 const modelName = process.env.MODEL_NAME || defaultModelName;
 // OpenClaw 2026.5.27+ schema requires provider/model format.
 // Codex auto-enable is prevented by setting models.providers.openai.baseUrl in openclaw.json
@@ -237,6 +237,15 @@ const config = {
         openai: {
           baseUrl: process.env.OPENAI_BASE_URL,
           ...(process.env.OPENAI_API_KEY ? { apiKey: process.env.OPENAI_API_KEY } : {}),
+          // Declare available models so OpenClaw's capability resolver knows which models
+          // support image inputs. Without this list the array is empty and OpenClaw falls
+          // back to built-in defaults that don't exist on the MiniMax API, breaking vision.
+          ...((process.env.OPENAI_BASE_URL || '').includes('minimax.io') ? {
+            models: [
+              { id: modelName, name: modelName, input: ['text', 'image'], contextWindow: 1048576, maxTokens: 8192 },
+              ...(modelName !== 'MiniMax-VL01' ? [{ id: 'MiniMax-VL01', name: 'MiniMax Vision', input: ['text', 'image'], contextWindow: 1048576, maxTokens: 8192 }] : []),
+            ],
+          } : {}),
         },
       },
     },

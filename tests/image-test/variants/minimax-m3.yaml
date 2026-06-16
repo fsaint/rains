@@ -1,0 +1,13 @@
+name: minimax-m3
+runtime: openclaw
+browser: false
+image: registry.fly.io/reins-imgtest:baseline
+description: Verify MiniMax M3 is the default model for MiniMax-provisioned agents
+build_args:
+  XVFB_RESOLUTION: "1280x1024x24"
+  EXTRA_FONT_PACKAGES: ""
+env:
+  MODEL_PROVIDER: openai
+  MODEL_NAME: MiniMax-M3
+  OPENAI_BASE_URL: https://api.minimax.io/v1
+  OPENAI_API_KEY: "${MINIMAX_API_KEY}"
