@@ -432,6 +432,35 @@ async function main() {
       const label = variant.runtime === 'hermes' ? 'Hermes runtime' : `${variant.name} (browser: false)`;
       console.log(`\n${label}: waiting 30s for bot to connect to Telegram...`);
       await new Promise<void>((r) => setTimeout(r, 30_000));
+
+      // For non-Hermes browser-disabled variants (e.g. MiniMax), send /new to get a
+      // clean session before running scenarios — same reason the browser path does it.
+      if (variant.browser === false && variant.runtime !== 'hermes') {
+        console.log('Sending /new to reset session context...');
+        const sendNewScript = `
+import asyncio, os
+from pathlib import Path
+async def send_new():
+    from telethon import TelegramClient
+    api_id = int(os.environ["TELETHON_API_ID"])
+    api_hash = os.environ["TELETHON_API_HASH"]
+    session = os.path.expanduser(os.environ.get("TELETHON_SESSION", str(Path.home() / ".reins_imgtest_telethon.session")))
+    async with TelegramClient(session, api_id, api_hash) as client:
+        bot = await client.get_entity(os.environ["_RESET_BOT_USERNAME"])
+        await client.send_message(bot, "/new")
+asyncio.run(send_new())
+`;
+        spawnSync('python3', ['-c', sendNewScript], {
+          encoding: 'utf8',
+          timeout: 15_000,
+          env: { ...process.env, _RESET_BOT_USERNAME: botUsername },
+        });
+        // Wait for the greeting to settle before running scenarios.
+        // MiniMax agents make a real LLM call to generate the /new greeting
+        // (~30s), so 60s ensures the response arrives and the session is quiet.
+        await new Promise<void>((r) => setTimeout(r, 60_000));
+      }
+
       console.log('Ready. Starting scenarios.\n');
     } else {
       // 4b. Send /new once to reset session history and trigger Chrome CDP init,
