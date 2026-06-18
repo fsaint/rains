@@ -15,7 +15,8 @@
     "./linear": "./dist/linear/index.js",
     "./hermeneutix": "./dist/hermeneutix/index.js",
     "./zendesk": "./dist/zendesk/index.js",
-    "./dev-sandbox": "./dist/dev-sandbox/index.js"
+    "./dev-sandbox": "./dist/dev-sandbox/index.js",
+    "./pipedrive": "./dist/pipedrive/index.js"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",

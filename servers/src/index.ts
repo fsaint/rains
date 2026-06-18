@@ -24,6 +24,7 @@ export { HermeneutixServer, hermeneutixTools } from './hermeneutix/index.js';
 export { ZendeskServer, zendeskTools } from './zendesk/index.js';
 export { DevSandboxServer, devSandboxTools } from './dev-sandbox/index.js';
 export { MemoryServer, memoryTools } from './memory/index.js';
+export { PipedriveServer, pipedriveTools } from './pipedrive/index.js';
 
 export { BaseServer } from './common/base-server.js';
 export { GoogleOAuthHandler } from './common/oauth-handler.js';
