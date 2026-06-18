@@ -282,6 +282,12 @@ export class ServerManager extends EventEmitter<ServerManagerEvents> {
       }
     }
 
+    // Inject Pipedrive company domain from credential data
+    if (serverType === 'pipedrive' && context.credential) {
+      const pipedriveData = context.credential.data as { companydomain?: string };
+      (context as unknown as Record<string, unknown>)['companydomain'] = pipedriveData.companydomain ?? '';
+    }
+
     // Inject Drive path rules for drive tools
     if (serverType === 'drive') {
       const driveConfig = await getDrivePathConfig(agentId);

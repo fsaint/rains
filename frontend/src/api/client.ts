@@ -291,6 +291,11 @@ export const credentials = {
       '/credentials/zendesk',
       { method: 'POST', body: JSON.stringify({ token, email, subdomain }) }
     ),
+  addPipedrive: (token: string, companydomain: string) =>
+    request<{ id: string; serviceId: string; userName: string; companyName: string }>(
+      '/credentials/pipedrive',
+      { method: 'POST', body: JSON.stringify({ token, companydomain }) }
+    ),
   addApiKey: (serviceId: string, apiKey: string) =>
     request<{ id: string; serviceId: string }>(
       '/credentials',

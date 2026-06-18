@@ -1895,6 +1895,53 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     return reply.code(201).send({ data: { id: credId, serviceId: 'zendesk' } });
   });
 
+  app.post('/api/credentials/pipedrive', async (request, reply) => {
+    const body = request.body as { token?: string; companydomain?: string } | undefined;
+    if (!body?.token) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'token is required' } });
+    }
+    if (!body?.companydomain) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'companydomain is required' } });
+    }
+
+    // Strip any accidental .pipedrive.com suffix the user may have pasted
+    const domain = body.companydomain.replace(/\.pipedrive\.com.*$/, '');
+
+    const userId = getUserId(request);
+
+    // Validate by fetching the authenticated user's profile
+    let userName = 'Unknown';
+    let companyName = domain;
+    try {
+      const res = await fetch(`https://${domain}.pipedrive.com/api/v1/users/me`, {
+        headers: { 'x-api-token': body.token },
+      });
+      if (!res.ok) {
+        return reply.code(401).send({ error: { code: 'INVALID_TOKEN', message: 'Invalid Pipedrive credentials' } });
+      }
+      const json = await res.json() as { data?: { name?: string; company_name?: string; email?: string } };
+      userName = json.data?.name ?? userName;
+      companyName = json.data?.company_name ?? companyName;
+    } catch {
+      return reply.code(502).send({ error: { code: 'SERVER_ERROR', message: 'Could not reach Pipedrive API' } });
+    }
+
+    const credId = await credentialVault.storeOAuth({
+      serviceId: 'pipedrive',
+      accountEmail: userName,
+      userId,
+      grantedServices: ['pipedrive'],
+      data: {
+        accessToken: body.token,
+        companydomain: domain,
+      } as any,
+    });
+
+    await autoLinkCredential('pipedrive', credId);
+
+    return reply.code(201).send({ data: { id: credId, serviceId: 'pipedrive', userName, companyName } });
+  });
+
   // ========================================================================
   // OAuth - Google
   // ========================================================================
