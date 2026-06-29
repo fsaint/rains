@@ -25,7 +25,8 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   'gpt-4.1':            { inputPer1M: 2.00,  outputPer1M: 8.00  },
   'openai-codex':       { inputPer1M: 3.00,  outputPer1M: 15.00 },
   // MiniMax
-  'minimax':            { inputPer1M: 0.80,  outputPer1M: 1.60  },
+  'minimax':            { inputPer1M: 0.29,  outputPer1M: 1.17  },
+  'minimax-m3':         { inputPer1M: 0.29,  outputPer1M: 1.17  },
   'minimax-m2.7':       { inputPer1M: 0.80,  outputPer1M: 1.60  },
 };
 

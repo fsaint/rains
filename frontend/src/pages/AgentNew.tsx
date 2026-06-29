@@ -114,7 +114,7 @@ export default function AgentNew() {
     telegramToken: '',
     telegramUserId: '',
     modelProvider: 'minimax',
-    modelName: 'MiniMax-M2.7',
+    modelName: 'MiniMax-M3',
     soulMd: DEFAULT_SOUL,
     region: 'iad',
     openaiApiKey: '',
@@ -831,7 +831,7 @@ export default function AgentNew() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <button
                 type="button"
-                onClick={() => update({ modelProvider: 'minimax', modelName: 'MiniMax-M2.7', openaiApiKey: '' })}
+                onClick={() => update({ modelProvider: 'minimax', modelName: 'MiniMax-M3', openaiApiKey: '' })}
                 className={`relative p-4 rounded-xl border-2 text-left transition-all ${
                   form.modelProvider === 'minimax'
                     ? 'border-trust-blue bg-trust-blue/5'
@@ -948,11 +948,12 @@ export default function AgentNew() {
                 <div>
                   <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">Model</label>
                   <select
-                    value={form.modelName || 'MiniMax-M2.7'}
+                    value={form.modelName || 'MiniMax-M3'}
                     onChange={(e) => update({ modelName: e.target.value })}
                     className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none bg-white"
                   >
-                    <option value="MiniMax-M2.7">MiniMax M2.7 (default)</option>
+                    <option value="MiniMax-M3">MiniMax M3 (default)</option>
+                    <option value="MiniMax-M2.7">MiniMax M2.7</option>
                     <option value="MiniMax-M2.7-highspeed">MiniMax M2.7 Highspeed</option>
                     <option value="MiniMax-M2.5">MiniMax M2.5</option>
                     <option value="MiniMax-M2.5-highspeed">MiniMax M2.5 Highspeed</option>

@@ -33,14 +33,14 @@ import { CodexDeviceFlow } from '../components/CodexDeviceFlow';
 const PROVIDERS = [
   { value: 'anthropic', label: 'Anthropic (Claude)' },
   { value: 'openai',    label: 'OpenAI (GPT-4o)' },
-  { value: 'minimax',   label: 'MiniMax (M2.7)' },
+  { value: 'minimax',   label: 'MiniMax (M3)' },
   { value: 'google',    label: 'Google (Gemini)' },
 ] as const;
 
 const MODEL_SUGGESTIONS: Record<string, string[]> = {
   anthropic: ['claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
   openai:    ['gpt-4o', 'o3-mini'],
-  minimax:   ['MiniMax-M2.7'],
+  minimax:   ['MiniMax-M3', 'MiniMax-M2.7'],
   google:    ['gemini-2.5-flash', 'gemini-2.5-pro'],
 };
 

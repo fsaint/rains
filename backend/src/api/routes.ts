@@ -3416,7 +3416,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         return mn && !mn.startsWith('claude-') ? mn : 'gpt-5.4';
       }
       if (mp === 'minimax') {
-        return mn || 'MiniMax-M2.7';
+        return mn || 'MiniMax-M3';
       }
       if (mp === 'openai') {
         return mn || 'gpt-4.1';
@@ -3669,7 +3669,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         return mn && !mn.startsWith('claude-') ? mn : 'gpt-5.4';
       }
       if (mp === 'minimax') {
-        return mn || 'MiniMax-M2.7';
+        return mn || 'MiniMax-M3';
       }
       if (mp === 'openai') {
         return mn || 'gpt-4.1';
@@ -4137,7 +4137,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         return mn && !mn.startsWith('claude-') ? mn : 'gpt-5.4';
       }
       if (mp === 'minimax') {
-        return mn || 'MiniMax-M2.7';
+        return mn || 'MiniMax-M3';
       }
       if (mp === 'openai') {
         return mn || 'gpt-4.1';

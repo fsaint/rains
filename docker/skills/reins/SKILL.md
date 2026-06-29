@@ -121,7 +121,7 @@ Your active model is shown in the dashboard under **Agent → Settings**. Suppor
 |---|---|
 | Anthropic | `claude-sonnet-4-6`, `claude-opus-4-6` |
 | OpenAI | `gpt-4o`, `gpt-4.1` |
-| MiniMax | `MiniMax-M2.7` |
+| MiniMax | `MiniMax-M3`, `MiniMax-M2.7` |
 | OpenAI Codex | `gpt-5.4` |
 
 Model changes require a redeploy.

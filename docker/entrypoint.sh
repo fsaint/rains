@@ -763,7 +763,7 @@ EOF_PRECACHE
       const webhookUrl = process.env.OPENCLAW_WEBHOOK_URL || '';
       const webhookSecret = process.env.OPENCLAW_WEBHOOK_SECRET || '';
       const modelProvider = process.env.MODEL_PROVIDER || 'anthropic';
-      const modelName = process.env.MODEL_NAME || (modelProvider === 'minimax' ? 'MiniMax-M2.7' : '');
+      const modelName = process.env.MODEL_NAME || (modelProvider === 'minimax' ? 'MiniMax-M3' : '');
       const openaiBaseUrl = process.env.OPENAI_BASE_URL || '';
       const primaryModel = modelName ? (modelProvider + '/' + modelName) : null;
       try {

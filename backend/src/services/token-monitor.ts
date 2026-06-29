@@ -229,7 +229,7 @@ async function validateMinimaxKey(apiKey: string): Promise<boolean> {
     const res = await fetch('https://api.minimax.io/v1/chat/completions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'MiniMax-M2.7', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
+      body: JSON.stringify({ model: 'MiniMax-M3', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
     });
     return res.status !== 401;
   } catch {

@@ -680,7 +680,7 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
                   value={config.modelProvider}
                   onChange={(e) => {
                     const provider = e.target.value;
-                    const defaultModel = provider === 'openai-codex' ? 'gpt-5.4' : provider === 'minimax' ? 'MiniMax-M2.7' : 'claude-sonnet-4-5';
+                    const defaultModel = provider === 'openai-codex' ? 'gpt-5.4' : provider === 'minimax' ? 'MiniMax-M3' : 'claude-sonnet-4-5';
                     setConfig({ ...config, modelProvider: provider, modelName: defaultModel });
                   }}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none bg-white"
@@ -710,7 +710,8 @@ export function DeploymentPanel({ agentId, agentName, onClose }: DeploymentPanel
                     </>
                   ) : config.modelProvider === 'minimax' ? (
                     <>
-                      <option value="MiniMax-M2.7">MiniMax M2.7 (default)</option>
+                      <option value="MiniMax-M3">MiniMax M3 (default)</option>
+                      <option value="MiniMax-M2.7">MiniMax M2.7</option>
                       <option value="MiniMax-M2.7-highspeed">MiniMax M2.7 Highspeed</option>
                       <option value="MiniMax-M2.5">MiniMax M2.5</option>
                       <option value="MiniMax-M2.5-highspeed">MiniMax M2.5 Highspeed</option>
