@@ -395,6 +395,7 @@ async function buildHermesMachineConfig(opts: CreateMachineOpts) {
       // INSTANCE_USER_ID and USAGE_CALLBACK_URL omitted until usage_reporter hook
       // files are baked into the Hermes image (docker/hermes/hooks/usage_reporter/)
       ...(opts.initialPrompt ? { INITIAL_PROMPT: opts.initialPrompt } : {}),
+      ...(opts.telegramGroups && opts.telegramGroups.length > 0 ? { TELEGRAM_GROUPS_JSON: JSON.stringify(opts.telegramGroups) } : {}),
     },
     // Hermes runs as root. Full ~/.hermes mount is safe (no pre-installed files there).
     ...(opts.volumeId ? { mounts: [{ volume: opts.volumeId, path: '/root/.hermes' }] } : {}),

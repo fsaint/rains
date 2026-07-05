@@ -309,6 +309,78 @@ console.log('MCP servers:', Object.keys(mcpServers).length);
 "
 }
 
+# Re-apply telegram group settings that the OpenClaw doctor strips on every startup.
+# Called from Codex, MiniMax/OpenAI, and Anthropic startup paths after the doctor runs.
+# Idempotent: only writes if groups, groupPolicy, or topic prompts differ.
+repatch_telegram_groups() {
+  node -e "
+    const fs = require('fs');
+    const configPath = '${CONFIG_DIR}/openclaw.json';
+    let groups = [];
+    try {
+      const raw = process.env.TELEGRAM_GROUPS_JSON;
+      if (raw && raw.trim()) groups = JSON.parse(raw);
+      if (!Array.isArray(groups)) groups = [];
+    } catch (e) { /* ignore */ }
+    if (groups.length === 0) { console.log('[repatch] No telegram groups to re-patch'); process.exit(0); }
+
+    // Build topic entries for reins-thread-prompt plugin
+    const topicEntries = [];
+    for (const g of groups) {
+      if (Array.isArray(g.topicPrompts) && g.topicPrompts.length > 0) {
+        for (const tp of g.topicPrompts) {
+          topicEntries.push({ chatId: String(g.chatId), threadId: tp.threadId, prompt: tp.prompt });
+        }
+      }
+    }
+
+    try {
+      let cfg = {};
+      try { cfg = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+      cfg.channels = cfg.channels || {};
+      cfg.channels.telegram = cfg.channels.telegram || {};
+
+      const expected = groups.reduce((acc, g) => {
+        if (!g.chatId) return acc;
+        acc[g.chatId] = {
+          enabled: true,
+          ...(typeof g.requireMention === 'boolean' ? { requireMention: g.requireMention } : {}),
+          ...(Array.isArray(g.allowFrom) && g.allowFrom.length ? { allowFrom: g.allowFrom } : {}),
+        };
+        return acc;
+      }, {});
+
+      const current = cfg.channels.telegram.groups || {};
+      const currentPolicy = cfg.channels.telegram.groupPolicy;
+      const existingTopics = (cfg.plugins && cfg.plugins.entries && cfg.plugins.entries['reins-thread-prompt'] && cfg.plugins.entries['reins-thread-prompt'].config && cfg.plugins.entries['reins-thread-prompt'].config.topics) || [];
+
+      if (JSON.stringify(expected) === JSON.stringify(current) &&
+          currentPolicy === 'allowlist' &&
+          JSON.stringify(topicEntries) === JSON.stringify(existingTopics)) {
+        console.log('[repatch] Telegram groups already correct, no patch needed');
+        process.exit(0);
+      }
+
+      cfg.channels.telegram.groupPolicy = 'allowlist';
+      cfg.channels.telegram.groups = expected;
+
+      if (topicEntries.length > 0) {
+        cfg.plugins = cfg.plugins || {};
+        cfg.plugins.enabled = true;
+        cfg.plugins.allow = cfg.plugins.allow || [];
+        if (!cfg.plugins.allow.includes('reins-thread-prompt')) cfg.plugins.allow.push('reins-thread-prompt');
+        cfg.plugins.entries = cfg.plugins.entries || {};
+        cfg.plugins.entries['reins-thread-prompt'] = { enabled: true, config: { topics: topicEntries } };
+      }
+
+      fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
+      console.log('[repatch] Telegram groups re-patched:', Object.keys(expected).length, 'group(s),', topicEntries.length, 'topic prompt(s)');
+    } catch (e) {
+      process.stderr.write('[repatch] Failed to re-patch telegram groups: ' + e.message + '\n');
+    }
+  " 2>&1 || true
+}
+
 generate_config
 
 # Start usage reporter in background (reports every 5 minutes)
@@ -417,44 +489,8 @@ if [ -n "$OPENAI_CODEX_TOKENS" ]; then
     fi
   done
 
-  # Re-apply telegram groups that the doctor strips on startup.
-  # Idempotent: only writes if groups differ to avoid triggering a spurious gateway restart.
-  node -e "
-    const fs = require('fs');
-    const configPath = '${CONFIG_DIR}/openclaw.json';
-    let groups = [];
-    try {
-      const raw = process.env.TELEGRAM_GROUPS_JSON;
-      if (raw && raw.trim()) groups = JSON.parse(raw);
-      if (!Array.isArray(groups)) groups = [];
-    } catch (e) { /* ignore */ }
-    if (groups.length === 0) { console.log('No telegram groups to re-patch'); process.exit(0); }
-    try {
-      const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      cfg.channels = cfg.channels || {};
-      cfg.channels.telegram = cfg.channels.telegram || {};
-      const expected = groups.reduce((acc, g) => {
-        if (!g.chatId) return acc;
-        acc[g.chatId] = {
-          enabled: true,
-          ...(typeof g.requireMention === 'boolean' ? { requireMention: g.requireMention } : {}),
-          ...(Array.isArray(g.allowFrom) && g.allowFrom.length ? { allowFrom: g.allowFrom } : {}),
-        };
-        return acc;
-      }, {});
-      const current = cfg.channels.telegram.groups || {};
-      // Only write if content differs — avoids spurious file change that causes gateway to exit
-      if (JSON.stringify(expected) === JSON.stringify(current)) {
-        console.log('Telegram groups already correct, no patch needed');
-        process.exit(0);
-      }
-      cfg.channels.telegram.groups = expected;
-      fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
-      console.log('Telegram groups re-patched:', Object.keys(expected).length, 'group(s)');
-    } catch (e) {
-      process.stderr.write('Failed to re-patch telegram groups: ' + e.message + '\n');
-    }
-  "
+  # Re-apply telegram groups (groupPolicy + groups map + topic prompts) that the doctor strips.
+  repatch_telegram_groups
 
   # Re-patch models.json if the doctor stripped the openai-codex model entries.
   # Idempotent: only writes if the model is actually missing.
@@ -836,6 +872,7 @@ EOF_PRECACHE
         process.stderr.write('[entrypoint] Phase 3: failed to re-inject Telegram settings: ' + e.message + '\n');
       }
     " 2>&1 || true
+    repatch_telegram_groups
     # Pre-fetch MCP tool definitions so the plugin can register them synchronously.
     # openclaw drops api.registerTool() calls made after register() returns — the plugin's
     # async .then() fires too late. We write /tmp/mcp-tools-cache.json here (before exec)
@@ -1088,6 +1125,7 @@ EOF_PRECACHE
         process.stderr.write('[entrypoint] Phase 3: failed to re-inject Telegram settings: ' + e.message + '\n');
       }
     " 2>&1 || true
+    repatch_telegram_groups
     # Pre-fetch MCP tool definitions so the plugin can register them synchronously.
     # openclaw drops api.registerTool() calls made after register() returns — the plugin's
     # async .then() fires too late. We write /tmp/mcp-tools-cache.json here (before exec)
