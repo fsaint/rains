@@ -34,6 +34,130 @@ const PROVIDER_KEY_RENEWAL_URL: Record<string, string> = {
   minimax: 'https://platform.minimax.io',
 };
 
+// Email-sending tools get a rich To/Cc/Subject/Body preview instead of a
+// truncated JSON dump. *_send_draft tools only carry a draftId, so they are
+// intentionally excluded and keep the generic branch.
+const EMAIL_TOOLS = new Set([
+  'gmail_send_message',
+  'gmail_create_draft',
+  'outlook_mail_send_message',
+  'outlook_mail_create_draft',
+  'outlook_mail_reply',
+]);
+
+// Telegram body preview cap. The Telegram message hard limit is 4096 chars;
+// leave generous headroom for the headers, blockquote markup, and buttons.
+const EMAIL_BODY_PREVIEW_LIMIT = 3000;
+
+function escapeHtml(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/** Best-effort HTML → plain text for previewing an email whose only body is HTML. */
+function htmlToText(html: string): string {
+  return html
+    .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+    .replace(/<\s*\/\s*p\s*>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/** Normalize a recipient field that may be a string[] or a single string. */
+function joinRecipients(value: unknown): string {
+  if (Array.isArray(value)) return value.map((v) => String(v)).join(', ');
+  if (typeof value === 'string') return value;
+  return '';
+}
+
+/**
+ * Rich Telegram preview for email approval requests (gmail_* / outlook_mail_*).
+ * Rendered with HTML parse mode — email subjects and bodies routinely contain
+ * Markdown-special characters, so HTML escaping (only & < >) is far more robust.
+ * Exported for unit testing without a live bot.
+ */
+export function formatEmailApprovalMessage(approval: ApprovalRequest): {
+  text: string;
+  keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>>;
+  parseMode: 'HTML';
+} {
+  const args = approval.arguments as {
+    account?: string;
+    to?: unknown;
+    cc?: unknown;
+    bcc?: unknown;
+    subject?: string;
+    body?: string;
+    htmlBody?: string;
+    threadId?: string;
+    replyTo?: string;
+    messageId?: string;
+  };
+
+  const isReply =
+    approval.tool === 'outlook_mail_reply' ||
+    Boolean(args.threadId) ||
+    Boolean(args.replyTo);
+
+  let heading: string;
+  if (approval.tool === 'gmail_create_draft' || approval.tool === 'outlook_mail_create_draft') {
+    heading = '📧 <b>Save draft</b>';
+  } else if (isReply) {
+    heading = '📧 <b>Reply to email</b>';
+  } else {
+    heading = '📧 <b>Send email</b>';
+  }
+
+  const to = joinRecipients(args.to);
+  const cc = joinRecipients(args.cc);
+  const bcc = joinRecipients(args.bcc);
+
+  // Prefer plain-text body; fall back to stripping the HTML that would be sent.
+  let bodyText = typeof args.body === 'string' && args.body.length > 0
+    ? args.body
+    : typeof args.htmlBody === 'string'
+    ? htmlToText(args.htmlBody)
+    : '';
+  let truncated = false;
+  if (bodyText.length > EMAIL_BODY_PREVIEW_LIMIT) {
+    bodyText = bodyText.slice(0, EMAIL_BODY_PREVIEW_LIMIT);
+    truncated = true;
+  }
+
+  const expiresIn = Math.round((approval.expiresAt.getTime() - Date.now()) / 60000);
+
+  const lines = [
+    heading,
+    args.account ? `<b>From account:</b> ${escapeHtml(args.account)}` : null,
+    to ? `<b>To:</b> ${escapeHtml(to)}` : null,
+    cc ? `<b>Cc:</b> ${escapeHtml(cc)}` : null,
+    bcc ? `<b>Bcc:</b> ${escapeHtml(bcc)}` : null,
+    args.subject ? `<b>Subject:</b> ${escapeHtml(args.subject)}` : null,
+    isReply ? `↩︎ <i>Reply</i>` : null,
+    `<b>Agent:</b> <code>${escapeHtml(approval.agentId)}</code>`,
+    bodyText
+      ? `<blockquote>${escapeHtml(bodyText)}${truncated ? '\n…(truncated)' : ''}</blockquote>`
+      : null,
+    ``,
+    `Expires in ~${expiresIn} min`,
+  ].filter(Boolean);
+
+  const keyboard = [
+    [
+      { text: '✅ Approve', callback_data: `ap:${approval.id}:approve` },
+      { text: '❌ Deny', callback_data: `ap:${approval.id}:deny` },
+    ],
+  ];
+
+  return { text: lines.join('\n'), keyboard, parseMode: 'HTML' };
+}
+
 const BOT_TOKEN = config.reisTelegramBotToken;
 const WEBHOOK_SECRET = config.reisTelegramWebhookSecret;
 const WEBHOOK_URL =
@@ -124,9 +248,9 @@ export class TelegramNotifier {
       const magicLinkUrl = approval.tool === 'reauth'
         ? this.buildMagicLinkUrl(owner.userId, approval.id)
         : null;
-      const { text, keyboard } = this.formatApprovalMessage(approval, magicLinkUrl);
+      const { text, keyboard, parseMode } = this.formatApprovalMessage(approval, magicLinkUrl);
       const sent = await this.sendMessage(owner.chatId, text, {
-        parse_mode: 'Markdown',
+        parse_mode: parseMode ?? 'Markdown',
         reply_markup: { inline_keyboard: keyboard },
       });
 
@@ -444,6 +568,7 @@ export class TelegramNotifier {
   private formatApprovalMessage(approval: ApprovalRequest, magicLinkUrl: string | null): {
     text: string;
     keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>>;
+    parseMode?: 'Markdown' | 'HTML';
   } {
     if (approval.tool === 'reauth') {
       return this.formatReauthMessage(approval, magicLinkUrl);
@@ -451,6 +576,10 @@ export class TelegramNotifier {
 
     if (approval.tool === 'telegram_group') {
       return this.formatGroupApprovalMessage(approval);
+    }
+
+    if (EMAIL_TOOLS.has(approval.tool)) {
+      return formatEmailApprovalMessage(approval);
     }
 
     const argsPreview = JSON.stringify(approval.arguments);
