@@ -7,7 +7,7 @@ import {
   handleListDeals, handleGetDeal, handleSearchDeals, handleCreateDeal, handleUpdateDeal, handleDeleteDeal,
   handleListPersons, handleGetPerson, handleSearchPersons, handleCreatePerson, handleUpdatePerson, handleDeletePerson,
   handleListOrganizations, handleGetOrganization, handleSearchOrganizations, handleCreateOrganization, handleUpdateOrganization, handleDeleteOrganization,
-  handleListLeads, handleGetLead, handleCreateLead, handleUpdateLead, handleDeleteLead,
+  handleListLeads, handleGetLead, handleCreateLead, handleUpdateLead, handleDeleteLead, handleConvertLead,
   handleListActivities, handleGetActivity, handleCreateActivity, handleUpdateActivity, handleDeleteActivity,
   handleListNotes, handleGetNote, handleCreateNote, handleUpdateNote, handleDeleteNote,
   handleListPipelines, handleGetPipeline, handleCreatePipeline, handleUpdatePipeline, handleDeletePipeline,
@@ -108,6 +108,10 @@ export const createDealTool: ToolDefinition = {
       expected_close_date: { type: 'string', description: 'Expected close date (YYYY-MM-DD)' },
       owner_id: { type: 'number', description: 'ID of the owner user' },
       label: { type: 'string', description: 'Deal label' },
+      custom_fields: {
+        type: 'object',
+        description: 'Custom field values keyed by Pipedrive field key (40-char hash), e.g. { "9058ca12...": 4640 }. Enum fields take the option ID (not the label); numeric fields a number; text a string. Merged into the request body.',
+      },
     },
     required: ['title'],
   },
@@ -133,6 +137,10 @@ export const updateDealTool: ToolDefinition = {
       owner_id: { type: 'number', description: 'ID of the owner user' },
       lost_reason: { type: 'string', description: 'Reason for losing the deal (when status is lost)' },
       label: { type: 'string', description: 'Deal label' },
+      custom_fields: {
+        type: 'object',
+        description: 'Custom field values keyed by Pipedrive field key (40-char hash), e.g. { "9058ca12...": 4640 }. Enum fields take the option ID (not the label); numeric fields a number; text a string. Merged into the request body.',
+      },
     },
     required: ['deal_id'],
   },
@@ -399,6 +407,10 @@ export const createLeadTool: ToolDefinition = {
         items: { type: 'string' },
         description: 'Label UUIDs to assign',
       },
+      custom_fields: {
+        type: 'object',
+        description: 'Custom field values keyed by Pipedrive field key (40-char hash), e.g. { "9058ca12...": 4640 }. Enum fields take the option ID (not the label); numeric fields a number; text a string. Merged into the request body.',
+      },
     },
     required: ['title'],
   },
@@ -421,6 +433,10 @@ export const updateLeadTool: ToolDefinition = {
       expected_close_date: { type: 'string', description: 'New expected close date (YYYY-MM-DD)' },
       label_ids: { type: 'array', items: { type: 'string' }, description: 'New label UUIDs' },
       was_seen: { type: 'boolean', description: 'Mark lead as seen/unseen' },
+      custom_fields: {
+        type: 'object',
+        description: 'Custom field values keyed by Pipedrive field key (40-char hash), e.g. { "9058ca12...": 4640 }. Enum fields take the option ID (not the label); numeric fields a number; text a string. Merged into the request body.',
+      },
     },
     required: ['lead_id'],
   },
@@ -438,6 +454,19 @@ export const deleteLeadTool: ToolDefinition = {
     required: ['lead_id'],
   },
   handler: handleDeleteLead,
+};
+
+export const convertLeadTool: ToolDefinition = {
+  name: 'pipedrive_convert_lead',
+  description: 'Convert a lead into a deal using Pipedrive\'s native conversion, preserving the linked person and organization. Conversion is asynchronous — the response reports a status (not_started/running/completed/failed/rejected) and includes the new deal ID only once completed.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      lead_id: { type: 'string', description: 'The lead UUID to convert to a deal' },
+    },
+    required: ['lead_id'],
+  },
+  handler: handleConvertLead,
 };
 
 // ─── Activities ───────────────────────────────────────────────────────────────
@@ -490,6 +519,7 @@ export const createActivityTool: ToolDefinition = {
       duration: { type: 'string', description: 'Duration (HH:MM)' },
       note: { type: 'string', description: 'Note/description' },
       deal_id: { type: 'number', description: 'Link to a deal' },
+      lead_id: { type: 'string', description: 'Link to a lead (UUID)' },
       person_id: { type: 'number', description: 'Link to a person' },
       org_id: { type: 'number', description: 'Link to an organization' },
       user_id: { type: 'number', description: 'Assign to user (assignee)' },
@@ -514,6 +544,7 @@ export const updateActivityTool: ToolDefinition = {
       duration: { type: 'string', description: 'New duration (HH:MM)' },
       note: { type: 'string', description: 'Note/description' },
       deal_id: { type: 'number', description: 'Link to a deal' },
+      lead_id: { type: 'string', description: 'Link to a lead (UUID)' },
       person_id: { type: 'number', description: 'Link to a person' },
       org_id: { type: 'number', description: 'Link to an organization' },
       user_id: { type: 'number', description: 'Assign to user' },
@@ -1626,6 +1657,7 @@ export const pipedriveTools: ToolDefinition[] = [
   createLeadTool,
   updateLeadTool,
   deleteLeadTool,
+  convertLeadTool,
   // Activities
   listActivitiesTool,
   getActivityTool,
