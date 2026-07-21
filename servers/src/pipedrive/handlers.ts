@@ -78,6 +78,22 @@ async function apiPatch(
   });
 }
 
+async function apiPut(
+  context: PipedriveContext,
+  path: string,
+  body: unknown
+): Promise<Response> {
+  const url = buildUrl(context.companydomain, path);
+  return fetch(url, {
+    method: 'PUT',
+    headers: {
+      'x-api-token': context.accessToken ?? '',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+}
+
 async function apiDelete(
   context: PipedriveContext,
   path: string
@@ -167,6 +183,9 @@ export async function handleCreateDeal(
   if (args.expected_close_date) body['expected_close_date'] = args.expected_close_date;
   if (args.owner_id) body['user_id'] = args.owner_id;
   if (args.label) body['label'] = args.label;
+  if (args.custom_fields && typeof args.custom_fields === 'object') {
+    Object.assign(body, args.custom_fields as Record<string, unknown>);
+  }
   return handleResponse(await apiPost(c, '/api/v1/deals', body));
 }
 
@@ -190,7 +209,10 @@ export async function handleUpdateDeal(
   if (args.owner_id) body['user_id'] = args.owner_id;
   if (args.label) body['label'] = args.label;
   if (args.lost_reason) body['lost_reason'] = args.lost_reason;
-  return handleResponse(await apiPatch(c, `/api/v1/deals/${id}`, body));
+  if (args.custom_fields && typeof args.custom_fields === 'object') {
+    Object.assign(body, args.custom_fields as Record<string, unknown>);
+  }
+  return handleResponse(await apiPut(c, `/api/v1/deals/${id}`, body));
 }
 
 export async function handleDeleteDeal(
@@ -276,7 +298,7 @@ export async function handleUpdatePerson(
   if (args.org_id) body['org_id'] = args.org_id;
   if (args.owner_id) body['owner_id'] = args.owner_id;
   if (args.visible_to) body['visible_to'] = args.visible_to;
-  return handleResponse(await apiPatch(c, `/api/v1/persons/${id}`, body));
+  return handleResponse(await apiPut(c, `/api/v1/persons/${id}`, body));
 }
 
 export async function handleDeletePerson(
@@ -356,7 +378,7 @@ export async function handleUpdateOrganization(
   if (args.owner_id) body['owner_id'] = args.owner_id;
   if (args.address) body['address'] = args.address;
   if (args.visible_to) body['visible_to'] = args.visible_to;
-  return handleResponse(await apiPatch(c, `/api/v1/organizations/${id}`, body));
+  return handleResponse(await apiPut(c, `/api/v1/organizations/${id}`, body));
 }
 
 export async function handleDeleteOrganization(
@@ -413,6 +435,9 @@ export async function handleCreateLead(
     body['value'] = { amount: args.value, currency: args.currency };
   }
   if (args.label_ids) body['label_ids'] = args.label_ids;
+  if (args.custom_fields && typeof args.custom_fields === 'object') {
+    Object.assign(body, args.custom_fields as Record<string, unknown>);
+  }
   return handleResponse(await apiPost(c, '/api/v1/leads', body));
 }
 
@@ -434,6 +459,9 @@ export async function handleUpdateLead(
   }
   if (args.label_ids) body['label_ids'] = args.label_ids;
   if (args.was_seen !== undefined) body['was_seen'] = args.was_seen;
+  if (args.custom_fields && typeof args.custom_fields === 'object') {
+    Object.assign(body, args.custom_fields as Record<string, unknown>);
+  }
   return handleResponse(await apiPatch(c, `/api/v1/leads/${id}`, body));
 }
 
@@ -445,6 +473,20 @@ export async function handleDeleteLead(
   const id = args.lead_id as string;
   if (!id) return { success: false, error: 'lead_id is required' };
   return handleResponse(await apiDelete(c, `/api/v1/leads/${id}`));
+}
+
+export async function handleConvertLead(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const c = ctx(context);
+  const id = args.lead_id as string;
+  if (!id) return { success: false, error: 'lead_id is required' };
+  // Native lead → deal conversion, preserving person/organization links.
+  // Conversion is async: the response carries a `status`
+  // (not_started/running/completed/failed/rejected) and a `deal_id` only once
+  // completed. Callers can poll conversion status separately if needed.
+  return handleResponse(await apiPost(c, `/api/v1/leads/${id}/convert/deal`, {}));
 }
 
 // ─── Activities ───────────────────────────────────────────────────────────────
@@ -495,6 +537,7 @@ export async function handleCreateActivity(
   if (args.duration) body['duration'] = args.duration;
   if (args.note) body['note'] = args.note;
   if (args.deal_id) body['deal_id'] = args.deal_id;
+  if (args.lead_id) body['lead_id'] = args.lead_id;
   if (args.person_id) body['person_id'] = args.person_id;
   if (args.org_id) body['org_id'] = args.org_id;
   if (args.user_id) body['user_id'] = args.user_id;
@@ -517,11 +560,12 @@ export async function handleUpdateActivity(
   if (args.duration) body['duration'] = args.duration;
   if (args.note) body['note'] = args.note;
   if (args.deal_id) body['deal_id'] = args.deal_id;
+  if (args.lead_id) body['lead_id'] = args.lead_id;
   if (args.person_id) body['person_id'] = args.person_id;
   if (args.org_id) body['org_id'] = args.org_id;
   if (args.user_id) body['user_id'] = args.user_id;
   if (args.done !== undefined) body['done'] = args.done;
-  return handleResponse(await apiPatch(c, `/api/v1/activities/${id}`, body));
+  return handleResponse(await apiPut(c, `/api/v1/activities/${id}`, body));
 }
 
 export async function handleDeleteActivity(
@@ -598,7 +642,7 @@ export async function handleUpdateNote(
   if (args.pinned_to_deal_flag !== undefined) body['pinned_to_deal_flag'] = args.pinned_to_deal_flag ? 1 : 0;
   if (args.pinned_to_person_flag !== undefined) body['pinned_to_person_flag'] = args.pinned_to_person_flag ? 1 : 0;
   if (args.pinned_to_org_flag !== undefined) body['pinned_to_organization_flag'] = args.pinned_to_org_flag ? 1 : 0;
-  return handleResponse(await apiPatch(c, `/api/v1/notes/${id}`, body));
+  return handleResponse(await apiPut(c, `/api/v1/notes/${id}`, body));
 }
 
 export async function handleDeleteNote(
@@ -654,7 +698,7 @@ export async function handleUpdatePipeline(
   if (args.name) body['name'] = args.name;
   if (args.order_nr !== undefined) body['order_nr'] = args.order_nr;
   if (args.active !== undefined) body['active'] = args.active;
-  return handleResponse(await apiPatch(c, `/api/v1/pipelines/${id}`, body));
+  return handleResponse(await apiPut(c, `/api/v1/pipelines/${id}`, body));
 }
 
 export async function handleDeletePipeline(
@@ -721,7 +765,7 @@ export async function handleUpdateStage(
   if (args.deal_probability !== undefined) body['deal_probability'] = args.deal_probability;
   if (args.rotten_flag !== undefined) body['rotten_flag'] = args.rotten_flag;
   if (args.rotten_days !== undefined) body['rotten_days'] = args.rotten_days;
-  return handleResponse(await apiPatch(c, `/api/v1/stages/${id}`, body));
+  return handleResponse(await apiPut(c, `/api/v1/stages/${id}`, body));
 }
 
 export async function handleDeleteStage(
@@ -791,7 +835,7 @@ export async function handleUpdateProduct(
   if (args.active_flag !== undefined) body['active_flag'] = args.active_flag;
   if (args.owner_id) body['owner_id'] = args.owner_id;
   if (args.prices) body['prices'] = args.prices;
-  return handleResponse(await apiPatch(c, `/api/v1/products/${id}`, body));
+  return handleResponse(await apiPut(c, `/api/v1/products/${id}`, body));
 }
 
 export async function handleDeleteProduct(
@@ -931,7 +975,7 @@ export async function handleUpdateDealProduct(
   if (args.tax !== undefined) body['tax'] = args.tax;
   if (args.comments) body['comments'] = args.comments;
   if (args.enabled_flag !== undefined) body['enabled_flag'] = args.enabled_flag;
-  return handleResponse(await apiPatch(c, `/api/v1/deals/${dealId}/products/${productAttachmentId}`, body));
+  return handleResponse(await apiPut(c, `/api/v1/deals/${dealId}/products/${productAttachmentId}`, body));
 }
 
 export async function handleDeleteDealProduct(
@@ -1080,7 +1124,7 @@ export async function handleUpdateGoal(
   if (args.expected_outcome) body['expected_outcome'] = args.expected_outcome;
   if (args.duration) body['duration'] = args.duration;
   if (args.interval) body['interval'] = args.interval;
-  return handleResponse(await apiPatch(c, `/api/v1/goals/${id}`, body));
+  return handleResponse(await apiPut(c, `/api/v1/goals/${id}`, body));
 }
 
 export async function handleDeleteGoal(

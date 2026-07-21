@@ -102,6 +102,7 @@ export const definition: ServiceDefinitionWithTools = {
       // Leads
       'pipedrive_create_lead',
       'pipedrive_update_lead',
+      'pipedrive_convert_lead',
       // Activities
       'pipedrive_create_activity',
       'pipedrive_update_activity',
