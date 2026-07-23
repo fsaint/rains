@@ -483,10 +483,27 @@ export async function handleConvertLead(
   const id = args.lead_id as string;
   if (!id) return { success: false, error: 'lead_id is required' };
   // Native lead → deal conversion, preserving person/organization links.
-  // Conversion is async: the response carries a `status`
-  // (not_started/running/completed/failed/rejected) and a `deal_id` only once
-  // completed. Callers can poll conversion status separately if needed.
-  return handleResponse(await apiPost(c, `/api/v1/leads/${id}/convert/deal`, {}));
+  // Only available on API v2 — there is no v1 convert endpoint (v1 returns 404).
+  // Conversion is async: the response carries a `conversion_id`; poll status via
+  // pipedrive_get_lead_conversion_status to obtain the resulting `deal_id`.
+  const body: Record<string, unknown> = {};
+  if (args.stage_id !== undefined) body['stage_id'] = args.stage_id;
+  if (args.pipeline_id !== undefined) body['pipeline_id'] = args.pipeline_id;
+  return handleResponse(await apiPost(c, `/api/v2/leads/${id}/convert/deal`, body));
+}
+
+export async function handleGetLeadConversionStatus(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const c = ctx(context);
+  const id = args.lead_id as string;
+  const conversionId = args.conversion_id as string;
+  if (!id) return { success: false, error: 'lead_id is required' };
+  if (!conversionId) return { success: false, error: 'conversion_id is required' };
+  // Returns status (not_started/running/completed/failed/rejected). The resulting
+  // deal_id is only present once completed, and is retained by Pipedrive for a few days.
+  return handleResponse(await apiGet(c, `/api/v2/leads/${id}/convert/status/${conversionId}`));
 }
 
 // ─── Activities ───────────────────────────────────────────────────────────────

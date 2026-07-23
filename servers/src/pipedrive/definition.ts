@@ -44,6 +44,7 @@ export const definition: ServiceDefinitionWithTools = {
       // Leads
       'pipedrive_list_leads',
       'pipedrive_get_lead',
+      'pipedrive_get_lead_conversion_status',
       // Activities
       'pipedrive_list_activities',
       'pipedrive_get_activity',

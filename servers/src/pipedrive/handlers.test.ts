@@ -18,6 +18,7 @@ import {
   handleUpdateProject,
   handleCreateActivity,
   handleConvertLead,
+  handleGetLeadConversionStatus,
 } from './handlers.js';
 
 const context: ServerContext = {
@@ -88,11 +89,24 @@ describe('Pipedrive handlers — HTTP verbs', () => {
     expect(url).toBe('https://testco.pipedrive.com/api/v2/projects/3');
   });
 
-  it('convert_lead POSTs to /api/v1/leads/{id}/convert/deal', async () => {
+  it('convert_lead POSTs to /api/v2/leads/{id}/convert/deal', async () => {
     await handleConvertLead({ lead_id: 'uuid-9' }, context);
     const { url, init } = lastCall();
     expect(init.method).toBe('POST');
-    expect(url).toBe('https://testco.pipedrive.com/api/v1/leads/uuid-9/convert/deal');
+    expect(url).toBe('https://testco.pipedrive.com/api/v2/leads/uuid-9/convert/deal');
+  });
+
+  it('convert_lead passes stage_id/pipeline_id in the body', async () => {
+    await handleConvertLead({ lead_id: 'uuid-9', stage_id: 5, pipeline_id: 2 }, context);
+    const { init } = lastCall();
+    expect(JSON.parse(init.body as string)).toEqual({ stage_id: 5, pipeline_id: 2 });
+  });
+
+  it('get_lead_conversion_status GETs the v2 status endpoint', async () => {
+    await handleGetLeadConversionStatus({ lead_id: 'uuid-9', conversion_id: 'conv-1' }, context);
+    const { url, init } = lastCall();
+    expect(init.method).toBeUndefined(); // apiGet relies on fetch's default GET
+    expect(url).toBe('https://testco.pipedrive.com/api/v2/leads/uuid-9/convert/status/conv-1');
   });
 });
 

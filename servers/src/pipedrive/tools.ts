@@ -7,7 +7,7 @@ import {
   handleListDeals, handleGetDeal, handleSearchDeals, handleCreateDeal, handleUpdateDeal, handleDeleteDeal,
   handleListPersons, handleGetPerson, handleSearchPersons, handleCreatePerson, handleUpdatePerson, handleDeletePerson,
   handleListOrganizations, handleGetOrganization, handleSearchOrganizations, handleCreateOrganization, handleUpdateOrganization, handleDeleteOrganization,
-  handleListLeads, handleGetLead, handleCreateLead, handleUpdateLead, handleDeleteLead, handleConvertLead,
+  handleListLeads, handleGetLead, handleCreateLead, handleUpdateLead, handleDeleteLead, handleConvertLead, handleGetLeadConversionStatus,
   handleListActivities, handleGetActivity, handleCreateActivity, handleUpdateActivity, handleDeleteActivity,
   handleListNotes, handleGetNote, handleCreateNote, handleUpdateNote, handleDeleteNote,
   handleListPipelines, handleGetPipeline, handleCreatePipeline, handleUpdatePipeline, handleDeletePipeline,
@@ -458,15 +458,31 @@ export const deleteLeadTool: ToolDefinition = {
 
 export const convertLeadTool: ToolDefinition = {
   name: 'pipedrive_convert_lead',
-  description: 'Convert a lead into a deal using Pipedrive\'s native conversion, preserving the linked person and organization. Conversion is asynchronous — the response reports a status (not_started/running/completed/failed/rejected) and includes the new deal ID only once completed.',
+  description: 'Convert a lead into a deal using Pipedrive\'s native conversion (API v2), preserving the linked person and organization. Conversion is asynchronous — the response returns a conversion_id; poll pipedrive_get_lead_conversion_status to obtain the resulting deal ID once completed.',
   inputSchema: {
     type: 'object',
     properties: {
       lead_id: { type: 'string', description: 'The lead UUID to convert to a deal' },
+      stage_id: { type: 'number', description: 'Optional stage ID to place the new deal in' },
+      pipeline_id: { type: 'number', description: 'Optional pipeline ID for the new deal (ignored if stage_id is provided)' },
     },
     required: ['lead_id'],
   },
   handler: handleConvertLead,
+};
+
+export const getLeadConversionStatusTool: ToolDefinition = {
+  name: 'pipedrive_get_lead_conversion_status',
+  description: 'Poll the status of a lead-to-deal conversion started by pipedrive_convert_lead. Returns status (not_started/running/completed/failed/rejected); the resulting deal ID is only present once completed (retained by Pipedrive for a few days).',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      lead_id: { type: 'string', description: 'The lead UUID that is being converted' },
+      conversion_id: { type: 'string', description: 'The conversion job ID returned by pipedrive_convert_lead' },
+    },
+    required: ['lead_id', 'conversion_id'],
+  },
+  handler: handleGetLeadConversionStatus,
 };
 
 // ─── Activities ───────────────────────────────────────────────────────────────
@@ -1658,6 +1674,7 @@ export const pipedriveTools: ToolDefinition[] = [
   updateLeadTool,
   deleteLeadTool,
   convertLeadTool,
+  getLeadConversionStatusTool,
   // Activities
   listActivitiesTool,
   getActivityTool,
