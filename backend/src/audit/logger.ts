@@ -1,4 +1,5 @@
 import { client } from '../db/index.js';
+import { redactToolArgs } from '../mcp/redact-args.js';
 import type { AuditEntry, AuditEventType, AuditResult, AuditFilter } from '@reins/shared';
 
 export class AuditLogger {
@@ -13,7 +14,9 @@ export class AuditLogger {
         entry.eventType,
         entry.agentId ?? null,
         entry.tool ?? null,
-        entry.arguments ? JSON.stringify(entry.arguments) : null,
+        // Redacted here rather than at each logToolCall site, so every caller
+        // is covered without having to remember.
+        entry.arguments ? JSON.stringify(redactToolArgs(entry.arguments)) : null,
         entry.result ?? null,
         entry.durationMs ?? null,
         entry.metadata ? JSON.stringify(entry.metadata) : null,

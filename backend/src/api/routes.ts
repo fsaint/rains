@@ -74,6 +74,7 @@ import {
   notifySoftStop,
 } from '../services/spend.js';
 import { performBackup, listBackups, getBackup, restoreBackup } from '../services/agent-backup.js';
+import { createUpload, getUpload, MAX_UPLOAD_BYTES } from '../services/agent-uploads.js';
 import { isCodexTokenExpired } from '../services/token-monitor.js';
 import { forwardToOpenclaw, handleMyChatMember } from '../services/agent-bot-relay.js';
 import { parseWikilinks, updateLinkIndex, ensureMemoryRoot, getDreamManifest, setEntryParent } from '../services/memory.js';
@@ -5306,15 +5307,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // =========================================================================
 
   /**
-   * Resolve user_id from either session or gateway token.
-   * Returns null if neither is present / valid.
+   * Resolve the agent and its owner from an x-reins-agent-secret gateway token.
+   * Single validator shared by every agent-authenticated route.
    */
-  async function resolveMemoryUserId(request: any): Promise<string | null> {
-    // Try session first
-    const session = getSession(request);
-    if (session) return session.userId;
-
-    // Try gateway token
+  async function resolveAgentFromGatewayToken(
+    request: any
+  ): Promise<{ agentId: string; userId: string } | null> {
     const agentSecret = request.headers['x-reins-agent-secret'] as string | undefined;
     if (!agentSecret) return null;
 
@@ -5327,8 +5325,97 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       args: [agentSecret],
     });
     if (depResult.rows.length === 0) return null;
-    return depResult.rows[0].user_id as string;
+
+    return {
+      agentId: depResult.rows[0].agent_id as string,
+      userId: depResult.rows[0].user_id as string,
+    };
   }
+
+  /**
+   * Resolve user_id from either session or gateway token.
+   * Returns null if neither is present / valid.
+   */
+  async function resolveMemoryUserId(request: any): Promise<string | null> {
+    // Try session first
+    const session = getSession(request);
+    if (session) return session.userId;
+
+    const agent = await resolveAgentFromGatewayToken(request);
+    return agent?.userId ?? null;
+  }
+
+  // -------------------------------------------------------------------------
+  // Agent uploads — short-lived blobs an agent POSTs from its own container.
+  //
+  // Lets an agent attach a file it generated without the bytes passing through
+  // the model's context. Raw octet-stream rather than multipart: there is one
+  // file, its metadata fits in the query string, and multipart would mean a new
+  // dependency (@fastify/multipart is not installed).
+  // -------------------------------------------------------------------------
+
+  // Scoped parser — registering it does not change how any other route parses.
+  app.addContentTypeParser(
+    'application/octet-stream',
+    { parseAs: 'buffer' },
+    (_request, body, done) => {
+      done(null, body);
+    }
+  );
+
+  app.post(
+    '/api/agent-uploads',
+    // Route-level, NEVER global. app.ts creates Fastify with no bodyLimit, so
+    // the 1 MiB default applies to every route — including POST /mcp/:agentId,
+    // which is exempt from the auth guard, and POST /api/auth/login. Raising it
+    // globally on a 512 MB single-machine VM would turn every unauthenticated
+    // endpoint into a memory-exhaustion lever against the one process holding
+    // all decrypted OAuth tokens.
+    { bodyLimit: MAX_UPLOAD_BYTES },
+    async (request, reply) => {
+      const agent = await resolveAgentFromGatewayToken(request);
+      if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
+
+      const query = request.query as { filename?: string; mimeType?: string };
+      const body = request.body;
+      if (!Buffer.isBuffer(body) || body.length === 0) {
+        return reply.status(400).send({
+          error: 'Request body must be the raw file bytes with Content-Type: application/octet-stream',
+        });
+      }
+
+      try {
+        const upload = await createUpload({
+          agentId: agent.agentId,
+          userId: agent.userId,
+          filename: query.filename ?? 'upload.bin',
+          mimeType: query.mimeType ?? 'application/octet-stream',
+          data: body,
+        });
+        return reply.status(201).send({ data: upload });
+      } catch (error) {
+        return reply.status(400).send({ error: (error as Error).message });
+      }
+    }
+  );
+
+  // Read back by the Gmail attachment resolver, which runs in the backend but
+  // in the @reins/servers package and so goes through the API rather than
+  // importing the db directly.
+  app.get('/api/agent-uploads/:id', async (request, reply) => {
+    const agent = await resolveAgentFromGatewayToken(request);
+    if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const { id } = request.params as { id: string };
+    const upload = await getUpload(id, agent.agentId);
+    if (!upload) return reply.status(404).send({ error: 'Upload not found or expired' });
+
+    return reply
+      .header('content-type', upload.mimeType)
+      .header('content-length', String(upload.sizeBytes))
+      .header('x-upload-filename', encodeURIComponent(upload.filename))
+      .send(upload.data);
+  });
 
   // -------------------------------------------------------------------------
   // GET /api/memory/root — get or create the user's memory root entry

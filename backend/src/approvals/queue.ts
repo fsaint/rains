@@ -2,6 +2,7 @@ import { client } from '../db/index.js';
 import { nanoid } from 'nanoid';
 import { EventEmitter } from 'events';
 import { getPostHog } from '../analytics/posthog.js';
+import { redactToolArgs } from '../mcp/redact-args.js';
 import type { ApprovalRequest, ApprovalStatus, ApprovalDecision } from '@reins/shared';
 
 const DEFAULT_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
@@ -49,7 +50,9 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
         id,
         agentId,
         tool,
-        JSON.stringify(args),
+        // Display-only snapshot: the deferred executor runs from an in-memory
+        // copy of `args`, so stripping bulk payloads here cannot affect it.
+        JSON.stringify(redactToolArgs(args)),
         context ?? null,
         now.toISOString(),
         expiresAt.toISOString(),

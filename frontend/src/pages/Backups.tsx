@@ -2,12 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Database, DownloadCloud, RotateCcw, Plus, AlertTriangle, CheckCircle, Loader2 } from 'lucide-react';
 import { backups, type BackupMetadata } from '../api/client';
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+import { formatBytes } from '../utils/format';
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString();

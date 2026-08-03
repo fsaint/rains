@@ -50,6 +50,18 @@ import {
   handleListLabels,
 } from './handlers.js';
 
+/**
+ * Decode the base64url `raw` message handed to a mocked Gmail send/create call,
+ * so assertions can be made against the actual RFC 822 bytes.
+ */
+function decodeRaw(mockFn: { mock: { calls: unknown[][] } }): string {
+  const call = mockFn.mock.calls.at(-1)?.[0] as
+    | { requestBody?: { raw?: string; message?: { raw?: string } } }
+    | undefined;
+  const raw = call?.requestBody?.raw ?? call?.requestBody?.message?.raw ?? '';
+  return Buffer.from(raw, 'base64url').toString('utf-8');
+}
+
 describe('Gmail Handlers', () => {
   const mockContext: ServerContext = {
     requestId: 'test-request-id',
@@ -313,6 +325,64 @@ describe('Gmail Handlers', () => {
 
       expect(mockGmailClient.users.drafts.create).toHaveBeenCalled();
     });
+
+    it('should attach a model-authored text file without base64', async () => {
+      vi.mocked(mockGmailClient.users.drafts.create).mockResolvedValueOnce({
+        data: { id: 'draft1' },
+      } as never);
+
+      await handleCreateDraft(
+        {
+          to: ['to@example.com'],
+          subject: 'Report',
+          body: 'See attached',
+          attachments: [{ source: 'text', filename: 'q3.csv', content: 'a,b\n1,2\n' }],
+        },
+        mockContext
+      );
+
+      const raw = decodeRaw(vi.mocked(mockGmailClient.users.drafts.create));
+      expect(raw).toContain('multipart/mixed');
+      expect(raw).toContain('text/csv');
+      expect(raw).toContain('filename="q3.csv"');
+    });
+
+    it('should still accept the legacy inline base64 shape', async () => {
+      vi.mocked(mockGmailClient.users.drafts.create).mockResolvedValueOnce({
+        data: { id: 'draft1' },
+      } as never);
+
+      const result = await handleCreateDraft(
+        {
+          to: ['to@example.com'],
+          subject: 'Legacy',
+          body: 'x',
+          attachments: [{ filename: 'a.txt', mimeType: 'text/plain', data: 'aGVsbG8=' }],
+        },
+        mockContext
+      );
+
+      expect(result.success).toBe(true);
+      expect(decodeRaw(vi.mocked(mockGmailClient.users.drafts.create))).toContain(
+        'filename="a.txt"'
+      );
+    });
+
+    it('should return an actionable error instead of throwing on a bad attachment', async () => {
+      const result = await handleCreateDraft(
+        {
+          to: ['to@example.com'],
+          subject: 'Bad',
+          body: 'x',
+          attachments: [{ source: 'gmail', messageId: 'M1' }],
+        },
+        mockContext
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/missing required field "attachmentId"/);
+      expect(mockGmailClient.users.drafts.create).not.toHaveBeenCalled();
+    });
   });
 
   describe('handleSendDraft', () => {
@@ -355,6 +425,28 @@ describe('Gmail Handlers', () => {
       expect(result.success).toBe(true);
       expect(result.data.messageId).toBe('sent-msg1');
       expect(result.data.message).toBe('Message sent successfully');
+    });
+
+    it('should attach files rather than silently dropping them', async () => {
+      // Regression: gmail_send_message previously had no attachments parameter
+      // and its handler ignored one if passed.
+      vi.mocked(mockGmailClient.users.messages.send).mockResolvedValueOnce({
+        data: { id: 'sent-msg1' },
+      } as never);
+
+      await handleSendMessage(
+        {
+          to: ['recipient@example.com'],
+          subject: 'With attachment',
+          body: 'See attached',
+          attachments: [{ source: 'text', filename: 'notes.txt', content: 'hello' }],
+        },
+        mockContext
+      );
+
+      const raw = decodeRaw(vi.mocked(mockGmailClient.users.messages.send));
+      expect(raw).toContain('multipart/mixed');
+      expect(raw).toContain('filename="notes.txt"');
     });
   });
 

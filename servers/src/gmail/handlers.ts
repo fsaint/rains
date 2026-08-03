@@ -2,8 +2,14 @@
  * Gmail MCP Server Tool Handlers
  */
 
-import { google, type gmail_v1 } from 'googleapis';
+import { google, type drive_v3, type gmail_v1 } from 'googleapis';
 import type { ServerContext, ToolResult } from '../common/types.js';
+import { buildMimeMessage, toRawBase64Url, type ResolvedAttachment } from './mime.js';
+import {
+  AttachmentError,
+  collectAttachmentParts,
+  parseAndResolveAttachments,
+} from './attachments.js';
 
 type GmailClient = gmail_v1.Gmail;
 
@@ -18,6 +24,13 @@ function getGmailClient(context: ServerContext): GmailClient {
   const auth = new google.auth.OAuth2();
   auth.setCredentials({ access_token: context.accessToken });
   return google.gmail({ version: 'v1', auth });
+}
+
+/** Drive client for the drive attachment source, using the same Google token. */
+function getDriveClient(context: ServerContext): drive_v3.Drive {
+  const auth = new google.auth.OAuth2();
+  auth.setCredentials({ access_token: context.accessToken });
+  return google.drive({ version: 'v3', auth });
 }
 
 /**
@@ -41,82 +54,34 @@ function decodeBase64Url(data: string): string {
 }
 
 /**
- * Encode email to base64 URL-safe format
+ * Resolve the raw `attachments` argument, converting an AttachmentError into a
+ * failed ToolResult so the model sees an actionable message rather than a stack
+ * trace. Returns null when resolution failed.
  */
-function encodeEmail(email: {
-  to: string[];
-  cc?: string[];
-  bcc?: string[];
-  subject: string;
-  body?: string;
-  htmlBody?: string;
-  replyTo?: string;
-  attachments?: Array<{ filename: string; mimeType: string; data: string }>;
-}): string {
-  const lines: string[] = [];
-
-  lines.push('MIME-Version: 1.0');
-  lines.push(`To: ${email.to.join(', ')}`);
-  if (email.cc?.length) lines.push(`Cc: ${email.cc.join(', ')}`);
-  if (email.bcc?.length) lines.push(`Bcc: ${email.bcc.join(', ')}`);
-  lines.push(`Subject: ${email.subject}`);
-  if (email.replyTo) {
-    lines.push(`In-Reply-To: ${email.replyTo}`);
-    lines.push(`References: ${email.replyTo}`);
+async function resolveAttachmentsOrFail(
+  raw: unknown,
+  gmail: GmailClient,
+  context: ServerContext
+): Promise<{ attachments: ResolvedAttachment[] } | { error: ToolResult }> {
+  try {
+    return {
+      attachments: await parseAndResolveAttachments(raw, {
+        gmail,
+        // The default Google grant carries drive.readonly alongside the Gmail
+        // scopes, so the same token can read a file to attach. Folder rules are
+        // enforced by the resolver.
+        drive: context.accessToken ? () => getDriveClient(context) : undefined,
+        driveDefaultLevel: context.driveDefaultLevel,
+        drivePathRules: context.drivePathRules,
+        gatewayToken: context.gatewayToken,
+      }),
+    };
+  } catch (error) {
+    if (error instanceof AttachmentError) {
+      return { error: { success: false, error: error.message } };
+    }
+    throw error;
   }
-
-  if (email.attachments?.length) {
-    const boundary = `boundary_${Math.random().toString(36).slice(2)}`;
-    lines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
-    lines.push('');
-
-    // Body part
-    lines.push(`--${boundary}`);
-    if (email.htmlBody) {
-      lines.push('Content-Type: text/html; charset=utf-8');
-      lines.push('');
-      lines.push(email.htmlBody);
-    } else {
-      lines.push('Content-Type: text/plain; charset=utf-8');
-      lines.push('');
-      lines.push(email.body ?? '');
-    }
-
-    // Attachment parts
-    for (const att of email.attachments) {
-      // Strip data-URL prefix if present (e.g. "data:application/pdf;base64,...")
-      const b64 = att.data.includes(',') ? att.data.split(',')[1] : att.data;
-      // RFC 2045: fold base64 at 76 characters
-      const folded = (b64.match(/.{1,76}/g) ?? [b64]).join('\r\n');
-      lines.push('');
-      lines.push(`--${boundary}`);
-      lines.push(`Content-Type: ${att.mimeType}`);
-      lines.push(`Content-Disposition: attachment; filename="${att.filename}"`);
-      lines.push('Content-Transfer-Encoding: base64');
-      lines.push('');
-      lines.push(folded);
-    }
-
-    lines.push('');
-    lines.push(`--${boundary}--`);
-  } else {
-    if (email.htmlBody) {
-      lines.push('Content-Type: text/html; charset=utf-8');
-      lines.push('');
-      lines.push(email.htmlBody);
-    } else {
-      lines.push('Content-Type: text/plain; charset=utf-8');
-      lines.push('');
-      lines.push(email.body ?? '');
-    }
-  }
-
-  const raw = lines.join('\r\n');
-  return Buffer.from(raw)
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
 }
 
 /**
@@ -230,24 +195,8 @@ export async function handleGetMessage(
     ? extractMessageContent(message.payload)
     : {};
 
-  // Extract attachment metadata
-  const attachments: { filename: string; mimeType: string; size: number; attachmentId: string }[] = [];
-  const extractAttachments = (part: gmail_v1.Schema$MessagePart) => {
-    if (part.filename && part.body?.attachmentId) {
-      attachments.push({
-        filename: part.filename,
-        mimeType: part.mimeType ?? 'application/octet-stream',
-        size: part.body.size ?? 0,
-        attachmentId: part.body.attachmentId,
-      });
-    }
-    if (part.parts) {
-      part.parts.forEach(extractAttachments);
-    }
-  };
-  if (message.payload) {
-    extractAttachments(message.payload);
-  }
+  // Extract attachment metadata (shared with the gmail attachment resolver)
+  const attachments = message.payload ? collectAttachmentParts(message.payload) : [];
 
   return {
     success: true,
@@ -374,11 +323,21 @@ export async function handleCreateDraft(
   const htmlBody = args.htmlBody as string | undefined;
   const replyTo = args.replyTo as string | undefined;
   const threadId = args.threadId as string | undefined;
-  const attachments = args.attachments as
-    | Array<{ filename: string; mimeType: string; data: string }>
-    | undefined;
+  const outcome = await resolveAttachmentsOrFail(args.attachments, gmail, context);
+  if ('error' in outcome) return outcome.error;
 
-  const raw = encodeEmail({ to, cc, bcc, subject, body, htmlBody, replyTo, attachments });
+  const raw = toRawBase64Url(
+    buildMimeMessage({
+      to,
+      cc,
+      bcc,
+      subject,
+      body,
+      htmlBody,
+      replyTo,
+      attachments: outcome.attachments,
+    })
+  );
 
   const response = await gmail.users.drafts.create({
     userId: 'me',
@@ -447,8 +406,21 @@ export async function handleSendMessage(
   const htmlBody = args.htmlBody as string | undefined;
   const replyTo = args.replyTo as string | undefined;
   const threadId = args.threadId as string | undefined;
+  const outcome = await resolveAttachmentsOrFail(args.attachments, gmail, context);
+  if ('error' in outcome) return outcome.error;
 
-  const raw = encodeEmail({ to, cc, bcc, subject, body, htmlBody, replyTo });
+  const raw = toRawBase64Url(
+    buildMimeMessage({
+      to,
+      cc,
+      bcc,
+      subject,
+      body,
+      htmlBody,
+      replyTo,
+      attachments: outcome.attachments,
+    })
+  );
 
   const response = await gmail.users.messages.send({
     userId: 'me',

@@ -108,6 +108,107 @@ describe('formatEmailApprovalMessage', () => {
     expect(text).toContain('…(truncated)');
     expect(text.length).toBeLessThan(4096);
   });
+
+  // A user approving an email must be able to see what is being attached.
+  describe('attachments', () => {
+    it('renders one line per attachment with size and origin', () => {
+      const approval = makeApproval({
+        arguments: {
+          to: ['a@x.com'],
+          subject: 's',
+          body: 'see attached',
+          attachments: [
+            { source: 'text', filename: 'q3.csv', content: 'a,b\n1,2\n' },
+            { source: 'gmail', filename: 'invoice.pdf', messageId: 'M1', attachmentId: 'A1' },
+          ],
+        },
+      });
+
+      const { text } = formatEmailApprovalMessage(approval);
+
+      expect(text).toContain('📎 q3.csv · 8 B · written by the agent');
+      expect(text).toContain('📎 invoice.pdf · forwarded from an email');
+    });
+
+    it('renders from redacted args, which is the shape actually persisted', () => {
+      const approval = makeApproval({
+        arguments: {
+          to: ['a@x.com'],
+          subject: 's',
+          body: 'x',
+          attachments: [
+            {
+              source: 'base64',
+              filename: 'report.pdf',
+              data: '[payload omitted]',
+              _bytes: 2_400_000,
+            },
+          ],
+        },
+      });
+
+      const { text } = formatEmailApprovalMessage(approval);
+      expect(text).toContain('📎 report.pdf · 2.3 MB · inline data');
+      expect(text).not.toContain('payload omitted');
+    });
+
+    it('escapes HTML in a filename', () => {
+      const approval = makeApproval({
+        arguments: {
+          to: ['a@x.com'],
+          subject: 's',
+          body: 'x',
+          attachments: [{ source: 'text', filename: '<script>x</script>.txt', content: 'a' }],
+        },
+      });
+
+      const { text } = formatEmailApprovalMessage(approval);
+      expect(text).toContain('&lt;script&gt;');
+      expect(text).not.toContain('<script>');
+    });
+
+    it('elides beyond ten attachments', () => {
+      const approval = makeApproval({
+        arguments: {
+          to: ['a@x.com'],
+          subject: 's',
+          body: 'x',
+          attachments: Array.from({ length: 13 }, (_, i) => ({
+            source: 'gmail',
+            filename: `f${i}.pdf`,
+            messageId: 'M1',
+            attachmentId: `A${i}`,
+          })),
+        },
+      });
+
+      const { text } = formatEmailApprovalMessage(approval);
+      expect(text).toContain('📎 …and 3 more');
+      expect(text).not.toContain('f10.pdf');
+    });
+
+    it('shows attachments even when the body is truncated away', () => {
+      const approval = makeApproval({
+        arguments: {
+          to: ['a@x.com'],
+          subject: 's',
+          body: 'x'.repeat(5000),
+          attachments: [{ source: 'gmail', filename: 'important.pdf', messageId: 'M', attachmentId: 'A' }],
+        },
+      });
+
+      const { text } = formatEmailApprovalMessage(approval);
+      expect(text).toContain('📎 important.pdf');
+      expect(text).toContain('…(truncated)');
+    });
+
+    it('renders nothing when there are no attachments', () => {
+      const approval = makeApproval({
+        arguments: { to: ['a@x.com'], subject: 's', body: 'x', attachments: [] },
+      });
+      expect(formatEmailApprovalMessage(approval).text).not.toContain('📎');
+    });
+  });
 });
 
 describe('formatCalendarApprovalMessage', () => {

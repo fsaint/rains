@@ -15,6 +15,7 @@ import {
   getEffectivePermissions,
   getEffectiveInstancePermissions,
   canAccessTool,
+  getDrivePathConfig,
   type ToolPermission,
 } from '../services/permissions.js';
 import { approvalQueue } from '../approvals/queue.js';
@@ -481,8 +482,23 @@ async function executeTool(
     agentId,
   };
 
-  // Inject gateway token for services that call back into the Reins API (e.g. memory)
-  if (serviceType === 'memory') {
+  // Inject Drive path rules.
+  //
+  // These were previously set only in server-manager.ts, which is a DIFFERENT
+  // code path from this one — so on the live agent path drivePermission() fell
+  // through to its 'write' default and per-folder rules were never enforced.
+  // The gmail attachment resolver relies on these being present to stop a Drive
+  // read being laundered through a Gmail tool.
+  if (serviceType === 'drive' || serviceType === 'gmail') {
+    const driveConfig = await getDrivePathConfig(agentId);
+    context.driveDefaultLevel = driveConfig.defaultLevel;
+    context.drivePathRules = driveConfig.rules;
+  }
+
+  // Inject gateway token for services that call back into the Reins API.
+  // memory reads/writes memory entries; gmail resolves source="upload"
+  // attachments via /api/agent-uploads.
+  if (serviceType === 'memory' || serviceType === 'gmail') {
     const depRow = await client.execute({
       sql: `SELECT gateway_token FROM deployed_agents WHERE agent_id = ? AND status NOT IN ('destroyed', 'error') ORDER BY created_at DESC LIMIT 1`,
       args: [agentId],

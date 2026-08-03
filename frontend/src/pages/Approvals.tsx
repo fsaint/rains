@@ -1,10 +1,70 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle, XCircle, Clock, AlertTriangle, MessageCircle, Loader, Users } from 'lucide-react';
+import { CheckCircle, XCircle, Clock, AlertTriangle, MessageCircle, Loader, Users, Paperclip } from 'lucide-react';
 import { approvals, telegram, auth } from '../api/client';
 import { ReauthApprovalCard } from '../components/ReauthApprovalCard';
 import { ReauthModal } from '../components/ReauthModal';
+import { formatBytes } from '../utils/format';
+
+const ATTACHMENT_SOURCE_LABELS: Record<string, string> = {
+  gmail: 'forwarded from an email',
+  drive: 'from Google Drive',
+  url: 'downloaded from a link',
+  upload: 'uploaded by the agent',
+  text: 'written by the agent',
+  base64: 'inline data',
+};
+
+/** Display-level cap for historical rows persisted before args were redacted. */
+const MAX_DISPLAYED_STRING = 2000;
+
+function attachmentSummary(entry: unknown, index: number) {
+  const item = (typeof entry === 'object' && entry !== null ? entry : {}) as Record<string, unknown>;
+
+  const source =
+    typeof item.source === 'string'
+      ? item.source
+      : typeof item.data === 'string'
+        ? 'base64'
+        : typeof item.content === 'string'
+          ? 'text'
+          : typeof item.attachmentId === 'string'
+            ? 'gmail'
+            : 'unknown';
+
+  const name =
+    typeof item.filename === 'string' && item.filename.trim() !== ''
+      ? item.filename
+      : source === 'gmail'
+        ? '(original filename)'
+        : `attachment-${index + 1}`;
+
+  // `_bytes` is what the backend leaves behind in place of a redacted payload.
+  const bytes =
+    typeof item._bytes === 'number'
+      ? item._bytes
+      : typeof item.content === 'string'
+        ? new Blob([item.content]).size
+        : typeof item.data === 'string'
+          ? Math.floor((item.data.length * 3) / 4)
+          : undefined;
+
+  return { name, bytes, origin: ATTACHMENT_SOURCE_LABELS[source] };
+}
+
+/** Args without attachments, with long strings capped for display. */
+function displayableArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args ?? {})) {
+    if (key === 'attachments') continue;
+    out[key] =
+      typeof value === 'string' && value.length > MAX_DISPLAYED_STRING
+        ? `${value.slice(0, MAX_DISPLAYED_STRING)}…(${value.length - MAX_DISPLAYED_STRING} chars omitted)`
+        : value;
+  }
+  return out;
+}
 
 interface Approval {
   id: string;
@@ -244,10 +304,41 @@ export default function Approvals() {
                       </div>
                     )}
 
+                    {Array.isArray(approval.arguments?.attachments) &&
+                      approval.arguments.attachments.length > 0 && (
+                        <div className="mt-4">
+                          <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">
+                            Attachments
+                          </p>
+                          <ul className="space-y-1">
+                            {(approval.arguments.attachments as unknown[]).map((entry, index) => {
+                              const { name, bytes, origin } = attachmentSummary(entry, index);
+                              return (
+                                <li
+                                  key={index}
+                                  className="flex items-center gap-2 text-sm bg-gray-50 px-3 py-2 rounded-lg"
+                                >
+                                  <Paperclip className="w-4 h-4 text-gray-400 shrink-0" />
+                                  <span className="font-medium truncate">{name}</span>
+                                  {bytes !== undefined && (
+                                    <span className="text-gray-500 shrink-0">
+                                      {formatBytes(bytes)}
+                                    </span>
+                                  )}
+                                  {origin && (
+                                    <span className="text-gray-400 text-xs shrink-0">{origin}</span>
+                                  )}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                      )}
+
                     <div className="mt-4">
                       <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Arguments</p>
                       <pre className="text-xs bg-gray-50 p-3 rounded-lg overflow-auto max-h-32 font-mono">
-                        {JSON.stringify(approval.arguments, null, 2)}
+                        {JSON.stringify(displayableArgs(approval.arguments), null, 2)}
                       </pre>
                     </div>
                   </div>

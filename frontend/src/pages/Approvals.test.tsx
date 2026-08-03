@@ -99,6 +99,62 @@ describe('Approvals page', () => {
     });
   });
 
+  // A user approving an email must be able to see what is being attached.
+  describe('attachments', () => {
+    it('lists each attachment with its size and origin', async () => {
+      vi.mocked(approvals.list).mockResolvedValue([
+        {
+          ...mockApproval,
+          arguments: {
+            to: 'user@example.com',
+            subject: 'Hello',
+            attachments: [
+              { source: 'gmail', filename: 'invoice.pdf', _bytes: 2_400_000 },
+              { source: 'text', filename: 'notes.csv', content: 'a,b' },
+            ],
+          },
+        },
+      ]);
+      render(<Approvals />, { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(screen.getByText('invoice.pdf')).toBeInTheDocument();
+      });
+      expect(screen.getByText('2.3 MB')).toBeInTheDocument();
+      expect(screen.getByText('forwarded from an email')).toBeInTheDocument();
+      expect(screen.getByText('notes.csv')).toBeInTheDocument();
+      expect(screen.getByText('written by the agent')).toBeInTheDocument();
+    });
+
+    it('keeps the attachment payload out of the raw argument dump', async () => {
+      vi.mocked(approvals.list).mockResolvedValue([
+        {
+          ...mockApproval,
+          arguments: {
+            to: 'user@example.com',
+            attachments: [{ source: 'text', filename: 'notes.csv', content: 'SECRETPAYLOAD' }],
+          },
+        },
+      ]);
+      render(<Approvals />, { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(screen.getByText('notes.csv')).toBeInTheDocument();
+      });
+      expect(screen.queryByText(/SECRETPAYLOAD/)).not.toBeInTheDocument();
+    });
+
+    it('renders no attachment block when there are none', async () => {
+      vi.mocked(approvals.list).mockResolvedValue([mockApproval]);
+      render(<Approvals />, { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(screen.getByText(/user@example\.com/)).toBeInTheDocument();
+      });
+      expect(screen.queryByText('Attachments')).not.toBeInTheDocument();
+    });
+  });
+
   it('renders Approve and Reject buttons', async () => {
     vi.mocked(approvals.list).mockResolvedValue([mockApproval]);
     render(<Approvals />, { wrapper: createWrapper() });

@@ -96,6 +96,87 @@ function truncateBody(raw: string): string {
     : escapeHtml(raw);
 }
 
+/** At most this many attachments are listed individually before eliding. */
+const ATTACHMENT_PREVIEW_LIMIT = 10;
+
+function formatByteSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+const ATTACHMENT_SOURCE_LABELS: Record<string, string> = {
+  gmail: 'forwarded from an email',
+  drive: 'from Google Drive',
+  url: 'downloaded from a link',
+  upload: 'uploaded by the agent',
+  text: 'written by the agent',
+  base64: 'inline data',
+};
+
+/**
+ * Render the attachments of an email approval as `📎 name · size · origin`.
+ *
+ * A user approving an email must be able to see what is being attached — this
+ * is the control that makes it safe not to maintain a MIME-type allowlist in
+ * the Gmail server.
+ *
+ * Tolerates three shapes, because it reads whatever was persisted to
+ * approvals.arguments_json: the current union, the legacy
+ * {filename, mimeType, data} shape, and args already passed through
+ * redactToolArgs (which replaces bulk payloads with a `_bytes` count).
+ */
+export function summarizeAttachments(raw: unknown): string[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+
+  const lines = raw.slice(0, ATTACHMENT_PREVIEW_LIMIT).map((entry, index) => {
+    const item = (typeof entry === 'object' && entry !== null ? entry : {}) as Record<
+      string,
+      unknown
+    >;
+
+    const source =
+      typeof item.source === 'string'
+        ? item.source
+        : typeof item.data === 'string'
+        ? 'base64'
+        : typeof item.content === 'string'
+        ? 'text'
+        : typeof item.attachmentId === 'string'
+        ? 'gmail'
+        : 'unknown';
+
+    const name =
+      typeof item.filename === 'string' && item.filename.trim() !== ''
+        ? item.filename
+        : source === 'gmail'
+        ? '(original filename)'
+        : `attachment-${index + 1}`;
+
+    // `_bytes` is what redactToolArgs leaves behind in place of the payload.
+    const bytes =
+      typeof item._bytes === 'number'
+        ? item._bytes
+        : typeof item.content === 'string'
+        ? Buffer.byteLength(item.content, 'utf-8')
+        : typeof item.data === 'string'
+        ? Math.floor((item.data.length * 3) / 4)
+        : undefined;
+
+    const size = bytes !== undefined ? ` · ${formatByteSize(bytes)}` : '';
+    const origin = ATTACHMENT_SOURCE_LABELS[source]
+      ? ` · ${ATTACHMENT_SOURCE_LABELS[source]}`
+      : '';
+
+    return `📎 ${escapeHtml(name)}${size}${origin}`;
+  });
+
+  if (raw.length > ATTACHMENT_PREVIEW_LIMIT) {
+    lines.push(`📎 …and ${raw.length - ATTACHMENT_PREVIEW_LIMIT} more`);
+  }
+  return lines;
+}
+
 // ---------------------------------------------------------------------------
 // Email
 // ---------------------------------------------------------------------------
@@ -116,6 +197,7 @@ export function formatEmailApprovalMessage(approval: ApprovalRequest): Formatted
     threadId?: string;
     replyTo?: string;
     messageId?: string;
+    attachments?: unknown;
   };
 
   const isReply =
@@ -152,6 +234,9 @@ export function formatEmailApprovalMessage(approval: ApprovalRequest): Formatted
     args.subject ? `<b>Subject:</b> ${escapeHtml(args.subject)}` : null,
     isReply ? `↩︎ <i>Reply</i>` : null,
     `<b>Agent:</b> <code>${escapeHtml(approval.agentId)}</code>`,
+    // Before the body: the body preview is length-capped, and what is being
+    // attached must never be the thing that gets truncated away.
+    ...(summarizeAttachments(args.attachments) ?? []),
     bodyText ? `<blockquote>${truncateBody(bodyText)}</blockquote>` : null,
     ``,
     expiresLine(approval),

@@ -768,6 +768,29 @@ export async function initializeDatabase() {
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_agent_model_configs_agent ON agent_model_configs(agent_id)`;
 
+  // Agent uploads — short-lived blobs an agent POSTs from its own container so
+  // it can attach a file it generated without the bytes passing through the
+  // model's context. Postgres rather than a volume or memory: there is no Fly
+  // volume on agenthelm-core, CI redeploys on every push to main, and an upload
+  // must outlive the 1-hour approval window because a deferred gmail_create_draft
+  // resolves its reference at approval time, not call time.
+  await sql`
+    CREATE TABLE IF NOT EXISTS agent_uploads (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      user_id TEXT,
+      filename TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      sha256 TEXT NOT NULL,
+      data BYTEA NOT NULL,
+      created_at TEXT DEFAULT now() NOT NULL,
+      expires_at TEXT NOT NULL
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_agent_uploads_agent ON agent_uploads(agent_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_agent_uploads_expires ON agent_uploads(expires_at)`;
+
   // Seed: create admin user if no users exist
   const userCount = await sql`SELECT COUNT(*) as count FROM users`;
   const count = Number(userCount[0]?.count ?? 0);

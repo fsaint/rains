@@ -3,6 +3,7 @@
  */
 
 import type { ToolDefinition } from '../common/base-server.js';
+import { attachmentsSchema } from './attachment-schema.js';
 import {
   handleListMessages,
   handleGetMessage,
@@ -31,6 +32,7 @@ const accountProperty = {
     description: 'Email of the account to use. Omit for default. See gmail_list_accounts.',
   },
 } as const;
+
 
 /**
  * List messages in the mailbox
@@ -98,7 +100,11 @@ export const getMessageTool: ToolDefinition = {
 export const getAttachmentTool: ToolDefinition = {
   name: 'gmail_get_attachment',
   description:
-    'Download an email attachment by its attachment ID. Returns the attachment content as base64url-encoded data. Use gmail_get_message first to get attachment IDs.',
+    'Download an email attachment as base64url-encoded data. Use gmail_get_message first to get attachment IDs.\n' +
+    'DO NOT call this to forward or re-send a file. To attach a file from an existing email, ' +
+    'pass {"source":"gmail","messageId":"…","attachmentId":"…"} in the attachments parameter of ' +
+    'gmail_create_draft — Reins fetches the bytes server-side, so they never pass through your ' +
+    'context. Downloading and re-encoding a file wastes your context and corrupts binary data.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -193,29 +199,7 @@ export const createDraftTool: ToolDefinition = {
         type: 'string',
         description: 'Thread ID to add the message to',
       },
-      attachments: {
-        type: 'array',
-        description: 'Files to attach to the draft',
-        items: {
-          type: 'object',
-          properties: {
-            filename: {
-              type: 'string',
-              description: 'File name including extension (e.g. "report.pdf")',
-            },
-            mimeType: {
-              type: 'string',
-              description: 'MIME type of the file (e.g. "application/pdf", "image/png")',
-            },
-            data: {
-              type: 'string',
-              description:
-                'File content as standard base64 or a data-URL (data:<mimeType>;base64,<data>)',
-            },
-          },
-          required: ['filename', 'mimeType', 'data'],
-        },
-      },
+      attachments: attachmentsSchema,
     },
     required: ['to', 'subject'],
   },
@@ -288,6 +272,7 @@ export const sendMessageTool: ToolDefinition = {
         type: 'string',
         description: 'Thread ID to add the message to',
       },
+      attachments: attachmentsSchema,
     },
     required: ['to', 'subject'],
   },
