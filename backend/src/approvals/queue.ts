@@ -7,6 +7,21 @@ import type { ApprovalRequest, ApprovalStatus, ApprovalDecision } from '@reins/s
 
 const DEFAULT_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
 
+/**
+ * How many times a human may send a request back to the agent for correction
+ * before they must simply approve or deny. Bounds the revise/resubmit loop.
+ */
+export const MAX_REVISIONS = 3;
+
+/**
+ * Window in which a fresh approval for the same agent+tool is treated as the
+ * agent's revision of a request that was sent back. The agent normally
+ * resubmits within seconds of polling.
+ */
+const REVISION_LINK_WINDOW_MS = 15 * 60 * 1000;
+
+export type RequestChangesResult = 'ok' | 'not_pending' | 'cap_reached';
+
 export interface ApprovalEvents {
   'request': [ApprovalRequest];
   'resolved': [ApprovalRequest];
@@ -43,9 +58,14 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + expiryMs);
 
+    // If the human recently sent an equivalent request back for correction, this
+    // is the agent's revision of it — link the chain so the UI can show lineage
+    // and the revision cap can be enforced.
+    const parent = await this.findRevisionParent(agentId, tool, now);
+
     await client.execute({
-      sql: `INSERT INTO approvals (id, agent_id, tool, arguments_json, context, status, requested_at, expires_at)
-            VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`,
+      sql: `INSERT INTO approvals (id, agent_id, tool, arguments_json, context, status, requested_at, expires_at, parent_approval_id, revision)
+            VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
       args: [
         id,
         agentId,
@@ -56,16 +76,52 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
         context ?? null,
         now.toISOString(),
         expiresAt.toISOString(),
+        parent?.id ?? null,
+        parent ? parent.revision + 1 : 0,
       ],
     });
 
     const request = await this.get(id);
     if (request) {
       this.emit('request', request);
-      getPostHog()?.capture({ distinctId: agentId, event: 'approval_requested', properties: { agentId, tool } });
+      getPostHog()?.capture({
+        distinctId: agentId,
+        event: 'approval_requested',
+        properties: { agentId, tool, revision: request.revision },
+      });
     }
 
     return id;
+  }
+
+  /**
+   * Find the approval a new request is a revision of: the most recent
+   * changes_requested row for the same agent+tool, inside the link window, that
+   * no other revision has already claimed.
+   *
+   * The link is inferred server-side rather than declared by the agent — making
+   * the model thread a parent id through every tool's arguments would pollute
+   * each tool schema for a concern the model has no reason to know about.
+   */
+  private async findRevisionParent(
+    agentId: string,
+    tool: string,
+    now: Date
+  ): Promise<{ id: string; revision: number } | null> {
+    const since = new Date(now.getTime() - REVISION_LINK_WINDOW_MS).toISOString();
+
+    const result = await client.execute({
+      sql: `SELECT id, revision FROM approvals
+            WHERE agent_id = ? AND tool = ? AND status = 'changes_requested'
+              AND resolved_at > ?
+              AND id NOT IN (SELECT parent_approval_id FROM approvals WHERE parent_approval_id IS NOT NULL)
+            ORDER BY resolved_at DESC LIMIT 1`,
+      args: [agentId, tool, since],
+    });
+
+    if (result.rows.length === 0) return null;
+    const row = result.rows[0] as { id: string; revision: number | null };
+    return { id: row.id, revision: Number(row.revision ?? 0) };
   }
 
   /**
@@ -183,6 +239,54 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
   }
 
   /**
+   * Send a request back to the agent with free-text feedback instead of
+   * approving or denying it.
+   *
+   * This closes the approval — the held executor is discarded, exactly as with
+   * reject(). The agent learns of the feedback by polling reins_get_result,
+   * revises the arguments, and issues a fresh tool call, which submit() links
+   * back to this row as the next revision.
+   */
+  async requestChanges(id: string, requester: string, feedback: string): Promise<RequestChangesResult> {
+    const now = new Date();
+
+    const result = await client.execute({
+      sql: `UPDATE approvals SET status = 'changes_requested', resolved_at = ?, resolved_by = ?, resolution_comment = ?
+            WHERE id = ? AND status = 'pending' AND COALESCE(revision, 0) < ?`,
+      args: [now.toISOString(), requester, feedback, id, MAX_REVISIONS],
+    });
+
+    if (result.rowsAffected === 0) {
+      // Distinguish "someone already handled it" from "out of revisions" so the
+      // caller can tell the user which it was.
+      const current = await this.get(id);
+      return current && current.status === 'pending' ? 'cap_reached' : 'not_pending';
+    }
+
+    const request = await this.get(id);
+    if (request) {
+      this.emit('resolved', request);
+      this.notifyWaiter(id, { approved: false, approver: requester, comment: feedback });
+      const waitTimeMs = now.getTime() - request.requestedAt.getTime();
+      getPostHog()?.capture({
+        distinctId: request.agentId,
+        event: 'approval_resolved',
+        properties: {
+          agentId: request.agentId,
+          tool: request.tool,
+          decision: 'changes_requested',
+          revision: request.revision,
+          waitTimeMs,
+        },
+      });
+    }
+
+    // The captured executor is stale — the agent will resubmit with new arguments.
+    this.pendingExecutors.delete(id);
+    return 'ok';
+  }
+
+  /**
    * Wait for a decision on an approval request
    */
   async waitForDecision(id: string, timeoutMs: number): Promise<ApprovalDecision | null> {
@@ -200,7 +304,9 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
       };
     }
 
-    if (request.status === 'rejected') {
+    // changes_requested is also "not approved" for the legacy blocking caller —
+    // it has no way to resubmit, so the feedback is surfaced as the comment.
+    if (request.status === 'rejected' || request.status === 'changes_requested') {
       return {
         approved: false,
         approver: request.resolvedBy || 'unknown',
@@ -348,7 +454,10 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
       emailLastSentAt: row.email_last_sent_at ? new Date(row.email_last_sent_at as string) : undefined,
       telegramChatId: row.telegram_chat_id as string | undefined,
       telegramMessageId: row.telegram_message_id as string | undefined,
+      telegramPromptMessageId: row.telegram_prompt_message_id as string | undefined,
       resultJson: row.result_json as string | undefined,
+      parentApprovalId: row.parent_approval_id as string | undefined,
+      revision: Number(row.revision ?? 0),
     };
   }
 }

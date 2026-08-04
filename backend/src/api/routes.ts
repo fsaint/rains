@@ -1,4 +1,4 @@
-import { FastifyInstance, FastifyPluginAsync } from 'fastify';
+import { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { spawn } from 'child_process';
 import { config } from '../config/index.js';
 import { client } from '../db/index.js';
@@ -98,6 +98,7 @@ import {
   UpdatePolicySchema,
   CreateCredentialSchema,
   ApprovalDecisionSchema,
+  RequestChangesSchema,
   AuditFilterSchema,
 } from '@reins/shared';
 
@@ -2630,12 +2631,40 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     return reply.code(201).send({ data: approval });
   });
 
+  /**
+   * Confirm the session user owns the agent this approval belongs to.
+   *
+   * Approvals are addressed by an unguessable nanoid, but that is not an
+   * authorization boundary — without this check any authenticated user could
+   * read or decide any approval by id.
+   */
+  const ownsApproval = async (request: FastifyRequest, approvalId: string): Promise<boolean> => {
+    const session = getSession(request);
+    if (!session?.userId) return false;
+
+    const result = await client.execute({
+      sql: `SELECT 1 FROM approvals a
+            JOIN agents ag ON ag.id = a.agent_id
+            WHERE a.id = ? AND ag.user_id = ?
+            LIMIT 1`,
+      args: [approvalId, session.userId],
+    });
+    return result.rows.length > 0;
+  };
+
+  const notFound = { error: { code: 'NOT_FOUND', message: 'Approval not found' } };
+
   app.get<{ Params: { id: string } }>('/api/approvals/:id', async (request, reply) => {
     const { id } = request.params;
 
+    // 404 rather than 403 — do not confirm the existence of other users' approvals.
+    if (!(await ownsApproval(request, id))) {
+      return reply.code(404).send(notFound);
+    }
+
     const approval = await approvalQueue.get(id);
     if (!approval) {
-      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Approval not found' } });
+      return reply.code(404).send(notFound);
     }
 
     return { data: approval };
@@ -2651,6 +2680,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     const session = getSession(request);
     const approver = session?.email ?? 'dashboard-user';
+
+    if (!(await ownsApproval(request, id))) {
+      return reply.code(404).send(notFound);
+    }
 
     const success = await approvalQueue.approve(id, approver, parsed.data.comment);
     if (!success) {
@@ -2674,6 +2707,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const session = getSession(request);
     const approver = session?.email ?? 'dashboard-user';
 
+    if (!(await ownsApproval(request, id))) {
+      return reply.code(404).send(notFound);
+    }
+
     const success = await approvalQueue.reject(id, approver, body.reason ?? 'Rejected');
     if (!success) {
       return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Approval not found or already resolved' } });
@@ -2683,6 +2720,49 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     if (approval) {
       auditLogger.logApproval(approval.agentId, approval.tool, 'blocked', approver, id).catch(() => {});
+    }
+
+    return { data: approval };
+  });
+
+  /**
+   * Send a request back to the agent with free-text feedback instead of
+   * approving or denying it. The agent revises the arguments and resubmits.
+   */
+  app.post<{ Params: { id: string } }>('/api/approvals/:id/request-changes', async (request, reply) => {
+    const { id } = request.params;
+    const parsed = RequestChangesSchema.safeParse(request.body);
+
+    if (!parsed.success) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: parsed.error.message } });
+    }
+
+    const session = getSession(request);
+    const requester = session?.email ?? 'dashboard-user';
+
+    if (!(await ownsApproval(request, id))) {
+      return reply.code(404).send(notFound);
+    }
+
+    const outcome = await approvalQueue.requestChanges(id, requester, parsed.data.feedback);
+
+    if (outcome === 'cap_reached') {
+      return reply.code(409).send({
+        error: {
+          code: 'REVISION_LIMIT_REACHED',
+          message: 'This request has already been revised the maximum number of times. Approve or deny it.',
+        },
+      });
+    }
+
+    if (outcome === 'not_pending') {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Approval not found or already resolved' } });
+    }
+
+    const approval = await approvalQueue.get(id);
+
+    if (approval) {
+      auditLogger.logApproval(approval.agentId, approval.tool, 'blocked', requester, id).catch(() => {});
     }
 
     return { data: approval };

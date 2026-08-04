@@ -53,6 +53,18 @@ export function escapeHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/**
+ * Escape Telegram legacy-Markdown specials.
+ *
+ * Required wherever user-authored text lands in a Markdown-parsed message —
+ * an unbalanced `_` or `*` makes Telegram reject the whole send/edit, so the
+ * message silently fails to update. The resolved-message renderer still uses
+ * Markdown, and correction feedback is free text typed by a human.
+ */
+export function escapeMarkdown(value: string): string {
+  return value.replace(/([_*`[\]])/g, '\\$1');
+}
+
 /** Best-effort HTML → plain text for previewing content whose only body is HTML. */
 export function htmlToText(html: string): string {
   return html
@@ -76,13 +88,47 @@ export function joinRecipients(value: unknown): string {
   return '';
 }
 
-function approveDenyKeyboard(approvalId: string) {
+export function approveDenyKeyboard(approvalId: string) {
   return [
     [
       { text: '✅ Approve', callback_data: `ap:${approvalId}:approve` },
       { text: '❌ Deny', callback_data: `ap:${approvalId}:deny` },
     ],
   ];
+}
+
+/**
+ * Add the correction affordance to any revisable tool-call approval: a third
+ * button that sends the request back to the agent with free-text feedback,
+ * plus a header line when the user is looking at a redo.
+ *
+ * Applied centrally so every revisable branch — email, calendar, generic —
+ * behaves identically, and so reauth/telegram_group (which are not tool calls
+ * the agent can revise) simply never route through it.
+ *
+ * The button is dropped once the revision cap is reached, leaving the human
+ * with approve or deny. Text is deliberately markup-free so it renders the same
+ * under HTML and Markdown parse modes.
+ *
+ * `ap:` + a 21-char nanoid + `:changes` is 32 bytes, well inside Telegram's
+ * 64-byte callback_data limit.
+ */
+export function withCorrectionAffordance<T extends { text: string; keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>> }>(
+  approval: ApprovalRequest,
+  formatted: T,
+  maxRevisions: number
+): T {
+  const canRevise = approval.revision < maxRevisions;
+
+  return {
+    ...formatted,
+    text: approval.revision > 0
+      ? `✏️ Revision ${approval.revision} of ${maxRevisions}\n${formatted.text}`
+      : formatted.text,
+    keyboard: canRevise
+      ? [...formatted.keyboard, [{ text: '✏️ Request changes', callback_data: `ap:${approval.id}:changes` }]]
+      : formatted.keyboard,
+  };
 }
 
 function expiresLine(approval: ApprovalRequest): string {

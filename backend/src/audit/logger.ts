@@ -55,14 +55,20 @@ export class AuditLogger {
     agentId: string,
     tool: string,
     result: 'success' | 'blocked',
-    approver?: string
+    approver?: string,
+    approvalId?: string
   ): Promise<number> {
+    const metadata: Record<string, string> = {};
+    if (approver) metadata.approver = approver;
+    // Links the audit entry back to the tool_call 'pending' row.
+    if (approvalId) metadata.approvalId = approvalId;
+
     return this.log({
       eventType: 'approval',
       agentId,
       tool,
       result,
-      metadata: approver ? { approver } : undefined,
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     });
   }
 

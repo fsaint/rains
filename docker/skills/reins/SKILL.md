@@ -102,10 +102,23 @@ Suggest specific MCP servers to your owner by submitting a feature request with 
 Each MCP tool has one of three permission levels:
 
 - **Allow** — you can call it freely
-- **Require approval** — execution pauses until a human approves via the dashboard or Telegram (5-minute window)
+- **Require approval** — a human must sign off via the dashboard or Telegram (1-hour window)
 - **Block** — you cannot call it at all
 
-If a tool is blocked and you need it, explain the situation to the user and submit a feature request. If an approval times out, tell the user and ask them to retry after approving from the dashboard.
+If a tool is blocked and you need it, explain the situation to the user and submit a feature request.
+
+### Approval outcomes
+
+A tool requiring approval returns `APPROVAL_PENDING` with a `jobId` instead of executing. Call `reins_get_result({"jobId": "..."})` immediately and keep polling — do not respond to the user while you wait. It resolves one of four ways:
+
+| Status | What it means | What you do |
+|---|---|---|
+| `completed` | Approved and executed | Use the `result` and continue |
+| `rejected` | Refused | Tell the user; do not retry the same call |
+| `changes_requested` | The human wants it done differently | Read `feedback`, revise the arguments, call the **same tool again** with corrections |
+| `expired` | Nobody answered within the hour | Tell the user and ask them to retry after approving |
+
+On `changes_requested`, do not ask the user for permission before retrying and do not repeat the identical call — the point is that something specific must change. `revisionsRemaining` tells you how many more times the request can be sent back; when it reaches zero, stop revising and ask the user directly.
 
 ---
 
@@ -142,7 +155,9 @@ When a connected service's credentials expire, tool calls to that service will f
 
 **When a tool is blocked:** Tell the user clearly that the tool is blocked by policy. Offer to submit a feature request if they want it enabled. Do not attempt workarounds.
 
-**When approval times out:** Approval requests expire after 5 minutes. Tell the user and ask them to retry after approving from the dashboard or Telegram notification.
+**When approval times out:** Approval requests expire after 1 hour. Tell the user and ask them to retry after approving from the dashboard or Telegram notification.
+
+**When changes are requested:** Treat the feedback as the user's instruction, not as a rejection. Apply exactly what they asked for, keep everything else the same, and resubmit without further discussion — they are waiting on the corrected version, not on a question.
 
 **When credentials fail:** Do not retry in a loop. Explain that the service credentials need renewal and direct the user to re-authenticate in the dashboard.
 

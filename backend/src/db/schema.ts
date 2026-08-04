@@ -88,9 +88,13 @@ export const approvals = pgTable('approvals', {
   resolvedAt: text('resolved_at'),
   resolvedBy: text('resolved_by'),
   resolutionComment: text('resolution_comment'),
+  emailLastSentAt: text('email_last_sent_at'), // 24h re-send throttle for reauth emails
   telegramChatId: text('telegram_chat_id'), // Telegram chat ID where notification was sent
   telegramMessageId: text('telegram_message_id'), // Telegram message ID for edit-in-place
+  telegramPromptMessageId: text('telegram_prompt_message_id'), // ForceReply prompt asking what to change
   resultJson: text('result_json'),      // stored after executor runs
+  parentApprovalId: text('parent_approval_id'), // the approval this revision supersedes
+  revision: integer('revision').default(0),     // 0 = original, n = nth revision
 });
 
 // Telegram link codes — one-time codes for linking a Telegram chat to a Reins user

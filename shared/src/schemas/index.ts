@@ -113,7 +113,7 @@ export const CredentialHealthSchema = z.object({
 // Approval Schemas
 // ============================================================================
 
-export const ApprovalStatusSchema = z.enum(['pending', 'approved', 'rejected', 'expired']);
+export const ApprovalStatusSchema = z.enum(['pending', 'approved', 'rejected', 'expired', 'changes_requested']);
 
 export const ApprovalRequestSchema = z.object({
   id: z.string().uuid(),
@@ -127,11 +127,18 @@ export const ApprovalRequestSchema = z.object({
   resolvedAt: z.coerce.date().optional(),
   resolvedBy: z.string().optional(),
   resolutionComment: z.string().optional(),
+  parentApprovalId: z.string().optional(),
+  revision: z.number().int().min(0).default(0),
 });
 
 export const ApprovalDecisionSchema = z.object({
   approved: z.boolean(),
   comment: z.string().max(500).optional(),
+});
+
+/** Body of POST /api/approvals/:id/request-changes */
+export const RequestChangesSchema = z.object({
+  feedback: z.string().trim().min(1).max(2000),
 });
 
 // ============================================================================

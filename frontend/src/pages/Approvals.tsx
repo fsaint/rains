@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle, XCircle, Clock, AlertTriangle, MessageCircle, Loader, Users, Paperclip } from 'lucide-react';
+import { CheckCircle, XCircle, Clock, AlertTriangle, MessageCircle, Loader, Users, Paperclip, Pencil } from 'lucide-react';
 import { approvals, telegram, auth } from '../api/client';
 import { ReauthApprovalCard } from '../components/ReauthApprovalCard';
 import { ReauthModal } from '../components/ReauthModal';
@@ -66,6 +66,9 @@ function displayableArgs(args: Record<string, unknown>): Record<string, unknown>
   return out;
 }
 
+/** Matches MAX_REVISIONS in backend/src/approvals/queue.ts */
+const MAX_REVISIONS = 3;
+
 interface Approval {
   id: string;
   agentId: string;
@@ -75,6 +78,8 @@ interface Approval {
   status: string;
   requestedAt: string;
   expiresAt: string;
+  /** 0 for an original request; n for the nth revision the agent resubmitted */
+  revision?: number;
 }
 
 export default function Approvals() {
@@ -129,6 +134,20 @@ export default function Approvals() {
   const rejectMutation = useMutation({
     mutationFn: (id: string) => approvals.reject(id, 'Rejected by user'),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['approvals'] }),
+  });
+
+  // Which card has its correction box open, and what has been typed into it.
+  const [correctingId, setCorrectingId] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState('');
+
+  const requestChangesMutation = useMutation({
+    mutationFn: ({ id, feedback }: { id: string; feedback: string }) =>
+      approvals.requestChanges(id, feedback),
+    onSuccess: () => {
+      setCorrectingId(null);
+      setFeedback('');
+      queryClient.invalidateQueries({ queryKey: ['approvals'] });
+    },
   });
 
   const groupBehaviorMutation = useMutation({
@@ -284,6 +303,12 @@ export default function Approvals() {
                       <h3 className="font-semibold text-lg">
                         Tool Request: <span className="font-mono text-trust-blue">{approval.tool}</span>
                       </h3>
+                      {(approval.revision ?? 0) > 0 && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-caution-amber text-xs font-medium">
+                          <Pencil className="w-3 h-3" />
+                          Revision {approval.revision} of {MAX_REVISIONS}
+                        </span>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-2 gap-4 mt-4">
@@ -341,6 +366,57 @@ export default function Approvals() {
                         {JSON.stringify(displayableArgs(approval.arguments), null, 2)}
                       </pre>
                     </div>
+
+                    {correctingId === approval.id && (
+                      <div className="mt-4">
+                        <label
+                          htmlFor={`feedback-${approval.id}`}
+                          className="block text-xs text-gray-500 uppercase tracking-wider mb-1"
+                        >
+                          What should the agent change?
+                        </label>
+                        <textarea
+                          id={`feedback-${approval.id}`}
+                          value={feedback}
+                          onChange={(e) => setFeedback(e.target.value)}
+                          rows={3}
+                          maxLength={2000}
+                          autoFocus
+                          placeholder="e.g. drop Bob from the recipients, make it shorter"
+                          className="w-full text-sm border border-gray-200 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-trust-blue"
+                        />
+                        <div className="flex items-center gap-2 mt-2">
+                          <button
+                            onClick={() =>
+                              requestChangesMutation.mutate({ id: approval.id, feedback: feedback.trim() })
+                            }
+                            disabled={!feedback.trim() || requestChangesMutation.isPending}
+                            className="flex items-center gap-2 px-4 py-2 bg-trust-blue text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                          >
+                            {requestChangesMutation.isPending ? (
+                              <Loader className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Pencil className="w-4 h-4" />
+                            )}
+                            Send back to agent
+                          </button>
+                          <button
+                            onClick={() => {
+                              setCorrectingId(null);
+                              setFeedback('');
+                            }}
+                            className="px-4 py-2 text-gray-500 hover:text-gray-700"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                        {requestChangesMutation.isError && (
+                          <p className="text-sm text-alert-red mt-2">
+                            Could not send that back. It may have already been handled.
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-3 shrink-0">
@@ -350,6 +426,18 @@ export default function Approvals() {
                     </div>
 
                     <div className="flex gap-2">
+                      {(approval.revision ?? 0) < MAX_REVISIONS && correctingId !== approval.id && (
+                        <button
+                          onClick={() => {
+                            setCorrectingId(approval.id);
+                            setFeedback('');
+                          }}
+                          className="flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+                        >
+                          <Pencil className="w-4 h-4" />
+                          Request changes
+                        </button>
+                      )}
                       <button
                         onClick={() => rejectMutation.mutate(approval.id)}
                         disabled={rejectMutation.isPending}

@@ -13,9 +13,13 @@ import type { ApprovalRequest } from '@reins/shared';
 import {
   CALENDAR_TOOLS,
   EMAIL_TOOLS,
+  approveDenyKeyboard,
+  escapeMarkdown,
   formatCalendarApprovalMessage,
   formatEmailApprovalMessage,
+  withCorrectionAffordance,
 } from './approval-format.js';
+import { MAX_REVISIONS } from '../approvals/queue.js';
 
 // Re-exported so existing callers and tests can keep importing from the
 // transport module; the formatters themselves live in ./approval-format.ts.
@@ -65,6 +69,8 @@ interface TelegramUpdate {
     from?: { id: number; username?: string };
     chat: { id: number; type: string };
     text?: string;
+    /** Set when the user replies — used to correlate correction feedback to an approval */
+    reply_to_message?: { message_id: number };
   };
   callback_query?: {
     id: string;
@@ -246,7 +252,12 @@ export class TelegramNotifier {
     } else if (update.callback_query) {
       await this.handleCallbackQuery(update.callback_query);
     } else if (update.message) {
-      await this.handleOnboardingMessage(update.message);
+      // A reply may carry correction feedback for a pending approval. When it
+      // does not, fall through so the onboarding chat-id capture still works.
+      const handled = await this.handleCorrectionReply(update.message);
+      if (!handled) {
+        await this.handleOnboardingMessage(update.message);
+      }
     }
   }
 
@@ -374,8 +385,8 @@ export class TelegramNotifier {
       return;
     }
 
-    // Expected format: ap:<approvalId>:approve or ap:<approvalId>:deny
-    const match = data.match(/^ap:([^:]+):(approve|deny)$/);
+    // Expected format: ap:<approvalId>:approve | deny | changes
+    const match = data.match(/^ap:([^:]+):(approve|deny|changes)$/);
     if (!match) {
       await this.answerCallbackQuery(callbackId, { text: 'Unknown action.' });
       return;
@@ -409,6 +420,14 @@ export class TelegramNotifier {
 
     // Dynamically import to avoid circular dependency
     const { approvalQueue } = await import('../approvals/queue.js');
+
+    // "Request changes" collects free text before resolving anything, so it
+    // returns early: the approval stays pending and its keyboard must survive
+    // (editMessageText unconditionally clears the inline keyboard).
+    if (action === 'changes') {
+      await this.promptForCorrection(callbackId, approvalId, row, cb);
+      return;
+    }
 
     let resolved: boolean;
     if (action === 'approve') {
@@ -451,6 +470,117 @@ export class TelegramNotifier {
     await this.answerCallbackQuery(callbackId, { text: toast });
   }
 
+  // -------------------------------------------------------------------------
+  // Request-changes flow
+  // -------------------------------------------------------------------------
+
+  /**
+   * Ask the user what the agent should change. Posts a ForceReply prompt and
+   * records its message_id so the eventual reply can be correlated back to this
+   * approval. The approval itself stays pending — if the user never replies it
+   * expires on the normal schedule.
+   */
+  private async promptForCorrection(
+    callbackId: string,
+    approvalId: string,
+    row: Record<string, unknown>,
+    cb: NonNullable<TelegramUpdate['callback_query']>
+  ): Promise<void> {
+    if (row.status !== 'pending') {
+      await this.answerCallbackQuery(callbackId, { text: 'Already handled.' });
+      return;
+    }
+
+    if (Number(row.revision ?? 0) >= MAX_REVISIONS) {
+      await this.answerCallbackQuery(callbackId, { text: 'Revision limit reached — approve or deny.' });
+      return;
+    }
+
+    const chatId = cb.message ? String(cb.message.chat.id) : null;
+    if (!chatId) {
+      await this.answerCallbackQuery(callbackId, { text: 'Cannot reply in this chat.' });
+      return;
+    }
+
+    try {
+      const sent = await this.sendMessage(chatId, 'What should the agent change?', {
+        reply_to_message_id: cb.message!.message_id,
+        reply_markup: {
+          force_reply: true,
+          input_field_placeholder: 'e.g. drop Bob, make it shorter',
+        },
+      });
+
+      await client.execute({
+        sql: `UPDATE approvals SET telegram_prompt_message_id = ? WHERE id = ?`,
+        args: [String(sent.message_id), approvalId],
+      });
+
+      await this.answerCallbackQuery(callbackId, { text: 'Reply with what to change.' });
+    } catch (err) {
+      console.error(`[telegram] failed to prompt for correction on ${approvalId}:`, err);
+      await this.answerCallbackQuery(callbackId, { text: 'Could not start the reply. Try again.' });
+    }
+  }
+
+  /**
+   * Handle a reply that carries correction feedback for a pending approval.
+   *
+   * Correlates on the replied-to message: either the ForceReply prompt, or the
+   * approval message itself (so replying directly, without tapping the button,
+   * also works).
+   *
+   * Returns false when the reply is not about an approval, so the caller can
+   * fall through to the onboarding handler.
+   */
+  private async handleCorrectionReply(
+    msg: NonNullable<TelegramUpdate['message']>
+  ): Promise<boolean> {
+    const repliedTo = msg.reply_to_message?.message_id;
+    const feedback = msg.text?.trim();
+    if (!repliedTo || !feedback) return false;
+
+    const chatId = String(msg.chat.id);
+
+    const result = await client.execute({
+      sql: `SELECT a.id, a.status, a.revision, ag.user_id, u.telegram_chat_id as owner_chat_id
+            FROM approvals a
+            JOIN agents ag ON ag.id = a.agent_id
+            JOIN users u ON u.id = ag.user_id
+            WHERE a.telegram_chat_id = ?
+              AND (a.telegram_prompt_message_id = ? OR a.telegram_message_id = ?)
+            LIMIT 1`,
+      args: [chatId, String(repliedTo), String(repliedTo)],
+    });
+
+    const row = result.rows[0];
+    if (!row) return false;
+
+    // Only the linked owner may steer the agent.
+    const ownerChatId = row.owner_chat_id as string | null;
+    if (!ownerChatId || ownerChatId !== String(msg.from?.id ?? '')) {
+      await this.sendMessage(chatId, 'You are not authorized to resolve this request.', {});
+      return true;
+    }
+
+    const { approvalQueue } = await import('../approvals/queue.js');
+    const outcome = await approvalQueue.requestChanges(
+      row.id as string,
+      `telegram:${msg.from!.id}`,
+      feedback
+    );
+
+    if (outcome === 'cap_reached') {
+      await this.sendMessage(chatId, 'Revision limit reached — please approve or deny this one.', {});
+    } else if (outcome === 'not_pending') {
+      await this.sendMessage(chatId, 'That request was already handled.', {});
+    } else {
+      await this.sendMessage(chatId, '✏️ Sent back to your agent. It will revise and ask again.', {});
+    }
+
+    return true;
+  }
+
   private formatApprovalMessage(approval: ApprovalRequest, magicLinkUrl: string | null): {
     text: string;
     keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>>;
@@ -464,14 +594,22 @@ export class TelegramNotifier {
       return this.formatGroupApprovalMessage(approval);
     }
 
-    if (EMAIL_TOOLS.has(approval.tool)) {
-      return formatEmailApprovalMessage(approval);
-    }
+    // Everything below is a tool call the agent can revise, so it gets the
+    // correction affordance. reauth and telegram_group above deliberately do not.
+    const formatted = EMAIL_TOOLS.has(approval.tool)
+      ? formatEmailApprovalMessage(approval)
+      : CALENDAR_TOOLS.has(approval.tool)
+      ? formatCalendarApprovalMessage(approval)
+      : this.formatGenericApprovalMessage(approval);
 
-    if (CALENDAR_TOOLS.has(approval.tool)) {
-      return formatCalendarApprovalMessage(approval);
-    }
+    return withCorrectionAffordance(approval, formatted, MAX_REVISIONS);
+  }
 
+  private formatGenericApprovalMessage(approval: ApprovalRequest): {
+    text: string;
+    keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>>;
+    parseMode?: 'Markdown' | 'HTML';
+  } {
     const argsPreview = JSON.stringify(approval.arguments);
     const truncated = argsPreview.length > 200 ? argsPreview.slice(0, 197) + '...' : argsPreview;
     const expiresIn = Math.round((approval.expiresAt.getTime() - Date.now()) / 60000);
@@ -489,14 +627,7 @@ export class TelegramNotifier {
       .filter(Boolean)
       .join('\n');
 
-    const keyboard = [
-      [
-        { text: '✅ Approve', callback_data: `ap:${approval.id}:approve` },
-        { text: '❌ Deny', callback_data: `ap:${approval.id}:deny` },
-      ],
-    ];
-
-    return { text, keyboard };
+    return { text, keyboard: approveDenyKeyboard(approval.id) };
   }
 
   private formatGroupApprovalMessage(approval: ApprovalRequest): {
@@ -614,8 +745,16 @@ export class TelegramNotifier {
     if (approval.status === 'approved') {
       return `✅ *Approved* by ${approval.resolvedBy ?? 'unknown'} at ${time}`;
     } else if (approval.status === 'rejected') {
-      const reason = approval.resolutionComment ? `: ${approval.resolutionComment}` : '';
+      const reason = approval.resolutionComment
+        ? `: ${escapeMarkdown(approval.resolutionComment)}`
+        : '';
       return `❌ *Denied* by ${approval.resolvedBy ?? 'unknown'} at ${time}${reason}`;
+    } else if (approval.status === 'changes_requested') {
+      // resolutionComment here is free text the user typed into Telegram.
+      const feedback = approval.resolutionComment
+        ? `: ${escapeMarkdown(approval.resolutionComment)}`
+        : '';
+      return `✏️ *Changes requested* at ${time}${feedback}\n\nYour agent is revising and will ask again.`;
     } else {
       return `⏱ *Expired* — approval request timed out`;
     }

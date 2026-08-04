@@ -18,7 +18,7 @@ import {
   getDrivePathConfig,
   type ToolPermission,
 } from '../services/permissions.js';
-import { approvalQueue } from '../approvals/queue.js';
+import { approvalQueue, MAX_REVISIONS } from '../approvals/queue.js';
 import { auditLogger } from '../audit/logger.js';
 import { credentialVault } from '../credentials/vault.js';
 import { sendReauthEmail } from '../services/email.js';
@@ -374,9 +374,12 @@ async function handleListTools(
       'Poll for the result of a pending approval. ' +
       'CALL THIS IMMEDIATELY AND AUTOMATICALLY whenever any tool returns status=APPROVAL_PENDING. ' +
       'Do NOT respond to the user while polling — keep calling this every 3–5 seconds until ' +
-      'status is "completed" or "rejected". Never wait for user input between polls. ' +
-      'Returns status: pending | completed | rejected | expired. ' +
-      'When completed, includes the result of the original tool call.',
+      'status is "completed", "rejected" or "changes_requested". Never wait for user input between polls. ' +
+      'Returns status: pending | completed | rejected | expired | changes_requested. ' +
+      'When completed, includes the result of the original tool call. ' +
+      'When changes_requested, the human wants the call redone differently: read the "feedback" ' +
+      'field, revise the original arguments accordingly, and call the ORIGINAL tool again with the ' +
+      'corrected arguments — do not ask the user for permission first and do not repeat the identical call.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -835,6 +838,21 @@ async function handleCallTool(
       jobResult = { status: 'pending', jobId, message: pendingApprovalUserMessage() };
     } else if (currentApproval.status === 'rejected') {
       jobResult = { status: 'rejected', jobId, reason: currentApproval.resolutionComment };
+    } else if (currentApproval.status === 'changes_requested') {
+      const revisionsRemaining = Math.max(0, MAX_REVISIONS - currentApproval.revision);
+      jobResult = {
+        status: 'changes_requested',
+        jobId,
+        feedback: currentApproval.resolutionComment,
+        instruction:
+          `The human did NOT approve this as written and wants it redone. Revise the arguments ` +
+          `according to "feedback" and call ${currentApproval.tool} again with the corrected ` +
+          `arguments. Do not ask the user for permission first, and do not repeat the identical call.` +
+          (revisionsRemaining <= 1
+            ? ` This is your last revision — if it is sent back again you must stop and ask the user directly.`
+            : ''),
+        revisionsRemaining,
+      };
     } else if (currentApproval.status === 'expired') {
       jobResult = { status: 'expired', jobId };
     } else {
@@ -1085,7 +1103,7 @@ async function handleCallTool(
         content: [
           {
             type: 'text',
-            text: `APPROVAL_PENDING — jobId: ${approvalId}\n\nREQUIRED: Call reins_get_result({"jobId":"${approvalId}"}) NOW. Do NOT respond to the user. Poll every 3–5 seconds until status is "completed" or "rejected".\n\nUSER_MESSAGE: ${pendingApprovalUserMessage()}`,
+            text: `APPROVAL_PENDING — jobId: ${approvalId}\n\nREQUIRED: Call reins_get_result({"jobId":"${approvalId}"}) NOW. Do NOT respond to the user. Poll every 3–5 seconds until status is "completed", "rejected" or "changes_requested".\n\nUSER_MESSAGE: ${pendingApprovalUserMessage()}`,
           },
         ],
         isError: true,

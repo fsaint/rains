@@ -9,6 +9,7 @@ vi.mock('../api/client', () => ({
     list: vi.fn(),
     approve: vi.fn(),
     reject: vi.fn(),
+    requestChanges: vi.fn(),
   },
 }));
 
@@ -227,6 +228,78 @@ describe('Approvals page', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Pending Approvals')).toBeInTheDocument();
+    });
+  });
+  describe('request changes', () => {
+    const openCorrectionBox = async () => {
+      vi.mocked(approvals.list).mockResolvedValue([mockApproval]);
+      render(<Approvals />, { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /request changes/i })).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole('button', { name: /request changes/i }));
+      return screen.getByLabelText(/what should the agent change/i);
+    };
+
+    it('sends the typed feedback back to the agent', async () => {
+      vi.mocked(approvals.requestChanges).mockResolvedValue({});
+
+      const textarea = await openCorrectionBox();
+      fireEvent.change(textarea, { target: { value: 'drop Bob, make it shorter' } });
+      fireEvent.click(screen.getByRole('button', { name: /send back to agent/i }));
+
+      await waitFor(() => {
+        expect(approvals.requestChanges).toHaveBeenCalledWith('appr-1', 'drop Bob, make it shorter');
+      });
+    });
+
+    it('will not send empty feedback', async () => {
+      const textarea = await openCorrectionBox();
+      fireEvent.change(textarea, { target: { value: '   ' } });
+
+      expect(screen.getByRole('button', { name: /send back to agent/i })).toBeDisabled();
+    });
+
+    it('closes the box on cancel without sending', async () => {
+      const textarea = await openCorrectionBox();
+      fireEvent.change(textarea, { target: { value: 'nope' } });
+      fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
+
+      await waitFor(() => {
+        expect(screen.queryByLabelText(/what should the agent change/i)).not.toBeInTheDocument();
+      });
+      expect(approvals.requestChanges).not.toHaveBeenCalled();
+    });
+
+    it('hides the button at the revision cap so the user must approve or deny', async () => {
+      vi.mocked(approvals.list).mockResolvedValue([{ ...mockApproval, revision: 3 }]);
+      render(<Approvals />, { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(screen.getByText('gmail_send_message')).toBeInTheDocument();
+      });
+      expect(screen.queryByRole('button', { name: /request changes/i })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /approve/i })).toBeInTheDocument();
+    });
+
+    it('marks a redo so the user knows the agent already revised it', async () => {
+      vi.mocked(approvals.list).mockResolvedValue([{ ...mockApproval, revision: 2 }]);
+      render(<Approvals />, { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(screen.getByText('Revision 2 of 3')).toBeInTheDocument();
+      });
+    });
+
+    it('shows no revision marker on an original request', async () => {
+      vi.mocked(approvals.list).mockResolvedValue([mockApproval]);
+      render(<Approvals />, { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(screen.getByText('gmail_send_message')).toBeInTheDocument();
+      });
+      expect(screen.queryByText(/Revision \d+ of/)).not.toBeInTheDocument();
     });
   });
 });

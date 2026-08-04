@@ -11,6 +11,8 @@ vi.mock('../db/index.js', () => ({
 }));
 
 import { formatCalendarApprovalMessage, formatEmailApprovalMessage } from './telegram.js';
+import { escapeMarkdown, withCorrectionAffordance } from './approval-format.js';
+import { MAX_REVISIONS } from '../approvals/queue.js';
 import type { ApprovalRequest } from '@reins/shared';
 
 function makeApproval(overrides: Partial<ApprovalRequest>): ApprovalRequest {
@@ -22,8 +24,14 @@ function makeApproval(overrides: Partial<ApprovalRequest>): ApprovalRequest {
     status: 'pending',
     requestedAt: new Date(),
     expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+    revision: 0,
     ...overrides,
   };
+}
+
+/** The callback actions offered by a keyboard, flattened. */
+function actionsOf(keyboard: Array<Array<{ callback_data?: string }>>): string[] {
+  return keyboard.flat().map((b) => b.callback_data ?? '');
 }
 
 describe('formatEmailApprovalMessage', () => {
@@ -379,5 +387,79 @@ describe('formatCalendarApprovalMessage', () => {
       makeApproval({ tool: 'calendar_create_event', arguments: { summary: 's', calendarId: 'team@x.com' } })
     );
     expect(other.text).toContain('<b>Calendar:</b> team@x.com');
+  });
+});
+
+describe('withCorrectionAffordance', () => {
+  const base = () => formatEmailApprovalMessage(
+    makeApproval({ arguments: { to: ['a@x.com'], subject: 'Hi', body: 'Hello' } })
+  );
+
+  it('adds a Request changes button alongside Approve / Deny', () => {
+    const { keyboard } = withCorrectionAffordance(makeApproval({}), base(), MAX_REVISIONS);
+
+    expect(actionsOf(keyboard)).toEqual([
+      'ap:appr-1:approve',
+      'ap:appr-1:deny',
+      'ap:appr-1:changes',
+    ]);
+  });
+
+  it('keeps callback_data inside Telegram 64-byte limit', () => {
+    const { keyboard } = withCorrectionAffordance(
+      makeApproval({ id: 'V1StGXR8_Z5jdHi6B-myT' }), // a real 21-char nanoid
+      base(),
+      MAX_REVISIONS
+    );
+
+    for (const data of actionsOf(keyboard)) {
+      expect(Buffer.byteLength(data, 'utf8')).toBeLessThanOrEqual(64);
+    }
+  });
+
+  it('drops the button at the revision cap so the human must approve or deny', () => {
+    const { keyboard } = withCorrectionAffordance(
+      makeApproval({ revision: MAX_REVISIONS }),
+      base(),
+      MAX_REVISIONS
+    );
+
+    expect(actionsOf(keyboard)).not.toContain('ap:appr-1:changes');
+    expect(actionsOf(keyboard)).toContain('ap:appr-1:approve');
+  });
+
+  it('labels a redo so the user knows what they are looking at', () => {
+    const { text } = withCorrectionAffordance(makeApproval({ revision: 2 }), base(), MAX_REVISIONS);
+    expect(text).toContain('Revision 2 of 3');
+  });
+
+  it('adds no header for an original request', () => {
+    const { text } = withCorrectionAffordance(makeApproval({ revision: 0 }), base(), MAX_REVISIONS);
+    expect(text).not.toContain('Revision');
+    expect(text.startsWith('📧')).toBe(true);
+  });
+
+  it('uses markup-free header text so it renders under HTML and Markdown alike', () => {
+    const { text } = withCorrectionAffordance(makeApproval({ revision: 1 }), base(), MAX_REVISIONS);
+    const header = text.split('\n')[0];
+    expect(header).not.toMatch(/[<>*_]/);
+  });
+});
+
+describe('escapeMarkdown', () => {
+  // formatResolvedMessage renders in Markdown, and correction feedback is free
+  // text a human typed. An unbalanced _ or * makes Telegram reject the edit, so
+  // the approval message silently never updates.
+  it('escapes the characters that break Telegram legacy Markdown', () => {
+    expect(escapeMarkdown('use *bold* and shorter_please')).toBe(
+      'use \\*bold\\* and shorter\\_please'
+    );
+    expect(escapeMarkdown('see [link] and `code`')).toBe(
+      'see \\[link\\] and \\`code\\`'
+    );
+  });
+
+  it('leaves ordinary feedback untouched', () => {
+    expect(escapeMarkdown('drop Bob, make it shorter')).toBe('drop Bob, make it shorter');
   });
 });

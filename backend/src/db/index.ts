@@ -547,6 +547,22 @@ export async function initializeDatabase() {
     END $$
   `;
 
+  // Add correction/retry columns — a human can send an approval back to the agent
+  // with free-text feedback; the agent revises and resubmits as a linked revision.
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE approvals ADD COLUMN IF NOT EXISTS parent_approval_id TEXT;
+      ALTER TABLE approvals ADD COLUMN IF NOT EXISTS revision INTEGER DEFAULT 0;
+      ALTER TABLE approvals ADD COLUMN IF NOT EXISTS telegram_prompt_message_id TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
+
+  // Chain lookup: submit() finds an unclaimed changes_requested parent by agent+tool
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_approvals_parent ON approvals(parent_approval_id)
+  `;
+
   // Add webhook relay columns for per-agent bot group detection
   await sql`
     DO $$ BEGIN

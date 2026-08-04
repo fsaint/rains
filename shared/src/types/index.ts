@@ -116,7 +116,7 @@ export interface CredentialHealth {
 // Approval Types
 // ============================================================================
 
-export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'changes_requested';
 
 export interface ApprovalRequest {
   id: string;
@@ -129,11 +129,18 @@ export interface ApprovalRequest {
   expiresAt: Date;
   resolvedAt?: Date;
   resolvedBy?: string;
+  /** Denial reason, or the human's free-text feedback when status is 'changes_requested' */
   resolutionComment?: string;
   emailLastSentAt?: Date;
   telegramChatId?: string;
   telegramMessageId?: string;
+  /** Message ID of the ForceReply prompt asking the user what to change */
+  telegramPromptMessageId?: string;
   resultJson?: string;   // populated after deferred execution completes
+  /** The approval this one supersedes, when the agent resubmitted after 'changes_requested' */
+  parentApprovalId?: string;
+  /** 0 for an original request; n for the nth revision of it */
+  revision: number;
 }
 
 export interface ApprovalDecision {
@@ -142,7 +149,7 @@ export interface ApprovalDecision {
   comment?: string;
 }
 
-export type DeferredJobStatus = 'pending' | 'completed' | 'rejected' | 'expired';
+export type DeferredJobStatus = 'pending' | 'completed' | 'rejected' | 'expired' | 'changes_requested';
 
 export interface DeferredJobResult {
   status: DeferredJobStatus;
@@ -153,6 +160,12 @@ export interface DeferredJobResult {
   reason?: string;
   /** Present when status === 'pending' — user-facing guidance to relay to the end user */
   message?: string;
+  /** Present when status === 'changes_requested' — the human's free-text correction */
+  feedback?: string;
+  /** Present when status === 'changes_requested' — what the agent must do next */
+  instruction?: string;
+  /** Present when status === 'changes_requested' — revisions left before the agent must stop and ask */
+  revisionsRemaining?: number;
 }
 
 // ============================================================================

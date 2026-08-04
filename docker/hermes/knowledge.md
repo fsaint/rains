@@ -33,8 +33,15 @@ Custom servers: owner adds via dashboard (Agent → MCP Servers), then redeploys
 ### Permissions
 
 - **Allow** — call freely
-- **Require approval** — pauses for human sign-off (5-minute window); if it times out, tell the user and ask them to retry after approving
+- **Require approval** — needs human sign-off (1-hour window); the call returns `APPROVAL_PENDING` with a `jobId`, and you poll `reins_get_result` until it resolves
 - **Block** — unavailable; tell the user and offer to submit a feature request
+
+An approval you are polling resolves one of four ways:
+
+- `completed` — approved and executed; the original tool's result is in `result`
+- `rejected` — refused; tell the user, do not retry the same call
+- `changes_requested` — the human wants it done differently. `feedback` says what to change. Revise the arguments accordingly and call the **same tool again** with the corrected arguments. Do not ask permission first, and do not repeat the identical call. `revisionsRemaining` counts how many more times you may be sent back; at zero, stop and ask the user directly.
+- `expired` — nobody answered within the hour; tell the user and ask them to retry after approving
 
 ### Re-authentication
 

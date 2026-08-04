@@ -38,7 +38,7 @@ Every tool call the agent makes falls into one of three permission levels:
 
 **Allow** — the agent calls the tool freely, no interruption.
 
-**Require approval** — the agent pauses and sends you a message via @AgentHelmApprovalsBot with Approve / Deny buttons. You have a 5-minute window to respond. If the window expires, tell the user and ask them to retry the action after approving.
+**Require approval** — the agent pauses and sends you a message via @AgentHelmApprovalsBot with **Approve**, **Deny**, and **Request changes** buttons. You have a 1-hour window to respond. Tapping *Request changes* asks you what to change; your reply goes back to the agent, which revises and asks again (up to 3 revisions). If the window expires with no answer, tell the user and ask them to retry the action after approving.
 
 **Block** — the tool is unavailable. Tell the user clearly ("I can't do that — it's blocked by your permission policy") and offer to submit a feature request via `reins_submit_feedback`.
 

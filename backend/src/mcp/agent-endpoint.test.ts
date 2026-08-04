@@ -165,6 +165,7 @@ vi.mock('./server-manager.js', () => ({
 }));
 
 vi.mock('../approvals/queue.js', () => ({
+  MAX_REVISIONS: 3,
   approvalQueue: {
     submit: vi.fn().mockResolvedValue('approval-123'),
     waitForDecision: vi.fn().mockResolvedValue({ approved: true, approver: 'user' }),
@@ -453,6 +454,66 @@ describe('reins_get_result tool', () => {
     const content = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text);
     expect(content.status).toBe('rejected');
     expect(content.reason).toBe('Not allowed at this time');
+  });
+
+  it('returns changes_requested with the human feedback and a revise instruction', async () => {
+    vi.mocked(approvalQueue.get).mockResolvedValueOnce({
+      id: 'job-1', agentId: 'agent-1', tool: 'gmail_send_message',
+      arguments: {}, status: 'changes_requested', revision: 0,
+      requestedAt: new Date(), expiresAt: new Date(Date.now() + 3600_000),
+      resolutionComment: 'drop Bob, make it shorter',
+    } as any);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'reins_get_result', arguments: { jobId: 'job-1' } },
+    });
+
+    expect(response.error).toBeUndefined();
+    const content = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text);
+    expect(content.status).toBe('changes_requested');
+    expect(content.feedback).toBe('drop Bob, make it shorter');
+    // The instruction must name the tool to re-call — weaker models otherwise
+    // treat the status as a stopping point (see docs/ops/COMMON_ERRORS.md).
+    expect(content.instruction).toContain('gmail_send_message');
+    expect(content.revisionsRemaining).toBe(3);
+  });
+
+  it('does not long-poll on changes_requested — it is a terminal state', async () => {
+    vi.mocked(approvalQueue.get).mockResolvedValueOnce({
+      id: 'job-1', agentId: 'agent-1', tool: 'gmail_send_message',
+      arguments: {}, status: 'changes_requested', revision: 1,
+      requestedAt: new Date(), expiresAt: new Date(Date.now() + 3600_000),
+      resolutionComment: 'shorter',
+    } as any);
+
+    // No timer advancement: if this awaited the 30s poll loop the test would hang.
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'reins_get_result', arguments: { jobId: 'job-1' } },
+    });
+
+    const content = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text);
+    expect(content.status).toBe('changes_requested');
+    expect(content.revisionsRemaining).toBe(2);
+  });
+
+  it('warns the agent when it is on its final revision', async () => {
+    vi.mocked(approvalQueue.get).mockResolvedValueOnce({
+      id: 'job-1', agentId: 'agent-1', tool: 'gmail_send_message',
+      arguments: {}, status: 'changes_requested', revision: 2,
+      requestedAt: new Date(), expiresAt: new Date(Date.now() + 3600_000),
+      resolutionComment: 'shorter still',
+    } as any);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'reins_get_result', arguments: { jobId: 'job-1' } },
+    });
+
+    const content = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text);
+    expect(content.revisionsRemaining).toBe(1);
+    expect(content.instruction).toContain('last revision');
   });
 
   it('returns error for unknown jobId', async () => {

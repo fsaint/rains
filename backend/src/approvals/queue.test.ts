@@ -15,7 +15,17 @@ vi.mock('nanoid', () => ({
 }));
 
 import { client } from '../db/index.js';
-import { ApprovalQueue } from './queue.js';
+import { ApprovalQueue, MAX_REVISIONS } from './queue.js';
+
+const EMPTY = { rows: [], rowsAffected: 0, lastInsertRowid: 0n, columns: [] };
+
+/**
+ * submit() first looks for a changes_requested approval to link this one to as
+ * a revision. Queue this "none found" answer ahead of a submit()'s own mocks.
+ */
+function mockNoRevisionParent() {
+  vi.mocked(client.execute).mockResolvedValueOnce({ ...EMPTY });
+}
 
 describe('ApprovalQueue', () => {
   let queue: ApprovalQueue;
@@ -34,6 +44,7 @@ describe('ApprovalQueue', () => {
   describe('submit', () => {
     it('should create an approval request and return its ID', async () => {
       // Mock the insert, then the get
+      mockNoRevisionParent();
       vi.mocked(client.execute)
         .mockResolvedValueOnce({ rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [] })
         .mockResolvedValueOnce({
@@ -58,33 +69,36 @@ describe('ApprovalQueue', () => {
       const id = await queue.submit('agent-1', 'send_message', { to: 'alice' });
 
       expect(id).toBe('test-approval-id');
-      expect(client.execute).toHaveBeenCalledTimes(2);
+      // parent lookup, insert, get
+      expect(client.execute).toHaveBeenCalledTimes(3);
 
-      const insertCall = vi.mocked(client.execute).mock.calls[0][0];
+      const insertCall = vi.mocked(client.execute).mock.calls[1][0];
       expect(typeof insertCall === 'object' && insertCall.sql).toContain('INSERT INTO approvals');
     });
 
     it('should set default expiry of 1 hour', async () => {
+      mockNoRevisionParent();
       vi.mocked(client.execute)
         .mockResolvedValueOnce({ rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [] })
         .mockResolvedValueOnce({ rows: [], rowsAffected: 0, lastInsertRowid: 0n, columns: [] });
 
       await queue.submit('agent-1', 'tool', {});
 
-      const call = vi.mocked(client.execute).mock.calls[0][0] as { args: unknown[] };
+      const call = vi.mocked(client.execute).mock.calls[1][0] as { args: unknown[] };
       const expiresAt = new Date(call.args[6] as string);
       const now = new Date('2024-06-15T12:00:00Z');
       expect(expiresAt.getTime() - now.getTime()).toBe(60 * 60 * 1000);
     });
 
     it('should accept custom expiry', async () => {
+      mockNoRevisionParent();
       vi.mocked(client.execute)
         .mockResolvedValueOnce({ rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [] })
         .mockResolvedValueOnce({ rows: [], rowsAffected: 0, lastInsertRowid: 0n, columns: [] });
 
       await queue.submit('agent-1', 'tool', {}, undefined, 5 * 60 * 1000);
 
-      const call = vi.mocked(client.execute).mock.calls[0][0] as { args: unknown[] };
+      const call = vi.mocked(client.execute).mock.calls[1][0] as { args: unknown[] };
       const expiresAt = new Date(call.args[6] as string);
       const now = new Date('2024-06-15T12:00:00Z');
       expect(expiresAt.getTime() - now.getTime()).toBe(5 * 60 * 1000);
@@ -94,6 +108,7 @@ describe('ApprovalQueue', () => {
       const handler = vi.fn();
       queue.on('request', handler);
 
+      mockNoRevisionParent();
       vi.mocked(client.execute)
         .mockResolvedValueOnce({ rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [] })
         .mockResolvedValueOnce({
@@ -246,6 +261,145 @@ describe('ApprovalQueue', () => {
 
       const result = await queue.reject('gone', 'admin', 'reason');
       expect(result).toBe(false);
+    });
+  });
+
+  describe('requestChanges', () => {
+    const changesRow = (overrides: Record<string, unknown> = {}) => ({
+      id: 'ap-1', agent_id: 'agent-1', tool: 'gmail_send_message', arguments_json: '{}',
+      context: null, status: 'changes_requested', requested_at: '2024-06-15T12:00:00Z',
+      expires_at: '2024-06-15T13:00:00Z', resolved_at: '2024-06-15T12:05:00Z',
+      resolved_by: 'telegram:42', resolution_comment: 'drop Bob, make it shorter',
+      revision: 0, parent_approval_id: null, result_json: null,
+      ...overrides,
+    });
+
+    it('sends a pending request back with the feedback as the resolution comment', async () => {
+      vi.mocked(client.execute)
+        .mockResolvedValueOnce({ rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [] })
+        .mockResolvedValueOnce({ rows: [changesRow()], rowsAffected: 0, lastInsertRowid: 0n, columns: [] });
+
+      const result = await queue.requestChanges('ap-1', 'telegram:42', 'drop Bob, make it shorter');
+
+      expect(result).toBe('ok');
+      const update = vi.mocked(client.execute).mock.calls[0][0] as { sql: string; args: unknown[] };
+      expect(update.sql).toContain("status = 'changes_requested'");
+      expect(update.args).toContain('drop Bob, make it shorter');
+    });
+
+    it('emits resolved so the Telegram message gets edited in place', async () => {
+      const handler = vi.fn();
+      queue.on('resolved', handler);
+
+      vi.mocked(client.execute)
+        .mockResolvedValueOnce({ rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [] })
+        .mockResolvedValueOnce({ rows: [changesRow()], rowsAffected: 0, lastInsertRowid: 0n, columns: [] });
+
+      await queue.requestChanges('ap-1', 'telegram:42', 'shorter');
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0][0].status).toBe('changes_requested');
+    });
+
+    it('discards the stale executor — the agent will resubmit with new arguments', async () => {
+      mockNoRevisionParent();
+      vi.mocked(client.execute)
+        .mockResolvedValueOnce({ rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [] })
+        .mockResolvedValueOnce({ rows: [changesRow({ status: 'pending' })], rowsAffected: 0, lastInsertRowid: 0n, columns: [] })
+        // requestChanges: update, then get
+        .mockResolvedValueOnce({ rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [] })
+        .mockResolvedValueOnce({ rows: [changesRow()], rowsAffected: 0, lastInsertRowid: 0n, columns: [] })
+        // approve attempt afterwards: update matches nothing
+        .mockResolvedValueOnce({ rows: [], rowsAffected: 0, lastInsertRowid: 0n, columns: [] });
+
+      const executorFn = vi.fn();
+      await queue.submit('agent-1', 'gmail_send_message', {});
+      queue.registerExecutor('test-approval-id', executorFn);
+      await queue.requestChanges('test-approval-id', 'telegram:42', 'shorter');
+      await queue.approve('test-approval-id', 'telegram:42');
+
+      expect(executorFn).not.toHaveBeenCalled();
+    });
+
+    it('reports not_pending when someone already approved or denied it', async () => {
+      vi.mocked(client.execute)
+        .mockResolvedValueOnce({ rows: [], rowsAffected: 0, lastInsertRowid: 0n, columns: [] })
+        .mockResolvedValueOnce({ rows: [changesRow({ status: 'approved' })], rowsAffected: 0, lastInsertRowid: 0n, columns: [] });
+
+      expect(await queue.requestChanges('ap-1', 'telegram:42', 'shorter')).toBe('not_pending');
+    });
+
+    it('reports cap_reached when the request is still pending at the revision cap', async () => {
+      vi.mocked(client.execute)
+        // the guarded UPDATE matches nothing because revision >= MAX_REVISIONS
+        .mockResolvedValueOnce({ rows: [], rowsAffected: 0, lastInsertRowid: 0n, columns: [] })
+        .mockResolvedValueOnce({
+          rows: [changesRow({ status: 'pending', revision: MAX_REVISIONS })],
+          rowsAffected: 0, lastInsertRowid: 0n, columns: [],
+        });
+
+      expect(await queue.requestChanges('ap-1', 'telegram:42', 'shorter')).toBe('cap_reached');
+    });
+
+    it('caps at MAX_REVISIONS in the UPDATE itself, not just in the UI', async () => {
+      vi.mocked(client.execute)
+        .mockResolvedValueOnce({ rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [] })
+        .mockResolvedValueOnce({ rows: [changesRow()], rowsAffected: 0, lastInsertRowid: 0n, columns: [] });
+
+      await queue.requestChanges('ap-1', 'telegram:42', 'shorter');
+
+      const update = vi.mocked(client.execute).mock.calls[0][0] as { sql: string; args: unknown[] };
+      expect(update.sql).toContain('revision');
+      expect(update.args).toContain(MAX_REVISIONS);
+    });
+  });
+
+  describe('revision chain linking', () => {
+    it('links a resubmitted call to the request that was sent back', async () => {
+      vi.mocked(client.execute)
+        // parent lookup finds an unclaimed changes_requested row at revision 1
+        .mockResolvedValueOnce({
+          rows: [{ id: 'parent-ap', revision: 1 }],
+          rowsAffected: 0, lastInsertRowid: 0n, columns: [],
+        })
+        .mockResolvedValueOnce({ rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [] })
+        .mockResolvedValueOnce({ ...EMPTY });
+
+      await queue.submit('agent-1', 'gmail_send_message', { to: 'alice' });
+
+      const insert = vi.mocked(client.execute).mock.calls[1][0] as { sql: string; args: unknown[] };
+      expect(insert.sql).toContain('parent_approval_id');
+      expect(insert.args).toContain('parent-ap');
+      expect(insert.args).toContain(2); // parent revision 1 + 1
+    });
+
+    it('starts at revision 0 when nothing was sent back', async () => {
+      mockNoRevisionParent();
+      vi.mocked(client.execute)
+        .mockResolvedValueOnce({ rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [] })
+        .mockResolvedValueOnce({ ...EMPTY });
+
+      await queue.submit('agent-1', 'gmail_send_message', { to: 'alice' });
+
+      const insert = vi.mocked(client.execute).mock.calls[1][0] as { sql: string; args: unknown[] };
+      expect(insert.args[insert.args.length - 2]).toBeNull(); // parent_approval_id
+      expect(insert.args[insert.args.length - 1]).toBe(0);    // revision
+    });
+
+    it('only considers parents inside the link window and not already claimed', async () => {
+      mockNoRevisionParent();
+      vi.mocked(client.execute)
+        .mockResolvedValueOnce({ rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [] })
+        .mockResolvedValueOnce({ ...EMPTY });
+
+      await queue.submit('agent-1', 'gmail_send_message', {});
+
+      const lookup = vi.mocked(client.execute).mock.calls[0][0] as { sql: string; args: unknown[] };
+      expect(lookup.sql).toContain("status = 'changes_requested'");
+      expect(lookup.sql).toContain('resolved_at >');
+      expect(lookup.sql).toContain('parent_approval_id IS NOT NULL');
+      // 15-minute window measured back from the frozen clock
+      expect(lookup.args).toContain(new Date('2024-06-15T11:45:00.000Z').toISOString());
     });
   });
 
@@ -403,6 +557,8 @@ describe('ApprovalQueue', () => {
         telegram_message_id: null,
         result_json: null,
       };
+      // submit: parent lookup
+      mockNoRevisionParent();
       // submit: insert
       vi.mocked(client.execute)
         .mockResolvedValueOnce({ rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [] })
@@ -475,6 +631,7 @@ describe('ApprovalQueue', () => {
         telegram_message_id: null,
         result_json: null,
       };
+      mockNoRevisionParent();
       vi.mocked(client.execute)
         .mockResolvedValueOnce({ rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [] })
         .mockResolvedValueOnce({ rows: [mockApprovalRow], rowsAffected: 0, lastInsertRowid: 0n, columns: [] })

@@ -338,6 +338,11 @@ export const approvals = {
     request<unknown>(`/approvals/${id}/approve`, { method: 'POST', body: JSON.stringify({ comment }) }),
   reject: (id: string, reason: string) =>
     request<unknown>(`/approvals/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  requestChanges: (id: string, feedback: string) =>
+    request<unknown>(`/approvals/${id}/request-changes`, {
+      method: 'POST',
+      body: JSON.stringify({ feedback }),
+    }),
 };
 
 // Audit
