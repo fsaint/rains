@@ -75,3 +75,7 @@ docker/workspace/BOOTSTRAP.md
 docker/hermes/BOOTSTRAP.md
 docker/workspace/MEMORY_POLICY.md
 docker/hermes/MEMORY_POLICY.md
+
+# Python bytecode — admin/ tooling
+__pycache__/
+*.pyc
