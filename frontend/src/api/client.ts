@@ -834,6 +834,70 @@ export const memory = {
     request<{ ok: boolean }>(`/memory/attributes/${attrId}`, { method: 'DELETE' }),
 };
 
+// Skills types
+export interface Skill {
+  id: string;
+  slug: string;
+  name: string;
+  /** The "when should the agent use this" line */
+  description: string;
+  /** Markdown instructions */
+  body: string;
+  /** Service types this skill needs, e.g. ['gmail', 'calendar'] */
+  requiredServices: string[];
+  /** Platform skill seeded from the repo — read-only unless you are an admin */
+  isSystem: boolean;
+  autoAssign: boolean;
+  enabled: boolean;
+  assignedAgentIds?: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A skill resolved against a specific agent's connected services */
+export interface AgentSkill extends Skill {
+  available: boolean;
+  missingServices: string[];
+}
+
+export interface SkillInput {
+  name: string;
+  description: string;
+  body: string;
+  requiredServices?: string[];
+  enabled?: boolean;
+  autoAssign?: boolean;
+}
+
+// Skills API
+export const skills = {
+  list: () => request<Skill[]>('/skills'),
+
+  get: (id: string) => request<Skill>(`/skills/${id}`),
+
+  create: (data: SkillInput & { isSystem?: boolean }) =>
+    request<Skill>('/skills', { method: 'POST', body: JSON.stringify(data) }),
+
+  update: (id: string, data: SkillInput) =>
+    request<Skill>(`/skills/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  remove: (id: string) =>
+    request<{ deleted: boolean }>(`/skills/${id}`, { method: 'DELETE' }),
+
+  listForAgent: (agentId: string) =>
+    request<AgentSkill[]>(`/agents/${agentId}/skills`),
+
+  /** Replaces the agent's whole set. Rejects with 409 if any dependency is unmet. */
+  setForAgent: (agentId: string, skillIds: string[]) =>
+    request<Array<{ id: string; slug: string }>>(`/agents/${agentId}/skills`, {
+      method: 'PUT',
+      body: JSON.stringify({ skillIds }),
+    }),
+
+  unassign: (agentId: string, skillId: string) =>
+    request<{ removed: boolean }>(`/agents/${agentId}/skills/${skillId}`, { method: 'DELETE' }),
+};
+
 // Model Router types
 export interface ModelConfig {
   id: string;

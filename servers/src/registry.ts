@@ -21,6 +21,7 @@ import { definition as hermeneutix } from './hermeneutix/definition.js';
 import { definition as zendesk } from './zendesk/definition.js';
 import { definition as devSandbox } from './dev-sandbox/definition.js';
 import { definition as memory } from './memory/definition.js';
+import { definition as skills } from './skills/definition.js';
 import { definition as pipedrive } from './pipedrive/definition.js';
 
 // Re-export the type from its canonical location
@@ -45,6 +46,7 @@ export const serviceDefinitions: ServiceDefinitionWithTools[] = [
   hermeneutix,
   zendesk,
   memory,
+  skills,
   pipedrive,
   ...devOnlyServices,
 ];

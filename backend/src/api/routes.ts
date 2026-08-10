@@ -78,6 +78,7 @@ import { createUpload, getUpload, MAX_UPLOAD_BYTES } from '../services/agent-upl
 import { isCodexTokenExpired } from '../services/token-monitor.js';
 import { forwardToOpenclaw, handleMyChatMember } from '../services/agent-bot-relay.js';
 import { parseWikilinks, updateLinkIndex, ensureMemoryRoot, getDreamManifest, setEntryParent } from '../services/memory.js';
+import { parseRequiredServices, resolveAvailability } from '../services/skills.js';
 import * as provider from '../providers/index.js';
 import Stripe from 'stripe';
 import {
@@ -5495,6 +5496,401 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       .header('content-length', String(upload.sizeBytes))
       .header('x-upload-filename', encodeURIComponent(upload.filename))
       .send(upload.data);
+  });
+
+  // =========================================================================
+  // Skills
+  //
+  // Two audiences share this data:
+  //   - the dashboard (session cookie) authors and assigns skills
+  //   - the agent (x-reins-agent-secret) reads them via the skills MCP server
+  //
+  // Unlike memory, which scopes per user, skills scope per *agent* — so the
+  // agent-facing routes use resolveAgentFromGatewayToken directly and there is
+  // deliberately no session fallback (a session carries no agentId).
+  // =========================================================================
+
+  const SKILL_BODY_MAX = 64 * 1024;
+
+  /** Shape a DB row for the dashboard. `user_id IS NULL` is the only system marker. */
+  function mapSkillRow(row: Record<string, unknown>) {
+    return {
+      id: row.id as string,
+      slug: row.slug as string,
+      name: row.name as string,
+      description: row.description as string,
+      body: row.body as string,
+      requiredServices: parseRequiredServices(row.required_services),
+      isSystem: row.user_id === null,
+      autoAssign: Boolean(row.auto_assign),
+      enabled: Boolean(row.enabled),
+      createdAt: row.created_at as string,
+      updatedAt: row.updated_at as string,
+    };
+  }
+
+  function slugify(value: string): string {
+    return value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 64);
+  }
+
+  /**
+   * Validate a create/update payload. Returns an error message, or null.
+   * Service types are checked against the live registry so a skill can never
+   * depend on something that doesn't exist.
+   */
+  function validateSkillPayload(body: {
+    name?: unknown;
+    description?: unknown;
+    body?: unknown;
+    requiredServices?: unknown;
+  }): string | null {
+    if (typeof body.name !== 'string' || body.name.trim() === '') return 'name is required';
+    if (typeof body.description !== 'string') return 'description is required';
+    if (typeof body.body !== 'string' || body.body.trim() === '') return 'body is required';
+    if (body.body.length > SKILL_BODY_MAX) {
+      return `body exceeds ${SKILL_BODY_MAX} bytes — the whole body is sent to the agent on every read`;
+    }
+    if (body.requiredServices !== undefined) {
+      if (!Array.isArray(body.requiredServices)) return 'requiredServices must be an array';
+      for (const s of body.requiredServices) {
+        if (typeof s !== 'string' || !validServiceTypes.includes(s)) {
+          return `Unknown service type: ${String(s)}`;
+        }
+      }
+    }
+    return null;
+  }
+
+  /** A skill the session user may read: their own, or any system skill. */
+  async function getReadableSkill(id: string, userId: string) {
+    const result = await client.execute({
+      sql: `SELECT * FROM skills WHERE id = ? AND (user_id = ? OR user_id IS NULL) LIMIT 1`,
+      args: [id, userId],
+    });
+    return result.rows[0] ?? null;
+  }
+
+  const skillNotFound = { error: { code: 'NOT_FOUND', message: 'Skill not found' } };
+
+  // --- Dashboard audience ---------------------------------------------------
+
+  app.get('/api/skills', async (request) => {
+    const userId = getUserId(request);
+
+    const [skillRows, assignments] = await Promise.all([
+      client.execute({
+        sql: `SELECT * FROM skills WHERE user_id = ? OR user_id IS NULL ORDER BY user_id NULLS FIRST, name`,
+        args: [userId],
+      }),
+      client.execute({
+        sql: `SELECT ask.skill_id, ask.agent_id FROM agent_skills ask
+              JOIN agents a ON a.id = ask.agent_id
+              WHERE a.user_id = ?`,
+        args: [userId],
+      }),
+    ]);
+
+    const bySkill = new Map<string, string[]>();
+    for (const row of assignments.rows) {
+      const skillId = row.skill_id as string;
+      if (!bySkill.has(skillId)) bySkill.set(skillId, []);
+      bySkill.get(skillId)!.push(row.agent_id as string);
+    }
+
+    return {
+      data: skillRows.rows.map((row) => ({
+        ...mapSkillRow(row),
+        assignedAgentIds: bySkill.get(row.id as string) ?? [],
+      })),
+    };
+  });
+
+  app.post('/api/skills', async (request, reply) => {
+    const userId = getUserId(request);
+    const body = request.body as {
+      name?: string; description?: string; body?: string;
+      requiredServices?: string[]; slug?: string; isSystem?: boolean;
+    };
+
+    // Only admins may author platform-wide skills.
+    if (body.isSystem && !requireAdmin(request, reply)) return;
+
+    const invalid = validateSkillPayload(body);
+    if (invalid) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: invalid } });
+    }
+
+    const slug = slugify(body.slug || body.name!);
+    if (!slug) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Could not derive a slug from name' } });
+    }
+
+    const id = body.isSystem ? slug : nanoid();
+    const ownerId = body.isSystem ? null : userId;
+
+    try {
+      await client.execute({
+        sql: `INSERT INTO skills (id, user_id, slug, name, description, body, required_services, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, now(), now())`,
+        args: [id, ownerId, slug, body.name!.trim(), body.description!, body.body!,
+               JSON.stringify(body.requiredServices ?? [])],
+      });
+    } catch (err) {
+      // 23505 = unique_violation. Anything else is a real failure and must not
+      // be reported to the user as a naming collision.
+      if ((err as { code?: string })?.code === '23505') {
+        return reply.code(409).send({
+          error: { code: 'DUPLICATE_SLUG', message: `You already have a skill with the slug "${slug}"` },
+        });
+      }
+      throw err;
+    }
+
+    // Skill bodies are instructions the agent will follow, so changes to them
+    // belong in the same audit trail as policy changes.
+    await auditLogger.log({
+      eventType: 'policy_change',
+      result: 'success',
+      metadata: { kind: 'skill', action: 'created', skillId: id, slug, changedBy: userId },
+    });
+
+    const row = await getReadableSkill(id, userId);
+    return reply.code(201).send({ data: row ? mapSkillRow(row) : null });
+  });
+
+  app.get<{ Params: { id: string } }>('/api/skills/:id', async (request, reply) => {
+    const userId = getUserId(request);
+    const row = await getReadableSkill(request.params.id, userId);
+    if (!row) return reply.code(404).send(skillNotFound);
+    return { data: mapSkillRow(row) };
+  });
+
+  app.put<{ Params: { id: string } }>('/api/skills/:id', async (request, reply) => {
+    const userId = getUserId(request);
+    const { id } = request.params;
+    const body = request.body as {
+      name?: string; description?: string; body?: string;
+      requiredServices?: string[]; enabled?: boolean; autoAssign?: boolean;
+    };
+
+    const existing = await getReadableSkill(id, userId);
+    if (!existing) return reply.code(404).send(skillNotFound);
+    // System skills are readable by everyone but writable only by admins.
+    if (existing.user_id === null && !requireAdmin(request, reply)) return;
+
+    const invalid = validateSkillPayload(body);
+    if (invalid) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: invalid } });
+    }
+
+    await client.execute({
+      sql: `UPDATE skills SET name = ?, description = ?, body = ?, required_services = ?,
+                  enabled = ?, auto_assign = ?, updated_at = now()
+            WHERE id = ?`,
+      args: [
+        body.name!.trim(), body.description!, body.body!,
+        JSON.stringify(body.requiredServices ?? parseRequiredServices(existing.required_services)),
+        body.enabled ?? Boolean(existing.enabled),
+        body.autoAssign ?? Boolean(existing.auto_assign),
+        id,
+      ],
+    });
+
+    await auditLogger.log({
+      eventType: 'policy_change',
+      result: 'success',
+      metadata: { kind: 'skill', action: 'updated', skillId: id, slug: existing.slug, changedBy: userId },
+    });
+
+    const row = await getReadableSkill(id, userId);
+    return { data: row ? mapSkillRow(row) : null };
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/skills/:id', async (request, reply) => {
+    const userId = getUserId(request);
+    const { id } = request.params;
+
+    const existing = await getReadableSkill(id, userId);
+    if (!existing) return reply.code(404).send(skillNotFound);
+    if (existing.user_id === null && !requireAdmin(request, reply)) return;
+
+    // agent_skills rows go with it via ON DELETE CASCADE.
+    await client.execute({ sql: `DELETE FROM skills WHERE id = ?`, args: [id] });
+
+    await auditLogger.log({
+      eventType: 'policy_change',
+      result: 'success',
+      metadata: { kind: 'skill', action: 'deleted', skillId: id, slug: existing.slug, changedBy: userId },
+    });
+
+    return { data: { deleted: true } };
+  });
+
+  // --- Assignment (dashboard, agent-ownership-guarded) ----------------------
+
+  /** 404 rather than 403 — an agent id is not an authorization boundary. */
+  async function ownsAgent(request: any, agentId: string): Promise<boolean> {
+    const userId = getUserId(request);
+    const result = await client.execute({
+      sql: `SELECT 1 FROM agents WHERE id = ? AND user_id = ? LIMIT 1`,
+      args: [agentId, userId],
+    });
+    return result.rows.length > 0;
+  }
+
+  const agentNotFound = { error: { code: 'NOT_FOUND', message: 'Agent not found' } };
+
+  app.get<{ Params: { id: string } }>('/api/agents/:id/skills', async (request, reply) => {
+    const { id } = request.params;
+    if (!(await ownsAgent(request, id))) return reply.code(404).send(agentNotFound);
+
+    const result = await client.execute({
+      sql: `SELECT s.* FROM skills s
+            JOIN agent_skills ask ON ask.skill_id = s.id
+            WHERE ask.agent_id = ? ORDER BY s.name`,
+      args: [id],
+    });
+
+    const mapped = result.rows.map(mapSkillRow);
+    const availability = await resolveAvailability(id, mapped);
+
+    return {
+      data: mapped.map((s) => ({
+        ...s,
+        available: availability.get(s.id)?.available ?? true,
+        missingServices: availability.get(s.id)?.missingServices ?? [],
+      })),
+    };
+  });
+
+  app.put<{ Params: { id: string } }>('/api/agents/:id/skills', async (request, reply) => {
+    const { id } = request.params;
+    const userId = getUserId(request);
+    if (!(await ownsAgent(request, id))) return reply.code(404).send(agentNotFound);
+
+    const body = request.body as { skillIds?: unknown };
+    if (!Array.isArray(body.skillIds)) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'skillIds must be an array' } });
+    }
+    const skillIds = body.skillIds.filter((s): s is string => typeof s === 'string');
+
+    // Every id must be readable by this user, so nobody can attach someone
+    // else's skill to their own agent.
+    const readable: Array<{ id: string; slug: string; name: string; requiredServices: string[] }> = [];
+    for (const skillId of skillIds) {
+      const row = await getReadableSkill(skillId, userId);
+      if (!row) return reply.code(404).send(skillNotFound);
+      readable.push({
+        id: row.id as string,
+        slug: row.slug as string,
+        name: row.name as string,
+        requiredServices: parseRequiredServices(row.required_services),
+      });
+    }
+
+    // Dependencies must be satisfied *before* a skill can be attached. (Once
+    // attached, a later disconnect only marks it unavailable — see
+    // services/skills.ts — so the user never silently loses assignments.)
+    const availability = await resolveAvailability(id, readable);
+    const blocked = readable
+      .map((s) => ({ skill: s, missing: availability.get(s.id)?.missingServices ?? [] }))
+      .filter((entry) => entry.missing.length > 0);
+
+    if (blocked.length > 0) {
+      return reply.code(409).send({
+        error: {
+          code: 'MISSING_SERVICES',
+          message: blocked
+            .map((b) => `"${b.skill.name}" needs ${b.missing.join(', ')}, not connected to this agent`)
+            .join('; '),
+          details: blocked.map((b) => ({ skillId: b.skill.id, missingServices: b.missing })),
+        },
+      });
+    }
+
+    await client.execute({ sql: `DELETE FROM agent_skills WHERE agent_id = ?`, args: [id] });
+    for (const skill of readable) {
+      await client.execute({
+        sql: `INSERT INTO agent_skills (agent_id, skill_id, created_at) VALUES (?, ?, now())
+              ON CONFLICT DO NOTHING`,
+        args: [id, skill.id],
+      });
+    }
+
+    return { data: readable.map((s) => ({ id: s.id, slug: s.slug })) };
+  });
+
+  app.delete<{ Params: { id: string; skillId: string } }>(
+    '/api/agents/:id/skills/:skillId',
+    async (request, reply) => {
+      const { id, skillId } = request.params;
+      if (!(await ownsAgent(request, id))) return reply.code(404).send(agentNotFound);
+
+      await client.execute({
+        sql: `DELETE FROM agent_skills WHERE agent_id = ? AND skill_id = ?`,
+        args: [id, skillId],
+      });
+      return { data: { removed: true } };
+    }
+  );
+
+  // --- Agent audience (gateway token only) ----------------------------------
+
+  /**
+   * Skills this agent can see: everything explicitly assigned, plus any system
+   * skill flagged auto_assign (so a freshly provisioned agent isn't empty).
+   */
+  async function listAgentSkills(agentId: string) {
+    const result = await client.execute({
+      sql: `SELECT s.* FROM skills s
+            JOIN agent_skills ask ON ask.skill_id = s.id
+            WHERE ask.agent_id = ? AND s.enabled = true
+            UNION
+            SELECT s.* FROM skills s
+            WHERE s.user_id IS NULL AND s.auto_assign = true AND s.enabled = true
+            ORDER BY name`,
+      args: [agentId],
+    });
+
+    const mapped = result.rows.map(mapSkillRow);
+    const availability = await resolveAvailability(agentId, mapped);
+    return mapped.map((s) => ({
+      ...s,
+      available: availability.get(s.id)?.available ?? true,
+      missingServices: availability.get(s.id)?.missingServices ?? [],
+    }));
+  }
+
+  app.get('/api/agent-skills', async (request, reply) => {
+    const agent = await resolveAgentFromGatewayToken(request);
+    if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const query = request.query as { include_unavailable?: string };
+    const includeUnavailable = query.include_unavailable !== 'false';
+
+    let skills = await listAgentSkills(agent.agentId);
+    if (!includeUnavailable) skills = skills.filter((s) => s.available);
+
+    // Bodies are omitted here on purpose — the list is advisory and the agent
+    // pulls one body at a time via /:slug.
+    return {
+      data: skills.map(({ body: _body, ...rest }) => rest),
+    };
+  });
+
+  app.get<{ Params: { slug: string } }>('/api/agent-skills/:slug', async (request, reply) => {
+    const agent = await resolveAgentFromGatewayToken(request);
+    if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const skills = await listAgentSkills(agent.agentId);
+    const skill = skills.find((s) => s.slug === request.params.slug);
+    if (!skill) return reply.status(404).send({ error: 'Skill not assigned to this agent' });
+
+    return { data: skill };
   });
 
   // -------------------------------------------------------------------------

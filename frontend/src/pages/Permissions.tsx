@@ -11,6 +11,7 @@ import {
   type PendingRegistration,
   type DrivePathConfig,
   type DrivePathRule,
+  skills as skillsApi,
 } from '../api/client';
 import {
   Mail,
@@ -508,6 +509,10 @@ export default function Permissions() {
                     <Plus className="w-4 h-4" />
                     Add Service
                   </button>
+
+                  {/* Skills depending on these services — shown here because
+                      this is where a user disabling a service is looking. */}
+                  <AgentSkillsStrip agentId={agent.id} />
                 </div>
               )}
             </div>
@@ -1257,6 +1262,50 @@ function DrivePathEditor({ agentId }: DrivePathEditorProps) {
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Read-only list of the skills attached to an agent, with a warning when a
+ * required service is no longer connected. Authoring lives on /skills.
+ */
+function AgentSkillsStrip({ agentId }: { agentId: string }) {
+  const { data: assigned = [] } = useQuery({
+    queryKey: ['agent-skills', agentId],
+    queryFn: () => skillsApi.listForAgent(agentId),
+  });
+
+  if (assigned.length === 0) return null;
+
+  return (
+    <div className="pt-3 mt-1 border-t border-gray-100">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs text-gray-400 uppercase tracking-wider">Skills</span>
+        <Link to="/skills" className="text-xs text-trust-blue hover:underline">
+          Manage
+        </Link>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {assigned.map((skill) => (
+          <span
+            key={skill.id}
+            title={
+              skill.available
+                ? skill.description
+                : `Needs ${skill.missingServices.join(', ')} \u2014 unavailable to the agent until reconnected`
+            }
+            className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded-lg border ${
+              skill.available
+                ? 'bg-white text-gray-600 border-gray-200'
+                : 'bg-caution-amber/5 text-caution-amber border-caution-amber/30'
+            }`}
+          >
+            {!skill.available && <AlertCircle className="w-3 h-3 shrink-0" />}
+            {skill.name}
+          </span>
+        ))}
       </div>
     </div>
   );

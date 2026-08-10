@@ -949,11 +949,11 @@ export async function createServiceInstance(
 }
 
 /**
- * Enable services that are on by default for every new agent (currently: memory).
+ * Enable services that are on by default for every new agent (memory, skills).
  * Idempotent — safe to call multiple times; will not create duplicate instances.
  */
 export async function enableDefaultServices(agentId: string): Promise<void> {
-  const defaults = ['memory'];
+  const defaults = ['memory', 'skills'];
   for (const serviceType of defaults) {
     try {
       const existing = await db

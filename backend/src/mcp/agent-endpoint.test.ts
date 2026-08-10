@@ -7,9 +7,11 @@ import { approvalQueue } from '../approvals/queue.js';
 import {
   handleMCPRequest,
   getServiceTypeFromTool,
+  buildSkillCatalog,
   MCP_ERROR_CODES,
   type MCPRequest,
 } from './agent-endpoint.js';
+import { client } from '../db/index.js';
 
 // Mock dependencies
 vi.mock('../config/index.js', () => ({
@@ -661,5 +663,77 @@ describe('scope guard', () => {
     // Should NOT be a MISSING_CREDENTIALS error for insufficient scope
     const isInsufficientScope = response.error?.message?.includes('insufficient scope');
     expect(isInsufficientScope).toBeFalsy();
+  });
+});
+
+describe('buildSkillCatalog', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function skillRows(n: number) {
+    return Array.from({ length: n }, (_, i) => ({
+      slug: `skill-${i}`,
+      name: `Skill ${i}`,
+      description: `Use for task ${i}.`,
+      required_services: '[]',
+    }));
+  }
+
+  it('returns null when the agent has no skills, so the description is untouched', async () => {
+    vi.mocked(client.execute).mockResolvedValueOnce({ rows: [] } as any);
+
+    expect(await buildSkillCatalog('agent-1')).toBeNull();
+  });
+
+  it('lists each skill with its slug, description, and required services', async () => {
+    vi.mocked(client.execute).mockResolvedValueOnce({
+      rows: [
+        { slug: 'inbox-triage', name: 'Inbox Triage', description: 'Clean the inbox.', required_services: '["gmail"]' },
+        { slug: 'notes', name: 'Notes', description: 'Take notes.', required_services: '[]' },
+      ],
+    } as any);
+
+    const catalog = await buildSkillCatalog('agent-1');
+
+    expect(catalog).toContain('- inbox-triage — Clean the inbox. (needs: gmail)');
+    // No requirements means no noisy empty parenthetical.
+    expect(catalog).toContain('- notes — Take notes.');
+    expect(catalog).not.toContain('notes — Take notes. (needs:');
+  });
+
+  it('tells the agent the list may be stale, since tools/list is cached per session', async () => {
+    vi.mocked(client.execute).mockResolvedValueOnce({ rows: skillRows(1) } as any);
+
+    const catalog = await buildSkillCatalog('agent-1');
+
+    expect(catalog).toContain('may be stale');
+    expect(catalog).toContain('skills_list');
+  });
+
+  it('caps the number of skills and says how many were omitted', async () => {
+    vi.mocked(client.execute).mockResolvedValueOnce({ rows: skillRows(35) } as any);
+
+    const catalog = await buildSkillCatalog('agent-1');
+
+    expect(catalog).toContain('skill-29');
+    expect(catalog).not.toContain('skill-30');
+    expect(catalog).toContain('…and 5 more.');
+  });
+
+  it('truncates rather than letting one huge catalog bloat every tools/list', async () => {
+    vi.mocked(client.execute).mockResolvedValueOnce({
+      rows: Array.from({ length: 30 }, (_, i) => ({
+        slug: `skill-${i}`,
+        name: `Skill ${i}`,
+        description: 'x'.repeat(300),
+        required_services: '[]',
+      })),
+    } as any);
+
+    const catalog = await buildSkillCatalog('agent-1');
+
+    expect(catalog!.length).toBeLessThan(2200);
+    expect(catalog).toContain('(truncated)');
   });
 });

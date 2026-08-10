@@ -234,6 +234,28 @@ export const memoryTags = pgTable('memory_tags', {
   createdAt: text('created_at').notNull().default(sql`now()`),
 }, (t) => ({ pk: primaryKey({ columns: [t.entryId, t.tag] }) }));
 
+// Skills - reusable task playbooks served to agents over MCP
+export const skills = pgTable('skills', {
+  id: text('id').primaryKey(),
+  userId: text('user_id'), // NULL => system skill
+  slug: text('slug').notNull(),
+  name: text('name').notNull(),
+  description: text('description').notNull(), // "when to use this"
+  body: text('body').notNull(), // Markdown instructions
+  requiredServices: text('required_services').notNull().default('[]'), // JSON string[]
+  autoAssign: boolean('auto_assign').notNull().default(false), // system rows only
+  enabled: boolean('enabled').notNull().default(true),
+  createdAt: text('created_at').notNull().default(sql`now()`),
+  updatedAt: text('updated_at').notNull().default(sql`now()`),
+});
+
+// Which skills are attached to which agent
+export const agentSkills = pgTable('agent_skills', {
+  agentId: text('agent_id').notNull(),
+  skillId: text('skill_id').notNull(),
+  createdAt: text('created_at').notNull().default(sql`now()`),
+}, (t) => ({ pk: primaryKey({ columns: [t.agentId, t.skillId] }) }));
+
 // Pending agent registrations - agents waiting to be claimed
 export const pendingAgentRegistrations = pgTable('pending_agent_registrations', {
   id: text('id').primaryKey(),

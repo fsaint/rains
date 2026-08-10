@@ -10,6 +10,7 @@ import * as schema from './schema.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEMPLATES_DIR = join(__dirname, '..', '..', '..', 'templates', 'initial-prompts');
+const SKILLS_TEMPLATES_DIR = join(__dirname, '..', '..', '..', 'templates', 'skills');
 
 const DATABASE_URL = config.databaseUrl;
 
@@ -750,6 +751,58 @@ export async function initializeDatabase() {
   await sql`CREATE INDEX IF NOT EXISTS idx_memory_tags_tag ON memory_tags(tag)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_memory_tags_entry ON memory_tags(entry_id)`;
 
+  // ========================================================================
+  // Skills — reusable task playbooks served to agents over MCP on demand.
+  // user_id IS NULL marks a system skill; there is deliberately no is_system
+  // column, so the two can never disagree.
+  // ========================================================================
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS skills (
+      id TEXT PRIMARY KEY,
+      user_id TEXT,
+      slug TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      body TEXT NOT NULL,
+      required_services TEXT NOT NULL DEFAULT '[]',
+      auto_assign BOOLEAN DEFAULT false NOT NULL,
+      enabled BOOLEAN DEFAULT true NOT NULL,
+      created_at TEXT DEFAULT now() NOT NULL,
+      updated_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_skills_user ON skills(user_id)`;
+  // Slugs are unique within a scope: once globally for system skills, once
+  // per owner for user skills.
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_skills_slug_system ON skills(slug) WHERE user_id IS NULL`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_skills_slug_user ON skills(user_id, slug) WHERE user_id IS NOT NULL`;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS agent_skills (
+      agent_id TEXT NOT NULL,
+      skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+      created_at TEXT DEFAULT now() NOT NULL,
+      PRIMARY KEY (agent_id, skill_id)
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_agent_skills_skill ON agent_skills(skill_id)`;
+
+  // Give every existing agent the 'skills' service instance. tools/list is
+  // computed live per request, so this exposes skills_list/skills_get to
+  // already-deployed agents without a redeploy.
+  await sql`
+    INSERT INTO agent_service_instances (id, agent_id, service_type, enabled, is_default, created_at, updated_at)
+    SELECT gen_random_uuid()::text, a.id, 'skills', true, true, now(), now()
+    FROM agents a
+    WHERE NOT EXISTS (
+      SELECT 1 FROM agent_service_instances i
+      WHERE i.agent_id = a.id AND i.service_type = 'skills'
+    )
+  `;
+
   // Stripe subscriptions table
   await sql`
     CREATE TABLE IF NOT EXISTS subscriptions (
@@ -835,6 +888,106 @@ export async function initializeDatabase() {
   } catch (err) {
     console.warn('[db] Could not seed initial prompt templates:', err);
   }
+
+  // Seed system skills from files
+  try {
+    await seedSystemSkills();
+  } catch (err) {
+    console.warn('[db] Could not seed system skills:', err);
+  }
+}
+
+/**
+ * Minimal YAML frontmatter parser for SKILL.md files.
+ *
+ * Handles only what the skill format needs: scalar values plus inline
+ * (`[a, b]`) and block (`- a`) sequences. Pulling in a YAML dependency for
+ * four keys isn't worth it.
+ */
+function parseSkillFrontmatter(raw: string): { meta: Record<string, string | string[]>; body: string } {
+  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+  if (!match) return { meta: {}, body: raw.trim() };
+
+  const meta: Record<string, string | string[]> = {};
+  const lines = match[1].split(/\r?\n/);
+
+  for (let i = 0; i < lines.length; i++) {
+    const kv = lines[i].match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
+    if (!kv) continue;
+    const key = kv[1];
+    const value = kv[2].trim();
+
+    if (value === '') {
+      // Block sequence: consume the following "- item" lines.
+      const items: string[] = [];
+      while (i + 1 < lines.length) {
+        const item = lines[i + 1].match(/^\s*-\s+(.*)$/);
+        if (!item) break;
+        items.push(item[1].trim().replace(/^["']|["']$/g, ''));
+        i++;
+      }
+      meta[key] = items;
+    } else if (value.startsWith('[') && value.endsWith(']')) {
+      meta[key] = value
+        .slice(1, -1)
+        .split(',')
+        .map((s) => s.trim().replace(/^["']|["']$/g, ''))
+        .filter(Boolean);
+    } else {
+      meta[key] = value.replace(/^["']|["']$/g, '');
+    }
+  }
+
+  return { meta, body: match[2].trim() };
+}
+
+/**
+ * Upsert platform skills from templates/skills/<slug>/SKILL.md.
+ *
+ * System skills are version-controlled files rather than dashboard rows, so
+ * they ship with a deploy and stay reviewable. Mirrors
+ * seedInitialPromptTemplates() — id equals the slug so re-seeding updates in
+ * place rather than duplicating.
+ */
+async function seedSystemSkills() {
+  let entries: string[];
+  try {
+    entries = await readdir(SKILLS_TEMPLATES_DIR);
+  } catch {
+    // Templates directory not present (e.g. stripped Docker build)
+    return;
+  }
+
+  let seeded = 0;
+  for (const slug of entries) {
+    let raw: string;
+    try {
+      raw = await readFile(join(SKILLS_TEMPLATES_DIR, slug, 'SKILL.md'), 'utf-8');
+    } catch {
+      continue; // not a skill directory
+    }
+
+    const { meta, body } = parseSkillFrontmatter(raw);
+    const name = typeof meta.name === 'string' && meta.name ? meta.name : slug;
+    const description = typeof meta.description === 'string' ? meta.description : '';
+    const requires = Array.isArray(meta.requires) ? meta.requires : [];
+    const autoAssign = meta.autoAssign === 'true' || meta.auto_assign === 'true';
+
+    await sql`
+      INSERT INTO skills (id, user_id, slug, name, description, body, required_services, auto_assign, created_at, updated_at)
+      VALUES (${slug}, NULL, ${slug}, ${name}, ${description}, ${body}, ${JSON.stringify(requires)}, ${autoAssign}, now(), now())
+      ON CONFLICT (id) DO UPDATE SET
+        name = ${name},
+        description = ${description},
+        body = ${body},
+        required_services = ${JSON.stringify(requires)},
+        auto_assign = ${autoAssign},
+        updated_at = now()
+    `;
+    seeded++;
+  }
+
+  if (seeded > 0) console.log(`Seeded ${seeded} system skill(s)`);
 }
 
 async function seedInitialPromptTemplates() {

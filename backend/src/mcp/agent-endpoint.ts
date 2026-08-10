@@ -27,6 +27,7 @@ import { getPostHog } from '../analytics/posthog.js';
 import type { DeferredJobResult } from '@reins/shared';
 import { checkSpendCap } from '../services/spend.js';
 import { checkUsageGate } from '../services/billing.js';
+import { parseRequiredServices } from '../services/skills.js';
 
 // ============================================================================
 // Types
@@ -412,6 +413,24 @@ async function handleListTools(
     });
   }
 
+  // Append this agent's skill catalog to the skills_list description.
+  //
+  // Filesystem SKILL.md files self-advertise because the runtime scans them and
+  // puts each name + description in context. MCP-served skills get none of
+  // that, so we reproduce the same progressive disclosure here: names and
+  // one-liners always visible, bodies fetched on demand via skills_get.
+  const skillsTool = tools.find((t) => t.name === 'skills_list');
+  if (skillsTool) {
+    try {
+      const catalog = await buildSkillCatalog(agentId);
+      if (catalog) skillsTool.description = `${skillsTool.description}\n\n${catalog}`;
+    } catch (error) {
+      // A catalog failure must never break tools/list — the tool still works,
+      // it just isn't pre-advertised.
+      console.warn('[agent-endpoint] skill catalog failed (non-fatal):', error instanceof Error ? error.message : error);
+    }
+  }
+
   return {
     jsonrpc: '2.0',
     id: requestId,
@@ -419,6 +438,52 @@ async function handleListTools(
       tools,
     },
   };
+}
+
+/** Cap the injected catalog so a large library can't bloat every tools/list. */
+const SKILL_CATALOG_MAX = 30;
+const SKILL_CATALOG_MAX_CHARS = 2000;
+
+/**
+ * Render the agent's assigned skills as a compact catalog for the
+ * skills_list description. Returns null when the agent has none.
+ *
+ * Exported for tests.
+ */
+export async function buildSkillCatalog(agentId: string): Promise<string | null> {
+  const result = await client.execute({
+    sql: `SELECT s.slug, s.name, s.description, s.required_services FROM skills s
+          JOIN agent_skills ask ON ask.skill_id = s.id
+          WHERE ask.agent_id = ? AND s.enabled = true
+          UNION
+          SELECT s.slug, s.name, s.description, s.required_services FROM skills s
+          WHERE s.user_id IS NULL AND s.auto_assign = true AND s.enabled = true
+          ORDER BY name`,
+    args: [agentId],
+  });
+
+  if (result.rows.length === 0) return null;
+
+  const shown = result.rows.slice(0, SKILL_CATALOG_MAX);
+  const lines: string[] = ['Skills currently assigned to you:'];
+
+  for (const row of shown) {
+    const requires = parseRequiredServices(row.required_services);
+    const suffix = requires.length > 0 ? ` (needs: ${requires.join(', ')})` : '';
+    lines.push(`- ${row.slug} — ${row.description}${suffix}`);
+  }
+
+  const omitted = result.rows.length - shown.length;
+  if (omitted > 0) lines.push(`…and ${omitted} more.`);
+
+  let catalog = lines.join('\n');
+  if (catalog.length > SKILL_CATALOG_MAX_CHARS) {
+    catalog = `${catalog.slice(0, SKILL_CATALOG_MAX_CHARS)}…\n(truncated)`;
+  }
+
+  // tools/list is typically cached per session, so the authoritative read is
+  // always the live call — say so rather than let a stale list mislead.
+  return `${catalog}\nCall skills_get with a slug to read the full instructions. This list may be stale; call skills_list for the authoritative version.`;
 }
 
 // ============================================================================
@@ -500,8 +565,8 @@ async function executeTool(
 
   // Inject gateway token for services that call back into the Reins API.
   // memory reads/writes memory entries; gmail resolves source="upload"
-  // attachments via /api/agent-uploads.
-  if (serviceType === 'memory' || serviceType === 'gmail') {
+  // attachments via /api/agent-uploads; skills reads /api/agent-skills.
+  if (serviceType === 'memory' || serviceType === 'gmail' || serviceType === 'skills') {
     const depRow = await client.execute({
       sql: `SELECT gateway_token FROM deployed_agents WHERE agent_id = ? AND status NOT IN ('destroyed', 'error') ORDER BY created_at DESC LIMIT 1`,
       args: [agentId],
