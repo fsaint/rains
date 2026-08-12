@@ -14,6 +14,8 @@ vi.mock('googleapis', () => {
         get: vi.fn(),
         send: vi.fn(),
         delete: vi.fn(),
+        modify: vi.fn(),
+        batchModify: vi.fn(),
       },
       drafts: {
         create: vi.fn(),
@@ -48,6 +50,11 @@ import {
   handleSendMessage,
   handleDeleteMessage,
   handleListLabels,
+  handleModifyLabels,
+  handleArchive,
+  handleMarkRead,
+  handleLabelMessage,
+  GMAIL_BATCH_MODIFY_MAX,
 } from './handlers.js';
 
 /**
@@ -491,6 +498,148 @@ describe('Gmail Handlers', () => {
         id: 'INBOX',
         name: 'INBOX',
         type: 'system',
+      });
+    });
+  });
+  // ==========================================================================
+  // Batch label modification
+  // ==========================================================================
+
+  describe('batch label modification', () => {
+    describe('handleModifyLabels', () => {
+      it('uses the single-message endpoint for one id, and returns its labels', async () => {
+        vi.mocked(mockGmailClient.users.messages.modify).mockResolvedValueOnce({
+          data: { labelIds: ['INBOX', 'Label_1'] },
+        } as never);
+
+        const result = await handleModifyLabels(
+          { messageId: 'msg1', addLabelIds: ['Label_1'] },
+          mockContext
+        );
+
+        expect(mockGmailClient.users.messages.modify).toHaveBeenCalledWith({
+          userId: 'me',
+          id: 'msg1',
+          requestBody: { addLabelIds: ['Label_1'], removeLabelIds: [] },
+        });
+        expect(mockGmailClient.users.messages.batchModify).not.toHaveBeenCalled();
+        expect(result.success).toBe(true);
+        // Only the single-message path can report resulting labels; batchModify
+        // returns no body.
+        expect((result.data as { labelIds: string[] }).labelIds).toEqual(['INBOX', 'Label_1']);
+      });
+
+      it('accepts messageIds and batches them in one call', async () => {
+        vi.mocked(mockGmailClient.users.messages.batchModify).mockResolvedValueOnce({} as never);
+
+        const result = await handleModifyLabels(
+          { messageIds: ['a', 'b', 'c'], addLabelIds: ['Label_1'], removeLabelIds: ['UNREAD'] },
+          mockContext
+        );
+
+        expect(mockGmailClient.users.messages.batchModify).toHaveBeenCalledTimes(1);
+        expect(mockGmailClient.users.messages.batchModify).toHaveBeenCalledWith({
+          userId: 'me',
+          requestBody: {
+            ids: ['a', 'b', 'c'],
+            addLabelIds: ['Label_1'],
+            removeLabelIds: ['UNREAD'],
+          },
+        });
+        expect(result.success).toBe(true);
+        expect((result.data as { modifiedCount: number }).modifiedCount).toBe(3);
+      });
+
+      it('still accepts the legacy singular messageId', async () => {
+        vi.mocked(mockGmailClient.users.messages.modify).mockResolvedValueOnce({
+          data: { labelIds: [] },
+        } as never);
+
+        const result = await handleModifyLabels({ messageId: 'only' }, mockContext);
+
+        expect(result.success).toBe(true);
+        expect(mockGmailClient.users.messages.modify).toHaveBeenCalledWith(
+          expect.objectContaining({ id: 'only' })
+        );
+      });
+
+      it('chunks past the Gmail per-call ceiling', async () => {
+        vi.mocked(mockGmailClient.users.messages.batchModify).mockResolvedValue({} as never);
+        const ids = Array.from({ length: GMAIL_BATCH_MODIFY_MAX + 5 }, (_, i) => `m${i}`);
+
+        const result = await handleModifyLabels(
+          { messageIds: ids, addLabelIds: ['Label_1'] },
+          mockContext
+        );
+
+        expect(mockGmailClient.users.messages.batchModify).toHaveBeenCalledTimes(2);
+        const calls = vi.mocked(mockGmailClient.users.messages.batchModify).mock.calls;
+        expect((calls[0][0] as any).requestBody.ids).toHaveLength(GMAIL_BATCH_MODIFY_MAX);
+        expect((calls[1][0] as any).requestBody.ids).toHaveLength(5);
+        expect((result.data as { modifiedCount: number }).modifiedCount).toBe(ids.length);
+      });
+
+      it('rejects a call naming no messages', async () => {
+        const result = await handleModifyLabels({ addLabelIds: ['Label_1'] }, mockContext);
+
+        expect(result.success).toBe(false);
+        expect(result.error).toMatch(/messageId/);
+        expect(mockGmailClient.users.messages.modify).not.toHaveBeenCalled();
+        expect(mockGmailClient.users.messages.batchModify).not.toHaveBeenCalled();
+      });
+
+      it('rejects an empty messageIds array rather than silently no-oping', async () => {
+        const result = await handleModifyLabels({ messageIds: [] }, mockContext);
+
+        expect(result.success).toBe(false);
+        expect(mockGmailClient.users.messages.batchModify).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('sibling handlers', () => {
+      it('archives many messages in one batch call', async () => {
+        vi.mocked(mockGmailClient.users.messages.batchModify).mockResolvedValueOnce({} as never);
+
+        const result = await handleArchive({ messageIds: ['a', 'b'] }, mockContext);
+
+        expect(mockGmailClient.users.messages.batchModify).toHaveBeenCalledWith({
+          userId: 'me',
+          requestBody: { ids: ['a', 'b'], addLabelIds: [], removeLabelIds: ['INBOX'] },
+        });
+        expect(result.success).toBe(true);
+      });
+
+      it('marks many messages read in one batch call', async () => {
+        vi.mocked(mockGmailClient.users.messages.batchModify).mockResolvedValueOnce({} as never);
+
+        await handleMarkRead({ messageIds: ['a', 'b'] }, mockContext);
+
+        expect(mockGmailClient.users.messages.batchModify).toHaveBeenCalledWith({
+          userId: 'me',
+          requestBody: { ids: ['a', 'b'], addLabelIds: [], removeLabelIds: ['UNREAD'] },
+        });
+      });
+
+      it('marks many messages unread in one batch call', async () => {
+        vi.mocked(mockGmailClient.users.messages.batchModify).mockResolvedValueOnce({} as never);
+
+        await handleMarkRead({ messageIds: ['a', 'b'], unread: true }, mockContext);
+
+        expect(mockGmailClient.users.messages.batchModify).toHaveBeenCalledWith({
+          userId: 'me',
+          requestBody: { ids: ['a', 'b'], addLabelIds: ['UNREAD'], removeLabelIds: [] },
+        });
+      });
+
+      it('labels many messages in one batch call', async () => {
+        vi.mocked(mockGmailClient.users.messages.batchModify).mockResolvedValueOnce({} as never);
+
+        await handleLabelMessage({ messageIds: ['a', 'b'], labelId: 'Label_9' }, mockContext);
+
+        expect(mockGmailClient.users.messages.batchModify).toHaveBeenCalledWith({
+          userId: 'me',
+          requestBody: { ids: ['a', 'b'], addLabelIds: ['Label_9'], removeLabelIds: [] },
+        });
       });
     });
   });

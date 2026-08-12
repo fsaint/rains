@@ -480,7 +480,105 @@ export async function handleListAccounts(
 }
 
 /**
- * Mark message as read/unread handler
+ * Gmail applies batchModify to at most 1000 ids per request; larger sets are
+ * chunked. https://developers.google.com/gmail/api/reference/rest/v1/users.messages/batchModify
+ */
+export const GMAIL_BATCH_MODIFY_MAX = 1000;
+
+/**
+ * Accept either the singular `messageId` or the plural `messageIds`.
+ *
+ * The singular form predates batching and is still what most callers and stored
+ * skill text use, so it stays supported rather than being migrated.
+ */
+function resolveMessageIds(args: Record<string, unknown>): string[] | { error: string } {
+  const plural = args.messageIds;
+  if (Array.isArray(plural)) {
+    const ids = plural.filter((id): id is string => typeof id === 'string' && id.length > 0);
+    if (ids.length === 0) {
+      // An empty array almost always means the caller's upstream search came
+      // back empty; silently succeeding would look like the labels were applied.
+      return { error: 'messageIds was empty — pass at least one message id.' };
+    }
+    return ids;
+  }
+
+  const single = args.messageId;
+  if (typeof single === 'string' && single.length > 0) return [single];
+
+  return { error: 'Provide messageId (one message) or messageIds (many).' };
+}
+
+/**
+ * Apply the same label change to one or many messages.
+ *
+ * One id uses users.messages.modify, which returns the resulting labels. More
+ * than one uses users.messages.batchModify, which returns no body at all — so
+ * callers get a count instead of per-message labels.
+ */
+async function applyLabelChange(
+  gmail: ReturnType<typeof getGmailClient>,
+  ids: string[],
+  addLabelIds: string[],
+  removeLabelIds: string[]
+): Promise<{ labelIds?: string[] | null; modifiedCount: number }> {
+  if (ids.length === 1) {
+    const response = await gmail.users.messages.modify({
+      userId: 'me',
+      id: ids[0],
+      requestBody: { addLabelIds, removeLabelIds },
+    });
+    return { labelIds: response.data.labelIds, modifiedCount: 1 };
+  }
+
+  for (let i = 0; i < ids.length; i += GMAIL_BATCH_MODIFY_MAX) {
+    await gmail.users.messages.batchModify({
+      userId: 'me',
+      requestBody: {
+        ids: ids.slice(i, i + GMAIL_BATCH_MODIFY_MAX),
+        addLabelIds,
+        removeLabelIds,
+      },
+    });
+  }
+
+  return { modifiedCount: ids.length };
+}
+
+/**
+ * Shape the result so single-message callers keep the response they had before
+ * batching existed, and batch callers get a count.
+ */
+function labelChangeResult(
+  ids: string[],
+  outcome: { labelIds?: string[] | null; modifiedCount: number },
+  singular: string,
+  plural: (n: number) => string
+): ToolResult {
+  if (ids.length === 1) {
+    return {
+      success: true,
+      data: {
+        messageId: ids[0],
+        ...(outcome.labelIds === undefined ? {} : { labelIds: outcome.labelIds }),
+        modifiedCount: 1,
+        message: singular,
+      },
+    };
+  }
+
+  return {
+    success: true,
+    data: {
+      messageIds: ids,
+      modifiedCount: outcome.modifiedCount,
+      message: plural(outcome.modifiedCount),
+    },
+  };
+}
+
+/**
+ * Mark message(s) as read/unread handler
  */
 export async function handleMarkRead(
   args: Record<string, unknown>,
@@ -488,30 +586,27 @@ export async function handleMarkRead(
 ): Promise<ToolResult> {
   const gmail = getGmailClient(context);
 
-  const messageId = args.messageId as string;
+  const ids = resolveMessageIds(args);
+  if (!Array.isArray(ids)) return { success: false, error: ids.error };
+
   const unread = args.unread as boolean | undefined;
 
   // Mark as read = remove UNREAD label. Mark as unread = add UNREAD label.
   const addLabelIds = unread ? ['UNREAD'] : [];
   const removeLabelIds = unread ? [] : ['UNREAD'];
 
-  await gmail.users.messages.modify({
-    userId: 'me',
-    id: messageId,
-    requestBody: { addLabelIds, removeLabelIds },
-  });
+  const outcome = await applyLabelChange(gmail, ids, addLabelIds, removeLabelIds);
 
-  return {
-    success: true,
-    data: {
-      messageId,
-      message: unread ? 'Message marked as unread' : 'Message marked as read',
-    },
-  };
+  return labelChangeResult(
+    ids,
+    outcome,
+    unread ? 'Message marked as unread' : 'Message marked as read',
+    (n) => `${n} messages marked as ${unread ? 'unread' : 'read'}`
+  );
 }
 
 /**
- * Archive message handler
+ * Archive message(s) handler
  */
 export async function handleArchive(
   args: Record<string, unknown>,
@@ -519,21 +614,17 @@ export async function handleArchive(
 ): Promise<ToolResult> {
   const gmail = getGmailClient(context);
 
-  const messageId = args.messageId as string;
+  const ids = resolveMessageIds(args);
+  if (!Array.isArray(ids)) return { success: false, error: ids.error };
 
-  await gmail.users.messages.modify({
-    userId: 'me',
-    id: messageId,
-    requestBody: { removeLabelIds: ['INBOX'] },
-  });
+  const outcome = await applyLabelChange(gmail, ids, [], ['INBOX']);
 
-  return {
-    success: true,
-    data: {
-      messageId,
-      message: 'Message archived (removed from inbox)',
-    },
-  };
+  return labelChangeResult(
+    ids,
+    outcome,
+    'Message archived (removed from inbox)',
+    (n) => `${n} messages archived (removed from inbox)`
+  );
 }
 
 /**
@@ -545,24 +636,20 @@ export async function handleModifyLabels(
 ): Promise<ToolResult> {
   const gmail = getGmailClient(context);
 
-  const messageId = args.messageId as string;
+  const ids = resolveMessageIds(args);
+  if (!Array.isArray(ids)) return { success: false, error: ids.error };
+
   const addLabelIds = (args.addLabelIds as string[]) ?? [];
   const removeLabelIds = (args.removeLabelIds as string[]) ?? [];
 
-  const response = await gmail.users.messages.modify({
-    userId: 'me',
-    id: messageId,
-    requestBody: { addLabelIds, removeLabelIds },
-  });
+  const outcome = await applyLabelChange(gmail, ids, addLabelIds, removeLabelIds);
 
-  return {
-    success: true,
-    data: {
-      messageId,
-      labelIds: response.data.labelIds,
-      message: 'Message labels updated',
-    },
-  };
+  return labelChangeResult(
+    ids,
+    outcome,
+    'Message labels updated',
+    (n) => `Labels updated on ${n} messages`
+  );
 }
 
 /**
@@ -661,21 +748,17 @@ export async function handleLabelMessage(
 ): Promise<ToolResult> {
   const gmail = getGmailClient(context);
 
-  const messageId = args.messageId as string;
+  const ids = resolveMessageIds(args);
+  if (!Array.isArray(ids)) return { success: false, error: ids.error };
+
   const labelId = args.labelId as string;
 
-  const response = await gmail.users.messages.modify({
-    userId: 'me',
-    id: messageId,
-    requestBody: { addLabelIds: [labelId] },
-  });
+  const outcome = await applyLabelChange(gmail, ids, [labelId], []);
 
-  return {
-    success: true,
-    data: {
-      messageId,
-      labelIds: response.data.labelIds,
-      message: `Label ${labelId} applied to message`,
-    },
-  };
+  return labelChangeResult(
+    ids,
+    outcome,
+    `Label ${labelId} applied to message`,
+    (n) => `Label ${labelId} applied to ${n} messages`
+  );
 }

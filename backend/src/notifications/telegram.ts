@@ -15,6 +15,7 @@ import {
   EMAIL_TOOLS,
   approveDenyKeyboard,
   escapeMarkdown,
+  formatBatchScope,
   formatCalendarApprovalMessage,
   formatEmailApprovalMessage,
   withCorrectionAffordance,
@@ -613,12 +614,15 @@ export class TelegramNotifier {
     const argsPreview = JSON.stringify(approval.arguments);
     const truncated = argsPreview.length > 200 ? argsPreview.slice(0, 197) + '...' : argsPreview;
     const expiresIn = Math.round((approval.expiresAt.getTime() - Date.now()) / 60000);
+    // Batch calls truncate mid-id-list below, so state the blast radius up front.
+    const batchScope = formatBatchScope(approval.arguments as Record<string, unknown> | undefined);
 
     const text = [
       `*Approval Required*`,
       ``,
       `*Tool:* \`${approval.tool}\``,
       `*Agent:* \`${approval.agentId}\``,
+      batchScope ? `*Affects:* ${batchScope}` : null,
       `*Args:* \`${truncated}\``,
       approval.context ? `*Context:* ${approval.context}` : null,
       ``,

@@ -333,21 +333,28 @@ export const listAccountsTool: ToolDefinition = {
  */
 export const markReadTool: ToolDefinition = {
   name: 'gmail_mark_read',
-  description: 'Mark an email as read or unread.',
+  description:
+    'Mark one email or many as read or unread. Pass messageId for one, or messageIds for a batch.',
   inputSchema: {
     type: 'object',
     properties: {
       ...accountProperty,
       messageId: {
         type: 'string',
-        description: 'The ID of the message to mark',
+        description: 'The ID of a single message to mark. For many messages use messageIds.',
+      },
+      messageIds: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'IDs of multiple messages to mark in one call (up to 1000 per request; larger sets are chunked automatically). Use this instead of messageId when acting on many messages — it is one API call rather than one per message.',
       },
       unread: {
         type: 'boolean',
         description: 'Set to true to mark as unread, false (default) to mark as read',
       },
     },
-    required: ['messageId'],
+    required: [],
   },
   handler: handleMarkRead,
 };
@@ -357,17 +364,24 @@ export const markReadTool: ToolDefinition = {
  */
 export const archiveTool: ToolDefinition = {
   name: 'gmail_archive',
-  description: 'Archive an email by removing it from the inbox. The message is not deleted.',
+  description:
+    'Archive one email or many by removing them from the inbox. Nothing is deleted. Pass messageId for one, or messageIds for a batch.',
   inputSchema: {
     type: 'object',
     properties: {
       ...accountProperty,
       messageId: {
         type: 'string',
-        description: 'The ID of the message to archive',
+        description: 'The ID of a single message to archive. For many messages use messageIds.',
+      },
+      messageIds: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'IDs of multiple messages to archive in one call (up to 1000 per request; larger sets are chunked automatically). Use this instead of messageId when acting on many messages — it is one API call rather than one per message.',
       },
     },
-    required: ['messageId'],
+    required: [],
   },
   handler: handleArchive,
 };
@@ -377,14 +391,21 @@ export const archiveTool: ToolDefinition = {
  */
 export const modifyLabelsTool: ToolDefinition = {
   name: 'gmail_modify_labels',
-  description: 'Add or remove labels on an email. Use gmail_list_labels to get available label IDs.',
+  description:
+    'Add or remove labels on one email or many. Pass messageId for one, or messageIds to apply the same change to a batch in a single call. Use gmail_list_labels to get available label IDs.',
   inputSchema: {
     type: 'object',
     properties: {
       ...accountProperty,
       messageId: {
         type: 'string',
-        description: 'The ID of the message to modify',
+        description: 'The ID of a single message to modify. For many messages use messageIds.',
+      },
+      messageIds: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'IDs of multiple messages to modify in one call (up to 1000 per request; larger sets are chunked automatically). Use this instead of messageId when acting on many messages — it is one API call rather than one per message.',
       },
       addLabelIds: {
         type: 'array',
@@ -397,7 +418,7 @@ export const modifyLabelsTool: ToolDefinition = {
         description: 'Label IDs to remove (e.g., ["UNREAD", "INBOX"])',
       },
     },
-    required: ['messageId'],
+    required: [],
   },
   handler: handleModifyLabels,
 };
@@ -466,14 +487,20 @@ export const labelMessageTool: ToolDefinition = {
       ...accountProperty,
       messageId: {
         type: 'string',
-        description: 'The ID of the message to label',
+        description: 'The ID of a single message to label. For many messages use messageIds.',
+      },
+      messageIds: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'IDs of multiple messages to label in one call (up to 1000 per request; larger sets are chunked automatically). Use this instead of messageId when acting on many messages — it is one API call rather than one per message.',
       },
       labelId: {
         type: 'string',
         description: 'The ID of the label to apply (e.g., "Label_123" or "STARRED")',
       },
     },
-    required: ['messageId', 'labelId'],
+    required: ['labelId'],
   },
   handler: handleLabelMessage,
 };

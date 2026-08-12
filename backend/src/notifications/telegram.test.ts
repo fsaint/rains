@@ -11,7 +11,7 @@ vi.mock('../db/index.js', () => ({
 }));
 
 import { formatCalendarApprovalMessage, formatEmailApprovalMessage } from './telegram.js';
-import { escapeMarkdown, withCorrectionAffordance } from './approval-format.js';
+import { escapeMarkdown, withCorrectionAffordance, formatBatchScope } from './approval-format.js';
 import { MAX_REVISIONS } from '../approvals/queue.js';
 import type { ApprovalRequest } from '@reins/shared';
 
@@ -461,5 +461,32 @@ describe('escapeMarkdown', () => {
 
   it('leaves ordinary feedback untouched', () => {
     expect(escapeMarkdown('drop Bob, make it shorter')).toBe('drop Bob, make it shorter');
+  });
+});
+
+describe('formatBatchScope', () => {
+  // The generic approval message truncates its JSON arg dump at 200 chars. With
+  // a batch of message ids that cuts mid-list, so the human approving sees
+  // neither how many messages are affected nor which — they are asked to
+  // consent to an unknown blast radius.
+  it('states how many messages a batch call would touch', () => {
+    expect(formatBatchScope({ messageIds: ['a', 'b', 'c'], addLabelIds: ['X'] })).toBe(
+      '3 messages'
+    );
+  });
+
+  it('reads naturally for a single-element batch', () => {
+    expect(formatBatchScope({ messageIds: ['a'] })).toBe('1 message');
+  });
+
+  it('returns null for single-message and non-batch calls', () => {
+    expect(formatBatchScope({ messageId: 'a' })).toBeNull();
+    expect(formatBatchScope({ query: 'invoice' })).toBeNull();
+    expect(formatBatchScope({})).toBeNull();
+  });
+
+  it('ignores a malformed messageIds value rather than guessing', () => {
+    expect(formatBatchScope({ messageIds: 'not-an-array' })).toBeNull();
+    expect(formatBatchScope({ messageIds: [] })).toBeNull();
   });
 });

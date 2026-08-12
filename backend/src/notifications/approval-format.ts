@@ -54,6 +54,21 @@ export function escapeHtml(value: string): string {
 }
 
 /**
+ * Describe how many messages a batch tool call would affect, e.g. "412 messages".
+ *
+ * The generic approval message truncates its JSON argument dump at 200
+ * characters, which lands mid-array for a batch of message ids — so without
+ * this the human is asked to approve "modify labels" with no idea whether that
+ * means one message or a thousand. Returns null when the call is not a batch,
+ * so the caller can omit the line entirely.
+ */
+export function formatBatchScope(args: Record<string, unknown> | undefined): string | null {
+  const ids = args?.messageIds;
+  if (!Array.isArray(ids) || ids.length === 0) return null;
+  return `${ids.length} message${ids.length === 1 ? '' : 's'}`;
+}
+
+/**
  * Escape Telegram legacy-Markdown specials.
  *
  * Required wherever user-authored text lands in a Markdown-parsed message —
