@@ -1581,7 +1581,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const id = await credentialVault.store(
       parsed.data.serviceId,
       parsed.data.type,
-      parsed.data.data
+      parsed.data.data,
+      getUserId(request)
     );
 
     return reply.code(201).send({ data: { id, serviceId: parsed.data.serviceId, type: parsed.data.type } });

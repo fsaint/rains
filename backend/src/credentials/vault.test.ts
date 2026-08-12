@@ -68,9 +68,9 @@ describe('CredentialVault', () => {
       await vault.store('brave-search', 'api_key', credData);
 
       // Verify encrypted data is base64 strings (not raw buffers)
-      const encryptedData = storedArgs[3] as string;
-      const iv = storedArgs[4] as string;
-      const authTag = storedArgs[5] as string;
+      const encryptedData = storedArgs[4] as string;
+      const iv = storedArgs[5] as string;
+      const authTag = storedArgs[6] as string;
 
       expect(typeof encryptedData).toBe('string');
       expect(typeof iv).toBe('string');
@@ -122,7 +122,7 @@ describe('CredentialVault', () => {
       vi.mocked(client.execute).mockResolvedValueOnce({
         rows: [{
           id: 'test-cred-id', service_id: 'google-gmail', type: 'oauth2',
-          encrypted_data: storedArgs[3], iv: storedArgs[4], auth_tag: storedArgs[5],
+          encrypted_data: storedArgs[4], iv: storedArgs[5], auth_tag: storedArgs[6],
           expires_at: '2024-12-31T00:00:00.000Z', account_email: null, account_name: null,
         }],
         rowsAffected: 0, lastInsertRowid: 0n, columns: [],
@@ -150,13 +150,42 @@ describe('CredentialVault', () => {
       vi.mocked(client.execute).mockResolvedValueOnce({
         rows: [{
           id: 'test-cred-id', service_id: 'test', type: 'api_key',
-          encrypted_data: storedArgs[3], iv: storedArgs[4], auth_tag: storedArgs[5],
+          encrypted_data: storedArgs[4], iv: storedArgs[5], auth_tag: storedArgs[6],
           expires_at: null, account_email: null, account_name: null,
         }],
         rowsAffected: 0, lastInsertRowid: 0n, columns: [],
       });
 
       await expect(otherVault.retrieve('test-cred-id')).rejects.toThrow();
+    });
+  });
+
+  // ==========================================================================
+  // store
+  // ==========================================================================
+
+  describe('store', () => {
+    it('should persist user_id so the credential shows up in a scoped list', async () => {
+      vi.mocked(client.execute).mockResolvedValueOnce({
+        rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [],
+      });
+
+      await vault.store('web-search', 'api_key', { apiKey: 'brave-key' }, 'user-123');
+
+      const call = vi.mocked(client.execute).mock.calls[0][0] as { sql: string; args: unknown[] };
+      expect(call.sql).toContain('user_id');
+      expect(call.args).toContain('user-123');
+    });
+
+    it('should store a null user_id when no userId is given', async () => {
+      vi.mocked(client.execute).mockResolvedValueOnce({
+        rows: [], rowsAffected: 1, lastInsertRowid: 0n, columns: [],
+      });
+
+      await vault.store('web-search', 'api_key', { apiKey: 'brave-key' });
+
+      const call = vi.mocked(client.execute).mock.calls[0][0] as { sql: string; args: unknown[] };
+      expect(call.args[1]).toBeNull();
     });
   });
 
@@ -279,7 +308,7 @@ describe('CredentialVault', () => {
       vi.mocked(client.execute).mockResolvedValueOnce({
         rows: [{
           id: 'c1', service_id: 'test', type: 'api_key',
-          encrypted_data: storedArgs[3], iv: storedArgs[4], auth_tag: storedArgs[5],
+          encrypted_data: storedArgs[4], iv: storedArgs[5], auth_tag: storedArgs[6],
           expires_at: null, account_email: null, account_name: null,
         }],
         rowsAffected: 0, lastInsertRowid: 0n, columns: [],

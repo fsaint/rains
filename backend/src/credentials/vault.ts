@@ -75,7 +75,8 @@ export class CredentialVault {
   async store(
     serviceId: string,
     type: CredentialType,
-    data: CredentialData
+    data: CredentialData,
+    userId?: string
   ): Promise<string> {
     const id = nanoid();
     const encrypted = this.encrypt(data);
@@ -87,9 +88,10 @@ export class CredentialVault {
     }
 
     await client.execute({
-      sql: `INSERT INTO credentials (id, service_id, type, encrypted_data, iv, auth_tag, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      sql: `INSERT INTO credentials (id, user_id, service_id, type, encrypted_data, iv, auth_tag, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         id,
+        userId ?? null,
         serviceId,
         type,
         encrypted.encryptedData.toString('base64'),
