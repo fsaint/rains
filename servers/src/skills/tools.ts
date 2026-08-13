@@ -10,7 +10,7 @@ import { handleListSkills, handleGetSkill } from './handlers.js';
  *
  * The description carries the behavioural instruction because, unlike
  * filesystem skills, nothing else tells the model these exist — the same
- * lever reins_get_result uses to teach its own polling protocol.
+ * lever get_result uses to teach its own polling protocol.
  */
 export const skillsListTool: ToolDefinition = {
   name: 'skills_list',

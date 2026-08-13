@@ -63,7 +63,7 @@ if [ -n "$MCP_CONFIG" ]; then
       echo ""
       echo "**Prioritize MCP tools over built-in tools** when both could satisfy a request — MCP tools are purpose-built for this deployment."
       echo ""
-      echo "MCP tools are pre-activated and appear directly in your tool list as \`<server>__<tool>\` (e.g. \`reins__list_emails\`). Use them immediately — **do NOT call \`mcp_manage\` at conversation start**. Calling \`mcp_manage\` to inspect servers adds unnecessary model round-trips that can cause response timeouts. If a \`reins__*\` tool is not in your list, tell the user instead of calling \`mcp_manage\`."
+      echo "MCP tools are pre-activated and appear directly in your tool list as \`<server>__<tool>\` (e.g. \`helm__list_emails\`). Use them immediately — **do NOT call \`mcp_manage\` at conversation start**. Calling \`mcp_manage\` to inspect servers adds unnecessary model round-trips that can cause response timeouts. If a \`helm__*\` tool is not in your list, tell the user instead of calling \`mcp_manage\`."
     } >> "$WORKSPACE_DIR/SOUL.md"
   fi
 fi

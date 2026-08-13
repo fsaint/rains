@@ -41,6 +41,7 @@ Python scripts for read-mostly production management. These replace the ad-hoc N
 | `restart_machine.py <app> <id>` | Restart a Fly machine |
 | `recover_agent.py <agent_id>` | Recreate a destroyed Fly app/machine from the DB record |
 | `update_minimax_model.py [--model X] [--dry-run]` | Redeploy all MiniMax agents with a new model name |
+| `redeploy_all_for_mcp_rename.py [--dry-run] [--runtime X] [--limit N]` | Redeploy every agent so its baked MCP_CONFIG picks up the `helm` server name |
 
 ## What this lane CANNOT do
 

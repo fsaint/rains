@@ -21,7 +21,7 @@ import * as provider from './index.js';
 const defaultOpts = {
   instanceId: 'inst-1',
   telegramToken: 'token',
-  mcpConfigs: [{ name: 'reins', url: 'https://reins.test/mcp/agent-1' }],
+  mcpConfigs: [{ name: 'helm', url: 'https://reins.test/mcp/agent-1' }],
   gatewayToken: 'gw-token-123',
 };
 

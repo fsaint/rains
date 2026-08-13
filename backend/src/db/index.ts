@@ -581,6 +581,19 @@ export async function initializeDatabase() {
     END $$
   `;
 
+  // The MCP server name baked into this machine's MCP_CONFIG at deploy time.
+  //
+  // The agent's client derives its tool prefix from that value, so it is the
+  // only correct source for tool names rendered into text the agent reads —
+  // MCP_SERVER_NAME here moves ahead of it the moment the backend deploys.
+  // Existing rows predate the helm rename, hence the 'reins' default.
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS mcp_server_name TEXT DEFAULT 'reins';
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
+
   // Add is_shared_bot column for shared platform bot routing
   await sql`
     DO $$ BEGIN

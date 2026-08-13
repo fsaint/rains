@@ -336,6 +336,9 @@ describe('handleMCPRequest', () => {
 
     it('returns deferred response immediately when tool requires approval', async () => {
       const { approvalQueue } = await import('../approvals/queue.js');
+      vi.mocked(client.execute).mockResolvedValue({
+        rows: [{ id: 'dep-1', runtime: 'openclaw', mcp_server_name: 'helm', has_onboarded: true }],
+      } as any);
 
       const request: MCPRequest = {
         jsonrpc: '2.0',
@@ -359,7 +362,7 @@ describe('handleMCPRequest', () => {
 
       const text = result.content[0].text;
       expect(text).toContain('APPROVAL_PENDING');
-      expect(text).toContain('reins_get_result');
+      expect(text).toContain('helm__get_result');
       expect(text).toContain('USER_MESSAGE:');
       expect(text).toContain('http://localhost:5173/approvals');
 
@@ -378,7 +381,119 @@ describe('handleMCPRequest', () => {
   });
 });
 
-describe('reins_get_result tool', () => {
+describe('helm rename', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('identifies the server as helm on initialize', async () => {
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'initialize',
+    });
+    const result = response.result as { serverInfo: { name: string } };
+    expect(result.serverInfo.name).toBe('helm');
+  });
+
+  it('advertises only the new built-in names in tools/list', async () => {
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/list',
+    });
+    const toolNames = (response.result as { tools: Array<{ name: string }> }).tools.map((t) => t.name);
+    expect(toolNames).toContain('get_result');
+    expect(toolNames).not.toContain('reins_get_result');
+  });
+
+  it('still dispatches the legacy reins_get_result name', async () => {
+    vi.mocked(approvalQueue.get).mockResolvedValueOnce({
+      id: 'job-1', agentId: 'agent-1', tool: 'gmail_send_email',
+      arguments: {}, status: 'approved',
+      requestedAt: new Date(), expiresAt: new Date(Date.now() + 3600_000),
+      resultJson: JSON.stringify({ messageId: 'msg-legacy' }),
+    } as any);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'reins_get_result', arguments: { jobId: 'job-1' } },
+    });
+
+    expect(response.error).toBeUndefined();
+    const content = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text);
+    expect(content.status).toBe('completed');
+    expect(content.result).toEqual({ messageId: 'msg-legacy' });
+  });
+
+  it('still dispatches the legacy reins__mark_onboarded name', async () => {
+    vi.mocked(client.execute).mockResolvedValue({
+      rows: [{ id: 'dep-1', fly_app_name: 'app', fly_machine_id: 'm1', has_onboarded: false }],
+    } as any);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'reins__mark_onboarded', arguments: {} },
+    });
+
+    expect(response.error).toBeUndefined();
+    expect(response.result).toBeDefined();
+  });
+
+  it('addresses get_result with the name the agent was deployed with', async () => {
+    // An agent deployed before the rename still has name:"reins" baked into its
+    // MCP_CONFIG, so its tool list holds reins__get_result. Rendering the
+    // current constant here would name a tool it does not have, and the
+    // approval would never resolve.
+    vi.mocked(client.execute).mockResolvedValue({
+      rows: [{ id: 'dep-1', runtime: 'openclaw', mcp_server_name: 'reins', has_onboarded: true }],
+    } as any);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 42, method: 'tools/call',
+      params: {
+        name: 'gmail_create_draft',
+        arguments: { to: 'test@example.com', subject: 'Hello', body: 'World' },
+      },
+    });
+
+    const text = (response.result as { content: Array<{ text: string }> }).content[0].text;
+    expect(text).toContain('reins__get_result');
+    expect(text).not.toContain('helm__get_result');
+  });
+
+  it('names get_result the way a Hermes agent actually sees it', async () => {
+    // Hermes namespaces as mcp__<server>__<tool>, OpenClaw as <server>__<tool>.
+    // Naming it the OpenClaw way here would tell a Hermes agent to call a tool
+    // that is not in its list, stranding every approval.
+    vi.mocked(client.execute).mockResolvedValue({
+      rows: [{ id: 'dep-1', runtime: 'hermes', mcp_server_name: 'helm', has_onboarded: true }],
+    } as any);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 42, method: 'tools/call',
+      params: {
+        name: 'gmail_create_draft',
+        arguments: { to: 'test@example.com', subject: 'Hello', body: 'World' },
+      },
+    });
+
+    const text = (response.result as { content: Array<{ text: string }> }).content[0].text;
+    expect(text).toContain('APPROVAL_PENDING');
+    expect(text).toContain('mcp__helm__get_result');
+  });
+
+  it('injects mark_onboarded under its new name when setup is incomplete', async () => {
+    vi.mocked(client.execute).mockResolvedValue({
+      rows: [{ id: 'dep-1', fly_app_name: 'app', fly_machine_id: 'm1', has_onboarded: false }],
+    } as any);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/list',
+    });
+    const toolNames = (response.result as { tools: Array<{ name: string }> }).tools.map((t) => t.name);
+    expect(toolNames).toContain('mark_onboarded');
+    expect(toolNames).not.toContain('reins__mark_onboarded');
+  });
+});
+
+describe('get_result tool', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -388,11 +503,11 @@ describe('reins_get_result tool', () => {
       jsonrpc: '2.0', id: 1, method: 'tools/list',
     });
     const toolNames = (response.result as { tools: Array<{ name: string }> }).tools.map((t) => t.name);
-    expect(toolNames).toContain('reins_get_result');
+    expect(toolNames).toContain('get_result');
   });
 
   it('returns pending status for an unresolved job', async () => {
-    // reins_get_result long-polls for 30s when status is pending — use fake timers
+    // get_result long-polls for 30s when status is pending — use fake timers
     vi.useFakeTimers();
 
     const pendingApproval = {
@@ -404,7 +519,7 @@ describe('reins_get_result tool', () => {
 
     const responsePromise = handleMCPRequest('agent-1', {
       jsonrpc: '2.0', id: 1, method: 'tools/call',
-      params: { name: 'reins_get_result', arguments: { jobId: 'job-1' } },
+      params: { name: 'get_result', arguments: { jobId: 'job-1' } },
     });
 
     // Advance past the 30s long-poll deadline
@@ -430,7 +545,7 @@ describe('reins_get_result tool', () => {
 
     const response = await handleMCPRequest('agent-1', {
       jsonrpc: '2.0', id: 1, method: 'tools/call',
-      params: { name: 'reins_get_result', arguments: { jobId: 'job-1' } },
+      params: { name: 'get_result', arguments: { jobId: 'job-1' } },
     });
 
     expect(response.error).toBeUndefined();
@@ -449,7 +564,7 @@ describe('reins_get_result tool', () => {
 
     const response = await handleMCPRequest('agent-1', {
       jsonrpc: '2.0', id: 1, method: 'tools/call',
-      params: { name: 'reins_get_result', arguments: { jobId: 'job-1' } },
+      params: { name: 'get_result', arguments: { jobId: 'job-1' } },
     });
 
     expect(response.error).toBeUndefined();
@@ -468,7 +583,7 @@ describe('reins_get_result tool', () => {
 
     const response = await handleMCPRequest('agent-1', {
       jsonrpc: '2.0', id: 1, method: 'tools/call',
-      params: { name: 'reins_get_result', arguments: { jobId: 'job-1' } },
+      params: { name: 'get_result', arguments: { jobId: 'job-1' } },
     });
 
     expect(response.error).toBeUndefined();
@@ -492,7 +607,7 @@ describe('reins_get_result tool', () => {
     // No timer advancement: if this awaited the 30s poll loop the test would hang.
     const response = await handleMCPRequest('agent-1', {
       jsonrpc: '2.0', id: 1, method: 'tools/call',
-      params: { name: 'reins_get_result', arguments: { jobId: 'job-1' } },
+      params: { name: 'get_result', arguments: { jobId: 'job-1' } },
     });
 
     const content = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text);
@@ -510,7 +625,7 @@ describe('reins_get_result tool', () => {
 
     const response = await handleMCPRequest('agent-1', {
       jsonrpc: '2.0', id: 1, method: 'tools/call',
-      params: { name: 'reins_get_result', arguments: { jobId: 'job-1' } },
+      params: { name: 'get_result', arguments: { jobId: 'job-1' } },
     });
 
     const content = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text);
@@ -523,7 +638,7 @@ describe('reins_get_result tool', () => {
 
     const response = await handleMCPRequest('agent-1', {
       jsonrpc: '2.0', id: 1, method: 'tools/call',
-      params: { name: 'reins_get_result', arguments: { jobId: 'nonexistent' } },
+      params: { name: 'get_result', arguments: { jobId: 'nonexistent' } },
     });
 
     expect(response.error).toBeDefined();
@@ -540,7 +655,7 @@ describe('reins_get_result tool', () => {
 
     const response = await handleMCPRequest('agent-1', {
       jsonrpc: '2.0', id: 1, method: 'tools/call',
-      params: { name: 'reins_get_result', arguments: { jobId: 'job-1' } },
+      params: { name: 'get_result', arguments: { jobId: 'job-1' } },
     });
 
     expect(response.error).toBeDefined();
@@ -556,7 +671,7 @@ describe('reins_get_result tool', () => {
 
     const response = await handleMCPRequest('agent-1', {
       jsonrpc: '2.0', id: 1, method: 'tools/call',
-      params: { name: 'reins_get_result', arguments: { jobId: 'job-1' } },
+      params: { name: 'get_result', arguments: { jobId: 'job-1' } },
     });
 
     expect(response.error).toBeUndefined();
@@ -575,7 +690,7 @@ describe('reins_get_result tool', () => {
 
     const response = await handleMCPRequest('agent-1', {
       jsonrpc: '2.0', id: 1, method: 'tools/call',
-      params: { name: 'reins_get_result', arguments: { jobId: 'job-1' } },
+      params: { name: 'get_result', arguments: { jobId: 'job-1' } },
     });
 
     expect(response.error).toBeUndefined();

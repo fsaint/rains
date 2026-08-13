@@ -72,10 +72,10 @@ COPY write-codex-auth.js /write-codex-auth.js
 COPY workspace/ /workspace-template/
 
 # Bundle skills: Reins platform knowledge + inbox distillation
-RUN mkdir -p /app/skills/reins /app/skills/inbox-distillation
-COPY skills/reins/SKILL.md /app/skills/reins/SKILL.md
+RUN mkdir -p /app/skills/helm /app/skills/inbox-distillation
+COPY skills/helm/SKILL.md /app/skills/helm/SKILL.md
 COPY skills/inbox-distillation/SKILL.md /app/skills/inbox-distillation/SKILL.md
-RUN chmod +x /entrypoint.sh /usr/local/bin/chromium-wrapper && chown -R node:node /workspace-template /app/skills/reins /app/skills/inbox-distillation
+RUN chmod +x /entrypoint.sh /usr/local/bin/chromium-wrapper && chown -R node:node /workspace-template /app/skills/helm /app/skills/inbox-distillation
 
 # Ensure Xvfb socket directory is writable by node user
 RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix

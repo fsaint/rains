@@ -341,9 +341,14 @@ function SkillEditor({
               value={body}
               onChange={(e) => setBody(e.target.value)}
               rows={14}
-              placeholder={'## Procedure\n\n1. …'}
+              placeholder={'## Procedure\n\n1. Call {{tool:gmail_search}} to find the thread\n2. …'}
               className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-mono focus:ring-2 focus:ring-trust-blue/20 focus:border-trust-blue transition-all outline-none"
             />
+            <p className="mt-1.5 text-xs text-gray-500">
+              To name a tool, write <code className="font-mono">{'{{tool:gmail_search}}'}</code> rather
+              than the tool name directly — it is rendered into the exact name each agent sees, which
+              differs between agent runtimes.
+            </p>
           </div>
 
           {error && (

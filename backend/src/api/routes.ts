@@ -101,6 +101,10 @@ import {
   ApprovalDecisionSchema,
   RequestChangesSchema,
   AuditFilterSchema,
+  MCP_SERVER_NAME,
+  LEGACY_MCP_SERVER_NAME,
+  resolveToolTokens,
+  type AgentRuntime,
 } from '@reins/shared';
 
 async function registerAgentBotWebhook(
@@ -130,6 +134,19 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // Helper to get userId from authenticated request
   function getUserId(request: any): string {
     return (request.session as SessionPayload).userId;
+  }
+
+  /**
+   * The platform's own MCP server entry for an agent's MCP_CONFIG.
+   *
+   * `name` becomes the namespace prefix on every tool the model sees
+   * (`helm__gmail_search`), so it must stay in one place — every deploy and
+   * redeploy path builds this, and a missed site silently strands that agent
+   * on the old tool names.
+   */
+  function buildPlatformMcpConfig(agentId: string) {
+    const reinsUrl = config.publicUrl || config.dashboardUrl;
+    return { name: MCP_SERVER_NAME, url: `${reinsUrl}/mcp/${agentId}`, transport: 'http' };
   }
 
   // Helper to validate onboarding bot API key
@@ -3517,7 +3534,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     // Build MCP configs
     const reinsUrl = config.publicUrl || config.dashboardUrl;
     const mcpConfigs = [
-      { name: 'reins', url: `${reinsUrl}/mcp/${agentId}`, transport: 'http' },
+      buildPlatformMcpConfig(agentId),
       ...userMcpServers,
     ];
 
@@ -3582,7 +3599,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         : null;
 
       await client.execute({
-        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_bot_username, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openai_api_key, telegram_groups_json, model_credentials, mcp_config_json, openclaw_webhook_url, webhook_relay_secret, runtime, initial_prompt, is_shared_bot, fly_volume_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_bot_username, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openai_api_key, telegram_groups_json, model_credentials, mcp_config_json, openclaw_webhook_url, webhook_relay_secret, runtime, initial_prompt, is_shared_bot, fly_volume_id, mcp_server_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           deploymentId, agentId,
           result.appName, result.machineId, 'running', result.managementUrl,
@@ -3598,6 +3615,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           body.initialPrompt ?? null,
           isSharedBot ? 1 : 0,
           result.volumeId ?? null,
+          MCP_SERVER_NAME,
           now, now,
         ],
       });
@@ -3735,13 +3753,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     // Build MCP config that routes through Reins proxy for policy enforcement.
     // REINS_PUBLIC_URL takes precedence (for when backend URL differs from dashboard).
-    const reinsUrl = config.publicUrl || config.dashboardUrl;
     const mcpConfigs = [
-      {
-        name: 'reins',
-        url: `${reinsUrl}/mcp/${id}`,
-        transport: 'http',
-      },
+      buildPlatformMcpConfig(id),
     ];
 
     const resolvedModelProvider = body.modelProvider ?? 'anthropic';
@@ -3785,7 +3798,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         : null;
 
       await client.execute({
-        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_bot_username, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openclaw_webhook_url, webhook_relay_secret, runtime, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_bot_username, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openclaw_webhook_url, webhook_relay_secret, runtime, mcp_server_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           deploymentId,
           id,
@@ -3803,6 +3816,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           gatewayToken,
           openclawWebhookUrl, webhookRelaySecret,
           body.runtime ?? 'openclaw',
+          MCP_SERVER_NAME,
           now,
           now,
         ],
@@ -4020,9 +4034,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     // Trigger redeploy with updated soul
     if (deployment.fly_app_name && deployment.fly_machine_id) {
       try {
-        const reinsUrl = config.publicUrl || config.dashboardUrl;
         const mcpConfigs = [
-          { name: 'reins', url: `${reinsUrl}/mcp/${id}`, transport: 'http' },
+          buildPlatformMcpConfig(id),
         ];
         // Add user MCP servers if stored
         if (deployment.mcp_config_json) {
@@ -4052,8 +4065,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         );
 
         await client.execute({
-          sql: `UPDATE deployed_agents SET status = 'running', updated_at = ? WHERE id = ?`,
-          args: [new Date().toISOString(), deployment.id as string],
+          sql: `UPDATE deployed_agents SET status = 'running', mcp_server_name = ?, updated_at = ? WHERE id = ?`,
+          args: [MCP_SERVER_NAME, new Date().toISOString(), deployment.id as string],
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
@@ -4207,9 +4220,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       });
     }
 
-    const reinsUrl = config.publicUrl || config.dashboardUrl;
     const mcpConfigs = [
-      { name: 'reins', url: `${reinsUrl}/mcp/${id}`, transport: 'http' },
+      buildPlatformMcpConfig(id),
     ];
 
     const redeployModelProvider = (body?.modelProvider || deployment.model_provider as string) ?? 'anthropic';
@@ -4272,7 +4284,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
       const now = new Date().toISOString();
       await client.execute({
-        sql: `UPDATE deployed_agents SET status = 'running', management_url = ?, fly_machine_id = COALESCE(?, fly_machine_id), telegram_token = COALESCE(?, telegram_token), telegram_user_id = COALESCE(?, telegram_user_id), soul_md = COALESCE(?, soul_md), model_provider = ?, model_name = ?, openai_api_key = CASE WHEN ? THEN ? ELSE openai_api_key END, telegram_groups_json = CASE WHEN ? THEN ? ELSE telegram_groups_json END, model_credentials = COALESCE(?, model_credentials), updated_at = ? WHERE id = ?`,
+        sql: `UPDATE deployed_agents SET status = 'running', management_url = ?, fly_machine_id = COALESCE(?, fly_machine_id), telegram_token = COALESCE(?, telegram_token), telegram_user_id = COALESCE(?, telegram_user_id), soul_md = COALESCE(?, soul_md), model_provider = ?, model_name = ?, openai_api_key = CASE WHEN ? THEN ? ELSE openai_api_key END, telegram_groups_json = CASE WHEN ? THEN ? ELSE telegram_groups_json END, model_credentials = COALESCE(?, model_credentials), mcp_server_name = ?, updated_at = ? WHERE id = ?`,
         args: [
           managementUrl,
           newMachineId ?? null,
@@ -4286,6 +4298,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           (body && 'telegramGroups' in body) ? 1 : 0,
           newTelegramGroupsJson,
           body?.modelCredentials ?? null,
+          MCP_SERVER_NAME,
           now,
           deployment.id as string,
         ],
@@ -5010,9 +5023,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const deployment = await getActiveDeployment(agentId);
     if (!deployment || deployment.status === 'stopped') return;
 
-    const reinsUrl = config.publicUrl || config.dashboardUrl;
     const mcpConfigs: object[] = [
-      { name: 'reins', url: `${reinsUrl}/mcp/${agentId}`, transport: 'http' },
+      buildPlatformMcpConfig(agentId),
     ];
     if (deployment.mcp_config_json) {
       try {
@@ -5043,8 +5055,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     );
 
     await client.execute({
-      sql: `UPDATE deployed_agents SET status = 'running', fly_machine_id = COALESCE(?, fly_machine_id), updated_at = ? WHERE id = ?`,
-      args: [autoNewMachineId ?? null, new Date().toISOString(), deployment.id as string],
+      sql: `UPDATE deployed_agents SET status = 'running', fly_machine_id = COALESCE(?, fly_machine_id), mcp_server_name = ?, updated_at = ? WHERE id = ?`,
+      args: [autoNewMachineId ?? null, MCP_SERVER_NAME, new Date().toISOString(), deployment.id as string],
     });
   }
 
@@ -5394,12 +5406,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
    */
   async function resolveAgentFromGatewayToken(
     request: any
-  ): Promise<{ agentId: string; userId: string } | null> {
+  ): Promise<{ agentId: string; userId: string; runtime: AgentRuntime; serverName: string } | null> {
     const agentSecret = request.headers['x-reins-agent-secret'] as string | undefined;
     if (!agentSecret) return null;
 
     const depResult = await client.execute({
-      sql: `SELECT da.agent_id, a.user_id
+      sql: `SELECT da.agent_id, da.runtime, da.mcp_server_name, a.user_id
             FROM deployed_agents da
             JOIN agents a ON a.id = da.agent_id
             WHERE da.gateway_token = ? AND da.status NOT IN ('destroyed', 'error')
@@ -5411,6 +5423,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     return {
       agentId: depResult.rows[0].agent_id as string,
       userId: depResult.rows[0].user_id as string,
+      // Decides how tool names are rendered back to this agent; the column
+      // predates Hermes so legacy rows are null and mean openclaw.
+      runtime: depResult.rows[0].runtime === 'hermes' ? 'hermes' : 'openclaw',
+      // The name baked into this machine's MCP_CONFIG, not MCP_SERVER_NAME —
+      // they differ for any agent not yet redeployed after a rename.
+      serverName: (depResult.rows[0].mcp_server_name as string | null) || LEGACY_MCP_SERVER_NAME,
     };
   }
 
@@ -5879,7 +5897,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     // Bodies are omitted here on purpose — the list is advisory and the agent
     // pulls one body at a time via /:slug.
     return {
-      data: skills.map(({ body: _body, ...rest }) => rest),
+      data: skills.map(({ body: _body, ...rest }) => ({
+        ...rest,
+        description: resolveToolTokens(rest.description ?? '', agent.runtime, agent.serverName),
+      })),
     };
   });
 
@@ -5891,7 +5912,16 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const skill = skills.find((s) => s.slug === request.params.slug);
     if (!skill) return reply.status(404).send({ error: 'Skill not assigned to this agent' });
 
-    return { data: skill };
+    // Resolve {{tool:...}} here rather than in the skills MCP server: this is
+    // the one place that knows the requesting agent's runtime, and the two
+    // runtimes render tool names differently.
+    return {
+      data: {
+        ...skill,
+        description: resolveToolTokens(skill.description ?? '', agent.runtime, agent.serverName),
+        body: resolveToolTokens(skill.body ?? '', agent.runtime, agent.serverName),
+      },
+    };
   });
 
   // -------------------------------------------------------------------------

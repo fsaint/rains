@@ -1,6 +1,10 @@
 # MCP Tool Injection — End-to-End Architecture
 
-This document explains how remote MCP tools are connected, installed, and injected into an OpenClaw agent's context, from Fly.io machine boot to the model calling a tool.
+This document explains how remote MCP tools are connected, installed, and injected into an
+agent's context, from Fly.io machine boot to the model calling a tool.
+
+The detailed walkthrough below covers **OpenClaw**. Hermes consumes the same `MCP_CONFIG`
+but differs in two ways that matter — see [Hermes](#hermes) at the end.
 
 ---
 
@@ -25,7 +29,7 @@ MCPManager.connectAll() → initialize handshake → tools/list
 Tools registered into agent context
      │  (api.registerTool() per discovered tool)
      ▼
-Model calls  reins__gmail_search(...) directly
+Model calls  helm__gmail_search(...) directly
 ```
 
 ---
@@ -38,9 +42,9 @@ When a Fly machine starts, `entrypoint.sh` reads the `MCP_CONFIG` environment va
 ```json
 [
   {
-    "name": "reins",
-    "url": "https://your-reins-instance.fly.dev/mcp",
-    "transport": "streamable-http"
+    "name": "helm",
+    "url": "https://app.helm.mom/mcp/<agentId>",
+    "transport": "http"
   }
 ]
 ```
@@ -51,17 +55,14 @@ When a Fly machine starts, `entrypoint.sh` reads the `MCP_CONFIG` environment va
   "plugins": {
     "enabled": true,
     "allow": ["openclaw-mcp-bridge"],
-    "load": {
-      "paths": ["/home/node/.openclaw/plugins/openclaw-mcp-bridge/node_modules/openclaw-mcp-bridge"]
-    },
     "entries": {
       "openclaw-mcp-bridge": {
         "enabled": true,
         "config": {
           "servers": {
-            "reins": {
-              "url": "https://your-reins-instance.fly.dev/mcp",
-              "transport": "streamable-http"
+            "helm": {
+              "url": "https://app.helm.mom/mcp/<agentId>",
+              "transport": "http"
             }
           }
         }
@@ -71,7 +72,17 @@ When a Fly machine starts, `entrypoint.sh` reads the `MCP_CONFIG` environment va
 }
 ```
 
-The `servers` map is keyed by the logical server name (e.g. `reins`). This name becomes the namespace prefix on every tool: `reins__gmail_search`, `reins__calendar_list_events`, etc.
+The `servers` map is keyed by the logical server name (`helm`, from `MCP_SERVER_NAME` in
+`shared/src/mcp-naming.ts`). That name becomes the namespace prefix on every tool:
+`helm__gmail_search`, `helm__calendar_list_events`.
+
+Two things are easy to get wrong here:
+
+- **The URL is per-agent** — `/mcp/<agentId>`, not a shared `/mcp`. The agent id in the path
+  is the only credential; there is no `Authorization` header and `/mcp/` is exempt from the
+  auth hook (`backend/src/auth/index.ts`).
+- **`transport` is `"http"`**, not `"streamable-http"`. The plugin's schema accepts only
+  `"http"` or `"stdio"`, and treats anything that is not `"stdio"` as HTTP.
 
 ---
 
@@ -206,7 +217,13 @@ for (const delay of retryDelaysMs) {
 }
 ```
 
-In practice, the first attempt fails (event loop blocked), and either the 5s or 15s retry succeeds (event loop free by then). Tools are available within ~20–40 seconds of gateway startup.
+In practice, the first attempt fails (event loop blocked), and either the 5s or 15s retry
+succeeds (event loop free by then).
+
+**This is no longer the mechanism that makes tools appear.** The entrypoint now pre-caches:
+`/tmp/mcp-pre-cache.mjs` connects and writes `/tmp/mcp-tools-cache.json` *before* the gateway
+is exec'd, and `docker/patch-plugin.js` makes `register()` read that file and register tools
+synchronously. The retry path remains as a fallback for servers that were unreachable at boot.
 
 ---
 
@@ -223,7 +240,7 @@ function buildTypeBoxSchema(inputSchema: MCPToolInput) {
 
 for (const rt of registeredTools) {
   api.registerTool({
-    name: rt.namespacedName,       // e.g. "reins__gmail_search"
+    name: rt.namespacedName,       // e.g. "helm__gmail_search"
     label: rt.description.slice(0, 60),
     description: rt.description,
     parameters: buildTypeBoxSchema(rt.inputSchema),
@@ -235,22 +252,22 @@ for (const rt of registeredTools) {
 }
 ```
 
-The `namespacedName` format is `<server-name>__<tool-name>` (double underscore). With server name `reins`, a tool named `gmail_search` becomes `reins__gmail_search`.
+The `namespacedName` format is `<server-name>__<tool-name>` (double underscore). With server name `helm`, a tool named `gmail_search` becomes `helm__gmail_search`.
 
 ---
 
 ## Step 7: Tool Invocation
 
-When the model calls `reins__gmail_search`:
+When the model calls `helm__gmail_search`:
 
 ```
-Model calls reins__gmail_search({"query": "invoice", "max_results": 10})
+Model calls helm__gmail_search({"query": "invoice", "max_results": 10})
      │
      ▼
 OpenClaw routes to plugin's execute() handler
      │
      ▼
-MCPManager.callTool("reins__gmail_search", params)
+MCPManager.callTool("helm__gmail_search", params)
      │  strips namespace prefix → "gmail_search"
      ▼
 POST https://reins.../mcp
@@ -277,13 +294,53 @@ The `mcp_manage` tool is always registered synchronously (before any connection 
 | Command | Description |
 |---------|-------------|
 | `mcp_manage servers` | List all configured servers and connection status |
-| `mcp_manage tools reins` | List all tools from the `reins` server |
-| `mcp_manage status reins` | Detailed connection status for one server |
-| `mcp_manage refresh reins` | Force re-discovery of tools from a server |
+| `mcp_manage tools helm` | List all tools from the `helm` server |
+| `mcp_manage status helm` | Detailed connection status for one server |
+| `mcp_manage refresh helm` | Force re-discovery of tools from a server |
 | `mcp_manage connect <url>` | Connect to a new server at runtime |
-| `mcp_manage disconnect reins` | Disconnect a server |
+| `mcp_manage disconnect helm` | Disconnect a server |
 
-The SOUL.md is also injected at boot with the list of configured MCP servers and instructions to call `mcp_manage` at the start of every conversation (see `entrypoint.sh`).
+`mcp_manage` is available but **the model is explicitly told not to call it at conversation
+start** (`docker/entrypoint.sh`): tools are pre-activated by the boot-time cache, and the
+extra round-trips caused response timeouts. Earlier revisions of this document said the
+opposite.
+
+---
+
+## Built-in tools and the approval layer
+
+Beyond the service tools, the endpoint always injects `get_result`, and injects
+`mark_onboarded` while the deployment has not completed first-run setup
+(`backend/src/mcp/agent-endpoint.ts`).
+
+A `tools/call` on a tool marked `require_approval` does **not** block. It returns
+immediately with `isError: true` and an `APPROVAL_PENDING` body naming a jobId; the executor
+closure is parked in memory, and the agent polls `get_result`, which long-polls up to 30s per
+call. The in-memory executor map is why `fly.toml` pins `max_machines_running = 1`.
+
+Tool names in any text the model reads must be the **model-visible** form, which differs per
+runtime — see `modelVisibleToolName()` in `shared/src/mcp-naming.ts`. Pre-rename names
+(`reins_get_result`, `reins__mark_onboarded`) are still accepted on `tools/call` but are no
+longer advertised on `tools/list`.
+
+---
+
+## Hermes
+
+Hermes consumes the same `MCP_CONFIG`, written by `docker/hermes/entrypoint.sh` into
+`~/.hermes/config.yaml` as an `mcp_servers:` map. Two differences matter:
+
+- **Namespacing.** hermes-agent renders tools as `mcp__<server>__<tool>`
+  (`tools/mcp_tool.py` → `mcp_prefixed_tool_name`), so the same tool the OpenClaw model calls
+  as `helm__gmail_search` is `mcp__helm__gmail_search` on Hermes. It also sanitizes each
+  component with `[^A-Za-z0-9_] -> _`, which is why the server name avoids hyphens.
+- **Config fidelity.** The Hermes entrypoint reads only `url` (or `command`/`args`); it drops
+  `transport`, and there is no header or auth passthrough.
+
+Because the two runtimes disagree, anything stored once and served to both — skill bodies,
+prompt templates, `shared/BOOTSTRAP.md` — names tools with `{{tool:NAME}}` and has it
+resolved for the target runtime at serve time (`/api/agent-skills`, `provision()`) or at
+image build time (`scripts/build-agent-image.sh`).
 
 ---
 
@@ -292,7 +349,10 @@ The SOUL.md is also injected at boot with the list of configured MCP servers and
 | File | Role |
 |------|------|
 | `docker/entrypoint.sh` | Generates `openclaw.json` from env vars; manages two-phase Codex startup |
-| `docker/Dockerfile` | Installs plugin tarball into `/home/node/.openclaw/plugins/` at build time |
+| `docker/Dockerfile` | Unpacks plugin tarball into `/app/dist/extensions/` at build time |
+| `docker/patch-plugin.js` | Rewrites the plugin's `dist/index.js` for id + synchronous tool registration |
+| `shared/src/mcp-naming.ts` | Server name, built-in tool names, legacy aliases, `{{tool:}}` resolution |
+| `backend/src/mcp/agent-endpoint.ts` | JSON-RPC handler: `tools/list` filtering, `tools/call`, approvals |
 | `openclaw-mcp-bridge/src/index.ts` | Plugin entry point — `register(api)`, retry logic, tool injection |
 | `openclaw-mcp-bridge/src/manager/mcp-manager.ts` | MCP session lifecycle, tool discovery, tool invocation routing |
 | `openclaw-mcp-bridge/src/transport/streamable-http.ts` | HTTP transport — POST requests, SSE streaming, AbortController timeouts |
@@ -307,4 +367,12 @@ The SOUL.md is also injected at boot with the list of configured MCP servers and
 
 **`api.pluginConfig` does not apply schema defaults.** OpenClaw's `validatePluginConfig()` validates the config and passes `validatedConfig.value` — the original parsed JSON, not a defaults-applied copy. Any optional config fields with TypeBox `default()` values must be handled with nullish coalescing in the plugin code.
 
-**Tools are not available until ~20–40 seconds after gateway start.** The retry sequence means the first successful connection attempt typically happens on the 5s or 15s retry. This is acceptable because the Codex event loop is blocked during this window anyway — no prompts are being processed.
+**~~Tools are not available until ~20–40 seconds after gateway start.~~** No longer true. The
+boot-time pre-cache registers tools synchronously during `register()`, so they are present in
+the model's very first turn. Retry-with-backoff only matters if the pre-cache failed.
+
+**The approval poll can surface as a timeout.** `get_result` long-polls for up to 30s
+(`agent-endpoint.ts`) while the plugin's `requestTimeoutMs` is also 30s
+(`transport/streamable-http.js`) and Reins does not override it. The two deadlines race, so a
+pending approval intermittently reaches the model as
+`Request "tools/call" timed out after 30000ms` instead of `status: "pending"`.

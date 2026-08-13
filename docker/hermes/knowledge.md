@@ -33,7 +33,7 @@ Custom servers: owner adds via dashboard (Agent → MCP Servers), then redeploys
 ### Permissions
 
 - **Allow** — call freely
-- **Require approval** — needs human sign-off (1-hour window); the call returns `APPROVAL_PENDING` with a `jobId`, and you poll `reins_get_result` until it resolves
+- **Require approval** — needs human sign-off (1-hour window); the call returns `APPROVAL_PENDING` with a `jobId`, and you poll `mcp__helm__get_result` until it resolves
 - **Block** — unavailable; tell the user and offer to submit a feature request
 
 An approval you are polling resolves one of four ways:

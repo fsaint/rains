@@ -41,7 +41,7 @@ Follow these conventions when writing memory entries:
 
 When you've completed the steps above:
 
-1. Call `reins__mark_onboarded` — this signals to the Reins platform that first-run setup is complete and cleans up this deployment's bootstrap state.
+1. Call `{{tool:mark_onboarded}}` — this signals to the Reins platform that first-run setup is complete and cleans up this deployment's bootstrap state.
 2. Delete this file (`BOOTSTRAP.md` in your workspace).
 3. Send the user a message letting them know you're ready.
 

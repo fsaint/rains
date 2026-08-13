@@ -142,7 +142,7 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
 
   /**
    * Get the most recently submitted deferred approval for an agent.
-   * Used as a fallback when the LLM calls reins_get_result without a jobId.
+   * Used as a fallback when the LLM calls get_result without a jobId.
    */
   async getLatestDeferred(agentId: string): Promise<ApprovalRequest | null> {
     const result = await client.execute({
@@ -243,7 +243,7 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
    * approving or denying it.
    *
    * This closes the approval — the held executor is discarded, exactly as with
-   * reject(). The agent learns of the feedback by polling reins_get_result,
+   * reject(). The agent learns of the feedback by polling get_result,
    * revises the arguments, and issues a fresh tool call, which submit() links
    * back to this row as the next revision.
    */
@@ -368,7 +368,7 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
       this.pendingWaiters.delete(id);
     } else {
       // No in-memory waiter. This is the expected path for deferred approvals
-      // (agent returned immediately with a jobId and is polling via reins_get_result).
+      // (agent returned immediately with a jobId and is polling via get_result).
       // It can also occur when the agent's HTTP connection timed out before the
       // user resolved a legacy blocking approval.
     }

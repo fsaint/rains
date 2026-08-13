@@ -1,5 +1,5 @@
 ---
-name: reins-knowledge
+name: helm-knowledge
 description: Use when asked about Reins platform best practices, agent configuration, how to submit feedback or bug reports, or how to extend agent capabilities with MCP servers. Also use when a user asks "how do I..." about anything related to Reins.
 ---
 
@@ -109,7 +109,7 @@ If a tool is blocked and you need it, explain the situation to the user and subm
 
 ### Approval outcomes
 
-A tool requiring approval returns `APPROVAL_PENDING` with a `jobId` instead of executing. Call `reins_get_result({"jobId": "..."})` immediately and keep polling — do not respond to the user while you wait. It resolves one of four ways:
+A tool requiring approval returns `APPROVAL_PENDING` with a `jobId` instead of executing. Call `helm__get_result({"jobId": "..."})` immediately and keep polling — do not respond to the user while you wait. It resolves one of four ways:
 
 | Status | What it means | What you do |
 |---|---|---|

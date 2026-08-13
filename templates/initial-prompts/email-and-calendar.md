@@ -35,4 +35,4 @@ From the same inbox scan, identify emails that appear to need a reply:
 
 ## Step 5: Mark Complete
 
-After completing all steps, call the `reins__mark_onboarded` tool. This removes these first-run instructions from future restarts.
+After completing all steps, call the `{{tool:mark_onboarded}}` tool. This removes these first-run instructions from future restarts.

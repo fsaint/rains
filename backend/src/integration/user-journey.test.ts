@@ -315,10 +315,10 @@ describe('User Journey — login → create agent → deploy', () => {
       expect(call?.telegramToken).toBe('test-bot-token');
     });
 
-    it('called provision() with an MCP config pointing back to Reins', () => {
+    it('called provision() with an MCP config pointing back to the platform', () => {
       const call = vi.mocked(provision).mock.calls[0]?.[0];
       expect(call?.mcpConfigs).toHaveLength(1);
-      expect(call?.mcpConfigs[0]).toMatchObject({ name: 'reins', transport: 'http' });
+      expect(call?.mcpConfigs[0]).toMatchObject({ name: 'helm', transport: 'http' });
       expect((call?.mcpConfigs[0] as { url: string }).url).toContain(createdAgentId);
     });
 

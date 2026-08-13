@@ -25,9 +25,54 @@ import { sendReauthEmail } from '../services/email.js';
 import { config } from '../config/index.js';
 import { getPostHog } from '../analytics/posthog.js';
 import type { DeferredJobResult } from '@reins/shared';
+import {
+  MCP_SERVER_NAME,
+  LEGACY_MCP_SERVER_NAME,
+  BUILTIN_TOOLS,
+  canonicalToolName,
+  modelVisibleToolName,
+  resolveToolTokens,
+  type AgentRuntime,
+} from '@reins/shared';
+
 import { checkSpendCap } from '../services/spend.js';
 import { checkUsageGate } from '../services/billing.js';
 import { parseRequiredServices } from '../services/skills.js';
+
+/**
+ * Read an agent's runtime off a deployed_agents row.
+ *
+ * The column predates Hermes, so legacy rows are null — which means openclaw.
+ * The runtime decides how tool names are rendered back to the model, and the
+ * two runtimes disagree, so guessing here produces names the model cannot call.
+ */
+function runtimeOf(row: { runtime?: unknown } | undefined): AgentRuntime {
+  return row?.runtime === 'hermes' ? 'hermes' : 'openclaw';
+}
+
+/**
+ * The MCP server name this agent's machine was actually deployed with.
+ *
+ * NOT MCP_SERVER_NAME: that constant moves the moment the backend deploys,
+ * while the agent keeps the prefix baked into its MCP_CONFIG until it is
+ * redeployed. Naming tools with the constant during that window points the
+ * model at a tool it does not have.
+ */
+function serverNameOf(row: { mcp_server_name?: unknown } | undefined): string {
+  const name = row?.mcp_server_name;
+  return typeof name === 'string' && name.length > 0 ? name : LEGACY_MCP_SERVER_NAME;
+}
+
+/** Look up how to address tools for an agent, when no deployment row is in hand. */
+async function getAgentToolNaming(
+  agentId: string
+): Promise<{ runtime: AgentRuntime; serverName: string }> {
+  const row = await client.execute({
+    sql: `SELECT runtime, mcp_server_name FROM deployed_agents WHERE agent_id = ? AND status NOT IN ('destroyed', 'error') ORDER BY created_at DESC LIMIT 1`,
+    args: [agentId],
+  });
+  return { runtime: runtimeOf(row.rows[0]), serverName: serverNameOf(row.rows[0]) };
+}
 
 // ============================================================================
 // Types
@@ -244,7 +289,7 @@ export async function handleMCPRequest(
             tools: { listChanged: false },
           },
           serverInfo: {
-            name: 'reins',
+            name: MCP_SERVER_NAME,
             version: '1.0.0',
           },
         },
@@ -368,9 +413,9 @@ async function handleListTools(
     }
   }
 
-  // Always inject the built-in reins_get_result polling tool
+  // Always inject the built-in get_result polling tool
   tools.push({
-    name: 'reins_get_result',
+    name: BUILTIN_TOOLS.getResult,
     description:
       'Poll for the result of a pending approval. ' +
       'CALL THIS IMMEDIATELY AND AUTOMATICALLY whenever any tool returns status=APPROVAL_PENDING. ' +
@@ -393,15 +438,15 @@ async function handleListTools(
     },
   });
 
-  // Inject reins__mark_onboarded if this agent has not yet completed first-run setup
+  // Inject mark_onboarded if this agent has not yet completed first-run setup
   const deploymentRow = await client.execute({
-    sql: `SELECT id, fly_app_name, fly_machine_id, has_onboarded FROM deployed_agents WHERE agent_id = ? ORDER BY created_at DESC LIMIT 1`,
+    sql: `SELECT id, fly_app_name, fly_machine_id, has_onboarded, runtime, mcp_server_name FROM deployed_agents WHERE agent_id = ? ORDER BY created_at DESC LIMIT 1`,
     args: [agentId],
   });
   const deployment = deploymentRow.rows[0];
   if (deployment && !deployment.has_onboarded) {
     tools.push({
-      name: 'reins__mark_onboarded',
+      name: BUILTIN_TOOLS.markOnboarded,
       description:
         'Signal that first-run setup is complete. Call this after finishing all initial setup tasks. ' +
         'Removes first-run instructions from future restarts.',
@@ -422,7 +467,7 @@ async function handleListTools(
   const skillsTool = tools.find((t) => t.name === 'skills_list');
   if (skillsTool) {
     try {
-      const catalog = await buildSkillCatalog(agentId);
+      const catalog = await buildSkillCatalog(agentId, runtimeOf(deployment), serverNameOf(deployment));
       if (catalog) skillsTool.description = `${skillsTool.description}\n\n${catalog}`;
     } catch (error) {
       // A catalog failure must never break tools/list — the tool still works,
@@ -450,7 +495,11 @@ const SKILL_CATALOG_MAX_CHARS = 2000;
  *
  * Exported for tests.
  */
-export async function buildSkillCatalog(agentId: string): Promise<string | null> {
+export async function buildSkillCatalog(
+  agentId: string,
+  runtime: AgentRuntime = 'openclaw',
+  serverName: string = MCP_SERVER_NAME
+): Promise<string | null> {
   const result = await client.execute({
     sql: `SELECT s.slug, s.name, s.description, s.required_services FROM skills s
           JOIN agent_skills ask ON ask.skill_id = s.id
@@ -470,7 +519,8 @@ export async function buildSkillCatalog(agentId: string): Promise<string | null>
   for (const row of shown) {
     const requires = parseRequiredServices(row.required_services);
     const suffix = requires.length > 0 ? ` (needs: ${requires.join(', ')})` : '';
-    lines.push(`- ${row.slug} — ${row.description}${suffix}`);
+    const description = resolveToolTokens(String(row.description ?? ''), runtime, serverName);
+    lines.push(`- ${row.slug} — ${description}${suffix}`);
   }
 
   const omitted = result.rows.length - shown.length;
@@ -842,14 +892,19 @@ async function executeTool(
  */
 async function handleCallTool(
   agentId: string,
-  toolName: string,
+  rawToolName: string,
   args: Record<string, unknown>,
   requestId: string | number
 ): Promise<MCPResponse> {
   const startTime = Date.now();
 
-  // Built-in tool: reins_get_result — poll for deferred approval job status
-  if (toolName === 'reins_get_result') {
+  // Accept pre-rename tool names. tools/list advertises only the canonical
+  // names, but agents deployed before the rename — and skills that name the old
+  // tools in prose — keep working.
+  const toolName = canonicalToolName(rawToolName);
+
+  // Built-in tool: get_result — poll for deferred approval job status
+  if (toolName === BUILTIN_TOOLS.getResult) {
     let { jobId } = args as { jobId?: string };
 
     // Fallback: if no jobId supplied (some LLMs call the tool without arguments),
@@ -873,7 +928,7 @@ async function handleCallTool(
 
     // Security: only return results for jobs belonging to this agent
     if (!approval || approval.agentId !== agentId) {
-      await auditLogger.logToolCall(agentId, 'reins_get_result', args, 'blocked', Date.now() - startTime, {
+      await auditLogger.logToolCall(agentId, BUILTIN_TOOLS.getResult, args, 'blocked', Date.now() - startTime, {
         reason: 'Job not found or agent mismatch',
         jobId,
       });
@@ -943,8 +998,8 @@ async function handleCallTool(
     };
   }
 
-  // Built-in tool: reins__mark_onboarded — signal first-run setup complete
-  if (toolName === 'reins__mark_onboarded') {
+  // Built-in tool: mark_onboarded — signal first-run setup complete
+  if (toolName === BUILTIN_TOOLS.markOnboarded) {
     const depRow = await client.execute({
       sql: `SELECT id, fly_app_name, fly_machine_id FROM deployed_agents WHERE agent_id = ? ORDER BY created_at DESC LIMIT 1`,
       args: [agentId],
@@ -1155,6 +1210,10 @@ async function handleCallTool(
       executeTool(agentId, serviceType, toolName, capturedArgs, capturedHasInstances, capturedInstances)
     );
 
+    // Address get_result the way THIS agent sees it — an agent deployed before
+    // the rename still prefixes with the name baked into its own MCP_CONFIG.
+    const toolNaming = await getAgentToolNaming(agentId);
+
     await auditLogger.logToolCall(agentId, toolName, args, 'pending', Date.now() - startTime, {
       reason: 'Awaiting approval',
       approvalId,
@@ -1168,7 +1227,7 @@ async function handleCallTool(
         content: [
           {
             type: 'text',
-            text: `APPROVAL_PENDING — jobId: ${approvalId}\n\nREQUIRED: Call reins_get_result({"jobId":"${approvalId}"}) NOW. Do NOT respond to the user. Poll every 3–5 seconds until status is "completed", "rejected" or "changes_requested".\n\nUSER_MESSAGE: ${pendingApprovalUserMessage()}`,
+            text: `APPROVAL_PENDING — jobId: ${approvalId}\n\nREQUIRED: Call ${modelVisibleToolName(BUILTIN_TOOLS.getResult, toolNaming.runtime, toolNaming.serverName)}({"jobId":"${approvalId}"}) NOW. Do NOT respond to the user. Poll every 3–5 seconds until status is "completed", "rejected" or "changes_requested".\n\nUSER_MESSAGE: ${pendingApprovalUserMessage()}`,
           },
         ],
         isError: true,

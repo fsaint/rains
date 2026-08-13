@@ -71,7 +71,7 @@ describe('Fly Provider', () => {
         instanceId: 'inst-12345678',
         telegramToken: 'tg-token-123',
         telegramUserId: 'user-456',
-        mcpConfigs: [{ name: 'reins', url: 'https://reins.test.com/mcp/agent-1' }],
+        mcpConfigs: [{ name: 'helm', url: 'https://reins.test.com/mcp/agent-1' }],
         gatewayToken: 'gw-token',
         soulMd: '# My Agent',
         modelProvider: 'anthropic',
@@ -92,7 +92,7 @@ describe('Fly Provider', () => {
       expect(body.config.env.SOUL_MD).toBe('# My Agent');
       expect(body.config.env.MODEL_PROVIDER).toBe('anthropic');
       expect(JSON.parse(body.config.env.MCP_CONFIG)).toEqual([
-        { name: 'reins', url: 'https://reins.test.com/mcp/agent-1' },
+        { name: 'helm', url: 'https://reins.test.com/mcp/agent-1' },
       ]);
     });
 

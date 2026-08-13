@@ -4,7 +4,7 @@ description: Answer questions about AgentHelm — what it is, how permissions wo
 version: 1.0.0
 metadata:
   hermes:
-    tags: [agenthelm, reins, platform, onboarding, help]
+    tags: [agenthelm, helm, platform, onboarding, help]
     category: productivity
 ---
 
