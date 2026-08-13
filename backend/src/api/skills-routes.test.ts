@@ -382,6 +382,77 @@ describe('GET /api/agent-skills/:slug', () => {
     expect(res.statusCode).toBe(404);
   });
 
+  it('reaches a skill referenced by an assigned one, and renders the reference', async () => {
+    // A reference grants access: deep-research is not assigned, but the
+    // assigned skill's body points at it.
+    routeDb([
+      [/FROM deployed_agents da/, rows([{ agent_id: 'agent-1', user_id: 'user-1' }])],
+      [/JOIN agent_skills ask/, rows([skillRow({ body: 'first see {{skill:deep-research}}' })])],
+      [/WHERE enabled = true AND \(user_id IS NULL OR user_id = \?\)/, rows([
+        skillRow({ body: 'first see {{skill:deep-research}}' }),
+        skillRow({ id: 'sk-2', slug: 'deep-research', name: 'Deep Research', body: 'dig deep' }),
+      ])],
+    ]);
+    mockResolveAvailability.mockResolvedValue(
+      new Map([['sk-2', { available: true, missingServices: [] }]])
+    );
+
+    const res = await app.inject({
+      method: 'GET', url: '/api/agent-skills/deep-research',
+      headers: { 'x-reins-agent-secret': 'tok' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.slug).toBe('deep-research');
+  });
+
+  it('renders {{skill:...}} into an instruction naming the fetch tool', async () => {
+    routeDb([
+      [/FROM deployed_agents da/, rows([{ agent_id: 'agent-1', user_id: 'user-1', mcp_server_name: 'helm' }])],
+      [/JOIN agent_skills ask/, rows([skillRow({ body: 'first see {{skill:deep-research}}' })])],
+    ]);
+    mockResolveAvailability.mockResolvedValue(
+      new Map([['sk-1', { available: true, missingServices: [] }]])
+    );
+
+    const res = await app.inject({
+      method: 'GET', url: '/api/agent-skills/inbox-triage',
+      headers: { 'x-reins-agent-secret': 'tok' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json().data.body;
+    expect(body).toContain('`deep-research` skill');
+    expect(body).toContain('helm__skills_get');
+    expect(body).not.toContain('{{skill:');
+  });
+
+  it('distinguishes an existing-but-unreachable skill from a missing one', async () => {
+    routeDb([
+      [/FROM deployed_agents da/, rows([{ agent_id: 'agent-1', user_id: 'user-1' }])],
+      [/JOIN agent_skills ask/, rows([skillRow()])],
+      [/WHERE enabled = true AND \(user_id IS NULL OR user_id = \?\)/, rows([
+        skillRow(),
+        skillRow({ id: 'sk-2', slug: 'unreferenced', body: 'nobody points here' }),
+      ])],
+    ]);
+    mockResolveAvailability.mockResolvedValue(new Map());
+
+    const unreachable = await app.inject({
+      method: 'GET', url: '/api/agent-skills/unreferenced',
+      headers: { 'x-reins-agent-secret': 'tok' },
+    });
+    expect(unreachable.statusCode).toBe(404);
+    expect(unreachable.json().code).toBe('SKILL_NOT_REACHABLE');
+
+    const missing = await app.inject({
+      method: 'GET', url: '/api/agent-skills/no-such-thing',
+      headers: { 'x-reins-agent-secret': 'tok' },
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json().code).toBe('SKILL_NOT_FOUND');
+  });
+
   it('returns the body for an assigned slug', async () => {
     routeDb([
       [/FROM deployed_agents da/, rows([{ agent_id: 'agent-1', user_id: 'user-1' }])],

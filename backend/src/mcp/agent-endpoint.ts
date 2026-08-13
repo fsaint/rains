@@ -32,6 +32,7 @@ import {
   canonicalToolName,
   modelVisibleToolName,
   resolveToolTokens,
+  resolveSkillTokens,
   type AgentRuntime,
 } from '@reins/shared';
 
@@ -519,7 +520,11 @@ export async function buildSkillCatalog(
   for (const row of shown) {
     const requires = parseRequiredServices(row.required_services);
     const suffix = requires.length > 0 ? ` (needs: ${requires.join(', ')})` : '';
-    const description = resolveToolTokens(String(row.description ?? ''), runtime, serverName);
+    const description = resolveSkillTokens(
+      resolveToolTokens(String(row.description ?? ''), runtime, serverName),
+      runtime,
+      serverName
+    );
     lines.push(`- ${row.slug} — ${description}${suffix}`);
   }
 

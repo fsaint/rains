@@ -111,3 +111,53 @@ export function resolveToolTokens(
     modelVisibleToolName(canonicalToolName(toolName), runtime, serverName)
   );
 }
+
+/**
+ * `{{skill:SLUG}}` — how one skill points at another.
+ *
+ * Skills are served one body at a time, so a reference has to tell the model
+ * both which skill and how to open it. Slugs are kebab-case (see `slugify` in
+ * the skills routes); anything else is an authoring mistake and is left
+ * verbatim rather than rendered into an instruction that cannot work.
+ *
+ * Referencing also grants access: whatever this renders as a fetch instruction
+ * must be reachable, which is why `extractSkillReferences` below shares this
+ * exact pattern instead of re-deriving it.
+ */
+const SKILL_TOKEN_PATTERN = /\{\{skill:([a-z0-9-]+)\}\}/g;
+
+/** Tool an agent calls to read a skill body. */
+const SKILL_FETCH_TOOL = 'skills_get';
+
+/**
+ * Replace every `{{skill:SLUG}}` with an instruction naming both the skill and
+ * the tool that opens it, addressed the way this particular agent sees it.
+ */
+export function resolveSkillTokens(
+  text: string,
+  runtime: AgentRuntime = 'openclaw',
+  serverName: string = MCP_SERVER_NAME
+): string {
+  if (!text) return text;
+  const fetchTool = modelVisibleToolName(SKILL_FETCH_TOOL, runtime, serverName);
+  return text.replace(
+    SKILL_TOKEN_PATTERN,
+    (_match, slug: string) => `the \`${slug}\` skill (open it with ${fetchTool})`
+  );
+}
+
+/**
+ * The slugs `resolveSkillTokens` would turn into fetch instructions, de-duped.
+ *
+ * This is the edge set of the reference graph. There is no stored list of
+ * relationships — the graph is derived from bodies at request time — so this
+ * and the renderer must stay in lockstep.
+ */
+export function extractSkillReferences(text: string): string[] {
+  if (!text) return [];
+  const found = new Set<string>();
+  for (const match of text.matchAll(SKILL_TOKEN_PATTERN)) {
+    found.add(match[1]);
+  }
+  return [...found];
+}

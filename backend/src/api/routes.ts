@@ -78,7 +78,7 @@ import { createUpload, getUpload, MAX_UPLOAD_BYTES } from '../services/agent-upl
 import { isCodexTokenExpired } from '../services/token-monitor.js';
 import { forwardToOpenclaw, handleMyChatMember } from '../services/agent-bot-relay.js';
 import { parseWikilinks, updateLinkIndex, ensureMemoryRoot, getDreamManifest, setEntryParent } from '../services/memory.js';
-import { parseRequiredServices, resolveAvailability } from '../services/skills.js';
+import { parseRequiredServices, resolveAvailability, resolveReachableSkill } from '../services/skills.js';
 import * as provider from '../providers/index.js';
 import Stripe from 'stripe';
 import {
@@ -104,6 +104,7 @@ import {
   MCP_SERVER_NAME,
   LEGACY_MCP_SERVER_NAME,
   resolveToolTokens,
+  resolveSkillTokens,
   type AgentRuntime,
 } from '@reins/shared';
 
@@ -5899,27 +5900,98 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     return {
       data: skills.map(({ body: _body, ...rest }) => ({
         ...rest,
-        description: resolveToolTokens(rest.description ?? '', agent.runtime, agent.serverName),
+        description: resolveSkillTokens(
+          resolveToolTokens(rest.description ?? '', agent.runtime, agent.serverName),
+          agent.runtime,
+          agent.serverName
+        ),
       })),
     };
   });
+
+  /**
+   * Skills a reference is allowed to reach: system skills plus this owner's own.
+   *
+   * This is the security boundary for `{{skill:...}}` — a reference can never
+   * cross to another user's skill, because a foreign skill is simply not a
+   * candidate. Loaded in one query and walked in memory, so following a
+   * reference chain costs no extra round-trips.
+   */
+  async function loadReferenceCandidates(ownerUserId: string) {
+    const result = await client.execute({
+      sql: `SELECT * FROM skills WHERE enabled = true AND (user_id IS NULL OR user_id = ?)`,
+      args: [ownerUserId],
+    });
+    return result.rows.map(mapSkillRow);
+  }
+
+  /**
+   * Tag rows with the owner id the reachability resolver compares on.
+   *
+   * Candidates are already scoped to system ∪ owner, so `isSystem` is enough to
+   * recover it — no need to widen any response shape with a raw user_id.
+   */
+  function withOwnerScope<T extends { isSystem: boolean }>(skills: T[], ownerUserId: string) {
+    return skills.map((s) => ({ ...s, userId: s.isSystem ? null : ownerUserId }));
+  }
 
   app.get<{ Params: { slug: string } }>('/api/agent-skills/:slug', async (request, reply) => {
     const agent = await resolveAgentFromGatewayToken(request);
     if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
 
-    const skills = await listAgentSkills(agent.agentId);
-    const skill = skills.find((s) => s.slug === request.params.slug);
-    if (!skill) return reply.status(404).send({ error: 'Skill not assigned to this agent' });
+    const { slug } = request.params;
+    // Availability is resolved after reachability, so the walk runs over the
+    // plain row shape both sources share.
+    type Candidate = ReturnType<typeof mapSkillRow> & { userId: string | null };
+    const assigned: Candidate[] = withOwnerScope(
+      await listAgentSkills(agent.agentId),
+      agent.userId
+    );
 
-    // Resolve {{tool:...}} here rather than in the skills MCP server: this is
-    // the one place that knows the requesting agent's runtime, and the two
-    // runtimes render tool names differently.
+    // Assigned is the common case; only pay for the candidate load when the
+    // slug has to be reached through a reference.
+    let outcome = resolveReachableSkill<Candidate>(slug, assigned, assigned);
+    if (!outcome.reachable) {
+      const candidates: Candidate[] = withOwnerScope(
+        await loadReferenceCandidates(agent.userId),
+        agent.userId
+      );
+      outcome = resolveReachableSkill<Candidate>(slug, assigned, candidates);
+    }
+
+    if (!outcome.reachable) {
+      // Distinguish "no such skill" from "exists but nothing points at it" so
+      // the agent can tell a typo from a missing assignment.
+      return reply.status(404).send({
+        error: outcome.reason === 'not_found'
+          ? `No skill with slug "${slug}" exists.`
+          : `Skill "${slug}" exists but is not assigned to you and is not referenced by any skill you have.`,
+        code: outcome.reason === 'not_found' ? 'SKILL_NOT_FOUND' : 'SKILL_NOT_REACHABLE',
+      });
+    }
+
+    const skill = outcome.skill;
+    // A skill reached by reference was not in the assigned list, so it carries
+    // no availability yet — resolve it so required_services still gate use.
+    const availability = (await resolveAvailability(agent.agentId, [skill])).get(skill.id);
+
+    // Resolve tokens here rather than in the skills MCP server: this is the one
+    // place that knows the requesting agent's runtime and deployed server name,
+    // and the two runtimes render tool names differently.
+    const render = (text: string) =>
+      resolveSkillTokens(
+        resolveToolTokens(text ?? '', agent.runtime, agent.serverName),
+        agent.runtime,
+        agent.serverName
+      );
+
     return {
       data: {
         ...skill,
-        description: resolveToolTokens(skill.description ?? '', agent.runtime, agent.serverName),
-        body: resolveToolTokens(skill.body ?? '', agent.runtime, agent.serverName),
+        available: availability?.available ?? true,
+        missingServices: availability?.missingServices ?? [],
+        description: render(skill.description),
+        body: render(skill.body),
       },
     };
   });

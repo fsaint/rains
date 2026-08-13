@@ -16,8 +16,14 @@ vi.mock('./permissions.js', () => ({
   getAgentInstances: mockGetAgentInstances,
 }));
 
-const { parseRequiredServices, getSatisfiedServices, missingServices, resolveAvailability } =
-  await import('./skills.js');
+const {
+  parseRequiredServices,
+  getSatisfiedServices,
+  missingServices,
+  resolveAvailability,
+  resolveReachableSkill,
+  SKILL_REFERENCE_MAX_DEPTH,
+} = await import('./skills.js');
 
 /** Minimal ServiceInstance shape — only the fields the resolver reads. */
 function instance(serviceType: string, enabled = true, credentialStatus = 'connected') {
@@ -119,5 +125,98 @@ describe('resolveAvailability', () => {
 
     expect(result.has('a')).toBe(true);
     expect(result.get('a')).toEqual({ available: false, missingServices: ['gmail'] });
+  });
+});
+
+// ============================================================================
+// Reachability through {{skill:...}} references
+// ============================================================================
+
+/**
+ * A reference grants access, and there is no stored edge set — the graph is
+ * derived from bodies at request time. These cover the shape of that walk and,
+ * more importantly, its limits: a reference must never reach another user's
+ * skill, and a cyclic or deep graph must not turn one fetch into a runaway.
+ */
+function skill(slug: string, body = '', userId: string | null = null) {
+  return { id: `id-${slug}${userId ?? ''}`, slug, userId, body };
+}
+
+describe('resolveReachableSkill', () => {
+  it('returns an assigned skill directly', () => {
+    const a = skill('a');
+    const result = resolveReachableSkill('a', [a], [a]);
+    expect(result.reachable).toBe(true);
+    expect(result.reachable && result.skill.slug).toBe('a');
+  });
+
+  it('reaches a skill referenced by an assigned one', () => {
+    const a = skill('a', 'see {{skill:b}}');
+    const b = skill('b');
+    const result = resolveReachableSkill('b', [a], [a, b]);
+    expect(result.reachable).toBe(true);
+  });
+
+  it('reaches transitively through a chain', () => {
+    const a = skill('a', '{{skill:b}}');
+    const b = skill('b', '{{skill:c}}');
+    const c = skill('c');
+    expect(resolveReachableSkill('c', [a], [a, b, c]).reachable).toBe(true);
+  });
+
+  it('reports an existing but unreferenced skill as not reachable, not missing', () => {
+    const a = skill('a');
+    const b = skill('b');
+    const result = resolveReachableSkill('b', [a], [a, b]);
+    expect(result.reachable).toBe(false);
+    expect(result.reachable === false && result.reason).toBe('not_reachable');
+  });
+
+  it('reports an unknown slug as not found', () => {
+    const a = skill('a', '{{skill:ghost}}');
+    const result = resolveReachableSkill('ghost', [a], [a]);
+    expect(result.reachable).toBe(false);
+    expect(result.reachable === false && result.reason).toBe('not_found');
+  });
+
+  it('terminates on a reference cycle', () => {
+    const a = skill('a', '{{skill:b}}');
+    const b = skill('b', '{{skill:a}}');
+    const target = skill('z');
+    const result = resolveReachableSkill('z', [a], [a, b, target]);
+    expect(result.reachable).toBe(false);
+  });
+
+  it('stops at the depth cap', () => {
+    // chain a -> s0 -> s1 -> ... longer than the cap
+    const depth = SKILL_REFERENCE_MAX_DEPTH + 3;
+    const chain = Array.from({ length: depth }, (_, i) =>
+      skill(`s${i}`, i < depth - 1 ? `{{skill:s${i + 1}}}` : '')
+    );
+    const entry = skill('a', '{{skill:s0}}');
+    const candidates = [entry, ...chain];
+
+    expect(resolveReachableSkill('s0', [entry], candidates).reachable).toBe(true);
+    expect(resolveReachableSkill(`s${depth - 1}`, [entry], candidates).reachable).toBe(false);
+  });
+
+  it('never reaches another user\'s skill', () => {
+    // The candidate set is scoped by the caller, so a foreign skill simply is
+    // not a candidate — even when an assigned body names its slug.
+    const mine = skill('mine', '{{skill:theirs}}', 'user-1');
+    const result = resolveReachableSkill('theirs', [mine], [mine]);
+    expect(result.reachable).toBe(false);
+    expect(result.reachable === false && result.reason).toBe('not_found');
+  });
+
+  it('prefers the owner\'s own skill over a system skill of the same slug', () => {
+    // slug is unique per-user and among system skills, but not globally, so a
+    // user skill can shadow a stock one. Resolution must be deterministic.
+    const system = skill('shared', 'system body', null);
+    const owned = skill('shared', 'owned body', 'user-1');
+    const entry = skill('entry', '{{skill:shared}}');
+    const result = resolveReachableSkill('shared', [entry], [entry, system, owned]);
+    expect(result.reachable).toBe(true);
+    expect(result.reachable && result.skill.body).toBe('owned body');
   });
 });

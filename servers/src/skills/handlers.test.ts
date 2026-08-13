@@ -27,11 +27,11 @@ function makeOkResponse(data: unknown) {
   };
 }
 
-function makeErrorResponse(status: number) {
+function makeErrorResponse(status: number, body: Record<string, unknown> = { error: 'Error' }) {
   return {
     ok: false,
     status,
-    json: async () => ({ error: 'Error' }),
+    json: async () => body,
     text: async () => 'Error',
   };
 }
@@ -153,6 +153,37 @@ describe('handleGetSkill', () => {
 
   it('names the slug and points at skills_list on a 404', async () => {
     mockFetch.mockResolvedValueOnce(makeErrorResponse(404));
+
+    const result = await handleGetSkill({ slug: 'nope' }, mockContext);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('nope');
+    expect(result.error).toContain('skills_list');
+  });
+
+  it('tells the agent when a referenced skill exists but is not reachable', async () => {
+    // "not assigned" and "does not exist" used to be the same bare 404, so the
+    // agent could not tell a typo from a missing assignment.
+    mockFetch.mockResolvedValueOnce(
+      makeErrorResponse(404, {
+        code: 'SKILL_NOT_REACHABLE',
+        error: 'Skill "deep-research" exists but is not assigned to you and is not referenced by any skill you have.',
+      })
+    );
+
+    const result = await handleGetSkill({ slug: 'deep-research' }, mockContext);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('deep-research');
+    expect(result.error).toContain('not assigned');
+    // Nothing to fix by listing — it is an assignment problem, not a typo.
+    expect(result.error).not.toContain('skills_list');
+  });
+
+  it('points at skills_list when the slug does not exist at all', async () => {
+    mockFetch.mockResolvedValueOnce(
+      makeErrorResponse(404, { code: 'SKILL_NOT_FOUND', error: 'No skill with slug "nope" exists.' })
+    );
 
     const result = await handleGetSkill({ slug: 'nope' }, mockContext);
 

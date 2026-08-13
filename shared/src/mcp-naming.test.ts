@@ -6,6 +6,8 @@ import {
   canonicalToolName,
   modelVisibleToolName,
   resolveToolTokens,
+  resolveSkillTokens,
+  extractSkillReferences,
 } from './mcp-naming.js';
 
 describe('canonicalToolName', () => {
@@ -48,6 +50,66 @@ describe('modelVisibleToolName', () => {
     // Hermes sanitizes [^A-Za-z0-9_] to _, so a hyphenated server name would
     // diverge between runtimes. This guards that choice.
     expect(MCP_SERVER_NAME).toMatch(/^[A-Za-z0-9_]+$/);
+  });
+});
+
+describe('resolveSkillTokens', () => {
+  it('renders an actionable instruction naming the fetch tool per runtime', () => {
+    expect(resolveSkillTokens('See {{skill:deep-research}} first.', 'openclaw'))
+      .toBe('See the `deep-research` skill (open it with helm__skills_get) first.');
+    expect(resolveSkillTokens('See {{skill:deep-research}} first.', 'hermes'))
+      .toBe('See the `deep-research` skill (open it with mcp__helm__skills_get) first.');
+  });
+
+  it('honours the server name the agent was deployed with', () => {
+    expect(resolveSkillTokens('{{skill:a-b}}', 'openclaw', LEGACY_MCP_SERVER_NAME))
+      .toContain('reins__skills_get');
+  });
+
+  it('resolves every occurrence', () => {
+    const out = resolveSkillTokens('{{skill:a}} and {{skill:b}}', 'openclaw');
+    expect(out).toContain('`a`');
+    expect(out).toContain('`b`');
+  });
+
+  it('leaves malformed tokens verbatim so authoring mistakes stay visible', () => {
+    // Slugs are kebab-case (slugify in routes.ts), so underscores and capitals
+    // are authoring errors, not alternate spellings.
+    expect(resolveSkillTokens('{{skill:}}', 'openclaw')).toBe('{{skill:}}');
+    expect(resolveSkillTokens('{{ skill:x }}', 'openclaw')).toBe('{{ skill:x }}');
+    expect(resolveSkillTokens('{{skill:Has_Underscore}}', 'openclaw')).toBe('{{skill:Has_Underscore}}');
+  });
+
+  it('leaves tool tokens alone', () => {
+    expect(resolveSkillTokens('{{tool:gmail_search}}', 'openclaw')).toBe('{{tool:gmail_search}}');
+  });
+
+  it('leaves text without tokens untouched', () => {
+    expect(resolveSkillTokens('No tokens here.', 'hermes')).toBe('No tokens here.');
+    expect(resolveSkillTokens('', 'hermes')).toBe('');
+  });
+});
+
+describe('extractSkillReferences', () => {
+  // The renderer and the reachability walk must agree on what counts as a
+  // reference: anything the renderer turns into a fetch instruction has to be
+  // reachable, or the agent is told to open something it cannot open.
+  it('returns the slugs the renderer would resolve', () => {
+    expect(extractSkillReferences('see {{skill:a-one}} then {{skill:b-two}}'))
+      .toEqual(['a-one', 'b-two']);
+  });
+
+  it('de-duplicates repeats', () => {
+    expect(extractSkillReferences('{{skill:a}} {{skill:a}}')).toEqual(['a']);
+  });
+
+  it('ignores what the renderer ignores', () => {
+    expect(extractSkillReferences('{{skill:}} {{ skill:x }} {{skill:Bad_Slug}} {{tool:gmail_search}}'))
+      .toEqual([]);
+  });
+
+  it('returns nothing for empty input', () => {
+    expect(extractSkillReferences('')).toEqual([]);
   });
 });
 

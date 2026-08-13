@@ -110,6 +110,18 @@ export async function handleGetSkill(
     const res = await skillsFetch(context, `/api/agent-skills/${encodeURIComponent(slug)}`);
 
     if (res.status === 404) {
+      // Three outcomes hide behind one status. A typo is fixed by listing; a
+      // skill that exists but is neither assigned nor referenced is an owner
+      // action, and telling the agent to list would send it in circles.
+      const body = await res.json().catch(() => ({})) as { code?: string; error?: string };
+      if (body.code === 'SKILL_NOT_REACHABLE') {
+        return {
+          success: false,
+          error:
+            body.error ??
+            `Skill "${slug}" exists but is not assigned to you. Ask your owner to enable it in the Reins dashboard (Skills).`,
+        };
+      }
       return {
         success: false,
         error: `No skill with slug "${slug}" is assigned to you. Call skills_list to see what is available.`,

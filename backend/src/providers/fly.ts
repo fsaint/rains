@@ -5,7 +5,7 @@
 
 import { config } from '../config/index.js';
 import { getLiteLLMConfigB64 } from '../services/model-router.js';
-import { resolveToolTokens } from '@reins/shared';
+import { resolveToolTokens, resolveSkillTokens } from '@reins/shared';
 
 const FLY_API_BASE = 'https://api.machines.dev/v1';
 
@@ -316,7 +316,7 @@ async function buildMachineConfig(opts: CreateMachineOpts) {
       } : {}),
       // Prompt templates name tools with {{tool:...}} so one stored template
       // serves both runtimes; resolve to this runtime's naming on the way in.
-      ...(opts.initialPrompt ? { INITIAL_PROMPT: resolveToolTokens(opts.initialPrompt, 'openclaw') } : {}),
+      ...(opts.initialPrompt ? { INITIAL_PROMPT: resolveSkillTokens(resolveToolTokens(opts.initialPrompt, 'openclaw'), 'openclaw') } : {}),
     },
     // OpenClaw runs as 'node' user. Mount only /agents to avoid hiding pre-installed plugins.
     ...(opts.volumeId ? { mounts: [{ volume: opts.volumeId, path: '/home/node/.openclaw/agents' }] } : {}),
@@ -397,7 +397,7 @@ async function buildHermesMachineConfig(opts: CreateMachineOpts) {
       REINS_API_URL: reinsUrl,
       // INSTANCE_USER_ID and USAGE_CALLBACK_URL omitted until usage_reporter hook
       // files are baked into the Hermes image (docker/hermes/hooks/usage_reporter/)
-      ...(opts.initialPrompt ? { INITIAL_PROMPT: resolveToolTokens(opts.initialPrompt, 'hermes') } : {}),
+      ...(opts.initialPrompt ? { INITIAL_PROMPT: resolveSkillTokens(resolveToolTokens(opts.initialPrompt, 'hermes'), 'hermes') } : {}),
       ...(opts.telegramGroups && opts.telegramGroups.length > 0 ? { TELEGRAM_GROUPS_JSON: JSON.stringify(opts.telegramGroups) } : {}),
     },
     // Hermes runs as root. Full ~/.hermes mount is safe (no pre-installed files there).
