@@ -13,7 +13,6 @@
  */
 
 import { getAgentInstances } from './permissions.js';
-import { extractSkillReferences } from '@reins/shared';
 
 /** Parse the TEXT-JSON `required_services` column, tolerating bad data. */
 export function parseRequiredServices(raw: unknown): string[] {
@@ -73,35 +72,29 @@ export async function resolveAvailability(
 }
 
 // ============================================================================
-// Reachability through {{skill:...}} references
+// Skill exposure: the assigned set, and nothing else
 // ============================================================================
 
 /**
- * Referencing a skill grants access to it, so an agent's effective skill set is
- * the transitive closure of what it was assigned.
+ * Assignment is the exposure boundary.
  *
- * There is no stored edge set — relationships are written inline in bodies as
- * `{{skill:slug}}` — so the graph is derived here at request time by scanning
- * the bodies the agent can already see.
+ * An earlier revision let a `{{skill:slug}}` reference grant access, making the
+ * effective set the transitive closure of assignment. That is no longer true:
+ * per-agent selection is meant to be exactly what the agent can reach, so a
+ * reference now renders as a pointer and nothing more. A skill the owner has
+ * but did not assign is reported as unassigned rather than served.
  */
 
-/** How many reference hops out from the assigned set are followed. */
-export const SKILL_REFERENCE_MAX_DEPTH = 5;
-
-/** Hard ceiling on skills inspected, so a pathological graph cannot run away. */
-export const SKILL_REFERENCE_MAX_VISITED = 200;
-
-export interface ReferenceableSkill {
+export interface AddressableSkill {
   slug: string;
   /** null for system skills; a user id for skills that user owns. */
   userId: string | null;
-  body: string;
 }
 
-export type SkillReachability<T> =
+export type SkillLookup<T> =
   | { reachable: true; skill: T }
-  /** `not_found`: no such slug in scope. `not_reachable`: exists, nothing points at it. */
-  | { reachable: false; reason: 'not_found' | 'not_reachable' };
+  /** `not_found`: no such slug at all. `not_assigned`: exists, but not on this agent. */
+  | { reachable: false; reason: 'not_found' | 'not_assigned' };
 
 /**
  * Pick one skill for a slug.
@@ -110,55 +103,29 @@ export type SkillReachability<T> =
  * (backend/src/db/index.ts) — so a user skill can shadow a system one. The
  * owner's own skill wins: overriding a stock skill is the intuitive reading,
  * and picking deterministically is what stops the old `find()`-over-a-UNION
- * ambiguity from becoming load-bearing now that slugs are addressable.
+ * ambiguity from deciding it by row order.
  */
-function pickBySlug<T extends ReferenceableSkill>(candidates: T[], slug: string): T | undefined {
+function pickBySlug<T extends AddressableSkill>(candidates: T[], slug: string): T | undefined {
   const matches = candidates.filter((c) => c.slug === slug);
   return matches.find((c) => c.userId !== null) ?? matches[0];
 }
 
 /**
- * Resolve `slug` for an agent, following references out from its assigned set.
+ * Resolve `slug` against what this agent was actually assigned.
  *
- * `candidates` is the caller's security boundary: it must already be scoped to
- * system skills plus the agent owner's own. A slug outside that set is reported
- * `not_found` rather than reached, so a reference can never cross to another
- * user's skill however it is spelled.
+ * `known` is only used to tell "you don't have it" from "it doesn't exist" —
+ * it never widens what is served. Callers scope it to the owner's skills so the
+ * distinction can't leak another user's slugs.
  */
-export function resolveReachableSkill<T extends ReferenceableSkill>(
+export function resolveAssignedSkill<T extends AddressableSkill>(
   slug: string,
   assigned: T[],
-  candidates: T[]
-): SkillReachability<T> {
+  known: T[] = []
+): SkillLookup<T> {
   const direct = pickBySlug(assigned, slug);
   if (direct) return { reachable: true, skill: direct };
 
-  const target = pickBySlug(candidates, slug);
-  if (!target) return { reachable: false, reason: 'not_found' };
-
-  const visited = new Set(assigned.map((s) => s.slug));
-  let frontier = assigned;
-
-  for (let depth = 0; depth < SKILL_REFERENCE_MAX_DEPTH; depth++) {
-    const next: T[] = [];
-
-    for (const source of frontier) {
-      for (const ref of extractSkillReferences(source.body)) {
-        if (ref === slug) return { reachable: true, skill: target };
-        if (visited.has(ref) || visited.size >= SKILL_REFERENCE_MAX_VISITED) continue;
-        visited.add(ref);
-        // An unresolvable reference is a dead end, not an error: the body still
-        // renders it, and fetching it reports not_found on its own request.
-        const hop = pickBySlug(candidates, ref);
-        if (hop) next.push(hop);
-      }
-    }
-
-    if (next.length === 0) break;
-    frontier = next;
-  }
-
-  return { reachable: false, reason: 'not_reachable' };
+  return { reachable: false, reason: pickBySlug(known, slug) ? 'not_assigned' : 'not_found' };
 }
 
 // ============================================================================

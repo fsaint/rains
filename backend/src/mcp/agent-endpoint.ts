@@ -506,13 +506,11 @@ export async function buildSkillCatalog(
   serverName: string = MCP_SERVER_NAME
 ): Promise<string | null> {
   const result = await client.execute({
+    // Must mirror listAgentSkills in routes.ts — explicit assignment only.
     sql: `SELECT s.slug, s.name, s.description, s.required_services, s.version FROM skills s
           JOIN agent_skills ask ON ask.skill_id = s.id
           WHERE ask.agent_id = ? AND s.enabled = true
-          UNION
-          SELECT s.slug, s.name, s.description, s.required_services, s.version FROM skills s
-          WHERE s.user_id IS NULL AND s.auto_assign = true AND s.enabled = true
-          ORDER BY name`,
+          ORDER BY s.name`,
     args: [agentId],
   });
 

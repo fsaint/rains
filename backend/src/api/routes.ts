@@ -81,7 +81,7 @@ import { parseWikilinks, updateLinkIndex, ensureMemoryRoot, getDreamManifest, se
 import {
   parseRequiredServices,
   resolveAvailability,
-  resolveReachableSkill,
+  resolveAssignedSkill,
   buildSetupNotice,
   compareSkillVersion,
   loadSkillVersionManifest,
@@ -6057,18 +6057,23 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // --- Agent audience (gateway token only) ----------------------------------
 
   /**
-   * Skills this agent can see: everything explicitly assigned, plus any system
-   * skill flagged auto_assign (so a freshly provisioned agent isn't empty).
+   * Skills this agent can see: exactly what was explicitly assigned to it.
+   *
+   * This set is the exposure boundary in both directions — it is what
+   * `skills_list` returns and the only thing `skills_get` will serve. A freshly
+   * provisioned agent therefore starts empty on purpose; the setup notice tells
+   * it so rather than a stock skill appearing unasked.
    */
   async function listAgentSkills(agentId: string) {
     const result = await client.execute({
+      // Explicit assignment only. The auto_assign UNION that used to be here
+      // handed every system skill to every agent, which defeats per-agent
+      // selection; auto_assign is now inert (settable via the API, read by
+      // nothing).
       sql: `SELECT s.* FROM skills s
             JOIN agent_skills ask ON ask.skill_id = s.id
             WHERE ask.agent_id = ? AND s.enabled = true
-            UNION
-            SELECT s.* FROM skills s
-            WHERE s.user_id IS NULL AND s.auto_assign = true AND s.enabled = true
-            ORDER BY name`,
+            ORDER BY s.name`,
       args: [agentId],
     });
 
@@ -6113,12 +6118,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   });
 
   /**
-   * Skills a reference is allowed to reach: system skills plus this owner's own.
-   *
-   * This is the security boundary for `{{skill:...}}` — a reference can never
-   * cross to another user's skill, because a foreign skill is simply not a
-   * candidate. Loaded in one query and walked in memory, so following a
-   * reference chain costs no extra round-trips.
+   * Skills that exist for this owner — used only to distinguish "not assigned to
+   * you" from "no such skill", never to serve one. Scoped to the owner so the
+   * distinction cannot reveal another user's slugs.
    */
   async function loadReferenceCandidates(ownerUserId: string) {
     const result = await client.execute({
@@ -6143,39 +6145,35 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
 
     const { slug } = request.params;
-    // Availability is resolved after reachability, so the walk runs over the
-    // plain row shape both sources share.
     type Candidate = ReturnType<typeof mapSkillRow> & { userId: string | null };
     const assigned: Candidate[] = withOwnerScope(
       await listAgentSkills(agent.agentId),
       agent.userId
     );
 
-    // Assigned is the common case; only pay for the candidate load when the
-    // slug has to be reached through a reference.
-    let outcome = resolveReachableSkill<Candidate>(slug, assigned, assigned);
+    let outcome = resolveAssignedSkill<Candidate>(slug, assigned);
     if (!outcome.reachable) {
-      const candidates: Candidate[] = withOwnerScope(
+      // Only to tell "you don't have it" from "it doesn't exist" — this load
+      // never widens what is served.
+      const known: Candidate[] = withOwnerScope(
         await loadReferenceCandidates(agent.userId),
         agent.userId
       );
-      outcome = resolveReachableSkill<Candidate>(slug, assigned, candidates);
+      outcome = resolveAssignedSkill<Candidate>(slug, assigned, known);
     }
 
     if (!outcome.reachable) {
-      // Distinguish "no such skill" from "exists but nothing points at it" so
-      // the agent can tell a typo from a missing assignment.
+      // A typo and a missing assignment need different fixes, so they get
+      // different answers.
       return reply.status(404).send({
         error: outcome.reason === 'not_found'
           ? `No skill with slug "${slug}" exists.`
-          : `Skill "${slug}" exists but is not assigned to you and is not referenced by any skill you have.`,
+          : `Skill "${slug}" exists but is not assigned to you. Ask your owner to assign it.`,
         code: outcome.reason === 'not_found' ? 'SKILL_NOT_FOUND' : 'SKILL_NOT_REACHABLE',
       });
     }
 
     const skill = outcome.skill;
-    // A skill reached by reference was not in the assigned list, so it carries
-    // no availability yet — resolve it so required_services still gate use.
     const availability = (await resolveAvailability(agent.agentId, [skill])).get(skill.id);
 
     // Resolve tokens here rather than in the skills MCP server: this is the one

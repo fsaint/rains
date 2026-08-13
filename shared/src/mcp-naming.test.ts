@@ -7,7 +7,6 @@ import {
   modelVisibleToolName,
   resolveToolTokens,
   resolveSkillTokens,
-  extractSkillReferences,
 } from './mcp-naming.js';
 
 describe('canonicalToolName', () => {
@@ -90,28 +89,6 @@ describe('resolveSkillTokens', () => {
   });
 });
 
-describe('extractSkillReferences', () => {
-  // The renderer and the reachability walk must agree on what counts as a
-  // reference: anything the renderer turns into a fetch instruction has to be
-  // reachable, or the agent is told to open something it cannot open.
-  it('returns the slugs the renderer would resolve', () => {
-    expect(extractSkillReferences('see {{skill:a-one}} then {{skill:b-two}}'))
-      .toEqual(['a-one', 'b-two']);
-  });
-
-  it('de-duplicates repeats', () => {
-    expect(extractSkillReferences('{{skill:a}} {{skill:a}}')).toEqual(['a']);
-  });
-
-  it('ignores what the renderer ignores', () => {
-    expect(extractSkillReferences('{{skill:}} {{ skill:x }} {{skill:Bad_Slug}} {{tool:gmail_search}}'))
-      .toEqual([]);
-  });
-
-  it('returns nothing for empty input', () => {
-    expect(extractSkillReferences('')).toEqual([]);
-  });
-});
 
 describe('resolveToolTokens', () => {
   it('resolves a token per runtime', () => {

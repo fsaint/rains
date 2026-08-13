@@ -120,9 +120,9 @@ export function resolveToolTokens(
  * the skills routes); anything else is an authoring mistake and is left
  * verbatim rather than rendered into an instruction that cannot work.
  *
- * Referencing also grants access: whatever this renders as a fetch instruction
- * must be reachable, which is why `extractSkillReferences` below shares this
- * exact pattern instead of re-deriving it.
+ * A reference is a pointer, not a grant: rendering one does not make the target
+ * reachable. An agent can only open skills it was actually assigned, so a
+ * reference to something unassigned comes back as "not assigned to you".
  */
 const SKILL_TOKEN_PATTERN = /\{\{skill:([a-z0-9-]+)\}\}/g;
 
@@ -146,18 +146,3 @@ export function resolveSkillTokens(
   );
 }
 
-/**
- * The slugs `resolveSkillTokens` would turn into fetch instructions, de-duped.
- *
- * This is the edge set of the reference graph. There is no stored list of
- * relationships — the graph is derived from bodies at request time — so this
- * and the renderer must stay in lockstep.
- */
-export function extractSkillReferences(text: string): string[] {
-  if (!text) return [];
-  const found = new Set<string>();
-  for (const match of text.matchAll(SKILL_TOKEN_PATTERN)) {
-    found.add(match[1]);
-  }
-  return [...found];
-}

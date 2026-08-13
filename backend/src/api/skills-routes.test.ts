@@ -382,9 +382,7 @@ describe('GET /api/agent-skills/:slug', () => {
     expect(res.statusCode).toBe(404);
   });
 
-  it('reaches a skill referenced by an assigned one, and renders the reference', async () => {
-    // A reference grants access: deep-research is not assigned, but the
-    // assigned skill's body points at it.
+  it('refuses a referenced-but-unassigned skill — a reference is a pointer, not a grant', async () => {
     routeDb([
       [/FROM deployed_agents da/, rows([{ agent_id: 'agent-1', user_id: 'user-1' }])],
       [/JOIN agent_skills ask/, rows([skillRow({ body: 'first see {{skill:deep-research}}' })])],
@@ -393,17 +391,16 @@ describe('GET /api/agent-skills/:slug', () => {
         skillRow({ id: 'sk-2', slug: 'deep-research', name: 'Deep Research', body: 'dig deep' }),
       ])],
     ]);
-    mockResolveAvailability.mockResolvedValue(
-      new Map([['sk-2', { available: true, missingServices: [] }]])
-    );
+    mockResolveAvailability.mockResolvedValue(new Map());
 
     const res = await app.inject({
       method: 'GET', url: '/api/agent-skills/deep-research',
       headers: { 'x-reins-agent-secret': 'tok' },
     });
 
-    expect(res.statusCode).toBe(200);
-    expect(res.json().data.slug).toBe('deep-research');
+    expect(res.statusCode).toBe(404);
+    expect(res.json().code).toBe('SKILL_NOT_REACHABLE');
+    expect(res.json().error).toContain('not assigned');
   });
 
   it('renders {{skill:...}} into an instruction naming the fetch tool', async () => {
