@@ -1,6 +1,6 @@
 ---
 name: helm-knowledge
-description: Use when asked about Reins platform best practices, agent configuration, how to submit feedback or bug reports, or how to extend agent capabilities with MCP servers. Also use when a user asks "how do I..." about anything related to Reins.
+description: Use when asked about Reins platform best practices, agent configuration, or how to extend agent capabilities with MCP servers. Also use when a user asks "how do I..." about anything related to Reins.
 ---
 
 # Reins Platform Knowledge
@@ -8,59 +8,6 @@ description: Use when asked about Reins platform best practices, agent configura
 Reins is the trust layer for AI agents. It acts as an MCP-native proxy between your agent and external services (Gmail, Google Drive, GitHub, Linear, browser, and more), enforcing permission policies, routing tool approvals to humans, and managing credentials securely.
 
 Your agent runs inside a Reins-managed container. The Reins dashboard (accessible to your owner) controls what you can do, which services you can access, and who can approve your tool calls.
-
----
-
-## Submitting Feedback, Bug Reports & Feature Requests
-
-You have a built-in tool for this: `reins_submit_feedback`. Use it proactively when you notice something broken, confusing, or worth improving — you don't need to wait for a user to ask.
-
-**Tool parameters:**
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `type` | `bug` \| `feature_request` \| `general_feedback` | yes | Kind of report |
-| `priority` | `low` \| `medium` \| `high` | yes | How urgent |
-| `title` | string | yes | Short summary (one line) |
-| `description` | string | yes | Full explanation |
-| `steps_to_reproduce` | string | no | Step-by-step reproduction (bugs only) |
-
-For `bug` reports, Reins automatically captures the last 400 lines of your container logs and attaches them to the ticket. You do not need to include log content yourself.
-
-**Examples:**
-
-Bug report:
-```json
-{
-  "type": "bug",
-  "priority": "high",
-  "title": "Browser fails to navigate to HTTPS sites",
-  "description": "Attempting to navigate to any HTTPS URL results in a connection refused error. HTTP sites work fine.",
-  "steps_to_reproduce": "1. Call browser_navigate with an HTTPS URL\n2. Observe connection refused error\n3. Retry with HTTP — works correctly"
-}
-```
-
-Feature request:
-```json
-{
-  "type": "feature_request",
-  "priority": "medium",
-  "title": "Add Slack integration as an MCP server",
-  "description": "It would be useful to send messages and read channels via Slack. Currently there is no Slack server in the registry."
-}
-```
-
-General feedback:
-```json
-{
-  "type": "general_feedback",
-  "priority": "low",
-  "title": "Approval notifications could include more context",
-  "description": "When I request approval for a Gmail send, the notification to the user does not show the email subject or recipient. Adding that context would help users make faster decisions."
-}
-```
-
-The admin team receives an email notification for every submission.
 
 ---
 
@@ -95,7 +42,7 @@ Each server requires OAuth credentials set up by your owner in the Reins dashboa
 3. The agent is redeployed for the change to take effect
 4. The new server's tools appear automatically in your tool list
 
-Suggest specific MCP servers to your owner by submitting a feature request with `reins_submit_feedback`.
+If a capability you need is missing, tell your owner which MCP server would provide it — they add it from the dashboard.
 
 ### Permission model
 
@@ -160,7 +107,5 @@ When a connected service's credentials expire, tool calls to that service will f
 **When changes are requested:** Treat the feedback as the user's instruction, not as a rejection. Apply exactly what they asked for, keep everything else the same, and resubmit without further discussion — they are waiting on the corrected version, not on a question.
 
 **When credentials fail:** Do not retry in a loop. Explain that the service credentials need renewal and direct the user to re-authenticate in the dashboard.
-
-**Submitting feedback proactively:** If you notice something not working as expected — even if the user has not complained — use `reins_submit_feedback` to report it. This is how the platform improves.
 
 **Staying within scope:** If asked to do something your policy blocks, explain clearly rather than attempting workarounds. Transparency builds trust with your owner and users.

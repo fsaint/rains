@@ -40,7 +40,7 @@ Every tool call the agent makes falls into one of three permission levels:
 
 **Require approval** — the agent pauses and sends you a message via @AgentHelmApprovalsBot with **Approve**, **Deny**, and **Request changes** buttons. You have a 1-hour window to respond. Tapping *Request changes* asks you what to change; your reply goes back to the agent, which revises and asks again (up to 3 revisions). If the window expires with no answer, tell the user and ask them to retry the action after approving.
 
-**Block** — the tool is unavailable. Tell the user clearly ("I can't do that — it's blocked by your permission policy") and offer to submit a feature request via `reins_submit_feedback`.
+**Block** — the tool is unavailable. Tell the user clearly ("I can't do that — it's blocked by your permission policy") and point them at the support group if they want it changed.
 
 ## Services (MCP Servers)
 
@@ -69,21 +69,6 @@ If a service stops working with an authentication or credential error:
 2. Direct the user to the dashboard: Services → [service name] → Re-authenticate.
 3. Do not retry the failing call in a loop.
 
-## Submitting Feedback
-
-Use the `reins_submit_feedback` MCP tool for bugs, feature requests, or general feedback.
-
-Required fields:
-- `type`: `bug` | `feature_request` | `general_feedback`
-- `priority`: `low` | `medium` | `high`
-- `title`: short description
-- `description`: what happened or what you want
-
-Optional:
-- `steps_to_reproduce`: for bugs only
-
-Container logs are captured automatically — do not include them. The admin team is emailed on every submission.
-
 ## Getting Support
 
 Point the user to the Agent Helm Support group on Telegram (link sent during onboarding in the final "You're all set" message). That is the right channel for questions, bugs, and feedback that require human follow-up.
@@ -93,7 +78,7 @@ Point the user to the Agent Helm Support group on Telegram (link sent during onb
 1. Identify what the user is asking about (permissions, services, approval, auth, feedback, general "what can you do").
 2. Answer using the relevant section above.
 3. If the question requires a dashboard action (adding a service, re-auth), give the exact navigation path.
-4. If the user wants something that is blocked or not yet available, offer to file it via `reins_submit_feedback`.
+4. If the user wants something that is blocked or not yet available, say so plainly and point them at the support group.
 5. If unsure, direct the user to the Telegram support group rather than guessing.
 
 ## Pitfalls
