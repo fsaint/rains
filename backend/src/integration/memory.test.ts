@@ -856,4 +856,207 @@ describe('Memory API — end-to-end', () => {
       expect(res.json().error).toContain('agent');
     });
   });
+
+  // ── Regression: the memory work dropped by bfce9eb ───────────────────────────
+  //
+  // That commit rewrote routes.ts and silently reverted six commits' worth of
+  // memory features while their service functions, MCP handlers, frontend
+  // callers and docs all stayed in place. Each test here pins one of the
+  // behaviours something else already depends on.
+
+  describe('regressions from bfce9eb', () => {
+    /** Layer a case on top of the standard router without restating it. */
+    function withRouter(extra: (sql: string) => unknown | undefined) {
+      const base = makeDbRouter(passwordHash);
+      mockExecute.mockImplementation(async (input: any) => {
+        const sql = typeof input === 'string' ? input : input.sql;
+        const hit = extra(sql);
+        if (hit !== undefined) return hit;
+        return base(input);
+      });
+    }
+
+    /** Every SQL string the route issued, for asserting on query shape. */
+    const sqlCalls = () =>
+      mockExecute.mock.calls.map((c: any) => (typeof c[0] === 'string' ? c[0] : c[0]?.sql ?? ''));
+
+    describe('GET /api/memory/tags', () => {
+      // memory_list_tags (servers/src/memory/handlers.ts) and the dashboard's
+      // client.listTags both call this; it 404'd for both.
+      it('returns tags with counts, most used first', async () => {
+        withRouter((sql) =>
+          sql.includes('FROM memory_tags mt')
+            ? { rows: [{ tag: 'acme', count: 3 }, { tag: 'travel', count: 1 }], columns: [], rowsAffected: 2, lastInsertRowid: 0n }
+            : undefined
+        );
+
+        const res = await app.inject({
+          method: 'GET', url: '/api/memory/tags', headers: { cookie: sessionCookie },
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(res.json().data).toEqual([
+          { tag: 'acme', count: 3 },
+          { tag: 'travel', count: 1 },
+        ]);
+      });
+
+      it('requires auth', async () => {
+        const res = await app.inject({ method: 'GET', url: '/api/memory/tags' });
+        expect(res.statusCode).toBe(401);
+      });
+    });
+
+    describe('GET /api/memory/entries filters', () => {
+      // memory_list sets these three on the query string; the route parsed only
+      // q/type/parent_id, so they were accepted and silently ignored.
+      it('joins memory_tags when filtering by tag', async () => {
+        const res = await app.inject({
+          method: 'GET', url: '/api/memory/entries?tag=acme', headers: { cookie: sessionCookie },
+        });
+
+        expect(res.statusCode).toBe(200);
+        const listQuery = sqlCalls().find((s) => s.includes('JOIN memory_tags mt'));
+        expect(listQuery).toBeDefined();
+      });
+
+      it('applies `since` as an updated_at floor', async () => {
+        const res = await app.inject({
+          method: 'GET',
+          url: '/api/memory/entries?since=2026-01-01T00:00:00.000Z',
+          headers: { cookie: sessionCookie },
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(sqlCalls().some((s) => s.includes('e.updated_at >= ?'))).toBe(true);
+      });
+
+      it('honours `order`, defaulting to most recently updated', async () => {
+        await app.inject({
+          method: 'GET', url: '/api/memory/entries?order=title', headers: { cookie: sessionCookie },
+        });
+        expect(sqlCalls().some((s) => s.includes('ORDER BY e.title ASC'))).toBe(true);
+
+        mockExecute.mockClear();
+        await app.inject({
+          method: 'GET', url: '/api/memory/entries', headers: { cookie: sessionCookie },
+        });
+        expect(sqlCalls().some((s) => s.includes('ORDER BY e.updated_at DESC'))).toBe(true);
+      });
+
+      it('binds `type` rather than interpolating it', async () => {
+        await app.inject({
+          method: 'GET',
+          url: `/api/memory/entries?type=${encodeURIComponent("person' OR '1'='1")}`,
+          headers: { cookie: sessionCookie },
+        });
+
+        // The value must never appear inside the SQL text itself.
+        expect(sqlCalls().some((s) => s.includes("OR '1'='1"))).toBe(false);
+      });
+    });
+
+    describe('POST /api/memory/entries idempotency', () => {
+      // MEMORY_POLICY.md instructs agents to branch on `created`. The route did a
+      // raw INSERT and always returned 201, so `created` was a lie and repeated
+      // observations about one person accumulated duplicates.
+      it('returns 200 and the existing row when the title already exists', async () => {
+        withRouter((sql) =>
+          sql.includes('WHERE user_id = ? AND type = ? AND title = ?')
+            ? { rows: [entryRow], columns: [], rowsAffected: 1, lastInsertRowid: 0n }
+            : undefined
+        );
+
+        const res = await app.inject({
+          method: 'POST', url: '/api/memory/entries', headers: { cookie: sessionCookie },
+          payload: { title: 'Alice Smith', type: 'person', content: 'Met again today.' },
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(res.json().data.id).toBe(ENTRY_ID);
+        // The whole point: no second row for the same person.
+        expect(sqlCalls().some((s) => s.includes('INSERT INTO memory_entries'))).toBe(false);
+      });
+
+      it('still returns 201 and inserts when nothing matches', async () => {
+        const res = await app.inject({
+          method: 'POST', url: '/api/memory/entries', headers: { cookie: sessionCookie },
+          payload: { title: 'Brand New Person', type: 'person' },
+        });
+
+        expect(res.statusCode).toBe(201);
+        expect(sqlCalls().some((s) => s.includes('INSERT INTO memory_entries'))).toBe(true);
+      });
+
+      it('indexes tags from the content it just wrote', async () => {
+        await app.inject({
+          method: 'POST', url: '/api/memory/entries', headers: { cookie: sessionCookie },
+          payload: { title: 'Tagged Note', content: 'Lunch with the #acme team.' },
+        });
+
+        // Without this, memory_tags stays empty and GET /api/memory/tags — and
+        // ?tag= filtering — return nothing however correct their SQL is.
+        const insert = mockExecute.mock.calls
+          .map((c: any) => c[0])
+          .find((q: any) => typeof q?.sql === 'string' && q.sql.includes('INSERT INTO memory_tags'));
+        expect(insert).toBeDefined();
+        expect(insert.args).toContain('acme');
+      });
+    });
+
+    describe('PUT /api/memory/entries/:id', () => {
+      it('re-indexes tags when the content changes', async () => {
+        await app.inject({
+          method: 'PUT', url: `/api/memory/entries/${ENTRY_ID}`, headers: { cookie: sessionCookie },
+          payload: { content: 'Now about #travel instead.' },
+        });
+
+        expect(sqlCalls().some((s) => s.includes('DELETE FROM memory_tags'))).toBe(true);
+        const insert = mockExecute.mock.calls
+          .map((c: any) => c[0])
+          .find((q: any) => typeof q?.sql === 'string' && q.sql.includes('INSERT INTO memory_tags'));
+        expect(insert.args).toContain('travel');
+      });
+    });
+
+    describe('GET /api/memory/entries/:id enrichment', () => {
+      // frontend/src/api/client.ts types these as required and MemoryEntry.tsx
+      // reads them; `entry.tags.map` at :395 throws outright when tags is absent.
+      it('returns tags, resolvedLinks, resolvedHeadings and transclusions', async () => {
+        const res = await app.inject({
+          method: 'GET', url: `/api/memory/entries/${ENTRY_ID}`, headers: { cookie: sessionCookie },
+        });
+
+        expect(res.statusCode).toBe(200);
+        const { data } = res.json();
+        expect(Array.isArray(data.tags)).toBe(true);
+        expect(data.resolvedLinks).toBeDefined();
+        expect(data.resolvedHeadings).toBeDefined();
+        expect(data.transclusions).toBeDefined();
+      });
+
+      it('resolves a [[wikilink]] in the content to an entry id', async () => {
+        withRouter((sql) => {
+          if (sql.startsWith('SELECT id, user_id, type, title, content') && sql.includes('WHERE id = ?')) {
+            return {
+              rows: [{ ...entryRow, content: 'Reports to [[Bob Jones#Role]].' }],
+              columns: [], rowsAffected: 1, lastInsertRowid: 0n,
+            };
+          }
+          if (sql.includes('AND title IN (')) {
+            return { rows: [{ id: 'bob-id', title: 'Bob Jones' }], columns: [], rowsAffected: 1, lastInsertRowid: 0n };
+          }
+          return undefined;
+        });
+
+        const res = await app.inject({
+          method: 'GET', url: `/api/memory/entries/${ENTRY_ID}`, headers: { cookie: sessionCookie },
+        });
+
+        const { data } = res.json();
+        expect(data.resolvedLinks['Bob Jones']).toBe('bob-id');
+        expect(data.resolvedHeadings['Bob Jones']).toBe('Role');
+      });
+    });
+  });
 });
