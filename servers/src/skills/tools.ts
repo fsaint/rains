@@ -22,7 +22,7 @@ export const skillsListTool: ToolDefinition = {
     "Returns each skill's slug, name, a one-line \"when to use this\" description, the services it requires, " +
     'and whether those services are currently connected to you. ' +
     'Then call skills_get with the slug to read the full instructions. ' +
-    'Skills are edited by your owner in the Reins dashboard and can change at any time — always re-read a ' +
+    'Skills are edited by your owner in the Helm dashboard and can change at any time — always re-read a ' +
     'skill rather than relying on memory of it from an earlier session.',
   inputSchema: {
     type: 'object',
@@ -44,7 +44,7 @@ export const skillsGetTool: ToolDefinition = {
     'Fetch the full Markdown instructions for one skill, by the slug returned from skills_list. ' +
     'Read the entire body and follow it — it reflects how your owner wants this task done. ' +
     'If the response includes unavailable_services, you cannot fully execute this skill: tell the user ' +
-    'exactly which service to connect in the Reins dashboard (Agents -> your agent -> Services) and do ' +
+    'exactly which service to connect in the Helm dashboard (Agents -> your agent -> Services) and do ' +
     'not improvise a workaround.',
   inputSchema: {
     type: 'object',

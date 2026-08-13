@@ -103,7 +103,7 @@ export const getAttachmentTool: ToolDefinition = {
     'Download an email attachment as base64url-encoded data. Use gmail_get_message first to get attachment IDs.\n' +
     'DO NOT call this to forward or re-send a file. To attach a file from an existing email, ' +
     'pass {"source":"gmail","messageId":"…","attachmentId":"…"} in the attachments parameter of ' +
-    'gmail_create_draft — Reins fetches the bytes server-side, so they never pass through your ' +
+    'gmail_create_draft — Helm fetches the bytes server-side, so they never pass through your ' +
     'context. Downloading and re-encoding a file wastes your context and corrupts binary data.',
   inputSchema: {
     type: 'object',

@@ -4,7 +4,7 @@ import { skillsTools } from './tools.js';
 export const definition: ServiceDefinitionWithTools = {
   type: 'skills',
   name: 'Skills',
-  description: 'Reusable task playbooks authored in the Reins dashboard — listed and loaded on demand',
+  description: 'Reusable task playbooks authored in the Helm dashboard — listed and loaded on demand',
   icon: 'BookOpen',
   category: 'productivity',
   toolPrefix: 'skills_',

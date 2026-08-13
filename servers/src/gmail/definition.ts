@@ -26,6 +26,9 @@ export const definition: ServiceDefinitionWithTools = {
   },
   permissionDescriptions: {
     read: 'List, read, and search emails',
-    full: 'Read emails freely. Creating drafts and sending require your approval.',
+    // Every tool in the write list is gated, not just drafting and sending —
+    // labelling, archiving, and marking read are too. Batch with messageIds so
+    // one approval covers a whole set instead of one per message.
+    full: 'Read emails freely. Drafting, sending, labelling, archiving, and marking read require your approval. Sending directly and deleting are blocked.',
   },
 };
