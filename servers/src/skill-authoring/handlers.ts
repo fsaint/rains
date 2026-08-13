@@ -41,13 +41,24 @@ async function authoringFetch(
   return fetch(`${getApiBase()}${path}`, { ...options, headers });
 }
 
-/** Turn a non-2xx into a ToolResult the model can act on. */
+/**
+ * Turn a non-2xx into a ToolResult the model can act on.
+ *
+ * Three envelope shapes reach here, and the order below is what tells them apart:
+ *   1. the app's own errors, `{error: {code, message}}` — the message is the point;
+ *   2. Fastify's defaults, `{statusCode, error: "Internal Server Error", message}` —
+ *      where `error` is only the status text and `message` carries the diagnosis;
+ *   3. terse routes, `{error: "Unauthorized"}` — a bare string and all there is.
+ *
+ * Reading `error` before `message` would collapse every case-2 failure to
+ * "Internal Server Error" and throw the actual cause away.
+ */
 async function toError(res: Response, fallback: string): Promise<ToolResult> {
-  const body = await res.json().catch(() => ({})) as { error?: unknown };
+  const body = await res.json().catch(() => ({})) as { error?: unknown; message?: unknown };
   const detail =
-    typeof body.error === 'string'
-      ? body.error
-      : (body.error as { message?: string } | undefined)?.message;
+    (body.error as { message?: string } | undefined)?.message ??
+    (typeof body.message === 'string' ? body.message : undefined) ??
+    (typeof body.error === 'string' ? body.error : undefined);
   return { success: false, error: detail ?? `${fallback} (HTTP ${res.status})` };
 }
 
@@ -75,7 +86,9 @@ export async function handleListAuthoredSkills(
   context: ServerContext
 ): Promise<ToolResult> {
   try {
-    const res = await authoringFetch(context, '/api/skills');
+    // /api/skill-library, not the dashboard's /api/skills — the latter resolves
+    // its caller from a session, which a gateway token does not have.
+    const res = await authoringFetch(context, '/api/skill-library');
     if (!res.ok) return toError(res, 'Could not list skills');
 
     const json = await res.json() as { data: SkillSummary[] };

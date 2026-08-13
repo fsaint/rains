@@ -56,12 +56,76 @@ describe('handleListAuthoredSkills', () => {
     const result = await handleListAuthoredSkills({}, mockContext);
 
     const { url, init } = lastCall();
-    expect(url).toBe('https://test.helm.mom/api/skills');
+    // Not /api/skills: that route resolves its caller from a session, which a
+    // gateway token does not have, so it threw a 500 on every call. Regression
+    // test — this assertion previously pinned the broken URL.
+    expect(url).toBe('https://test.helm.mom/api/skill-library');
     expect((init.headers as Record<string, string>)['x-reins-agent-secret']).toBe('test-gateway-token');
 
     const skills = (result.data as any).skills;
     expect(skills[0].read_only).toBeUndefined();
     expect(skills[1].read_only).toBe(true);
+  });
+
+  it('surfaces a 403 when the skill-authoring service is not enabled', async () => {
+    mockFetch.mockResolvedValueOnce(
+      makeErrorResponse(403, {
+        error: { code: 'SERVICE_NOT_ENABLED', message: 'The skill-authoring service is not enabled on this agent.' },
+      })
+    );
+
+    const result = await handleListAuthoredSkills({}, mockContext);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('not enabled');
+  });
+});
+
+/**
+ * The reason the /api/skills bug was opaque: Fastify's default envelope puts the
+ * generic status text in `error` and the real cause in `message`, so reading
+ * `error` first reported "Internal Server Error" for every unexpected failure.
+ */
+describe('error surfacing', () => {
+  it('prefers the app\'s own {error:{message}} over anything else', async () => {
+    mockFetch.mockResolvedValueOnce(
+      makeErrorResponse(409, { error: { code: 'DUPLICATE_SLUG', message: 'A skill with the slug "x" already exists' } })
+    );
+
+    const result = await handleListAuthoredSkills({}, mockContext);
+
+    expect(result.error).toBe('A skill with the slug "x" already exists');
+  });
+
+  it('reports the Fastify message, not the generic "Internal Server Error"', async () => {
+    mockFetch.mockResolvedValueOnce(
+      makeErrorResponse(500, {
+        statusCode: 500,
+        error: 'Internal Server Error',
+        message: "Cannot read properties of undefined (reading 'userId')",
+      })
+    );
+
+    const result = await handleListAuthoredSkills({}, mockContext);
+
+    expect(result.error).toBe("Cannot read properties of undefined (reading 'userId')");
+    expect(result.error).not.toBe('Internal Server Error');
+  });
+
+  it('falls back to a bare string error when that is all there is', async () => {
+    mockFetch.mockResolvedValueOnce(makeErrorResponse(401, { error: 'Unauthorized' }));
+
+    const result = await handleListAuthoredSkills({}, mockContext);
+
+    expect(result.error).toBe('Unauthorized');
+  });
+
+  it('falls back to the caller\'s phrasing plus the status when the body is empty', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 502, json: async () => ({}), text: async () => '' });
+
+    const result = await handleListAuthoredSkills({}, mockContext);
+
+    expect(result.error).toBe('Could not list skills (HTTP 502)');
   });
 });
 

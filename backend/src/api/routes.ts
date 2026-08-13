@@ -43,6 +43,7 @@ import {
   resetInstanceToolPermission,
   getDrivePathConfig,
   setDrivePathConfig,
+  isServiceEnabledForAgent,
   type ToolPermission,
   type PermissionLevel,
   type DrivePathConfig,
@@ -5890,6 +5891,57 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // Reaching these routes at all requires the skill-authoring service to be
   // enabled on that agent. That enablement is the whole privilege boundary;
   // see the note in servers/src/skill-authoring/definition.ts.
+  //
+  // The boundary is enforced *here*, not only in the MCP endpoint: every deployed
+  // agent has its own gateway token and REINS_API_URL in its environment, so an
+  // agent that is merely denied the tools could otherwise call these routes
+  // directly. Skill bodies are instructions other agents follow.
+
+  /**
+   * 403 rather than 404: the caller is a valid agent of a real owner, it simply
+   * is not an architect. Nothing about another user is revealed by saying so.
+   */
+  async function requireSkillAuthoring(agentId: string, reply: any): Promise<boolean> {
+    if (await isServiceEnabledForAgent(agentId, 'skill-authoring')) return true;
+    reply.code(403).send({
+      error: {
+        code: 'SERVICE_NOT_ENABLED',
+        message: 'The skill-authoring service is not enabled on this agent.',
+      },
+    });
+    return false;
+  }
+
+  /**
+   * The owner's whole skill library, for an architect agent.
+   *
+   * Distinct from GET /api/agent-skills, which returns only what is assigned to
+   * the calling agent — authoring needs the ids of skills it has not been given,
+   * including ones assigned to no agent at all.
+   *
+   * Bodies are omitted, matching /api/agent-skills: the list is for picking an id,
+   * and one body at a time is pulled via /api/agent-skills/:slug. The
+   * assignedAgentIds aggregate that the dashboard's /api/skills computes is left
+   * out too — an agent has no use for it, and it would name the owner's other agents.
+   */
+  app.get('/api/skill-library', async (request, reply) => {
+    const agent = await resolveAgentFromGatewayToken(request);
+    if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
+    if (!(await requireSkillAuthoring(agent.agentId, reply))) return;
+
+    const result = await client.execute({
+      sql: `SELECT * FROM skills WHERE user_id = ? OR user_id IS NULL
+            ORDER BY user_id NULLS FIRST, name`,
+      args: [agent.userId],
+    });
+
+    return {
+      data: result.rows.map((row) => {
+        const { body: _body, ...rest } = mapSkillRow(row);
+        return rest;
+      }),
+    };
+  });
 
   /** A skill this owner may write: their own only, never a system skill. */
   async function getWritableSkill(id: string, userId: string) {
@@ -5903,6 +5955,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.post('/api/agent-skills', async (request, reply) => {
     const agent = await resolveAgentFromGatewayToken(request);
     if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
+    if (!(await requireSkillAuthoring(agent.agentId, reply))) return;
 
     const body = request.body as {
       name?: string; description?: string; body?: string;
@@ -5950,6 +6003,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.put<{ Params: { id: string } }>('/api/agent-skills/id/:id', async (request, reply) => {
     const agent = await resolveAgentFromGatewayToken(request);
     if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
+    if (!(await requireSkillAuthoring(agent.agentId, reply))) return;
 
     const existing = await getWritableSkill(request.params.id, agent.userId);
     if (!existing) return reply.code(404).send(skillNotFound);
@@ -5998,6 +6052,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.post<{ Params: { agentId: string } }>('/api/agent-skills/assign/:agentId', async (request, reply) => {
     const agent = await resolveAgentFromGatewayToken(request);
     if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
+    if (!(await requireSkillAuthoring(agent.agentId, reply))) return;
 
     const target = request.params.agentId;
     // 404 rather than 403 — an agent id is not an authorization boundary.

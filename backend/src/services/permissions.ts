@@ -532,6 +532,35 @@ export async function getEffectivePermissions(
 }
 
 /**
+ * Is `serviceType` enabled on this agent?
+ *
+ * The single definition of the enablement boundary. Both the MCP endpoint and the
+ * gateway-token HTTP routes answer it through here — if they ever drift, a tool
+ * blocked over MCP becomes reachable over plain HTTP with the agent's own token.
+ *
+ * An enabled instance row is the modern answer; agents predating instances fall
+ * back to the legacy per-service access row.
+ */
+export async function isServiceEnabledForAgent(
+  agentId: string,
+  serviceType: string
+): Promise<boolean> {
+  const instances = await db
+    .select()
+    .from(agentServiceInstances)
+    .where(and(
+      eq(agentServiceInstances.agentId, agentId),
+      eq(agentServiceInstances.serviceType, serviceType),
+      eq(agentServiceInstances.enabled, true)
+    ));
+
+  if (instances.length > 0) return true;
+
+  const { enabled } = await getEffectivePermissions(agentId, serviceType);
+  return enabled;
+}
+
+/**
  * Check if agent has access to a specific tool
  */
 export async function canAccessTool(
