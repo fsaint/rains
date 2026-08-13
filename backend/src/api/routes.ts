@@ -78,7 +78,14 @@ import { createUpload, getUpload, MAX_UPLOAD_BYTES } from '../services/agent-upl
 import { isCodexTokenExpired } from '../services/token-monitor.js';
 import { forwardToOpenclaw, handleMyChatMember } from '../services/agent-bot-relay.js';
 import { parseWikilinks, updateLinkIndex, ensureMemoryRoot, getDreamManifest, setEntryParent } from '../services/memory.js';
-import { parseRequiredServices, resolveAvailability, resolveReachableSkill } from '../services/skills.js';
+import {
+  parseRequiredServices,
+  resolveAvailability,
+  resolveReachableSkill,
+  buildSetupNotice,
+  compareSkillVersion,
+  loadSkillVersionManifest,
+} from '../services/skills.js';
 import * as provider from '../providers/index.js';
 import Stripe from 'stripe';
 import {
@@ -5541,6 +5548,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       description: row.description as string,
       body: row.body as string,
       requiredServices: parseRequiredServices(row.required_services),
+      version: (row.version as string | null) ?? null,
       isSystem: row.user_id === null,
       autoAssign: Boolean(row.auto_assign),
       enabled: Boolean(row.enabled),
@@ -5567,7 +5575,11 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     description?: unknown;
     body?: unknown;
     requiredServices?: unknown;
+    version?: unknown;
   }): string | null {
+    if (body.version !== undefined && body.version !== null && typeof body.version !== 'string') {
+      return 'version must be a string';
+    }
     if (typeof body.name !== 'string' || body.name.trim() === '') return 'name is required';
     if (typeof body.description !== 'string') return 'description is required';
     if (typeof body.body !== 'string' || body.body.trim() === '') return 'body is required';
@@ -5634,6 +5646,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const body = request.body as {
       name?: string; description?: string; body?: string;
       requiredServices?: string[]; slug?: string; isSystem?: boolean;
+      version?: string;
     };
 
     // Only admins may author platform-wide skills.
@@ -5654,10 +5667,11 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     try {
       await client.execute({
-        sql: `INSERT INTO skills (id, user_id, slug, name, description, body, required_services, created_at, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, now(), now())`,
+        sql: `INSERT INTO skills (id, user_id, slug, name, description, body, required_services, version, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, now(), now())`,
         args: [id, ownerId, slug, body.name!.trim(), body.description!, body.body!,
-               JSON.stringify(body.requiredServices ?? [])],
+               JSON.stringify(body.requiredServices ?? []),
+               (body.version as string | undefined) ?? null],
       });
     } catch (err) {
       // 23505 = unique_violation. Anything else is a real failure and must not
@@ -5695,6 +5709,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const body = request.body as {
       name?: string; description?: string; body?: string;
       requiredServices?: string[]; enabled?: boolean; autoAssign?: boolean;
+      version?: string;
     };
 
     const existing = await getReadableSkill(id, userId);
@@ -5709,13 +5724,16 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     await client.execute({
       sql: `UPDATE skills SET name = ?, description = ?, body = ?, required_services = ?,
-                  enabled = ?, auto_assign = ?, updated_at = now()
+                  enabled = ?, auto_assign = ?, version = ?, updated_at = now()
             WHERE id = ?`,
       args: [
         body.name!.trim(), body.description!, body.body!,
         JSON.stringify(body.requiredServices ?? parseRequiredServices(existing.required_services)),
         body.enabled ?? Boolean(existing.enabled),
         body.autoAssign ?? Boolean(existing.auto_assign),
+        // Omitting version keeps the stamped one — a dashboard edit must not
+        // silently un-version a skill the installer placed.
+        body.version ?? ((existing.version as string | null) ?? null),
         id,
       ],
     });
@@ -5753,13 +5771,16 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // --- Assignment (dashboard, agent-ownership-guarded) ----------------------
 
   /** 404 rather than 403 — an agent id is not an authorization boundary. */
-  async function ownsAgent(request: any, agentId: string): Promise<boolean> {
-    const userId = getUserId(request);
+  async function userOwnsAgent(userId: string, agentId: string): Promise<boolean> {
     const result = await client.execute({
       sql: `SELECT 1 FROM agents WHERE id = ? AND user_id = ? LIMIT 1`,
       args: [agentId, userId],
     });
     return result.rows.length > 0;
+  }
+
+  async function ownsAgent(request: any, agentId: string): Promise<boolean> {
+    return userOwnsAgent(getUserId(request), agentId);
   }
 
   const agentNotFound = { error: { code: 'NOT_FOUND', message: 'Agent not found' } };
@@ -5858,6 +5879,181 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
   );
 
+  // --- Architect audience (gateway token, skill-authoring service) -----------
+  //
+  // Write counterparts to /api/agent-skills, for an agent running the
+  // skill-authoring service. Authenticated as the *agent*, then scoped to its
+  // owner: an agent may touch its owner's skills and no one else's, and never a
+  // system skill (user_id IS NULL) — no agent can satisfy requireAdmin, so
+  // platform skills stay dashboard-only.
+  //
+  // Reaching these routes at all requires the skill-authoring service to be
+  // enabled on that agent. That enablement is the whole privilege boundary;
+  // see the note in servers/src/skill-authoring/definition.ts.
+
+  /** A skill this owner may write: their own only, never a system skill. */
+  async function getWritableSkill(id: string, userId: string) {
+    const result = await client.execute({
+      sql: `SELECT * FROM skills WHERE id = ? AND user_id = ? LIMIT 1`,
+      args: [id, userId],
+    });
+    return result.rows[0] ?? null;
+  }
+
+  app.post('/api/agent-skills', async (request, reply) => {
+    const agent = await resolveAgentFromGatewayToken(request);
+    if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const body = request.body as {
+      name?: string; description?: string; body?: string;
+      requiredServices?: string[]; slug?: string; version?: string;
+    };
+
+    const invalid = validateSkillPayload(body);
+    if (invalid) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: invalid } });
+    }
+
+    const slug = slugify(body.slug || body.name!);
+    if (!slug) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Could not derive a slug from name' } });
+    }
+
+    const id = nanoid();
+    try {
+      await client.execute({
+        sql: `INSERT INTO skills (id, user_id, slug, name, description, body, required_services, version, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, now(), now())`,
+        args: [id, agent.userId, slug, body.name!.trim(), body.description!, body.body!,
+               JSON.stringify(body.requiredServices ?? []), body.version ?? null],
+      });
+    } catch (err) {
+      if ((err as { code?: string })?.code === '23505') {
+        return reply.code(409).send({
+          error: { code: 'DUPLICATE_SLUG', message: `A skill with the slug "${slug}" already exists` },
+        });
+      }
+      throw err;
+    }
+
+    // Same trail as a dashboard edit: a skill body is an instruction another
+    // agent will follow, and this one was written by an agent.
+    await auditLogger.log({
+      eventType: 'policy_change',
+      result: 'success',
+      metadata: { kind: 'skill', action: 'created', skillId: id, slug, changedBy: agent.userId, byAgent: agent.agentId },
+    });
+
+    return reply.code(201).send({ data: { id, slug } });
+  });
+
+  app.put<{ Params: { id: string } }>('/api/agent-skills/id/:id', async (request, reply) => {
+    const agent = await resolveAgentFromGatewayToken(request);
+    if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const existing = await getWritableSkill(request.params.id, agent.userId);
+    if (!existing) return reply.code(404).send(skillNotFound);
+
+    const body = request.body as {
+      name?: string; description?: string; body?: string;
+      requiredServices?: string[]; version?: string;
+    };
+    const invalid = validateSkillPayload(body);
+    if (invalid) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: invalid } });
+    }
+
+    await client.execute({
+      sql: `UPDATE skills SET name = ?, description = ?, body = ?, required_services = ?,
+                  version = ?, updated_at = now()
+            WHERE id = ?`,
+      args: [
+        body.name!.trim(), body.description!, body.body!,
+        JSON.stringify(body.requiredServices ?? parseRequiredServices(existing.required_services)),
+        body.version ?? ((existing.version as string | null) ?? null),
+        request.params.id,
+      ],
+    });
+
+    await auditLogger.log({
+      eventType: 'policy_change',
+      result: 'success',
+      metadata: {
+        kind: 'skill', action: 'updated', skillId: request.params.id,
+        slug: existing.slug, changedBy: agent.userId, byAgent: agent.agentId,
+      },
+    });
+
+    return { data: { id: request.params.id, slug: existing.slug as string } };
+  });
+
+  /**
+   * Attach or detach one skill on one of the owner's agents.
+   *
+   * Deliberately not modelled on PUT /api/agents/:id/skills, which replaces the
+   * whole set: an agent submitting only the skill it just wrote would silently
+   * unassign every other skill on the target. This reads, merges, and writes one
+   * row.
+   */
+  app.post<{ Params: { agentId: string } }>('/api/agent-skills/assign/:agentId', async (request, reply) => {
+    const agent = await resolveAgentFromGatewayToken(request);
+    if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const target = request.params.agentId;
+    // 404 rather than 403 — an agent id is not an authorization boundary.
+    if (!(await userOwnsAgent(agent.userId, target))) return reply.code(404).send(agentNotFound);
+
+    const body = request.body as { skillId?: unknown; attached?: unknown };
+    if (typeof body.skillId !== 'string') {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'skillId is required' } });
+    }
+    const attach = body.attached !== false;
+
+    const skill = await getWritableSkill(body.skillId, agent.userId);
+    if (!skill) return reply.code(404).send(skillNotFound);
+
+    if (!attach) {
+      await client.execute({
+        sql: `DELETE FROM agent_skills WHERE agent_id = ? AND skill_id = ?`,
+        args: [target, body.skillId],
+      });
+      return { data: { agentId: target, skillId: body.skillId, attached: false } };
+    }
+
+    // Dependencies must be satisfied before attaching, same rule the dashboard
+    // enforces — a skill needing a service the target lacks is refused here
+    // rather than surfacing as a broken skill later.
+    const requiredServices = parseRequiredServices(skill.required_services);
+    const availability = await resolveAvailability(target, [{ id: skill.id as string, requiredServices }]);
+    const missing = availability.get(skill.id as string)?.missingServices ?? [];
+    if (missing.length > 0) {
+      return reply.code(409).send({
+        error: {
+          code: 'MISSING_SERVICES',
+          message: `"${skill.name}" needs ${missing.join(', ')}, not connected to that agent`,
+          details: [{ skillId: skill.id, missingServices: missing }],
+        },
+      });
+    }
+
+    await client.execute({
+      sql: `INSERT INTO agent_skills (agent_id, skill_id, created_at) VALUES (?, ?, now())
+            ON CONFLICT DO NOTHING`,
+      args: [target, body.skillId],
+    });
+
+    await auditLogger.log({
+      eventType: 'policy_change',
+      result: 'success',
+      metadata: {
+        kind: 'skill', action: 'assigned', skillId: body.skillId, slug: skill.slug,
+        targetAgentId: target, changedBy: agent.userId, byAgent: agent.agentId,
+      },
+    });
+
+    return { data: { agentId: target, skillId: body.skillId, attached: true } };
+  });
+
   // --- Agent audience (gateway token only) ----------------------------------
 
   /**
@@ -5895,17 +6091,24 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     let skills = await listAgentSkills(agent.agentId);
     if (!includeUnavailable) skills = skills.filter((s) => s.available);
 
+    const manifest = await loadSkillVersionManifest();
+    // Computed over the unfiltered set: hiding unavailable skills must not hide
+    // that setup is incomplete.
+    const setupNotice = buildSetupNotice(skills, manifest);
+
     // Bodies are omitted here on purpose — the list is advisory and the agent
     // pulls one body at a time via /:slug.
     return {
       data: skills.map(({ body: _body, ...rest }) => ({
         ...rest,
+        ...compareSkillVersion(rest.slug, rest.version, manifest),
         description: resolveSkillTokens(
           resolveToolTokens(rest.description ?? '', agent.runtime, agent.serverName),
           agent.runtime,
           agent.serverName
         ),
       })),
+      ...(setupNotice ? { setupNotice } : {}),
     };
   });
 

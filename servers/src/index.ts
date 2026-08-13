@@ -25,6 +25,7 @@ export { ZendeskServer, zendeskTools } from './zendesk/index.js';
 export { DevSandboxServer, devSandboxTools } from './dev-sandbox/index.js';
 export { MemoryServer, memoryTools } from './memory/index.js';
 export { SkillsServer, skillsTools } from './skills/index.js';
+export { SkillAuthoringServer, skillAuthoringTools } from './skill-authoring/index.js';
 export { PipedriveServer, pipedriveTools } from './pipedrive/index.js';
 
 export { BaseServer } from './common/base-server.js';

@@ -245,6 +245,8 @@ export const skills = pgTable('skills', {
   requiredServices: text('required_services').notNull().default('[]'), // JSON string[]
   autoAssign: boolean('auto_assign').notNull().default(false), // system rows only
   enabled: boolean('enabled').notNull().default(true),
+  version: text('version'), // stamped by the installer; null = unversioned
+
   createdAt: text('created_at').notNull().default(sql`now()`),
   updatedAt: text('updated_at').notNull().default(sql`now()`),
 });

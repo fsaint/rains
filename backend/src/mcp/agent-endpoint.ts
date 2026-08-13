@@ -38,7 +38,11 @@ import {
 
 import { checkSpendCap } from '../services/spend.js';
 import { checkUsageGate } from '../services/billing.js';
-import { parseRequiredServices } from '../services/skills.js';
+import {
+  parseRequiredServices,
+  buildSetupNotice,
+  loadSkillVersionManifest,
+} from '../services/skills.js';
 
 /**
  * Read an agent's runtime off a deployed_agents row.
@@ -502,17 +506,27 @@ export async function buildSkillCatalog(
   serverName: string = MCP_SERVER_NAME
 ): Promise<string | null> {
   const result = await client.execute({
-    sql: `SELECT s.slug, s.name, s.description, s.required_services FROM skills s
+    sql: `SELECT s.slug, s.name, s.description, s.required_services, s.version FROM skills s
           JOIN agent_skills ask ON ask.skill_id = s.id
           WHERE ask.agent_id = ? AND s.enabled = true
           UNION
-          SELECT s.slug, s.name, s.description, s.required_services FROM skills s
+          SELECT s.slug, s.name, s.description, s.required_services, s.version FROM skills s
           WHERE s.user_id IS NULL AND s.auto_assign = true AND s.enabled = true
           ORDER BY name`,
     args: [agentId],
   });
 
-  if (result.rows.length === 0) return null;
+  // Setup state is reported even with zero skills: a fresh agent has no skill
+  // that could tell it setup exists, because the boot skill is what is missing.
+  const setupNotice = buildSetupNotice(
+    result.rows.map((row) => ({
+      slug: String(row.slug),
+      version: (row.version as string | null) ?? null,
+    })),
+    await loadSkillVersionManifest()
+  );
+
+  if (result.rows.length === 0) return setupNotice;
 
   const shown = result.rows.slice(0, SKILL_CATALOG_MAX);
   const lines: string[] = ['Skills currently assigned to you:'];
@@ -531,14 +545,19 @@ export async function buildSkillCatalog(
   const omitted = result.rows.length - shown.length;
   if (omitted > 0) lines.push(`…and ${omitted} more.`);
 
+  // The setup notice comes out of the same budget rather than being appended
+  // past it: the skill list is the expendable part, the setup state is not.
+  const catalogBudget = SKILL_CATALOG_MAX_CHARS - (setupNotice ? setupNotice.length + 1 : 0);
+
   let catalog = lines.join('\n');
-  if (catalog.length > SKILL_CATALOG_MAX_CHARS) {
-    catalog = `${catalog.slice(0, SKILL_CATALOG_MAX_CHARS)}…\n(truncated)`;
+  if (catalog.length > catalogBudget) {
+    catalog = `${catalog.slice(0, catalogBudget)}…\n(truncated)`;
   }
 
   // tools/list is typically cached per session, so the authoritative read is
   // always the live call — say so rather than let a stale list mislead.
-  return `${catalog}\nCall skills_get with a slug to read the full instructions. This list may be stale; call skills_list for the authoritative version.`;
+  const footer = `Call skills_get with a slug to read the full instructions. This list may be stale; call skills_list for the authoritative version.`;
+  return [catalog, footer, setupNotice].filter(Boolean).join('\n');
 }
 
 // ============================================================================
@@ -621,7 +640,12 @@ async function executeTool(
   // Inject gateway token for services that call back into the Reins API.
   // memory reads/writes memory entries; gmail resolves source="upload"
   // attachments via /api/agent-uploads; skills reads /api/agent-skills.
-  if (serviceType === 'memory' || serviceType === 'gmail' || serviceType === 'skills') {
+  if (
+    serviceType === 'memory' ||
+    serviceType === 'gmail' ||
+    serviceType === 'skills' ||
+    serviceType === 'skill-authoring'
+  ) {
     const depRow = await client.execute({
       sql: `SELECT gateway_token FROM deployed_agents WHERE agent_id = ? AND status NOT IN ('destroyed', 'error') ORDER BY created_at DESC LIMIT 1`,
       args: [agentId],

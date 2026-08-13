@@ -23,6 +23,10 @@ const {
   resolveAvailability,
   resolveReachableSkill,
   SKILL_REFERENCE_MAX_DEPTH,
+  compareSkillVersion,
+  buildSetupNotice,
+  BOOT_SKILL_SLUG,
+  HERMES_INJECTION_PATTERNS,
 } = await import('./skills.js');
 
 /** Minimal ServiceInstance shape — only the fields the resolver reads. */
@@ -218,5 +222,88 @@ describe('resolveReachableSkill', () => {
     const result = resolveReachableSkill('shared', [entry], [entry, system, owned]);
     expect(result.reachable).toBe(true);
     expect(result.reachable && result.skill.body).toBe('owned body');
+  });
+});
+
+// ============================================================================
+// Version comparison and the setup notice
+// ============================================================================
+
+describe('compareSkillVersion', () => {
+  const manifest = { 'email-triage': '1.2.0', 'helm-boot': '1.0.0' };
+
+  it('reports an update when the installed version differs from published', () => {
+    expect(compareSkillVersion('email-triage', '1.0.0', manifest)).toEqual({
+      latestVersion: '1.2.0',
+      updateAvailable: true,
+    });
+  });
+
+  it('reports no update when they match', () => {
+    expect(compareSkillVersion('email-triage', '1.2.0', manifest).updateAvailable).toBe(false);
+  });
+
+  it('never reports an update for an unversioned skill', () => {
+    // A hand-authored dashboard skill has no version and is not the
+    // installer's to manage — nagging about it would be noise.
+    expect(compareSkillVersion('email-triage', null, manifest).updateAvailable).toBe(false);
+  });
+
+  it('never reports an update for a slug the manifest does not publish', () => {
+    expect(compareSkillVersion('someones-own-skill', '3.0.0', manifest)).toEqual({
+      latestVersion: null,
+      updateAvailable: false,
+    });
+  });
+});
+
+describe('buildSetupNotice', () => {
+  it('offers the installer when the boot skill is absent', () => {
+    const notice = buildSetupNotice([{ slug: 'email-triage', version: '1.2.0' }], {});
+    expect(notice).not.toBeNull();
+    expect(notice).toContain('install-skills');
+  });
+
+  it('says nothing once the boot skill is installed and current', () => {
+    const notice = buildSetupNotice(
+      [{ slug: BOOT_SKILL_SLUG, version: '1.0.0' }],
+      { [BOOT_SKILL_SLUG]: '1.0.0' }
+    );
+    expect(notice).toBeNull();
+  });
+
+  it('names the outdated skills when the boot skill is present', () => {
+    const notice = buildSetupNotice(
+      [
+        { slug: BOOT_SKILL_SLUG, version: '1.0.0' },
+        { slug: 'email-triage', version: '1.0.0' },
+      ],
+      { [BOOT_SKILL_SLUG]: '1.0.0', 'email-triage': '1.2.0' }
+    );
+    expect(notice).toContain('email-triage');
+    expect(notice).not.toContain(BOOT_SKILL_SLUG);
+  });
+
+  it('speaks up for an agent with no skills at all', () => {
+    // This is the case that must not stay silent: with zero skills there is no
+    // skill that could carry the instruction, so the server has to.
+    expect(buildSetupNotice([], {})).toContain('install-skills');
+  });
+
+  it('avoids every pattern the Hermes description scanner flags', () => {
+    // hermes-agent scans MCP tool descriptions for prompt-injection patterns
+    // and logs a warning on a hit. This text ships inside the skills_list
+    // description, so it must read as plain reporting.
+    const samples = [
+      buildSetupNotice([], {}),
+      buildSetupNotice([{ slug: 'a', version: '1.0.0' }], { a: '2.0.0' }),
+    ].filter((t): t is string => typeof t === 'string');
+
+    expect(samples.length).toBeGreaterThan(0);
+    for (const text of samples) {
+      for (const pattern of HERMES_INJECTION_PATTERNS) {
+        expect(pattern.test(text), `matched ${pattern}`).toBe(false);
+      }
+    }
   });
 });

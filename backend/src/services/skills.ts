@@ -160,3 +160,113 @@ export function resolveReachableSkill<T extends ReferenceableSkill>(
 
   return { reachable: false, reason: 'not_reachable' };
 }
+
+// ============================================================================
+// Setup state: is the boot skill installed, and are skills current?
+// ============================================================================
+
+/**
+ * The skill that carries first-run orientation. Its absence is what tells an
+ * agent its skills have never been installed — and it cannot announce that
+ * itself, since it is precisely what is missing, so the server says it instead.
+ */
+export const BOOT_SKILL_SLUG = 'helm-boot';
+
+/** Command the user runs to install or update the skill set. */
+const INSTALLER_COMMAND = 'node scripts/install-skills.mjs';
+
+/**
+ * Versions this build publishes, read from templates/skill-versions.json.
+ *
+ * templates/ is COPY'd into the backend image, so the file is present at
+ * runtime — but a stripped build must degrade to "no updates known" rather
+ * than crash, the same way seedSystemSkills tolerates a missing directory.
+ */
+export type SkillVersionManifest = Record<string, string>;
+
+let _manifest: SkillVersionManifest | null = null;
+
+export async function loadSkillVersionManifest(): Promise<SkillVersionManifest> {
+  if (_manifest) return _manifest;
+  try {
+    const { readFile } = await import('fs/promises');
+    const { join, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const raw = await readFile(join(here, '..', '..', '..', 'templates', 'skill-versions.json'), 'utf-8');
+    const parsed = JSON.parse(raw) as unknown;
+    _manifest =
+      parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as SkillVersionManifest)
+        : {};
+  } catch {
+    _manifest = {};
+  }
+  return _manifest;
+}
+
+/** Test seam — reset the cached manifest. */
+export function __resetSkillVersionManifest() {
+  _manifest = null;
+}
+
+/**
+ * Compare an installed version against the published one.
+ *
+ * Inequality, not ordering: an unexpected version is worth surfacing whichever
+ * direction it points, and semver parsing buys nothing here. An unversioned
+ * skill, or one the manifest does not publish, is somebody's own work and is
+ * never reported as stale.
+ */
+export function compareSkillVersion(
+  slug: string,
+  installedVersion: string | null | undefined,
+  manifest: SkillVersionManifest
+): { latestVersion: string | null; updateAvailable: boolean } {
+  const latestVersion = manifest[slug] ?? null;
+  if (!latestVersion || !installedVersion) return { latestVersion, updateAvailable: false };
+  return { latestVersion, updateAvailable: installedVersion !== latestVersion };
+}
+
+/**
+ * Patterns hermes-agent flags in MCP tool descriptions (`_scan_mcp_description`).
+ *
+ * Exported so the wording below is tested against them rather than reviewed by
+ * eye. Warning-level upstream, but text that reads like an injection attempt in
+ * the logs is text worth rewording.
+ */
+export const HERMES_INJECTION_PATTERNS = [
+  /ignore\s+(all\s+)?previous\s+instructions/i,
+  /you\s+are\s+now\s+a/i,
+  /your\s+new\s+(task|role|instructions?)\s+(is|are)/i,
+  /system\s*:\s*/i,
+  /<\s*(system|human|assistant)\s*>/i,
+  /do\s+not\s+(tell|inform|mention|reveal)/i,
+  /(curl|wget|fetch)\s+https?:\/\//i,
+];
+
+/**
+ * One line of setup state for the agent, or null when there is nothing to say.
+ *
+ * Shared by the skills_list description and the skills_list result note so the
+ * two cannot drift. Phrased as reporting — the agent relays it to the user, who
+ * is the only one who can act, since skills are installed over REST and not MCP.
+ */
+export function buildSetupNotice(
+  installed: Array<{ slug: string; version?: string | null }>,
+  manifest: SkillVersionManifest
+): string | null {
+  const hasBootSkill = installed.some((s) => s.slug === BOOT_SKILL_SLUG);
+
+  if (!hasBootSkill) {
+    return `Setup skills are not installed on this agent. The owner installs them by running \`${INSTALLER_COMMAND}\` from the reins repo; ask them to run it, then check again.`;
+  }
+
+  const stale = installed
+    .filter((s) => compareSkillVersion(s.slug, s.version, manifest).updateAvailable)
+    .map((s) => s.slug);
+
+  if (stale.length === 0) return null;
+
+  return `Newer versions are published for: ${stale.join(', ')}. The owner updates them by re-running \`${INSTALLER_COMMAND}\` from the reins repo.`;
+}

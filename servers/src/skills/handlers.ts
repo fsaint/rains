@@ -44,6 +44,10 @@ interface SkillSummary {
   requiredServices: string[];
   available: boolean;
   missingServices: string[];
+  /** Stamped by the installer; absent for hand-authored dashboard skills. */
+  version?: string | null;
+  latestVersion?: string | null;
+  updateAvailable?: boolean;
 }
 
 interface SkillDetail extends SkillSummary {
@@ -65,8 +69,11 @@ export async function handleListSkills(
     if (!res.ok) {
       return { success: false, error: `Skills API returned ${res.status}` };
     }
-    const json = await res.json() as { data: SkillSummary[] };
+    const json = await res.json() as { data: SkillSummary[]; setupNotice?: string };
     const skills = json.data ?? [];
+    // Setup state is computed server-side (it needs the published manifest),
+    // so it is relayed rather than re-derived here.
+    const setup = json.setupNotice ? { setup: json.setupNotice } : {};
 
     if (skills.length === 0) {
       return {
@@ -74,6 +81,7 @@ export async function handleListSkills(
         data: {
           skills: [],
           note: 'No skills are assigned to you. Your owner can add them in the Reins dashboard under Skills.',
+          ...setup,
         },
       };
     }
@@ -88,8 +96,11 @@ export async function handleListSkills(
           requires: s.requiredServices,
           available: s.available,
           ...(s.available ? {} : { missing_services: s.missingServices }),
+          ...(s.version ? { version: s.version } : {}),
+          ...(s.updateAvailable ? { update_available: true, latest_version: s.latestVersion } : {}),
         })),
         next_step: 'Call skills_get with a slug to read the full instructions before acting.',
+        ...setup,
       },
     };
   } catch (err) {

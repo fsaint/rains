@@ -27,6 +27,16 @@ function makeOkResponse(data: unknown) {
   };
 }
 
+/** Response whose JSON body is used verbatim, for envelopes beyond `{ data }`. */
+function makeOkBody(body: unknown) {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  };
+}
+
 function makeErrorResponse(status: number, body: Record<string, unknown> = { error: 'Error' }) {
   return {
     ok: false,
@@ -149,6 +159,40 @@ describe('handleGetSkill', () => {
     expect((result.data as any).unavailable_services).toEqual(['calendar']);
     expect((result.data as any).blocked_notice).toContain('calendar');
     expect((result.data as any).blocked_notice).toContain('Do not improvise');
+  });
+
+  it('relays the setup notice when the backend reports one', async () => {
+    // The agent cannot install skills itself, so the note has to hand off to
+    // the user with the exact command.
+    mockFetch.mockResolvedValueOnce(
+      makeOkBody({
+        data: [],
+        setupNotice: 'Setup skills are not installed. Run `node scripts/install-skills.mjs`.',
+      })
+    );
+
+    const result = await handleListSkills({}, mockContext);
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).setup).toContain('install-skills');
+  });
+
+  it('surfaces per-skill update state', async () => {
+    mockFetch.mockResolvedValueOnce(
+      makeOkBody({
+        data: [{
+          slug: 'email-triage', name: 'Email Triage', description: 'Triage.',
+          requiredServices: ['gmail'], available: true, missingServices: [],
+          version: '1.0.0', latestVersion: '1.2.0', updateAvailable: true,
+        }],
+      })
+    );
+
+    const result = await handleListSkills({}, mockContext);
+
+    const skill = (result.data as any).skills[0];
+    expect(skill.version).toBe('1.0.0');
+    expect(skill.update_available).toBe(true);
   });
 
   it('names the slug and points at skills_list on a 404', async () => {

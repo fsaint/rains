@@ -795,10 +795,32 @@ describe('buildSkillCatalog', () => {
     }));
   }
 
-  it('returns null when the agent has no skills, so the description is untouched', async () => {
+  it('offers the installer when the agent has no skills at all', async () => {
+    // Previously this returned null and the description stayed empty — which
+    // left a fresh agent with no way to learn setup exists, since the boot
+    // skill that would say so is exactly what is missing.
     vi.mocked(client.execute).mockResolvedValueOnce({ rows: [] } as any);
 
-    expect(await buildSkillCatalog('agent-1')).toBeNull();
+    const catalog = await buildSkillCatalog('agent-1');
+    expect(catalog).not.toBeNull();
+    expect(catalog).toContain('install-skills');
+  });
+
+  it('offers the installer when skills exist but the boot skill does not', async () => {
+    vi.mocked(client.execute).mockResolvedValueOnce({ rows: skillRows(2) } as any);
+
+    const catalog = await buildSkillCatalog('agent-1');
+    expect(catalog).toContain('skill-0');
+    expect(catalog).toContain('install-skills');
+  });
+
+  it('stays quiet once the boot skill is installed', async () => {
+    vi.mocked(client.execute).mockResolvedValueOnce({
+      rows: [{ slug: 'helm-boot', name: 'Boot', description: 'Orient.', required_services: '[]', version: null }],
+    } as any);
+
+    const catalog = await buildSkillCatalog('agent-1');
+    expect(catalog).not.toContain('install-skills');
   });
 
   it('lists each skill with its slug, description, and required services', async () => {
@@ -850,5 +872,46 @@ describe('buildSkillCatalog', () => {
 
     expect(catalog!.length).toBeLessThan(2200);
     expect(catalog).toContain('(truncated)');
+  });
+});
+
+// ============================================================================
+// The skill-authoring privilege boundary
+// ============================================================================
+
+/**
+ * The feature's whole claim is "one architect agent can author skills, the
+ * others cannot". There is no agent role column — the boundary is simply
+ * whether the service is enabled on that agent, so it is worth a test that
+ * fails loudly if anything ever auto-enables it.
+ */
+describe('skill-authoring enablement boundary', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('refuses an authoring call from an agent without the service enabled', async () => {
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'skill_authoring_create', arguments: { name: 'X', description: 'd', body: 'b' } },
+    });
+
+    expect(response.result).toBeUndefined();
+    // Either "unknown tool" or "service not enabled" — what matters is that it
+    // never reaches a handler.
+    expect([
+      MCP_ERROR_CODES.SERVICE_NOT_ENABLED,
+      MCP_ERROR_CODES.INVALID_PARAMS,
+      MCP_ERROR_CODES.TOOL_BLOCKED,
+    ]).toContain(response.error?.code);
+  });
+
+  it('does not advertise any authoring tool to an ordinary agent', async () => {
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/list',
+    });
+
+    const toolNames = (response.result as { tools: Array<{ name: string }> }).tools.map((t) => t.name);
+    expect(toolNames.some((n) => n.startsWith('skill_authoring_'))).toBe(false);
   });
 });

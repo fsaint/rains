@@ -781,9 +781,20 @@ export async function initializeDatabase() {
       required_services TEXT NOT NULL DEFAULT '[]',
       auto_assign BOOLEAN DEFAULT false NOT NULL,
       enabled BOOLEAN DEFAULT true NOT NULL,
+      version TEXT,
       created_at TEXT DEFAULT now() NOT NULL,
       updated_at TEXT DEFAULT now() NOT NULL
     )
+  `;
+
+  // Version the installer stamps from the source SKILL.md frontmatter, compared
+  // against templates/skill-versions.json to tell an agent its skills are stale.
+  // Null means unversioned, which is never reported as an update.
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE skills ADD COLUMN IF NOT EXISTS version TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
   `;
 
   await sql`CREATE INDEX IF NOT EXISTS idx_skills_user ON skills(user_id)`;
@@ -985,16 +996,18 @@ async function seedSystemSkills() {
     const description = typeof meta.description === 'string' ? meta.description : '';
     const requires = Array.isArray(meta.requires) ? meta.requires : [];
     const autoAssign = meta.autoAssign === 'true' || meta.auto_assign === 'true';
+    const version = typeof meta.version === 'string' && meta.version ? meta.version : null;
 
     await sql`
-      INSERT INTO skills (id, user_id, slug, name, description, body, required_services, auto_assign, created_at, updated_at)
-      VALUES (${slug}, NULL, ${slug}, ${name}, ${description}, ${body}, ${JSON.stringify(requires)}, ${autoAssign}, now(), now())
+      INSERT INTO skills (id, user_id, slug, name, description, body, required_services, auto_assign, version, created_at, updated_at)
+      VALUES (${slug}, NULL, ${slug}, ${name}, ${description}, ${body}, ${JSON.stringify(requires)}, ${autoAssign}, ${version}, now(), now())
       ON CONFLICT (id) DO UPDATE SET
         name = ${name},
         description = ${description},
         body = ${body},
         required_services = ${JSON.stringify(requires)},
         auto_assign = ${autoAssign},
+        version = ${version},
         updated_at = now()
     `;
     seeded++;

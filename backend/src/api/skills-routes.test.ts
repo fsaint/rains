@@ -471,3 +471,107 @@ describe('GET /api/agent-skills/:slug', () => {
     expect(res.json().data.body).toBe('## Procedure');
   });
 });
+
+// ============================================================================
+// Architect audience — agent-authored skill writes
+// ============================================================================
+
+/**
+ * These routes authenticate the *agent* and then act as its owner, so the tests
+ * that matter are the refusals: another user's skill, a platform skill, and an
+ * agent the owner does not own. Plus the one positive guarantee that assignment
+ * adds rather than replaces.
+ */
+describe('agent-authored skill writes', () => {
+  const agentAuth = { 'x-reins-agent-secret': 'tok' };
+  const deployedRow: [RegExp, unknown] = [
+    /FROM deployed_agents da/,
+    rows([{ agent_id: 'architect', user_id: 'user-1' }]),
+  ];
+
+  it('creates a skill owned by the calling agent\'s owner', async () => {
+    routeDb([deployedRow, [/INSERT INTO skills/, rows([])]]);
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/agent-skills', headers: agentAuth,
+      payload: { name: 'Written By Agent', description: 'When to use.', body: '## Steps' },
+    });
+
+    expect(res.statusCode).toBe(201);
+    const insert = mockExecute.mock.calls
+      .map((c: any) => c[0])
+      .find((q: any) => typeof q?.sql === 'string' && q.sql.includes('INSERT INTO skills'));
+    // args[1] is user_id — the owner, never the agent id.
+    expect(insert.args[1]).toBe('user-1');
+  });
+
+  it('refuses to edit a skill the owner does not own', async () => {
+    // getWritableSkill matches on user_id, so another user's row simply is not
+    // found — the same shape a platform skill takes.
+    routeDb([deployedRow, [/SELECT \* FROM skills WHERE id = \? AND user_id = \?/, rows([])]]);
+
+    const res = await app.inject({
+      method: 'PUT', url: '/api/agent-skills/id/sk-someone-else', headers: agentAuth,
+      payload: { name: 'n', description: 'd', body: 'b' },
+    });
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('refuses to edit a platform skill', async () => {
+    // A system skill has user_id IS NULL and can never satisfy `user_id = ?`,
+    // so no agent can edit one however it is addressed.
+    routeDb([deployedRow, [/SELECT \* FROM skills WHERE id = \? AND user_id = \?/, rows([])]]);
+
+    const res = await app.inject({
+      method: 'PUT', url: '/api/agent-skills/id/system-skill', headers: agentAuth,
+      payload: { name: 'n', description: 'd', body: 'b' },
+    });
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('adds an assignment without disturbing the agent\'s other skills', async () => {
+    routeDb([
+      deployedRow,
+      [/SELECT 1 FROM agents WHERE id = \? AND user_id = \?/, rows([{ '?column?': 1 }])],
+      [/SELECT \* FROM skills WHERE id = \? AND user_id = \?/, rows([skillRow({ required_services: '[]' })])],
+      [/INSERT INTO agent_skills/, rows([])],
+    ]);
+    mockResolveAvailability.mockResolvedValue(
+      new Map([['sk-1', { available: true, missingServices: [] }]])
+    );
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/agent-skills/assign/agent-2', headers: agentAuth,
+      payload: { skillId: 'sk-1' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    // The dashboard route replaces the whole set with a bulk DELETE. This one
+    // must not: an architect attaching one skill would otherwise strip every
+    // other skill off the target agent.
+    const bulkDelete = mockExecute.mock.calls
+      .map((c: any) => c[0])
+      .find((q: any) =>
+        typeof q?.sql === 'string' &&
+        q.sql.includes('DELETE FROM agent_skills') &&
+        !q.sql.includes('skill_id')
+      );
+    expect(bulkDelete).toBeUndefined();
+  });
+
+  it('refuses to assign to an agent the owner does not own', async () => {
+    routeDb([
+      deployedRow,
+      [/SELECT 1 FROM agents WHERE id = \? AND user_id = \?/, rows([])],
+    ]);
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/agent-skills/assign/someone-elses-agent', headers: agentAuth,
+      payload: { skillId: 'sk-1' },
+    });
+
+    expect(res.statusCode).toBe(404);
+  });
+});
