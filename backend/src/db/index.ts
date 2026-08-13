@@ -671,6 +671,33 @@ export async function initializeDatabase() {
   // Memory system tables
   // ========================================================================
 
+  // Scopes partition a user's vault. Every entry belongs to exactly one; the
+  // `default` scope (is_system) holds everything that predates scopes and can
+  // never be deleted. Created before memory_entries because entries reference it.
+  await sql`
+    CREATE TABLE IF NOT EXISTS memory_scopes (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      slug TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      root_entry_id TEXT,
+      is_default BOOLEAN DEFAULT false NOT NULL,
+      is_system BOOLEAN DEFAULT false NOT NULL,
+      created_by_agent_id TEXT,
+      archived_at TEXT,
+      created_at TEXT DEFAULT now() NOT NULL,
+      updated_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
+
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_scopes_user_slug ON memory_scopes(user_id, slug)`;
+  // One default per user, enforced by the database rather than by care.
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_scopes_user_default ON memory_scopes(user_id) WHERE is_default`;
+  // FK target for the composite (scope_id, user_id) reference below.
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_scopes_id_user ON memory_scopes(id, user_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_memory_scopes_user ON memory_scopes(user_id)`;
+
   await sql`
     CREATE TABLE IF NOT EXISTS memory_entries (
       id TEXT PRIMARY KEY,
@@ -685,10 +712,27 @@ export async function initializeDatabase() {
     )
   `;
 
+  // scope_id lands nullable: there is no static DEFAULT available because the
+  // value is per-user. It is backfilled below and made NOT NULL in a later
+  // deploy, once every write path is proven to set it — doing it now would turn
+  // a missing-column bug into a 500 on user writes instead of a repairable NULL.
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS scope_id TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$
+  `;
+
   await sql`CREATE EXTENSION IF NOT EXISTS pg_trgm`;
   await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_user ON memory_entries(user_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_user_type ON memory_entries(user_id, type)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_user_deleted ON memory_entries(user_id, is_deleted)`;
+  // scope_id functionally determines user_id, so scope leads every lookup.
+  await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_scope ON memory_entries(scope_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_scope_type ON memory_entries(scope_id, type)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_scope_deleted ON memory_entries(scope_id, is_deleted)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_scope_title ON memory_entries(scope_id, type, title) WHERE is_deleted = false`;
+  // FK target for the composite (entry, scope) references on branches and links.
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_entries_id_scope ON memory_entries(id, scope_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_search ON memory_entries USING GIN(search_vector)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_title_trgm ON memory_entries USING GIN(title gin_trgm_ops) WHERE is_deleted = false`;
 
@@ -763,6 +807,109 @@ export async function initializeDatabase() {
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_memory_tags_tag ON memory_tags(tag)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_memory_tags_entry ON memory_tags(entry_id)`;
+
+  // Per-agent scope grants. Zero rows for an agent means every scope its owner
+  // has — grants are an opt-in narrowing, so no existing agent loses access and
+  // there is no creation-path hook to forget. (bfce9eb is the cautionary tale:
+  // it dropped enableDefaultServices from two of three creation paths unnoticed.)
+  await sql`
+    CREATE TABLE IF NOT EXISTS agent_memory_scopes (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      scope_id TEXT NOT NULL REFERENCES memory_scopes(id) ON DELETE CASCADE,
+      is_default BOOLEAN DEFAULT false NOT NULL,
+      created_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_memory_scopes_pair ON agent_memory_scopes(agent_id, scope_id)`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_memory_scopes_default ON agent_memory_scopes(agent_id) WHERE is_default`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_agent_memory_scopes_scope ON agent_memory_scopes(scope_id)`;
+
+  // Branches and links carry scope_id so composite FKs can make cross-scope
+  // parenting and cross-scope wikilinks structurally impossible rather than
+  // merely policed. Attributes cannot: a relation's target lives in a
+  // polymorphic `value TEXT` that no FK can reference — enforced in the route.
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE memory_branches ADD COLUMN IF NOT EXISTS scope_id TEXT;
+      ALTER TABLE memory_links ADD COLUMN IF NOT EXISTS scope_id TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$
+  `;
+
+  // ── Scope backfill ──────────────────────────────────────────────────────────
+  //
+  // Idempotent, and kept permanently in the boot path as self-repair: any row
+  // that somehow lands without a scope is adopted on the next start.
+
+  // 1. A default scope for every user that has any memory at all. The id is
+  //    derived rather than random so a concurrent boot cannot race a second row
+  //    in before the unique index takes hold, and so fixtures can predict it.
+  await sql`
+    INSERT INTO memory_scopes (id, user_id, slug, name, description, is_default, is_system, created_at, updated_at)
+    SELECT md5('memscope:' || e.user_id), e.user_id, 'default', 'Default',
+           'Everything that was in your memory before scopes existed.',
+           true, true, now()::text, now()::text
+    FROM (SELECT DISTINCT user_id FROM memory_entries) e
+    ON CONFLICT (user_id, slug) DO NOTHING
+  `;
+
+  // Users with no entries get a scope lazily on first API touch instead, which
+  // keeps this block O(memory rows) rather than O(users).
+
+  // 2. Assign every unscoped entry to its owner's default scope.
+  await sql`
+    UPDATE memory_entries e SET scope_id = s.id
+    FROM memory_scopes s
+    WHERE e.scope_id IS NULL AND s.user_id = e.user_id AND s.is_default
+  `;
+
+  // 3. Adopt the user's existing root as the default scope's root: the
+  //    parentless index entry, falling back to the earliest one. Replaces
+  //    ensureMemoryRoot's old `type='index' LIMIT 1` guess, which was
+  //    non-deterministic once an agent created a second index entry — something
+  //    MEMORY_POLICY.md explicitly sanctions as a hierarchical hub.
+  await sql`
+    UPDATE memory_scopes s SET root_entry_id = r.id
+    FROM (
+      SELECT DISTINCT ON (e.user_id) e.user_id, e.id
+      FROM memory_entries e
+      LEFT JOIN memory_branches b ON b.entry_id = e.id
+      WHERE e.type = 'index' AND e.is_deleted = false
+      ORDER BY e.user_id, (b.parent_entry_id IS NULL) DESC, e.created_at ASC
+    ) r
+    WHERE s.root_entry_id IS NULL AND s.user_id = r.user_id AND s.is_default
+  `;
+
+  // 4. Propagate scope to the child tables.
+  await sql`
+    UPDATE memory_branches b SET scope_id = e.scope_id
+    FROM memory_entries e WHERE b.entry_id = e.id AND b.scope_id IS NULL
+  `;
+  await sql`
+    UPDATE memory_links l SET scope_id = e.scope_id
+    FROM memory_entries e WHERE l.source_id = e.id AND l.scope_id IS NULL
+  `;
+
+  // Post-backfill every user has exactly one scope, so there is nothing to
+  // purge yet — but this must precede the composite FK, and it runs on every
+  // boot, so it also cleans up after any future bug that produces one.
+  await sql`
+    DELETE FROM memory_links l USING memory_entries t
+    WHERE l.target_id = t.id AND t.scope_id IS DISTINCT FROM l.scope_id
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_memory_branches_scope ON memory_branches(scope_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_memory_links_scope ON memory_links(scope_id)`;
+
+  // The root FK is added after memory_entries exists — the two tables reference
+  // each other, so it cannot be part of either CREATE TABLE.
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE memory_scopes
+        ADD CONSTRAINT memory_scopes_root_fk
+        FOREIGN KEY (root_entry_id) REFERENCES memory_entries(id);
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$
+  `;
 
   // ========================================================================
   // Skills — reusable task playbooks served to agents over MCP on demand.

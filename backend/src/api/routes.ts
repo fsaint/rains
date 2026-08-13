@@ -90,6 +90,7 @@ import {
   parseTransclusions,
   lookupEntryByTitleOrAlias,
 } from '../services/memory.js';
+import { resolveMemoryContext, type MemoryContext } from '../services/memory-scopes.js';
 import {
   parseRequiredServices,
   resolveAvailability,
@@ -5458,16 +5459,22 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   }
 
   /**
-   * Resolve user_id from either session or gateway token.
-   * Returns null if neither is present / valid.
+   * Resolve the caller's memory scopes, from either a session or a gateway
+   * token. Returns null if neither is present or valid.
+   *
+   * Replaces the old resolveMemoryUserId, which resolved an agent's token to
+   * its owner and then discarded the agent identity — the reason every agent a
+   * user owns shared one vault. Scope grants are keyed on that identity.
+   *
+   * Every user has exactly one scope until scopes become creatable, so routes
+   * switching to this see identical behaviour — that is the point: the schema
+   * and the resolver ship and are verified before any semantics change.
    */
-  async function resolveMemoryUserId(request: any): Promise<string | null> {
-    // Try session first
-    const session = getSession(request);
-    if (session) return session.userId;
-
-    const agent = await resolveAgentFromGatewayToken(request);
-    return agent?.userId ?? null;
+  async function resolveMemoryScopeContext(request: any): Promise<MemoryContext | null> {
+    return resolveMemoryContext(
+      getSession(request) ?? null,
+      () => resolveAgentFromGatewayToken(request)
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -6272,8 +6279,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // GET /api/memory/root — get or create the user's memory root entry
   // -------------------------------------------------------------------------
   app.get('/api/memory/root', async (request, reply) => {
-    const userId = await resolveMemoryUserId(request);
-    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+    const memCtx = await resolveMemoryScopeContext(request);
+    if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
+    const userId = memCtx.userId;
 
     const rootId = await ensureMemoryRoot(userId);
     const result = await client.execute({
@@ -6287,8 +6295,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // GET /api/memory/entries — list/search entries
   // -------------------------------------------------------------------------
   app.get('/api/memory/entries', async (request, reply) => {
-    const userId = await resolveMemoryUserId(request);
-    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+    const memCtx = await resolveMemoryScopeContext(request);
+    if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
+    const userId = memCtx.userId;
 
     const { q, type, parent_id, limit: lim = '50', tag, since, order } = request.query as Record<string, string>;
     const maxLimit = Math.min(parseInt(lim, 10) || 50, 200);
@@ -6364,8 +6373,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // POST /api/memory/entries — create entry
   // -------------------------------------------------------------------------
   app.post('/api/memory/entries', async (request, reply) => {
-    const userId = await resolveMemoryUserId(request);
-    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+    const memCtx = await resolveMemoryScopeContext(request);
+    if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
+    const userId = memCtx.userId;
 
     const body = request.body as Record<string, unknown>;
     const title = (body.title as string | undefined)?.trim();
@@ -6435,8 +6445,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // GET /api/memory/entries/:id — get entry with attributes and backlinks
   // -------------------------------------------------------------------------
   app.get<{ Params: { id: string } }>('/api/memory/entries/:id', async (request, reply) => {
-    const userId = await resolveMemoryUserId(request);
-    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+    const memCtx = await resolveMemoryScopeContext(request);
+    if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
+    const userId = memCtx.userId;
 
     const { id } = request.params;
 
@@ -6551,8 +6562,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // GET /api/memory/tags — list all distinct tags with counts
   // -------------------------------------------------------------------------
   app.get('/api/memory/tags', async (request, reply) => {
-    const userId = await resolveMemoryUserId(request);
-    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+    const memCtx = await resolveMemoryScopeContext(request);
+    if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
+    const userId = memCtx.userId;
 
     const result = await client.execute({
       sql: `SELECT mt.tag, COUNT(*) AS count
@@ -6571,8 +6583,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // PUT /api/memory/entries/:id — update entry
   // -------------------------------------------------------------------------
   app.put<{ Params: { id: string } }>('/api/memory/entries/:id', async (request, reply) => {
-    const userId = await resolveMemoryUserId(request);
-    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+    const memCtx = await resolveMemoryScopeContext(request);
+    if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
+    const userId = memCtx.userId;
 
     const { id } = request.params;
     const body = request.body as Record<string, unknown>;
@@ -6619,8 +6632,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // DELETE /api/memory/entries/:id — soft delete
   // -------------------------------------------------------------------------
   app.delete<{ Params: { id: string } }>('/api/memory/entries/:id', async (request, reply) => {
-    const userId = await resolveMemoryUserId(request);
-    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+    const memCtx = await resolveMemoryScopeContext(request);
+    if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
+    const userId = memCtx.userId;
 
     const { id } = request.params;
     await client.execute({
@@ -6634,8 +6648,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // GET /api/memory/tree — full tree for sidebar
   // -------------------------------------------------------------------------
   app.get('/api/memory/tree', async (request, reply) => {
-    const userId = await resolveMemoryUserId(request);
-    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+    const memCtx = await resolveMemoryScopeContext(request);
+    if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
+    const userId = memCtx.userId;
 
     await ensureMemoryRoot(userId);
 
@@ -6655,8 +6670,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // GET /api/memory/graph — nodes + edges for D3 graph view
   // -------------------------------------------------------------------------
   app.get('/api/memory/graph', async (request, reply) => {
-    const userId = await resolveMemoryUserId(request);
-    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+    const memCtx = await resolveMemoryScopeContext(request);
+    if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
+    const userId = memCtx.userId;
 
     const entries = await client.execute({
       sql: `SELECT id, type, title FROM memory_entries WHERE user_id = ? AND is_deleted = false`,
@@ -6700,8 +6716,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // POST /api/memory/entries/:id/attributes — add attribute
   // -------------------------------------------------------------------------
   app.post<{ Params: { id: string } }>('/api/memory/entries/:id/attributes', async (request, reply) => {
-    const userId = await resolveMemoryUserId(request);
-    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+    const memCtx = await resolveMemoryScopeContext(request);
+    if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
+    const userId = memCtx.userId;
 
     const { id } = request.params;
     const body = request.body as Record<string, unknown>;
@@ -6733,8 +6750,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // DELETE /api/memory/attributes/:attrId — remove attribute
   // -------------------------------------------------------------------------
   app.delete<{ Params: { attrId: string } }>('/api/memory/attributes/:attrId', async (request, reply) => {
-    const userId = await resolveMemoryUserId(request);
-    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+    const memCtx = await resolveMemoryScopeContext(request);
+    if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
+    const userId = memCtx.userId;
 
     const { attrId } = request.params;
 
@@ -6758,8 +6776,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // GET /api/memory/dream — compact manifest for dream process
   // -------------------------------------------------------------------------
   app.get('/api/memory/dream', async (request, reply) => {
-    const userId = await resolveMemoryUserId(request);
-    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+    const memCtx = await resolveMemoryScopeContext(request);
+    if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
+    const userId = memCtx.userId;
 
     const entries = await getDreamManifest(userId);
     return reply.send({ data: entries });
@@ -6769,8 +6788,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // PUT /api/memory/entries/:id/parent — reparent entry (dream reorganization)
   // -------------------------------------------------------------------------
   app.put<{ Params: { id: string } }>('/api/memory/entries/:id/parent', async (request, reply) => {
-    const userId = await resolveMemoryUserId(request);
-    if (!userId) return reply.status(401).send({ error: 'Unauthorized' });
+    const memCtx = await resolveMemoryScopeContext(request);
+    if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
+    const userId = memCtx.userId;
 
     const { id } = request.params;
     const body = request.body as { parent_id?: string | null };

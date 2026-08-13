@@ -154,6 +154,25 @@ const attrRow = {
   position: 0,
 };
 
+const SCOPE_ID = 'scope-default-id';
+
+// Serves both listUserScopes (which ignores the extra columns) and
+// getAgentScopeGrants (which needs them). grant_count 0 means "no grant rows",
+// so an agent sees every scope its owner has — the default everywhere.
+const scopeRow = {
+  id: SCOPE_ID,
+  user_id: USER_ID,
+  slug: 'default',
+  name: 'Default',
+  description: null,
+  root_entry_id: ROOT_ID,
+  is_default: true,
+  is_system: true,
+  archived_at: null,
+  granted: false,
+  grant_count: 0,
+};
+
 // ── DB mock router ─────────────────────────────────────────────────────────────
 //
 // Returns fixture data based on which SQL is being executed. Conditions are
@@ -178,6 +197,13 @@ function makeDbRouter(passwordHash: string) {
         }],
         columns: [], rowsAffected: 1, lastInsertRowid: 0n,
       };
+    }
+
+    // ── Scopes (resolveMemoryContext runs on every memory route) ─────────────
+    // Must precede the memory_entries branches; every request resolves its
+    // scope context before touching an entry.
+    if (sql.includes('FROM memory_scopes')) {
+      return { rows: [scopeRow], columns: [], rowsAffected: 1, lastInsertRowid: 0n };
     }
 
     // ── Memory root check (ensureMemoryRoot + GET /api/memory/root) ───────────
@@ -317,6 +343,27 @@ describe('Memory API — end-to-end', () => {
     mockExecute.mockImplementation(makeDbRouter(passwordHash));
   });
 
+  /**
+   * Override the next query that is not scope resolution.
+   *
+   * Every memory route resolves its scope context before touching an entry, so
+   * a plain mockImplementationOnce lands on that instead of the query under
+   * test. Matching on the query rather than on call order keeps these tests
+   * from breaking again the next time a route grows a lookup.
+   */
+  function overrideNextEntryQuery(result: unknown) {
+    const base = makeDbRouter(passwordHash);
+    let used = false;
+    mockExecute.mockImplementation(async (input: any) => {
+      const sql = typeof input === 'string' ? input : input.sql;
+      if (!used && !sql.includes('FROM memory_scopes')) {
+        used = true;
+        return result;
+      }
+      return base(input);
+    });
+  }
+
   afterAll(async () => {
     await app.close();
     vi.unstubAllGlobals();
@@ -387,7 +434,10 @@ describe('Memory API — end-to-end', () => {
     });
 
     it('creates root on first call if none exists', async () => {
-      // Override: root lookup returns empty → triggers creation path
+      // Override: root lookup returns empty → triggers creation path.
+      // Scope resolution is served from the fixture and does not advance the
+      // sequence, so this stays about the root path rather than about how many
+      // queries happen to precede it.
       const createSequence: Array<Record<string, unknown>[]> = [
         [],          // SELECT type='index' → empty → will create
         [],          // INSERT memory_entries
@@ -395,10 +445,16 @@ describe('Memory API — end-to-end', () => {
         [rootRow],   // SELECT by id after creation
       ];
       let idx = 0;
-      mockExecute.mockImplementation(async () => ({
-        rows: createSequence[idx++] ?? [],
-        columns: [], rowsAffected: 0, lastInsertRowid: 0n,
-      }));
+      mockExecute.mockImplementation(async (input: any) => {
+        const sql = typeof input === 'string' ? input : input.sql;
+        if (sql.includes('FROM memory_scopes')) {
+          return { rows: [scopeRow], columns: [], rowsAffected: 1, lastInsertRowid: 0n };
+        }
+        return {
+          rows: createSequence[idx++] ?? [],
+          columns: [], rowsAffected: 0, lastInsertRowid: 0n,
+        };
+      });
 
       const res = await app.inject({
         method: 'GET',
@@ -492,7 +548,7 @@ describe('Memory API — end-to-end', () => {
 
     it('returns 404 for an unknown entry', async () => {
       // Override: entry lookup returns empty → 404
-      mockExecute.mockImplementationOnce(async () => EMPTY);
+      overrideNextEntryQuery(EMPTY);
 
       const res = await app.inject({
         method: 'GET',
@@ -522,7 +578,7 @@ describe('Memory API — end-to-end', () => {
 
     it('returns 404 when entry does not belong to user', async () => {
       // Override: ownership SELECT returns empty
-      mockExecute.mockImplementationOnce(async () => EMPTY);
+      overrideNextEntryQuery(EMPTY);
 
       const res = await app.inject({
         method: 'PUT',
@@ -702,7 +758,7 @@ describe('Memory API — end-to-end', () => {
 
     it('returns 404 when entry does not belong to user', async () => {
       // Override: ownership check returns empty
-      mockExecute.mockImplementationOnce(async () => EMPTY);
+      overrideNextEntryQuery(EMPTY);
 
       const res = await app.inject({
         method: 'POST',
@@ -731,7 +787,7 @@ describe('Memory API — end-to-end', () => {
 
     it('returns 404 when attribute not found', async () => {
       // Override: attribute ownership check returns empty
-      mockExecute.mockImplementationOnce(async () => EMPTY);
+      overrideNextEntryQuery(EMPTY);
 
       const res = await app.inject({
         method: 'DELETE',
@@ -813,7 +869,7 @@ describe('Memory API — end-to-end', () => {
     });
 
     it('returns 404 when entry not found', async () => {
-      mockExecute.mockImplementationOnce(async () => ({ rows: [], rowsAffected: 0, lastInsertRowid: 0n, columns: [] }));
+      overrideNextEntryQuery({ rows: [], rowsAffected: 0, lastInsertRowid: 0n, columns: [] });
 
       const res = await app.inject({
         method: 'PUT',
@@ -840,10 +896,10 @@ describe('Memory API — end-to-end', () => {
   describe('Root read-only enforcement', () => {
     it('returns 403 when session user tries to update root index entry', async () => {
       // Override: ownership check returns a root entry (type = 'index')
-      mockExecute.mockImplementationOnce(async () => ({
+      overrideNextEntryQuery({
         rows: [{ id: ROOT_ID, type: 'index' }],
         rowsAffected: 0, lastInsertRowid: 0n, columns: [],
-      }));
+      });
 
       const res = await app.inject({
         method: 'PUT',
