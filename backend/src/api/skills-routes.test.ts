@@ -17,11 +17,13 @@ const {
   mockGetSession,
   mockRequireAdmin,
   mockResolveAvailability,
+  mockIsServiceEnabled,
 } = vi.hoisted(() => ({
   mockExecute: vi.fn(),
   mockGetSession: vi.fn(),
   mockRequireAdmin: vi.fn(),
   mockResolveAvailability: vi.fn(),
+  mockIsServiceEnabled: vi.fn(),
 }));
 
 vi.mock('../db/index.js', () => ({
@@ -35,6 +37,13 @@ vi.mock('../auth/index.js', () => ({
   createMagicLinkToken: vi.fn(),
   verifyMagicLinkToken: vi.fn(),
 }));
+
+// Only the enablement check is stubbed — it is the skill-authoring privilege
+// boundary, and every other export the route module pulls from here is real.
+vi.mock('../services/permissions.js', async () => {
+  const actual = await vi.importActual<typeof import('../services/permissions.js')>('../services/permissions.js');
+  return { ...actual, isServiceEnabledForAgent: mockIsServiceEnabled };
+});
 
 vi.mock('../services/skills.js', async () => {
   const actual = await vi.importActual<typeof import('../services/skills.js')>('../services/skills.js');
@@ -152,6 +161,8 @@ beforeEach(async () => {
   mockGetSession.mockReturnValue({ userId: 'user-1', email: 'me@example.com', role: 'user' });
   mockRequireAdmin.mockReturnValue(true);
   mockResolveAvailability.mockResolvedValue(new Map());
+  // Default to an architect; the tests that care flip it off explicitly.
+  mockIsServiceEnabled.mockResolvedValue(true);
   mockExecute.mockResolvedValue(empty);
   app = await buildApp();
 });
@@ -570,5 +581,139 @@ describe('agent-authored skill writes', () => {
     });
 
     expect(res.statusCode).toBe(404);
+  });
+});
+
+/**
+ * The skill-authoring boundary, enforced at the HTTP layer.
+ *
+ * The MCP endpoint already declines to advertise these tools to an agent without
+ * the service. That is not sufficient on its own: every deployed agent holds its
+ * own gateway token and REINS_API_URL, so it can reach these routes directly. A
+ * skill body is an instruction other agents follow, so the boundary has to hold
+ * here too.
+ */
+describe('skill-authoring enablement boundary (HTTP)', () => {
+  const agentAuth = { 'x-reins-agent-secret': 'tok' };
+  const deployedRow: [RegExp, unknown] = [
+    /FROM deployed_agents da/,
+    rows([{ agent_id: 'ordinary-agent', user_id: 'user-1' }]),
+  ];
+
+  beforeEach(() => {
+    mockIsServiceEnabled.mockResolvedValue(false);
+    routeDb([deployedRow]);
+  });
+
+  it('refuses to create a skill', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/api/agent-skills', headers: agentAuth,
+      payload: { name: 'Sneaky', description: 'd', body: 'b' },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.code).toBe('SERVICE_NOT_ENABLED');
+    const inserted = mockExecute.mock.calls.some((c: any[]) =>
+      String(c[0]?.sql ?? c[0]).includes('INSERT INTO skills')
+    );
+    expect(inserted).toBe(false);
+  });
+
+  it('refuses to update a skill', async () => {
+    const res = await app.inject({
+      method: 'PUT', url: '/api/agent-skills/id/sk-1', headers: agentAuth,
+      payload: { name: 'n', description: 'd', body: 'b' },
+    });
+
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('refuses to assign a skill', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/api/agent-skills/assign/agent-2', headers: agentAuth,
+      payload: { skillId: 'sk-1' },
+    });
+
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('still serves the read-only agent routes, which every agent may use', async () => {
+    const res = await app.inject({
+      method: 'GET', url: '/api/agent-skills', headers: agentAuth,
+    });
+
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+/**
+ * GET /api/skill-library — what skill_authoring_list reads.
+ *
+ * Distinct from GET /api/agent-skills: authoring needs the ids of skills that are
+ * assigned to no agent at all. It previously pointed at the dashboard's
+ * /api/skills, which resolves its caller from a session and so threw a 500 on
+ * every call from a gateway token.
+ */
+describe('GET /api/skill-library', () => {
+  const agentAuth = { 'x-reins-agent-secret': 'tok' };
+  const deployedRow: [RegExp, unknown] = [
+    /FROM deployed_agents da/,
+    rows([{ agent_id: 'architect', user_id: 'user-1' }]),
+  ];
+
+  it('rejects a request with no gateway token', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/skill-library' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('refuses an agent without the skill-authoring service', async () => {
+    mockIsServiceEnabled.mockResolvedValue(false);
+    routeDb([deployedRow]);
+
+    const res = await app.inject({ method: 'GET', url: '/api/skill-library', headers: agentAuth });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.code).toBe('SERVICE_NOT_ENABLED');
+  });
+
+  it("returns the owner's skills and the platform's, flagging the platform ones", async () => {
+    routeDb([
+      deployedRow,
+      [/FROM skills WHERE user_id = \? OR user_id IS NULL/, rows([
+        skillRow({ id: 'sk-sys', user_id: null, slug: 'stock', name: 'Stock' }),
+        skillRow({ id: 'sk-1' }),
+      ])],
+    ]);
+
+    const res = await app.inject({ method: 'GET', url: '/api/skill-library', headers: agentAuth });
+
+    expect(res.statusCode).toBe(200);
+    const data = res.json().data;
+    expect(data.map((s: any) => s.id)).toEqual(['sk-sys', 'sk-1']);
+    expect(data[0].isSystem).toBe(true);
+    expect(data[1].isSystem).toBe(false);
+  });
+
+  it('scopes the query to the calling agent\'s owner', async () => {
+    routeDb([deployedRow, [/FROM skills WHERE user_id = \? OR user_id IS NULL/, rows([])]]);
+
+    await app.inject({ method: 'GET', url: '/api/skill-library', headers: agentAuth });
+
+    const query = mockExecute.mock.calls
+      .map((c: any) => c[0])
+      .find((q: any) => typeof q?.sql === 'string' && q.sql.includes('OR user_id IS NULL'));
+    expect(query.args).toEqual(['user-1']);
+  });
+
+  it('omits bodies — the list is for picking an id, not for reading skills', async () => {
+    routeDb([
+      deployedRow,
+      [/FROM skills WHERE user_id = \? OR user_id IS NULL/, rows([skillRow({ body: 'secret procedure' })])],
+    ]);
+
+    const res = await app.inject({ method: 'GET', url: '/api/skill-library', headers: agentAuth });
+
+    expect(res.json().data[0]).not.toHaveProperty('body');
+    expect(res.payload).not.toContain('secret procedure');
   });
 });

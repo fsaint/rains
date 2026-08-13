@@ -1146,7 +1146,13 @@ async function handleCallTool(
       eq(agentServiceInstances.enabled, true)
     ));
 
-  // Check if service is enabled (either via instances or legacy)
+  // Check if service is enabled (either via instances or legacy).
+  //
+  // Same rule as isServiceEnabledForAgent() in services/permissions.ts, which is
+  // what the gateway-token HTTP routes use. Kept inline here because the rows are
+  // needed below for credential resolution and the helper would re-query them —
+  // change one, change the other, or a tool blocked over MCP becomes reachable
+  // over HTTP.
   const hasInstances = serviceInstances.length > 0;
   if (!hasInstances) {
     const { enabled } = await getEffectivePermissions(agentId, serviceType);

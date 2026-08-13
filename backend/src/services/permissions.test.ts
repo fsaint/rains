@@ -116,6 +116,7 @@ import {
   setToolPermission,
   resetToolPermission,
   getEffectivePermissions,
+  isServiceEnabledForAgent,
   canAccessTool,
   getCredentialsForService,
   setPermissionLevel,
@@ -434,6 +435,47 @@ describe('Permission Service', () => {
       expect(result.enabled).toBe(true);
       expect(result.tools.gmail_send_message).toBe('allow');
       expect(result.tools.gmail_list_messages).toBe('allow'); // default
+    });
+  });
+
+  /**
+   * The enablement boundary. The MCP endpoint and the gateway-token HTTP routes
+   * both answer "may this agent use this service?" through here, so the two
+   * cannot drift apart — see the note at agent-endpoint.ts's instance lookup.
+   */
+  describe('isServiceEnabledForAgent', () => {
+    /** One `db.select()` per call: an enabled-instance lookup, then the fallback. */
+    const selectOnce = (result: unknown) =>
+      vi.mocked(db.select).mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(result) }),
+      } as never);
+
+    it('is true when an enabled instance exists', async () => {
+      selectOnce([{ id: 'inst-1', enabled: true }]);
+
+      expect(await isServiceEnabledForAgent('agent-1', 'skill-authoring')).toBe(true);
+    });
+
+    it('falls back to legacy service access when the agent has no instances', async () => {
+      selectOnce([]);                       // no instance rows
+      selectOnce([{ enabled: true }]);      // getEffectivePermissions' access row
+      selectOnce([]);                       // its tool overrides
+
+      expect(await isServiceEnabledForAgent('agent-1', 'skill-authoring')).toBe(true);
+    });
+
+    it('is false when there is neither an instance nor legacy access', async () => {
+      selectOnce([]);                       // no instance rows
+      selectOnce([{ enabled: false }]);     // access row present but off
+
+      expect(await isServiceEnabledForAgent('agent-1', 'skill-authoring')).toBe(false);
+    });
+
+    it('is false when the agent has no record of the service at all', async () => {
+      selectOnce([]);                       // no instance rows
+      selectOnce([]);                       // no access row either
+
+      expect(await isServiceEnabledForAgent('agent-1', 'skill-authoring')).toBe(false);
     });
   });
 
