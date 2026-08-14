@@ -61,4 +61,9 @@ Uploads are limited to 25 MB and expire after 24 hours.
 
 ### Memory
 
-Memory hygiene, `memory_*` tool semantics, and link/tag conventions are in the **Memory Policy** section that follows this knowledge block.
+Memory is the system of record, not a scratchpad — use it on every turn that touches a person, an organization, or a project.
+
+- **Search before you answer.** Any question about a person, company, or project starts with `memory_search`, even when you think you already know. If it finds nothing, say what you searched for.
+- **Write back before the turn ends.** A name, a date, a decision, an amount, a change in someone's role — anything durable goes in. `memory_create` is idempotent, so recording it is always safe.
+
+`memory_*` tool semantics and link/tag conventions are in the **Memory Policy** section that follows this knowledge block.
