@@ -17,16 +17,38 @@ import {
   handleAddAttribute,
   handleRemoveAttribute,
   handleListTags,
+  handleListScopes,
+  handleCreateScope,
 } from './handlers.js';
+
+/**
+ * The `scope` argument, defined once so its wording cannot drift between tools.
+ *
+ * Only the tools that address memory by content take it. The ones that address
+ * an existing entry by id do not: an entry's scope is a fact about it, not a
+ * parameter, and offering the argument there would invite the model to think
+ * memory_update({scope}) moves an entry between scopes.
+ */
+const SCOPE_ARG = {
+  type: 'string' as const,
+  description:
+    'Scope slug (e.g. "work"). Scopes are separate compartments of the vault that never ' +
+    'mix — entries, links and relations cannot cross between them. Omit to use your ' +
+    'default scope for writes, or to span every scope you can reach for reads. ' +
+    'Call memory_list_scopes to see what is available.',
+};
 
 export const memoryGetRootTool: ToolDefinition = {
   name: 'memory_get_root',
   description:
     'Get the user\'s root memory index — a Markdown document linking to all significant memory entries. ' +
-    'Call this at the start of every conversation to orient yourself with what you know.',
+    'Call this at the start of every conversation to orient yourself with what you know. ' +
+    'Returns your default scope\'s index, plus one for every other scope you can reach.',
   inputSchema: {
     type: 'object',
-    properties: {},
+    properties: {
+      scope: SCOPE_ARG,
+    },
   },
   handler: handleGetRoot,
 };
@@ -55,6 +77,12 @@ export const memoryCreateTool: ToolDefinition = {
       parent_id: {
         type: 'string',
         description: 'Parent entry ID (optional — for nesting under a section)',
+      },
+      scope: {
+        ...SCOPE_ARG,
+        description:
+          SCOPE_ARG.description +
+          ' If parent_id is given, the new entry inherits that parent\'s scope.',
       },
       attributes: {
         type: 'array',
@@ -113,6 +141,7 @@ export const memorySearchTool: ToolDefinition = {
         description: 'Filter by entry type (optional)',
       },
       limit: { type: 'number', description: 'Max results (default: 20, max: 50)' },
+      scope: SCOPE_ARG,
     },
     required: ['query'],
   },
@@ -140,6 +169,7 @@ export const memoryListTool: ToolDefinition = {
       tag: { type: 'string', description: 'Filter entries by tag (e.g. "client" for #client)' },
       since: { type: 'string', description: 'ISO 8601 date — return only entries updated at or after this date (e.g. "2026-05-01")' },
       order: { type: 'string', enum: ['updated', 'created', 'title'], description: 'Sort order (default: updated — most recently updated first)' },
+      scope: SCOPE_ARG,
     },
   },
   handler: handleList,
@@ -155,6 +185,12 @@ export const memoryGetTool: ToolDefinition = {
     properties: {
       id: { type: 'string', description: 'Entry ID (takes precedence over title)' },
       title: { type: 'string', description: 'Exact entry title (used if id is not provided)' },
+      scope: {
+        ...SCOPE_ARG,
+        description:
+          'Which scope to look the title up in. Ignored when id is given, since an ' +
+          'entry id already determines its scope.',
+      },
     },
   },
   handler: handleGet,
@@ -194,10 +230,13 @@ export const memoryDreamTool: ToolDefinition = {
   name: 'memory_dream',
   description:
     'Get a compact manifest of your entire memory vault — all entries with type, parent, and backlink count. ' +
-    'Call this at the start of a dream session to survey what needs reorganization.',
+    'Call this at the start of a dream session to survey what needs reorganization. ' +
+    'Every row is labelled with its scope; pass scope to work through one at a time.',
   inputSchema: {
     type: 'object',
-    properties: {},
+    properties: {
+      scope: SCOPE_ARG,
+    },
   },
   handler: handleDream,
 };
@@ -260,8 +299,44 @@ export const memoryRemoveAttributeTool: ToolDefinition = {
 export const memoryListTagsTool: ToolDefinition = {
   name: 'memory_list_tags',
   description: 'List all tags used in your memory vault with their entry counts. Use to discover what topics are tagged.',
-  inputSchema: { type: 'object', properties: {} },
+  inputSchema: {
+    type: 'object',
+    properties: {
+      scope: SCOPE_ARG,
+    },
+  },
   handler: handleListTags,
+};
+
+export const memoryListScopesTool: ToolDefinition = {
+  name: 'memory_list_scopes',
+  description:
+    'List the memory scopes you can reach. A scope is a separate compartment of the vault — ' +
+    'work and personal memory kept apart, for instance — and nothing crosses between them. ' +
+    'Call this before passing a scope anywhere else: slugs cannot be guessed, and naming one ' +
+    'you cannot reach is refused.',
+  inputSchema: { type: 'object', properties: {} },
+  handler: handleListScopes,
+};
+
+export const memoryCreateScopeTool: ToolDefinition = {
+  name: 'memory_create_scope',
+  description:
+    'Create a new memory scope — a compartment that will not mix with the others. ' +
+    'Only for a genuinely separate context the user has asked to keep apart, such as a ' +
+    'new client engagement. Check memory_list_scopes first: a near-duplicate of an ' +
+    'existing slug is refused, and a vault split across too many scopes is hard to undo. ' +
+    'Entries, links and relations can never move between scopes afterwards.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      name: { type: 'string', description: 'Human-readable name (e.g. "Acme Engagement")' },
+      slug: { type: 'string', description: 'Short handle, lowercase kebab (e.g. "acme"). Derived from name if omitted.' },
+      description: { type: 'string', description: 'What belongs in this scope (optional)' },
+    },
+    required: ['name'],
+  },
+  handler: handleCreateScope,
 };
 
 export const memoryTools: ToolDefinition[] = [
@@ -278,4 +353,6 @@ export const memoryTools: ToolDefinition[] = [
   memoryAddAttributeTool,
   memoryRemoveAttributeTool,
   memoryListTagsTool,
+  memoryListScopesTool,
+  memoryCreateScopeTool,
 ];

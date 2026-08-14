@@ -19,6 +19,8 @@ import {
   handleAddAttribute,
   handleRemoveAttribute,
   handleListTags,
+  handleListScopes,
+  handleCreateScope,
 } from './handlers.js';
 import type { ServerContext } from '../common/types.js';
 
@@ -620,4 +622,203 @@ describe('Memory Handlers', () => {
     });
   });
 
+  // ── Scopes ─────────────────────────────────────────────────────────────────
+
+  describe('scope forwarding', () => {
+    const lastUrl = () => mockFetch.mock.calls.at(-1)![0] as string;
+
+    it('forwards scope on reads that take it', async () => {
+      const cases: Array<[string, () => Promise<unknown>]> = [
+        ['search', () => handleSearch({ query: 'x', scope: 'work' }, mockContext)],
+        ['list', () => handleList({ scope: 'work' }, mockContext)],
+        ['tags', () => handleListTags({ scope: 'work' }, mockContext)],
+        ['dream', () => handleDream({ scope: 'work' }, mockContext)],
+        ['root', () => handleGetRoot({ scope: 'work' }, mockContext)],
+      ];
+
+      for (const [label, run] of cases) {
+        mockFetch.mockResolvedValueOnce(makeOkResponse([]));
+        await run();
+        expect(lastUrl(), label).toContain('scope=work');
+      }
+    });
+
+    it('omits scope entirely when it is not given', async () => {
+      // An absent scope means "span everything I can reach"; sending an empty
+      // one would be a 400 from the backend.
+      const cases: Array<() => Promise<unknown>> = [
+        () => handleSearch({ query: 'x' }, mockContext),
+        () => handleList({}, mockContext),
+        () => handleListTags({}, mockContext),
+        () => handleDream({}, mockContext),
+        () => handleGetRoot({}, mockContext),
+      ];
+
+      for (const run of cases) {
+        mockFetch.mockResolvedValueOnce(makeOkResponse([]));
+        await run();
+        expect(lastUrl()).not.toContain('scope=');
+      }
+    });
+
+    it('sends scope in the body on create', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true, status: 201,
+        json: async () => ({ data: { id: 'e1', scope: 'work' } }),
+        text: async () => '',
+      });
+
+      await handleCreate({ title: 'Acme kickoff', scope: 'work' }, mockContext);
+
+      const [, init] = mockFetch.mock.calls.at(-1)!;
+      expect(JSON.parse((init as RequestInit).body as string).scope).toBe('work');
+    });
+
+    it('narrows a title lookup by scope, and keeps the id path scope-free', async () => {
+      mockFetch.mockResolvedValueOnce(makeOkResponse([{ id: 'e1', title: 'Alice' }]));
+      mockFetch.mockResolvedValueOnce(makeOkResponse({ id: 'e1' }));
+
+      await handleGet({ title: 'Alice', scope: 'work' }, mockContext);
+
+      expect(mockFetch.mock.calls[0][0]).toContain('scope=work');
+      // The follow-up fetch addresses the entry by id, which already determines
+      // its scope — passing one there would be meaningless.
+      expect(mockFetch.mock.calls[1][0]).not.toContain('scope=');
+    });
+  });
+
+  describe('handleListScopes', () => {
+    it('returns the reachable scopes', async () => {
+      mockFetch.mockResolvedValueOnce(makeOkResponse([
+        { id: 's1', slug: 'default', name: 'Default', description: null, is_default: true, entry_count: 12 },
+        { id: 's2', slug: 'work', name: 'Work', description: 'Client work', is_default: false, entry_count: 3 },
+      ]));
+
+      const result = await handleListScopes({}, mockContext);
+
+      expect(mockFetch.mock.calls[0][0]).toBe('https://test.helm.mom/api/memory/scopes');
+      const scopes = (result.data as any).scopes;
+      expect(scopes.map((s: any) => s.slug)).toEqual(['default', 'work']);
+      expect(scopes[0].entry_count).toBe(12);
+      // Ids are internal — the agent addresses scopes by slug.
+      expect(scopes[0]).not.toHaveProperty('id');
+    });
+  });
+
+  describe('handleCreateScope', () => {
+    it('creates a scope and points at how to use it', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true, status: 201,
+        json: async () => ({ data: { id: 's3', slug: 'acme', name: 'Acme' } }),
+        text: async () => '',
+      });
+
+      const result = await handleCreateScope({ name: 'Acme' }, mockContext);
+
+      expect(result.success).toBe(true);
+      expect((result.data as any).slug).toBe('acme');
+      expect((result.data as any).next_step).toContain('scope');
+    });
+
+    it('requires a name', async () => {
+      const result = await handleCreateScope({}, mockContext);
+
+      expect(result.success).toBe(false);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('passes the near-duplicate refusal through verbatim', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false, status: 409,
+        json: async () => ({ error: '"work" already covers this. Use it, or pick a clearly different name.', code: 'SIMILAR_SCOPE' }),
+        text: async () => '',
+      });
+
+      const result = await handleCreateScope({ name: 'Works' }, mockContext);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('already covers this');
+    });
+  });
+
+  /**
+   * A refused scope comes back with the list of usable ones. That list is what
+   * lets a model correct itself on the next call instead of failing the task, so
+   * losing it — as apiGet did, reporting only the status code — turns a
+   * recoverable error into a dead end.
+   */
+  describe('scope rejection surfacing', () => {
+    const notGranted = {
+      ok: false, status: 403,
+      json: async () => ({
+        error: 'Scope "finance" is not available. Available: default, work.',
+        code: 'SCOPE_NOT_GRANTED',
+        available_scopes: ['default', 'work'],
+      }),
+      text: async () => '',
+    };
+
+    it('reaches the model through a read', async () => {
+      mockFetch.mockResolvedValueOnce(notGranted);
+
+      const result = await handleSearch({ query: 'x', scope: 'finance' }, mockContext);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Available: default, work');
+      expect(result.error).not.toMatch(/^Search failed/);
+    });
+
+    it('reaches the model through a write', async () => {
+      mockFetch.mockResolvedValueOnce(notGranted);
+
+      const result = await handleCreate({ title: 'x', scope: 'finance' }, mockContext);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Available: default, work');
+    });
+
+    it('falls back to the status when the body carries nothing useful', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false, status: 502, json: async () => null, text: async () => '',
+      });
+
+      const result = await handleList({}, mockContext);
+
+      expect(result.error).toBe('List failed (HTTP 502)');
+    });
+  });
+
+  describe('handleGetRoot scope superset', () => {
+    it('keeps the original top-level fields while adding scope information', async () => {
+      // Agents running the older MEMORY_POLICY.md read id/title/content and
+      // nothing else; the shape must not change under them.
+      mockFetch.mockResolvedValueOnce(makeOkResponse({
+        id: 'root-1', title: 'Memory Index', content: '# Memory Index',
+        scope: 'default', default_scope: 'default',
+        scopes: [
+          { scope: 'default', id: 'root-1', title: 'Memory Index' },
+          { scope: 'work', id: 'root-2', title: 'Work Index' },
+        ],
+      }));
+
+      const result = await handleGetRoot({}, mockContext);
+      const data = result.data as any;
+
+      expect(data.id).toBe('root-1');
+      expect(data.title).toBe('Memory Index');
+      expect(data.content).toBe('# Memory Index');
+      expect(data.scopes).toHaveLength(2);
+      expect(data.default_scope).toBe('default');
+    });
+
+    it('omits the scope fields entirely when the backend does not send them', async () => {
+      mockFetch.mockResolvedValueOnce(makeOkResponse({
+        id: 'root-1', title: 'Memory Index', content: '# Memory Index',
+      }));
+
+      const result = await handleGetRoot({}, mockContext);
+
+      expect(result.data).toEqual({ id: 'root-1', title: 'Memory Index', content: '# Memory Index' });
+    });
+  });
 });
