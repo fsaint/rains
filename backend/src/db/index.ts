@@ -911,6 +911,59 @@ export async function initializeDatabase() {
     EXCEPTION WHEN duplicate_object THEN NULL; END $$
   `;
 
+  // ── Scope constraints ───────────────────────────────────────────────────────
+  //
+  // Applied only once every write path sets scope_id, which is why they trail
+  // the backfill rather than sitting with the column definitions.
+
+  // Each is attempted independently and logged rather than swallowed in SQL: if
+  // one cannot apply — a straggler NULL, a legacy cross-scope row — boot must
+  // still succeed, but the reason has to be visible or the partition is only
+  // half-enforced and nobody knows which half.
+  const scopeConstraints: Array<[string, string]> = [
+    ['memory_entries.scope_id NOT NULL',
+     `ALTER TABLE memory_entries ALTER COLUMN scope_id SET NOT NULL`],
+    // The composite (scope_id, user_id) key makes the denormalised user_id
+    // impossible to desynchronise from the scope's owner. Without it, a bug
+    // writing the wrong user_id yields an entry visible to nobody — undetectable.
+    ['memory_entries_scope_user_fk',
+     `ALTER TABLE memory_entries ADD CONSTRAINT memory_entries_scope_user_fk
+        FOREIGN KEY (scope_id, user_id) REFERENCES memory_scopes(id, user_id)`],
+    // The highest-leverage part of the feature: after these, no application-layer
+    // mistake can produce a cross-scope tree edge or wikilink. Root entries have
+    // parent_entry_id IS NULL and pass under the default MATCH SIMPLE, which
+    // skips the check when any column of the key is NULL.
+    ['memory_branches_entry_scope_fk',
+     `ALTER TABLE memory_branches ADD CONSTRAINT memory_branches_entry_scope_fk
+        FOREIGN KEY (entry_id, scope_id) REFERENCES memory_entries(id, scope_id)`],
+    ['memory_branches_parent_scope_fk',
+     `ALTER TABLE memory_branches ADD CONSTRAINT memory_branches_parent_scope_fk
+        FOREIGN KEY (parent_entry_id, scope_id) REFERENCES memory_entries(id, scope_id)`],
+    ['memory_links_source_scope_fk',
+     `ALTER TABLE memory_links ADD CONSTRAINT memory_links_source_scope_fk
+        FOREIGN KEY (source_id, scope_id) REFERENCES memory_entries(id, scope_id)`],
+    ['memory_links_target_scope_fk',
+     `ALTER TABLE memory_links ADD CONSTRAINT memory_links_target_scope_fk
+        FOREIGN KEY (target_id, scope_id) REFERENCES memory_entries(id, scope_id)`],
+  ];
+
+  for (const [label, statement] of scopeConstraints) {
+    try {
+      await sql.unsafe(statement);
+    } catch (err) {
+      const code = (err as { code?: string })?.code;
+      // 42710 duplicate_object, 42P07 duplicate_table — already applied.
+      if (code === '42710' || code === '42P07') continue;
+      console.warn(
+        `[memory-scopes] could not apply ${label}: ${err instanceof Error ? err.message : err}`
+      );
+    }
+  }
+
+  // Superseded by their (scope_id, …) equivalents; scope_id determines user_id.
+  await sql`DROP INDEX IF EXISTS idx_memory_entries_user_type`;
+  await sql`DROP INDEX IF EXISTS idx_memory_entries_user_deleted`;
+
   // ========================================================================
   // Skills — reusable task playbooks served to agents over MCP on demand.
   // user_id IS NULL marks a system skill; there is deliberately no is_system

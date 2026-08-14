@@ -90,7 +90,15 @@ import {
   parseTransclusions,
   lookupEntryByTitleOrAlias,
 } from '../services/memory.js';
-import { resolveMemoryContext, type MemoryContext } from '../services/memory-scopes.js';
+import {
+  resolveMemoryContext,
+  listUserScopes,
+  getAgentScopeGrants,
+  setAgentScopeGrants,
+  pickScope,
+  isRejection,
+  type MemoryContext,
+} from '../services/memory-scopes.js';
 import {
   parseRequiredServices,
   resolveAvailability,
@@ -6276,19 +6284,47 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   });
 
   // -------------------------------------------------------------------------
-  // GET /api/memory/root — get or create the user's memory root entry
+  // GET /api/memory/root — the root index of every scope the caller can reach
+  //
+  // The response is a superset of what it used to be: the top-level fields are
+  // still the default scope's root, exactly as before, with `scopes[]` added
+  // alongside. Agents running the older MEMORY_POLICY.md see no change.
+  //
+  // Deliberately not polymorphic on scope count — a response that changes shape
+  // the day a user adds a second scope is a prompt bug that only surfaces in
+  // production.
   // -------------------------------------------------------------------------
   app.get('/api/memory/root', async (request, reply) => {
     const memCtx = await resolveMemoryScopeContext(request);
     if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
     const userId = memCtx.userId;
 
-    const rootId = await ensureMemoryRoot(userId);
-    const result = await client.execute({
-      sql: `SELECT id, type, title, content, created_at, updated_at FROM memory_entries WHERE id = ?`,
-      args: [rootId],
+    const requested = (request.query as Record<string, string>).scope;
+    const picked = pickScope(memCtx, requested, 'read');
+    if (isRejection(picked)) return reply.status(picked.status).send(picked.body);
+
+    const wanted = memCtx.scopes.filter((s) => picked.scopeIds.includes(s.id));
+
+    const roots = [];
+    for (const scope of wanted) {
+      const rootId = await ensureMemoryRoot(userId, scope.id);
+      const result = await client.execute({
+        sql: `SELECT id, type, title, content, created_at, updated_at FROM memory_entries WHERE id = ?`,
+        args: [rootId],
+      });
+      const row = result.rows[0] as Record<string, unknown> | undefined;
+      if (row) roots.push({ ...row, scope: scope.slug, scope_name: scope.name });
+    }
+
+    const primary = roots.find((r) => r.scope === memCtx.scopes.find((s) => s.isDefault)?.slug) ?? roots[0];
+
+    return reply.send({
+      data: {
+        ...primary,
+        default_scope: memCtx.scopes.find((s) => s.isDefault)?.slug ?? null,
+        scopes: roots,
+      },
     });
-    return reply.send({ data: result.rows[0] });
   });
 
   // -------------------------------------------------------------------------
@@ -6297,47 +6333,59 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.get('/api/memory/entries', async (request, reply) => {
     const memCtx = await resolveMemoryScopeContext(request);
     if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
-    const userId = memCtx.userId;
 
-    const { q, type, parent_id, limit: lim = '50', tag, since, order } = request.query as Record<string, string>;
+    const { q, type, parent_id, limit: lim = '50', tag, since, order, scope } = request.query as Record<string, string>;
     const maxLimit = Math.min(parseInt(lim, 10) || 50, 200);
+
+    // No scope given spans everything the caller can reach; naming one narrows.
+    const picked = pickScope(memCtx, scope, 'read');
+    if (isRejection(picked)) return reply.status(picked.status).send(picked.body);
+    const scopeIn = picked.scopeIds.map(() => '?').join(', ');
 
     let rows;
     if (q) {
       const result = await client.execute({
-        sql: `SELECT id, user_id, type, title, content, created_at, updated_at
-              FROM memory_entries
-              WHERE user_id = ? AND is_deleted = false
-                AND search_vector @@ plainto_tsquery('english', ?)
-                ${type ? `AND type = ?` : ''}
-              ORDER BY ts_rank(search_vector, plainto_tsquery('english', ?)) DESC
+        sql: `SELECT e.id, e.user_id, e.type, e.title, e.content, e.created_at, e.updated_at,
+                     s.slug AS scope, s.name AS scope_name
+              FROM memory_entries e
+              JOIN memory_scopes s ON s.id = e.scope_id
+              WHERE e.scope_id IN (${scopeIn}) AND e.is_deleted = false
+                AND e.search_vector @@ plainto_tsquery('english', ?)
+                ${type ? `AND e.type = ?` : ''}
+              ORDER BY ts_rank(e.search_vector, plainto_tsquery('english', ?)) DESC
               LIMIT ?`,
-        args: type ? [userId, q, type, q, maxLimit] : [userId, q, q, maxLimit],
+        args: type
+          ? [...picked.scopeIds, q, type, q, maxLimit]
+          : [...picked.scopeIds, q, q, maxLimit],
       });
       rows = result.rows;
     } else if (parent_id) {
       const result = await client.execute({
-        sql: `SELECT e.id, e.type, e.title, e.content, e.created_at, e.updated_at
+        sql: `SELECT e.id, e.type, e.title, e.content, e.created_at, e.updated_at,
+                     s.slug AS scope, s.name AS scope_name
               FROM memory_entries e
+              JOIN memory_scopes s ON s.id = e.scope_id
               JOIN memory_branches b ON b.entry_id = e.id
-              WHERE e.user_id = ? AND e.is_deleted = false AND b.parent_entry_id = ?
+              WHERE e.scope_id IN (${scopeIn}) AND e.is_deleted = false AND b.parent_entry_id = ?
                 ${type ? `AND e.type = ?` : ''}
               ORDER BY b.position ASC, e.title ASC
               LIMIT ?`,
-        args: type ? [userId, parent_id, type, maxLimit] : [userId, parent_id, maxLimit],
+        args: type
+          ? [...picked.scopeIds, parent_id, type, maxLimit]
+          : [...picked.scopeIds, parent_id, maxLimit],
       });
       rows = result.rows;
     } else {
       const args: unknown[] = [];
 
-      let fromClause = 'FROM memory_entries e';
+      let fromClause = 'FROM memory_entries e JOIN memory_scopes s ON s.id = e.scope_id';
       if (tag) {
         fromClause += ' JOIN memory_tags mt ON mt.entry_id = e.id AND mt.tag = ?';
         args.push(tag);
       }
 
-      let whereClause = `WHERE e.user_id = ? AND e.is_deleted = false`;
-      args.push(userId);
+      let whereClause = `WHERE e.scope_id IN (${scopeIn}) AND e.is_deleted = false`;
+      args.push(...picked.scopeIds);
 
       if (type) {
         whereClause += ` AND e.type = ?`;
@@ -6356,7 +6404,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
       args.push(maxLimit);
       const result = await client.execute({
-        sql: `SELECT e.id, e.type, e.title, e.content, e.created_at, e.updated_at
+        sql: `SELECT e.id, e.type, e.title, e.content, e.created_at, e.updated_at,
+                     s.slug AS scope, s.name AS scope_name
               ${fromClause}
               ${whereClause}
               ORDER BY ${orderCol} ${orderDir}
@@ -6384,11 +6433,44 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const type = (body.type as string | undefined) ?? 'note';
     const content = (body.content as string | undefined) ?? null;
     const parentId = (body.parent_id as string | undefined) ?? null;
+    const requestedScope = (body.scope as string | undefined) ?? null;
+
+    // Write-scope precedence: an explicit scope, else the parent's scope, else
+    // the caller's default. Inheriting from the parent is what makes "create
+    // this under that entry" do the obvious thing without the model having to
+    // reason about scopes at all.
+    const picked = pickScope(memCtx, requestedScope, 'write');
+    if (isRejection(picked)) return reply.status(picked.status).send(picked.body);
+    let scopeId = picked.scopeIds[0];
+
+    if (parentId) {
+      const parentRow = await client.execute({
+        sql: `SELECT scope_id FROM memory_entries WHERE id = ? AND is_deleted = false LIMIT 1`,
+        args: [parentId],
+      });
+      if (parentRow.rows.length === 0) {
+        return reply.status(404).send({ error: 'Parent entry not found' });
+      }
+      const parentScopeId = parentRow.rows[0].scope_id as string;
+      if (!memCtx.scopeIds.includes(parentScopeId)) {
+        return reply.status(404).send({ error: 'Parent entry not found' });
+      }
+      if (requestedScope && parentScopeId !== scopeId) {
+        // Never silently pick one — the caller asked for two different things.
+        return reply.status(409).send({
+          error: 'The requested scope and the parent entry are in different scopes.',
+          code: 'SCOPE_CONFLICT',
+        });
+      }
+      scopeId = parentScopeId;
+    }
 
     // Idempotent: an exact, alias, or close-enough title match returns the
     // existing entry instead of a duplicate. MEMORY_POLICY.md tells agents to
     // branch on `created`, so this must be honest.
-    const { row, created } = await resolveOrCreate({ userId, type, title, content });
+    const { row, created } = await resolveOrCreate({ userId, scopeId, type, title, content });
+
+    const scopeSlug = memCtx.scopes.find((s) => s.id === scopeId)?.slug ?? null;
 
     // If an existing entry was matched (exact/alias/fuzzy), return it immediately
     if (!created) {
@@ -6396,6 +6478,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         data: {
           id: row.id,
           userId: row.user_id,
+          scope: scopeSlug,
           type: row.type,
           title: row.title,
           content: row.content,
@@ -6419,8 +6502,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       position = (posResult.rows[0]?.next_pos as number) ?? 0;
     }
     await client.execute({
-      sql: `INSERT INTO memory_branches (id, entry_id, parent_entry_id, position, is_expanded) VALUES (?, ?, ?, ?, false)`,
-      args: [branchId, id, parentId, position],
+      sql: `INSERT INTO memory_branches (id, entry_id, parent_entry_id, scope_id, position, is_expanded)
+            VALUES (?, ?, ?, ?, ?, false)`,
+      args: [branchId, id, parentId, scopeId, position],
     });
 
     // Handle initial attributes
@@ -6435,10 +6519,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       }
     }
 
-    await updateLinkIndex(id, userId, content);
+    await updateLinkIndex(id, scopeId, content);
     await updateTagIndex(id, content);
 
-    return reply.status(201).send({ data: { id, userId, type, title, content, createdAt: now, updatedAt: now } });
+    return reply.status(201).send({
+      data: { id, userId, scope: scopeSlug, type, title, content, createdAt: now, updatedAt: now },
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -6447,18 +6533,24 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.get<{ Params: { id: string } }>('/api/memory/entries/:id', async (request, reply) => {
     const memCtx = await resolveMemoryScopeContext(request);
     if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
-    const userId = memCtx.userId;
 
     const { id } = request.params;
+    const scopeIn = memCtx.scopeIds.map(() => '?').join(', ');
 
+    // Scope-filtered, not merely user-filtered: an entry outside the caller's
+    // grants is a 404, indistinguishable from one that does not exist.
     const entryResult = await client.execute({
-      sql: `SELECT id, user_id, type, title, content, created_at, updated_at
-            FROM memory_entries WHERE id = ? AND user_id = ? AND is_deleted = false`,
-      args: [id, userId],
+      sql: `SELECT e.id, e.user_id, e.scope_id, e.type, e.title, e.content, e.created_at, e.updated_at,
+                   s.slug AS scope, s.name AS scope_name
+            FROM memory_entries e
+            JOIN memory_scopes s ON s.id = e.scope_id
+            WHERE e.id = ? AND e.scope_id IN (${scopeIn}) AND e.is_deleted = false`,
+      args: [id, ...memCtx.scopeIds],
     });
     if (entryResult.rows.length === 0) return reply.status(404).send({ error: 'Not found' });
 
     const entry = entryResult.rows[0];
+    const entryScopeId = entry.scope_id as string;
 
     const attrsResult = await client.execute({
       sql: `SELECT id, type, name, value, position FROM memory_attributes
@@ -6466,12 +6558,15 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       args: [id],
     });
 
+    // Backlinks stay inside the entry's own scope. memory_links cannot hold a
+    // cross-scope row, but filtering here too means a legacy row from before the
+    // constraint cannot leak a title across the partition.
     const backlinksResult = await client.execute({
       sql: `SELECT e.id, e.title, e.type, ml.context
             FROM memory_links ml
             JOIN memory_entries e ON e.id = ml.source_id
-            WHERE ml.target_id = ? AND e.is_deleted = false AND e.user_id = ?`,
-      args: [id, userId],
+            WHERE ml.target_id = ? AND e.is_deleted = false AND e.scope_id = ?`,
+      args: [id, entryScopeId],
     });
 
     const branchResult = await client.execute({
@@ -6485,7 +6580,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     });
     const tags = tagsResult.rows.map((r) => r.tag as string);
 
-    // Resolve [[wikilinks]] in the content to entry IDs for clickable rendering
+    // Resolve [[wikilinks]] in the content to entry IDs for clickable rendering.
+    // Scoped to the entry's own scope, matching updateLinkIndex: a link to a
+    // title that exists only in another scope stays unresolved, because from
+    // inside this scope that entry does not exist.
     const wikilinkRefs = parseWikilinkRefs((entry.content as string | null) ?? '');
     const referencedTitles = [...new Set(wikilinkRefs.map((r) => r.title))];
     const resolvedLinks: Record<string, string> = {};
@@ -6493,8 +6591,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const placeholders = referencedTitles.map(() => '?').join(', ');
       const titleRows = await client.execute({
         sql: `SELECT id, title FROM memory_entries
-              WHERE user_id = ? AND is_deleted = false AND title IN (${placeholders})`,
-        args: [userId, ...referencedTitles],
+              WHERE scope_id = ? AND is_deleted = false AND title IN (${placeholders})`,
+        args: [entryScopeId, ...referencedTitles],
       });
       for (const r of titleRows.rows) {
         resolvedLinks[r.title as string] = r.id as string;
@@ -6507,9 +6605,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           sql: `SELECT e.id, a.value AS alias
                 FROM memory_attributes a
                 JOIN memory_entries e ON e.id = a.entry_id
-                WHERE e.user_id = ? AND a.name = 'alias' AND a.is_deleted = false
+                WHERE e.scope_id = ? AND a.name = 'alias' AND a.is_deleted = false
                   AND a.value IN (${aliasPlaceholders})`,
-          args: [userId, ...unresolved],
+          args: [entryScopeId, ...unresolved],
         });
         for (const r of aliasRows.rows) {
           resolvedLinks[r.alias as string] = r.id as string;
@@ -6528,12 +6626,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const transRefs = parseTransclusions((entry.content as string | null) ?? '');
     const transclusions: Record<string, { id: string; title: string; content: string }> = {};
     const seen = new Set<string>([id]);
-    const transclusionUserId: string = userId;
+    const transclusionScopeId: string = entryScopeId;
 
     if (transRefs.length > 0) {
       async function resolveTransclusion(title: string, depth: number): Promise<void> {
         if (depth > 2 || title in transclusions) return;
-        const target = await lookupEntryByTitleOrAlias(transclusionUserId, title);
+        const target = await lookupEntryByTitleOrAlias(transclusionScopeId, title);
         if (!target || seen.has(target.id)) return;
         seen.add(target.id);
         transclusions[title] = { id: target.id, title: target.title, content: target.content ?? '' };
@@ -6564,16 +6662,19 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.get('/api/memory/tags', async (request, reply) => {
     const memCtx = await resolveMemoryScopeContext(request);
     if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
-    const userId = memCtx.userId;
+
+    const picked = pickScope(memCtx, (request.query as Record<string, string>).scope, 'read');
+    if (isRejection(picked)) return reply.status(picked.status).send(picked.body);
+    const scopeIn = picked.scopeIds.map(() => '?').join(', ');
 
     const result = await client.execute({
       sql: `SELECT mt.tag, COUNT(*) AS count
             FROM memory_tags mt
             JOIN memory_entries e ON e.id = mt.entry_id
-            WHERE e.user_id = ? AND e.is_deleted = false
+            WHERE e.scope_id IN (${scopeIn}) AND e.is_deleted = false
             GROUP BY mt.tag
             ORDER BY COUNT(*) DESC, mt.tag ASC`,
-      args: [userId],
+      args: picked.scopeIds,
     });
 
     return reply.send({ data: result.rows.map((r) => ({ tag: r.tag as string, count: Number(r.count) })) });
@@ -6585,16 +6686,27 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.put<{ Params: { id: string } }>('/api/memory/entries/:id', async (request, reply) => {
     const memCtx = await resolveMemoryScopeContext(request);
     if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
-    const userId = memCtx.userId;
 
     const { id } = request.params;
     const body = request.body as Record<string, unknown>;
+    const scopeIn = memCtx.scopeIds.map(() => '?').join(', ');
 
     const existing = await client.execute({
-      sql: `SELECT id, type FROM memory_entries WHERE id = ? AND user_id = ? AND is_deleted = false`,
-      args: [id, userId],
+      sql: `SELECT id, type, scope_id FROM memory_entries
+            WHERE id = ? AND scope_id IN (${scopeIn}) AND is_deleted = false`,
+      args: [id, ...memCtx.scopeIds],
     });
     if (existing.rows.length === 0) return reply.status(404).send({ error: 'Not found' });
+    const entryScopeId = existing.rows[0].scope_id as string;
+
+    // Moving an entry between scopes is a separate, deliberate operation — an
+    // entry's scope is a fact about it, not a field to patch.
+    if (body.scope !== undefined || body.scope_id !== undefined) {
+      return reply.status(400).send({
+        error: 'Use PUT /api/memory/entries/:id/scope to move an entry between scopes.',
+        code: 'SCOPE_NOT_PATCHABLE',
+      });
+    }
 
     // Root index is read-only from dashboard sessions — only the agent (gateway token) may update it
     if (existing.rows[0].type === 'index' && getSession(request)) {
@@ -6617,7 +6729,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     });
 
     if (body.content !== undefined) {
-      await updateLinkIndex(id, userId, body.content as string | null);
+      await updateLinkIndex(id, entryScopeId, body.content as string | null);
       await updateTagIndex(id, body.content as string | null);
     }
 
@@ -6634,12 +6746,26 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.delete<{ Params: { id: string } }>('/api/memory/entries/:id', async (request, reply) => {
     const memCtx = await resolveMemoryScopeContext(request);
     if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
-    const userId = memCtx.userId;
 
     const { id } = request.params;
+    const scopeIn = memCtx.scopeIds.map(() => '?').join(', ');
+
+    // A scope's root index anchors its tree; deleting it would orphan the scope.
+    const isRoot = await client.execute({
+      sql: `SELECT id FROM memory_scopes WHERE root_entry_id = ? LIMIT 1`,
+      args: [id],
+    });
+    if (isRoot.rows.length > 0) {
+      return reply.status(400).send({
+        error: "A scope's index entry cannot be deleted. Delete or archive the scope instead.",
+        code: 'CANNOT_DELETE_ROOT',
+      });
+    }
+
     await client.execute({
-      sql: `UPDATE memory_entries SET is_deleted = true, updated_at = ? WHERE id = ? AND user_id = ?`,
-      args: [new Date().toISOString(), id, userId],
+      sql: `UPDATE memory_entries SET is_deleted = true, updated_at = ?
+            WHERE id = ? AND scope_id IN (${scopeIn})`,
+      args: [new Date().toISOString(), id, ...memCtx.scopeIds],
     });
     return reply.send({ ok: true });
   });
@@ -6652,15 +6778,24 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
     const userId = memCtx.userId;
 
-    await ensureMemoryRoot(userId);
+    const picked = pickScope(memCtx, (request.query as Record<string, string>).scope, 'read');
+    if (isRejection(picked)) return reply.status(picked.status).send(picked.body);
 
+    // Each reachable scope needs its root before the tree can render it.
+    for (const scopeId of picked.scopeIds) {
+      await ensureMemoryRoot(userId, scopeId);
+    }
+
+    const scopeIn = picked.scopeIds.map(() => '?').join(', ');
     const entries = await client.execute({
-      sql: `SELECT e.id, e.type, e.title, b.parent_entry_id, b.position, b.is_expanded
+      sql: `SELECT e.id, e.type, e.title, b.parent_entry_id, b.position, b.is_expanded,
+                   s.slug AS scope, s.name AS scope_name
             FROM memory_entries e
+            JOIN memory_scopes s ON s.id = e.scope_id
             LEFT JOIN memory_branches b ON b.entry_id = e.id
-            WHERE e.user_id = ? AND e.is_deleted = false
-            ORDER BY b.parent_entry_id NULLS FIRST, b.position ASC, e.title ASC`,
-      args: [userId],
+            WHERE e.scope_id IN (${scopeIn}) AND e.is_deleted = false
+            ORDER BY s.name ASC, b.parent_entry_id NULLS FIRST, b.position ASC, e.title ASC`,
+      args: picked.scopeIds,
     });
 
     return reply.send({ data: entries.rows });
@@ -6672,11 +6807,17 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.get('/api/memory/graph', async (request, reply) => {
     const memCtx = await resolveMemoryScopeContext(request);
     if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
-    const userId = memCtx.userId;
+
+    const picked = pickScope(memCtx, (request.query as Record<string, string>).scope, 'read');
+    if (isRejection(picked)) return reply.status(picked.status).send(picked.body);
+    const scopeIn = picked.scopeIds.map(() => '?').join(', ');
 
     const entries = await client.execute({
-      sql: `SELECT id, type, title FROM memory_entries WHERE user_id = ? AND is_deleted = false`,
-      args: [userId],
+      sql: `SELECT e.id, e.type, e.title, s.slug AS scope
+            FROM memory_entries e
+            JOIN memory_scopes s ON s.id = e.scope_id
+            WHERE e.scope_id IN (${scopeIn}) AND e.is_deleted = false`,
+      args: picked.scopeIds,
     });
 
     const links = await client.execute({
@@ -6684,24 +6825,32 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
             FROM memory_links ml
             JOIN memory_entries s ON s.id = ml.source_id
             JOIN memory_entries t ON t.id = ml.target_id
-            WHERE s.user_id = ? AND s.is_deleted = false AND t.is_deleted = false`,
-      args: [userId],
+            WHERE s.scope_id IN (${scopeIn}) AND s.is_deleted = false AND t.is_deleted = false
+              AND t.scope_id = s.scope_id`,
+      args: picked.scopeIds,
     });
 
-    // Relation edges from attributes
+    // Relation edges from attributes. Unlike branches and links these cannot be
+    // constrained in the database — a relation's target lives in a polymorphic
+    // `value TEXT` that no foreign key can reference — so the same-scope rule is
+    // enforced by this join. Any legacy cross-scope relation is dropped rather
+    // than drawn.
     const relations = await client.execute({
       sql: `SELECT ma.entry_id AS source_id, ma.value AS target_id, ma.name
             FROM memory_attributes ma
             JOIN memory_entries e ON e.id = ma.entry_id
-            WHERE e.user_id = ? AND e.is_deleted = false
+            JOIN memory_entries t ON t.id = ma.value AND t.scope_id = e.scope_id
+            WHERE e.scope_id IN (${scopeIn}) AND e.is_deleted = false
+              AND t.is_deleted = false
               AND ma.type = 'relation' AND ma.is_deleted = false`,
-      args: [userId],
+      args: picked.scopeIds,
     });
 
     const nodes = entries.rows.map((e) => ({
       id: e.id,
       type: e.type,
       title: e.title,
+      scope: e.scope,
     }));
 
     const edges = [
@@ -6718,7 +6867,6 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.post<{ Params: { id: string } }>('/api/memory/entries/:id/attributes', async (request, reply) => {
     const memCtx = await resolveMemoryScopeContext(request);
     if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
-    const userId = memCtx.userId;
 
     const { id } = request.params;
     const body = request.body as Record<string, unknown>;
@@ -6729,11 +6877,33 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (!type || !name || !value) return reply.status(400).send({ error: 'type, name, value required' });
     if (!['label', 'relation'].includes(type)) return reply.status(400).send({ error: 'type must be label or relation' });
 
+    const scopeIn = memCtx.scopeIds.map(() => '?').join(', ');
     const ownerCheck = await client.execute({
-      sql: `SELECT id FROM memory_entries WHERE id = ? AND user_id = ? AND is_deleted = false`,
-      args: [id, userId],
+      sql: `SELECT id, scope_id FROM memory_entries
+            WHERE id = ? AND scope_id IN (${scopeIn}) AND is_deleted = false`,
+      args: [id, ...memCtx.scopeIds],
     });
     if (ownerCheck.rows.length === 0) return reply.status(404).send({ error: 'Entry not found' });
+
+    // A relation points at another entry by id, and that entry must live in the
+    // same scope. This is the one cross-scope rule with no database constraint
+    // behind it: `value` is polymorphic — a label's value is arbitrary text —
+    // so no foreign key can be declared on it.
+    if (type === 'relation') {
+      const target = await client.execute({
+        sql: `SELECT scope_id FROM memory_entries WHERE id = ? AND is_deleted = false LIMIT 1`,
+        args: [value],
+      });
+      if (target.rows.length === 0) {
+        return reply.status(404).send({ error: 'Relation target not found' });
+      }
+      if ((target.rows[0].scope_id as string) !== (ownerCheck.rows[0].scope_id as string)) {
+        return reply.status(409).send({
+          error: 'A relation cannot cross scopes — the target lives in a different scope.',
+          code: 'CROSS_SCOPE_RELATION',
+        });
+      }
+    }
 
     const attrId = nanoid();
     const now = new Date().toISOString();
@@ -6752,16 +6922,16 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.delete<{ Params: { attrId: string } }>('/api/memory/attributes/:attrId', async (request, reply) => {
     const memCtx = await resolveMemoryScopeContext(request);
     if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
-    const userId = memCtx.userId;
 
     const { attrId } = request.params;
 
-    // Verify ownership via joined query
+    // Verify reachability via joined query
+    const scopeIn = memCtx.scopeIds.map(() => '?').join(', ');
     const check = await client.execute({
       sql: `SELECT ma.id FROM memory_attributes ma
             JOIN memory_entries e ON e.id = ma.entry_id
-            WHERE ma.id = ? AND e.user_id = ?`,
-      args: [attrId, userId],
+            WHERE ma.id = ? AND e.scope_id IN (${scopeIn})`,
+      args: [attrId, ...memCtx.scopeIds],
     });
     if (check.rows.length === 0) return reply.status(404).send({ error: 'Attribute not found' });
 
@@ -6778,9 +6948,11 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.get('/api/memory/dream', async (request, reply) => {
     const memCtx = await resolveMemoryScopeContext(request);
     if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
-    const userId = memCtx.userId;
 
-    const entries = await getDreamManifest(userId);
+    const picked = pickScope(memCtx, (request.query as Record<string, string>).scope, 'read');
+    if (isRejection(picked)) return reply.status(picked.status).send(picked.body);
+
+    const entries = await getDreamManifest(picked.scopeIds);
     return reply.send({ data: entries });
   });
 
@@ -6790,19 +6962,419 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.put<{ Params: { id: string } }>('/api/memory/entries/:id/parent', async (request, reply) => {
     const memCtx = await resolveMemoryScopeContext(request);
     if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
-    const userId = memCtx.userId;
 
     const { id } = request.params;
     const body = request.body as { parent_id?: string | null };
     const newParentId = body.parent_id ?? null;
 
-    const result = await setEntryParent(id, userId, newParentId);
+    const result = await setEntryParent(id, memCtx.scopeIds, newParentId);
     if ('error' in result) {
       const status = result.error === 'Entry not found' ? 404 : 400;
       return reply.status(status).send({ error: result.error });
     }
     return reply.send({ data: result });
   });
+
+  // -------------------------------------------------------------------------
+  // Scopes
+  //
+  // A scope is a hard partition of one user's vault. Reads and writes are
+  // covered above; these manage the scopes themselves.
+  // -------------------------------------------------------------------------
+
+  /** Lowercase kebab, and never a word the query layer treats as special. */
+  const RESERVED_SCOPE_SLUGS = new Set(['all', 'none']);
+
+  function slugifyScope(value: string): string {
+    return value
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 48);
+  }
+
+  // GET /api/memory/scopes — what the caller can reach, with entry counts.
+  // Serves both the dashboard and the agents' memory_list_scopes.
+  app.get('/api/memory/scopes', async (request, reply) => {
+    const memCtx = await resolveMemoryScopeContext(request);
+    if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const includeArchived =
+      memCtx.isSession && (request.query as Record<string, string>).include_archived === 'true';
+
+    const visible = includeArchived
+      ? await listUserScopes(memCtx.userId, { includeArchived: true })
+      : memCtx.scopes;
+    if (visible.length === 0) return reply.send({ data: [] });
+
+    const placeholders = visible.map(() => '?').join(', ');
+    const counts = await client.execute({
+      sql: `SELECT scope_id, COUNT(*) AS count FROM memory_entries
+            WHERE scope_id IN (${placeholders}) AND is_deleted = false
+            GROUP BY scope_id`,
+      args: visible.map((s) => s.id),
+    });
+    const byScope = new Map(counts.rows.map((r) => [r.scope_id as string, Number(r.count)]));
+
+    return reply.send({
+      data: visible.map((s) => ({
+        id: s.id,
+        slug: s.slug,
+        name: s.name,
+        description: s.description,
+        is_default: s.isDefault,
+        archived_at: s.archivedAt,
+        entry_count: byScope.get(s.id) ?? 0,
+      })),
+    });
+  });
+
+  // POST /api/memory/scopes — create one. Reachable by agents as well as the
+  // dashboard, so it carries the guardrails an agent needs: provenance, a cap,
+  // and a near-duplicate check, since a fragmented vault has no undo.
+  app.post('/api/memory/scopes', async (request, reply) => {
+    const memCtx = await resolveMemoryScopeContext(request);
+    if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const body = request.body as Record<string, unknown>;
+    const name = (body.name as string | undefined)?.trim();
+    if (!name) return reply.status(400).send({ error: 'name is required' });
+
+    const slug = slugifyScope((body.slug as string | undefined) || name);
+    if (!slug) return reply.status(400).send({ error: 'Could not derive a slug from name' });
+    if (RESERVED_SCOPE_SLUGS.has(slug)) {
+      return reply.status(400).send({ error: `"${slug}" is reserved and cannot be a scope slug` });
+    }
+
+    const all = await listUserScopes(memCtx.userId, { includeArchived: true });
+    if (all.length >= 50) {
+      return reply.status(409).send({
+        error: 'Scope limit reached (50). Archive one you no longer use.',
+        code: 'SCOPE_LIMIT',
+      });
+    }
+    const clash = all.find((s) => s.slug === slug);
+    if (clash) {
+      return reply.status(409).send({
+        error: `A scope with the slug "${slug}" already exists.`,
+        code: 'DUPLICATE_SCOPE',
+      });
+    }
+    // Near-duplicate check, so an agent cannot quietly split a vault into
+    // "acme" and "acme-corp" that neither it nor the user will reconcile.
+    const similar = await client.execute({
+      sql: `SELECT slug FROM memory_scopes
+            WHERE user_id = ? AND similarity(slug, ?) > 0.7 LIMIT 1`,
+      args: [memCtx.userId, slug],
+    });
+    if (similar.rows.length > 0) {
+      return reply.status(409).send({
+        error: `"${similar.rows[0].slug}" already covers this. Use it, or pick a clearly different name.`,
+        code: 'SIMILAR_SCOPE',
+      });
+    }
+
+    const id = nanoid();
+    const now = new Date().toISOString();
+    await client.execute({
+      sql: `INSERT INTO memory_scopes
+              (id, user_id, slug, name, description, is_default, is_system,
+               created_by_agent_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, false, false, ?, ?, ?)`,
+      args: [
+        id, memCtx.userId, slug, name,
+        (body.description as string | undefined) ?? null,
+        memCtx.agentId, now, now,
+      ],
+    });
+
+    // A scope without a root has no tree to hang anything from.
+    await ensureMemoryRoot(memCtx.userId, id);
+
+    return reply.status(201).send({
+      data: { id, slug, name, description: (body.description as string | undefined) ?? null },
+    });
+  });
+
+  /** Scope CRUD beyond creation is the user's, not an agent's. */
+  async function requireScopeOwner(memCtx: MemoryContext, scopeId: string, reply: any) {
+    if (!memCtx.isSession) {
+      reply.status(403).send({ error: 'Only the account owner can manage scopes' });
+      return null;
+    }
+    const row = await client.execute({
+      sql: `SELECT id, slug, name, is_system, is_default, archived_at
+            FROM memory_scopes WHERE id = ? AND user_id = ? LIMIT 1`,
+      args: [scopeId, memCtx.userId],
+    });
+    if (row.rows.length === 0) {
+      reply.status(404).send({ error: 'Scope not found' });
+      return null;
+    }
+    return row.rows[0] as Record<string, unknown>;
+  }
+
+  app.put<{ Params: { id: string } }>('/api/memory/scopes/:id', async (request, reply) => {
+    const memCtx = await resolveMemoryScopeContext(request);
+    if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const scope = await requireScopeOwner(memCtx, request.params.id, reply);
+    if (!scope) return;
+
+    const body = request.body as Record<string, unknown>;
+    const now = new Date().toISOString();
+
+    if (body.archived !== undefined && scope.is_system) {
+      return reply.status(409).send({ error: 'The default scope cannot be archived' });
+    }
+    if (body.is_default === false && scope.is_default) {
+      return reply.status(409).send({
+        error: 'Choose another scope as the default rather than clearing this one',
+      });
+    }
+
+    // One default per user is a database invariant, so the swap is two
+    // statements: clear, then set.
+    if (body.is_default === true) {
+      await client.execute({
+        sql: `UPDATE memory_scopes SET is_default = false, updated_at = ? WHERE user_id = ? AND is_default`,
+        args: [now, memCtx.userId],
+      });
+      await client.execute({
+        sql: `UPDATE memory_scopes SET is_default = true, updated_at = ? WHERE id = ?`,
+        args: [now, request.params.id],
+      });
+    }
+
+    const fields: string[] = [];
+    const args: unknown[] = [];
+    if (body.name !== undefined) { fields.push('name = ?'); args.push((body.name as string).trim()); }
+    if (body.description !== undefined) { fields.push('description = ?'); args.push(body.description); }
+    if (body.slug !== undefined) {
+      const slug = slugifyScope(body.slug as string);
+      if (!slug || RESERVED_SCOPE_SLUGS.has(slug)) {
+        return reply.status(400).send({ error: 'Invalid slug' });
+      }
+      fields.push('slug = ?'); args.push(slug);
+    }
+    if (body.archived !== undefined) {
+      fields.push('archived_at = ?'); args.push(body.archived ? now : null);
+    }
+
+    if (fields.length > 0) {
+      fields.push('updated_at = ?'); args.push(now);
+      args.push(request.params.id);
+      await client.execute({
+        sql: `UPDATE memory_scopes SET ${fields.join(', ')} WHERE id = ?`,
+        args,
+      });
+    }
+
+    const updated = await client.execute({
+      sql: `SELECT id, slug, name, description, is_default, archived_at FROM memory_scopes WHERE id = ?`,
+      args: [request.params.id],
+    });
+    return reply.send({ data: updated.rows[0] });
+  });
+
+  // DELETE /api/memory/scopes/:id
+  //
+  // There is deliberately no purge option. Nothing else in this system hard
+  // deletes memory — memory_delete is a soft delete and is permission-blocked —
+  // so a single endpoint that can vaporise a vault is not worth the convenience.
+  app.delete<{ Params: { id: string } }>('/api/memory/scopes/:id', async (request, reply) => {
+    const memCtx = await resolveMemoryScopeContext(request);
+    if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const scope = await requireScopeOwner(memCtx, request.params.id, reply);
+    if (!scope) return;
+
+    if (scope.is_system) {
+      return reply.status(409).send({
+        error: 'The default scope cannot be deleted.',
+        code: 'CANNOT_DELETE_DEFAULT',
+      });
+    }
+
+    const query = request.query as Record<string, string>;
+    const now = new Date().toISOString();
+
+    if (query.archive === 'true') {
+      await client.execute({
+        sql: `UPDATE memory_scopes SET archived_at = ?, updated_at = ? WHERE id = ?`,
+        args: [now, now, request.params.id],
+      });
+      return reply.send({ data: { archived: true } });
+    }
+
+    const countResult = await client.execute({
+      sql: `SELECT COUNT(*) AS count FROM memory_entries WHERE scope_id = ? AND is_deleted = false`,
+      args: [request.params.id],
+    });
+    const entryCount = Number(countResult.rows[0]?.count ?? 0);
+
+    if (entryCount > 0 && !query.reassign_to) {
+      return reply.status(409).send({
+        error: `This scope still holds ${entryCount} entries. Archive it, or pass reassign_to to move them.`,
+        code: 'SCOPE_NOT_EMPTY',
+        entry_count: entryCount,
+      });
+    }
+
+    if (query.reassign_to) {
+      const target = await requireScopeOwner(memCtx, query.reassign_to, reply);
+      if (!target) return;
+      // Entries, branches and links all carry scope_id and must move together,
+      // or the composite foreign keys will reject the update.
+      for (const table of ['memory_entries', 'memory_branches', 'memory_links']) {
+        await client.execute({
+          sql: `UPDATE ${table} SET scope_id = ? WHERE scope_id = ?`,
+          args: [query.reassign_to, request.params.id],
+        });
+      }
+    }
+
+    await client.execute({
+      sql: `UPDATE memory_scopes SET root_entry_id = NULL WHERE id = ?`,
+      args: [request.params.id],
+    });
+    await client.execute({
+      sql: `DELETE FROM memory_scopes WHERE id = ?`,
+      args: [request.params.id],
+    });
+    return reply.send({ data: { deleted: true, reassigned: query.reassign_to ?? null } });
+  });
+
+  // PUT /api/memory/entries/:id/scope — move one entry between scopes.
+  //
+  // Session only. Moving is the one operation that crosses the partition, so it
+  // is a deliberate human act; agents re-file by creating in the right scope.
+  app.put<{ Params: { id: string } }>('/api/memory/entries/:id/scope', async (request, reply) => {
+    const memCtx = await resolveMemoryScopeContext(request);
+    if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
+    if (!memCtx.isSession) {
+      return reply.status(403).send({ error: 'Only the account owner can move an entry between scopes' });
+    }
+
+    const target = pickScope(memCtx, (request.body as Record<string, unknown>).scope as string, 'write');
+    if (isRejection(target)) return reply.status(target.status).send(target.body);
+    const targetScopeId = target.scopeIds[0];
+
+    const { id } = request.params;
+    const scopeIn = memCtx.scopeIds.map(() => '?').join(', ');
+    const entry = await client.execute({
+      sql: `SELECT id, scope_id FROM memory_entries
+            WHERE id = ? AND scope_id IN (${scopeIn}) AND is_deleted = false`,
+      args: [id, ...memCtx.scopeIds],
+    });
+    if (entry.rows.length === 0) return reply.status(404).send({ error: 'Not found' });
+    if ((entry.rows[0].scope_id as string) === targetScopeId) {
+      return reply.send({ data: { moved: false } });
+    }
+
+    const isRoot = await client.execute({
+      sql: `SELECT id FROM memory_scopes WHERE root_entry_id = ? LIMIT 1`,
+      args: [id],
+    });
+    if (isRoot.rows.length > 0) {
+      return reply.status(400).send({ error: "A scope's index entry cannot be moved" });
+    }
+
+    const now = new Date().toISOString();
+    await client.execute({
+      sql: `UPDATE memory_entries SET scope_id = ?, updated_at = ? WHERE id = ?`,
+      args: [targetScopeId, now, id],
+    });
+    // The entry leaves its subtree behind rather than dragging children across
+    // the partition: it re-enters the new scope at the root.
+    await client.execute({
+      sql: `UPDATE memory_branches SET scope_id = ?, parent_entry_id = NULL WHERE entry_id = ?`,
+      args: [targetScopeId, id],
+    });
+    // Its links pointed at entries in the old scope and cannot survive the move.
+    await client.execute({ sql: `DELETE FROM memory_links WHERE source_id = ? OR target_id = ?`, args: [id, id] });
+
+    const moved = await client.execute({
+      sql: `SELECT content FROM memory_entries WHERE id = ?`,
+      args: [id],
+    });
+    await updateLinkIndex(id, targetScopeId, (moved.rows[0]?.content as string | null) ?? null);
+
+    return reply.send({ data: { moved: true, scope: targetScopeId } });
+  });
+
+  // -------------------------------------------------------------------------
+  // Per-agent scope grants
+  //
+  // Zero rows means every scope the owner has. Grants narrow; they do not
+  // enable — whether the agent sees memory tools at all is the separate
+  // question of the memory service being enabled on it.
+  // -------------------------------------------------------------------------
+
+  app.get<{ Params: { agentId: string } }>(
+    '/api/permissions/:agentId/memory/scopes',
+    async (request, reply) => {
+      const userId = getUserId(request);
+      if (!(await userOwnsAgent(userId, request.params.agentId))) {
+        return reply.code(404).send(agentNotFound);
+      }
+
+      const grants = await getAgentScopeGrants(request.params.agentId, userId);
+      const all = await listUserScopes(userId);
+
+      return reply.send({
+        data: {
+          mode: grants.mode,
+          defaultScopeId: grants.defaultScopeId,
+          grantedScopeIds: grants.scopes.map((s) => s.id),
+          availableScopes: all.map((s) => ({
+            id: s.id, slug: s.slug, name: s.name, is_default: s.isDefault,
+          })),
+        },
+      });
+    }
+  );
+
+  app.put<{ Params: { agentId: string } }>(
+    '/api/permissions/:agentId/memory/scopes',
+    async (request, reply) => {
+      const userId = getUserId(request);
+      if (!(await userOwnsAgent(userId, request.params.agentId))) {
+        return reply.code(404).send(agentNotFound);
+      }
+
+      const body = request.body as { mode?: string; scopeIds?: unknown; defaultScopeId?: unknown };
+
+      if (body.mode === 'all') {
+        await setAgentScopeGrants(request.params.agentId, userId, null);
+        return reply.send({ data: { mode: 'all' } });
+      }
+
+      if (!Array.isArray(body.scopeIds) || body.scopeIds.length === 0) {
+        return reply.code(400).send({
+          error: { code: 'VALIDATION_ERROR', message: 'scopeIds must be a non-empty array' },
+        });
+      }
+      const scopeIds = body.scopeIds.filter((s): s is string => typeof s === 'string');
+      const defaultScopeId = typeof body.defaultScopeId === 'string' ? body.defaultScopeId : scopeIds[0];
+      if (!scopeIds.includes(defaultScopeId)) {
+        return reply.code(400).send({
+          error: { code: 'VALIDATION_ERROR', message: 'defaultScopeId must be one of scopeIds' },
+        });
+      }
+
+      await setAgentScopeGrants(request.params.agentId, userId, { scopeIds, defaultScopeId });
+      const grants = await getAgentScopeGrants(request.params.agentId, userId);
+      return reply.send({
+        data: {
+          mode: grants.mode,
+          defaultScopeId: grants.defaultScopeId,
+          grantedScopeIds: grants.scopes.map((s) => s.id),
+        },
+      });
+    }
+  );
 
   // ========================================================================
   // Billing endpoints

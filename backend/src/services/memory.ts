@@ -16,16 +16,22 @@ export function parseTransclusions(content: string): string[] {
   return titles;
 }
 
-/** Look up an entry by exact title, then by alias attribute. Returns null if not found. */
+/**
+ * Look up an entry by exact title, then by alias attribute, within one scope.
+ * Returns null if not found.
+ *
+ * Scoped, so a `![[Title]]` transclusion cannot pull content across the
+ * partition — the same title in another scope is a different entry.
+ */
 export async function lookupEntryByTitleOrAlias(
-  userId: string,
+  scopeId: string,
   title: string
 ): Promise<{ id: string; title: string; content: string | null } | null> {
   // 1. Exact title match
   const exact = await client.execute({
     sql: `SELECT id, title, content FROM memory_entries
-          WHERE user_id = ? AND title = ? AND is_deleted = false LIMIT 1`,
-    args: [userId, title],
+          WHERE scope_id = ? AND title = ? AND is_deleted = false LIMIT 1`,
+    args: [scopeId, title],
   });
   if (exact.rows.length > 0) {
     const r = exact.rows[0];
@@ -35,8 +41,8 @@ export async function lookupEntryByTitleOrAlias(
   const alias = await client.execute({
     sql: `SELECT e.id, e.title, e.content FROM memory_attributes a
           JOIN memory_entries e ON e.id = a.entry_id
-          WHERE e.user_id = ? AND a.name = 'alias' AND a.value = ? AND a.is_deleted = false LIMIT 1`,
-    args: [userId, title],
+          WHERE e.scope_id = ? AND a.name = 'alias' AND a.value = ? AND a.is_deleted = false LIMIT 1`,
+    args: [scopeId, title],
   });
   if (alias.rows.length > 0) {
     const r = alias.rows[0];
@@ -62,10 +68,19 @@ export function parseWikilinkRefs(content: string): Array<{ title: string; headi
   return out;
 }
 
-/** Rebuild memory_links for a single entry (after create/update) */
+/**
+ * Rebuild memory_links for a single entry (after create/update).
+ *
+ * This is the enforcement point for wikilinks: titles resolve only within the
+ * entry's own scope. A `[[Title]]` pointing at an entry in another scope
+ * silently fails to resolve, exactly as if the entry did not exist — which,
+ * from inside that scope, it does not. Resolving across scopes would put
+ * cross-partition rows in memory_links, and those leak straight back out
+ * through backlinks and the graph view regardless of any grant.
+ */
 export async function updateLinkIndex(
   entryId: string,
-  userId: string,
+  scopeId: string,
   content: string | null
 ): Promise<void> {
   // Remove existing links from this source
@@ -78,11 +93,11 @@ export async function updateLinkIndex(
   const titles = parseWikilinks(content);
   if (titles.length === 0) return;
 
-  // Resolve each title to an entry ID within the user's vault
+  // Resolve each title to an entry ID within the same scope
   for (const title of titles) {
     const targetResult = await client.execute({
-      sql: `SELECT id FROM memory_entries WHERE user_id = ? AND title = ? AND is_deleted = false LIMIT 1`,
-      args: [userId, title],
+      sql: `SELECT id FROM memory_entries WHERE scope_id = ? AND title = ? AND is_deleted = false LIMIT 1`,
+      args: [scopeId, title],
     });
     if (targetResult.rows.length === 0) continue;
     const targetId = targetResult.rows[0].id as string;
@@ -94,9 +109,9 @@ export async function updateLinkIndex(
     const context = match ? `${match[1]}[[${title}]]${match[2]}` : null;
 
     await client.execute({
-      sql: `INSERT INTO memory_links (source_id, target_id, context) VALUES (?, ?, ?)
+      sql: `INSERT INTO memory_links (source_id, target_id, scope_id, context) VALUES (?, ?, ?, ?)
             ON CONFLICT (source_id, target_id) DO UPDATE SET context = EXCLUDED.context`,
-      args: [entryId, targetId, context],
+      args: [entryId, targetId, scopeId, context],
     });
   }
 }
@@ -153,22 +168,32 @@ export interface DreamManifestEntry {
   parent_id: string | null;
   backlink_count: number;
   updated_at: string;
+  scope: string;
+  scope_name: string;
 }
 
-/** Compact manifest of all entries for the dream process */
-export async function getDreamManifest(userId: string): Promise<DreamManifestEntry[]> {
+/**
+ * Compact manifest of all entries for the dream process, across every scope the
+ * caller can reach. Each row carries its scope, so a model that ignores the
+ * per-scope loop still cannot silently merge entries across the partition.
+ */
+export async function getDreamManifest(scopeIds: string[]): Promise<DreamManifestEntry[]> {
+  if (scopeIds.length === 0) return [];
+  const placeholders = scopeIds.map(() => '?').join(', ');
   const result = await client.execute({
     sql: `SELECT e.id, e.title, e.type,
                  b.parent_entry_id AS parent_id,
                  COUNT(ml.source_id) AS backlink_count,
-                 e.updated_at
+                 e.updated_at,
+                 s.slug AS scope, s.name AS scope_name
           FROM memory_entries e
+          JOIN memory_scopes s ON s.id = e.scope_id
           LEFT JOIN memory_branches b ON b.entry_id = e.id
           LEFT JOIN memory_links ml ON ml.target_id = e.id
-          WHERE e.user_id = ? AND e.is_deleted = false
-          GROUP BY e.id, e.title, e.type, b.parent_entry_id, e.updated_at
-          ORDER BY e.type ASC, e.title ASC`,
-    args: [userId],
+          WHERE e.scope_id IN (${placeholders}) AND e.is_deleted = false
+          GROUP BY e.id, e.title, e.type, b.parent_entry_id, e.updated_at, s.slug, s.name
+          ORDER BY s.name ASC, e.type ASC, e.title ASC`,
+    args: scopeIds,
   });
   return result.rows.map((r) => ({
     id: r.id as string,
@@ -177,26 +202,52 @@ export async function getDreamManifest(userId: string): Promise<DreamManifestEnt
     parent_id: (r.parent_id as string | null) ?? null,
     backlink_count: Number(r.backlink_count ?? 0),
     updated_at: r.updated_at as string,
+    scope: r.scope as string,
+    scope_name: r.scope_name as string,
   }));
 }
 
-/** Move an entry to a new parent in the tree */
+/**
+ * Move an entry to a new parent in the tree.
+ *
+ * Reparenting cannot cross scopes. The composite FK on memory_branches makes
+ * that impossible at the database level too; this check exists so the caller
+ * gets a sentence explaining why rather than a constraint violation.
+ */
 export async function setEntryParent(
   entryId: string,
-  userId: string,
+  scopeIds: string[],
   newParentId: string | null
 ): Promise<{ ok: true } | { error: string }> {
-  // 1. Ownership check
+  if (scopeIds.length === 0) return { error: 'Entry not found' };
+  const placeholders = scopeIds.map(() => '?').join(', ');
+
+  // 1. Reachability check — outside the caller's scopes is indistinguishable
+  //    from nonexistent, deliberately.
   const ownerCheck = await client.execute({
-    sql: `SELECT id FROM memory_entries WHERE id = ? AND user_id = ? AND is_deleted = false`,
-    args: [entryId, userId],
+    sql: `SELECT id, scope_id FROM memory_entries
+          WHERE id = ? AND scope_id IN (${placeholders}) AND is_deleted = false`,
+    args: [entryId, ...scopeIds],
   });
   if (ownerCheck.rows.length === 0) return { error: 'Entry not found' };
+  const entryScopeId = ownerCheck.rows[0].scope_id as string;
 
   // 2. Self-parent check
   if (newParentId === entryId) return { error: 'Cannot set an entry as its own parent' };
 
-  // 3. Circular reference check — walk ancestors of newParentId
+  // 3. Same-scope check
+  if (newParentId !== null) {
+    const parentRow = await client.execute({
+      sql: `SELECT scope_id FROM memory_entries WHERE id = ? AND is_deleted = false LIMIT 1`,
+      args: [newParentId],
+    });
+    if (parentRow.rows.length === 0) return { error: 'Parent not found' };
+    if ((parentRow.rows[0].scope_id as string) !== entryScopeId) {
+      return { error: 'Cannot move an entry into a different scope' };
+    }
+  }
+
+  // 4. Circular reference check — walk ancestors of newParentId
   if (newParentId !== null) {
     let current: string | null = newParentId;
     const visited = new Set<string>();
@@ -212,7 +263,7 @@ export async function setEntryParent(
     }
   }
 
-  // 4. Update
+  // 5. Update
   await client.execute({
     sql: `UPDATE memory_branches SET parent_entry_id = ? WHERE entry_id = ?`,
     args: [newParentId, entryId],
@@ -223,6 +274,7 @@ export async function setEntryParent(
 export interface MemoryEntryRow {
   id: string;
   user_id: string;
+  scope_id: string;
   type: string;
   title: string;
   content: string | null;
@@ -242,46 +294,55 @@ const ENTRY_TEMPLATES: Partial<Record<string, string>> = {
  *
  * Returns the entry row plus a `created` flag (false = pre-existing entry).
  * The caller is responsible for creating branch/attribute records when created=true.
+ *
+ * All three lookups key on scope_id rather than user_id, so the same person can
+ * exist independently in two scopes. That is the intended semantics of a hard
+ * partition, not an oversight: a work contact and a personal contact who happen
+ * to share a name are, from each scope's point of view, unrelated.
+ *
+ * user_id is still written on insert; the composite (scope_id, user_id) foreign
+ * key is what keeps that denormalization honest.
  */
 export async function resolveOrCreate(opts: {
   userId: string;
+  scopeId: string;
   type: string;
   title: string;
   content?: string | null;
 }): Promise<{ row: MemoryEntryRow; created: boolean }> {
-  const { userId, type, title, content = null } = opts;
+  const { userId, scopeId, type, title, content = null } = opts;
 
   // 1. Exact title match
   const exact = await client.execute({
-    sql: `SELECT id, user_id, type, title, content, created_at, updated_at
+    sql: `SELECT id, user_id, scope_id, type, title, content, created_at, updated_at
           FROM memory_entries
-          WHERE user_id = ? AND type = ? AND title = ? AND is_deleted = false
+          WHERE scope_id = ? AND type = ? AND title = ? AND is_deleted = false
           LIMIT 1`,
-    args: [userId, type, title],
+    args: [scopeId, type, title],
   });
   if (exact.rows.length > 0) return { row: exact.rows[0] as unknown as MemoryEntryRow, created: false };
 
   // 2. Alias match (memory_attributes with name='alias')
   const aliasHit = await client.execute({
-    sql: `SELECT e.id, e.user_id, e.type, e.title, e.content, e.created_at, e.updated_at
+    sql: `SELECT e.id, e.user_id, e.scope_id, e.type, e.title, e.content, e.created_at, e.updated_at
           FROM memory_attributes a
           JOIN memory_entries e ON e.id = a.entry_id
-          WHERE e.user_id = ? AND e.type = ? AND e.is_deleted = false
+          WHERE e.scope_id = ? AND e.type = ? AND e.is_deleted = false
             AND a.name = 'alias' AND a.value = ? AND a.is_deleted = false
           LIMIT 1`,
-    args: [userId, type, title],
+    args: [scopeId, type, title],
   });
   if (aliasHit.rows.length > 0) return { row: aliasHit.rows[0] as unknown as MemoryEntryRow, created: false };
 
   // 3. Fuzzy match via pg_trgm similarity
   const fuzzy = await client.execute({
-    sql: `SELECT id, user_id, type, title, content, created_at, updated_at
+    sql: `SELECT id, user_id, scope_id, type, title, content, created_at, updated_at
           FROM memory_entries
-          WHERE user_id = ? AND type = ? AND is_deleted = false
+          WHERE scope_id = ? AND type = ? AND is_deleted = false
             AND similarity(title, ?) > 0.7
           ORDER BY similarity(title, ?) DESC
           LIMIT 1`,
-    args: [userId, type, title, title],
+    args: [scopeId, type, title, title],
   });
   if (fuzzy.rows.length > 0) return { row: fuzzy.rows[0] as unknown as MemoryEntryRow, created: false };
 
@@ -290,35 +351,58 @@ export async function resolveOrCreate(opts: {
   const now = new Date().toISOString();
   const effectiveContent = content ?? ENTRY_TEMPLATES[type] ?? null;
   await client.execute({
-    sql: `INSERT INTO memory_entries (id, user_id, type, title, content, is_deleted, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, false, ?, ?)`,
-    args: [id, userId, type, title, effectiveContent, now, now],
+    sql: `INSERT INTO memory_entries (id, user_id, scope_id, type, title, content, is_deleted, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, false, ?, ?)`,
+    args: [id, userId, scopeId, type, title, effectiveContent, now, now],
   });
   return {
-    row: { id, user_id: userId, type, title, content: effectiveContent, created_at: now, updated_at: now },
+    row: {
+      id, user_id: userId, scope_id: scopeId, type, title,
+      content: effectiveContent, created_at: now, updated_at: now,
+    },
     created: true,
   };
 }
 
-/** Ensure user has a root Memory Index entry; create if missing */
-export async function ensureMemoryRoot(userId: string): Promise<string> {
-  const existing = await client.execute({
-    sql: `SELECT id FROM memory_entries WHERE user_id = ? AND type = 'index' AND is_deleted = false LIMIT 1`,
-    args: [userId],
+/**
+ * Ensure a scope has a root index entry; create if missing.
+ *
+ * The root is tracked on memory_scopes.root_entry_id rather than found by
+ * `type='index' LIMIT 1`. That old guess was non-deterministic the moment an
+ * agent created a second index entry — which MEMORY_POLICY.md explicitly
+ * sanctions as a hierarchical hub — so which entry counted as "the root"
+ * depended on row order.
+ */
+export async function ensureMemoryRoot(userId: string, scopeId: string): Promise<string> {
+  const scope = await client.execute({
+    sql: `SELECT root_entry_id, name, is_system FROM memory_scopes WHERE id = ? LIMIT 1`,
+    args: [scopeId],
   });
-  if (existing.rows.length > 0) return existing.rows[0].id as string;
+  const existingRoot = scope.rows[0]?.root_entry_id as string | null | undefined;
+  if (existingRoot) return existingRoot;
+
+  // The migrated default scope keeps the original title so nothing user-visible
+  // changes for someone who never creates a second scope.
+  const scopeName = (scope.rows[0]?.name as string | undefined) ?? 'Memory';
+  const title = scope.rows[0]?.is_system ? 'Memory Index' : `${scopeName} Index`;
 
   const id = nanoid();
   const now = new Date().toISOString();
   await client.execute({
-    sql: `INSERT INTO memory_entries (id, user_id, type, title, content, is_deleted, created_at, updated_at)
-          VALUES (?, ?, 'index', 'Memory Index', ?, false, ?, ?)`,
-    args: [id, userId, ROOT_CONTENT, now, now],
+    sql: `INSERT INTO memory_entries (id, user_id, scope_id, type, title, content, is_deleted, created_at, updated_at)
+          VALUES (?, ?, ?, 'index', ?, ?, false, ?, ?)`,
+    args: [id, userId, scopeId, title, ROOT_CONTENT, now, now],
   });
   // Root has no branch parent
   await client.execute({
-    sql: `INSERT INTO memory_branches (id, entry_id, parent_entry_id, position, is_expanded) VALUES (?, ?, NULL, 0, true)`,
-    args: [nanoid(), id],
+    sql: `INSERT INTO memory_branches (id, entry_id, parent_entry_id, scope_id, position, is_expanded)
+          VALUES (?, ?, NULL, ?, 0, true)`,
+    args: [nanoid(), id, scopeId],
+  });
+  // Record it, so the next call is a single lookup rather than a guess.
+  await client.execute({
+    sql: `UPDATE memory_scopes SET root_entry_id = ?, updated_at = ? WHERE id = ?`,
+    args: [id, now, scopeId],
   });
   return id;
 }

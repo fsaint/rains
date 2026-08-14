@@ -138,6 +138,9 @@ const rootRow = {
 const entryRow = {
   id: ENTRY_ID,
   user_id: USER_ID,
+  scope_id: 'scope-default-id',
+  scope: 'default',
+  scope_name: 'Default',
   type: 'person',
   title: 'Alice Smith',
   content: 'Works at Acme Corp.',
@@ -202,8 +205,24 @@ function makeDbRouter(passwordHash: string) {
     // ── Scopes (resolveMemoryContext runs on every memory route) ─────────────
     // Must precede the memory_entries branches; every request resolves its
     // scope context before touching an entry.
+
+    // "Is this entry some scope's root?" — more specific than the scope lookup
+    // below, so it has to come first or every entry looks like a root.
+    if (sql.includes('FROM memory_scopes WHERE root_entry_id = ?')) {
+      const isRoot = typeof input !== 'string' && input.args?.[0] === ROOT_ID;
+      return { rows: isRoot ? [{ id: SCOPE_ID }] : [], columns: [], rowsAffected: 0, lastInsertRowid: 0n };
+    }
+
     if (sql.includes('FROM memory_scopes')) {
       return { rows: [scopeRow], columns: [], rowsAffected: 1, lastInsertRowid: 0n };
+    }
+
+    // ── Graph nodes ───────────────────────────────────────────────────────────
+    if (sql.includes('SELECT e.id, e.type, e.title, s.slug AS scope')) {
+      return {
+        rows: [{ id: ROOT_ID, type: 'index', title: 'Memory Index', scope: 'default' }],
+        columns: [], rowsAffected: 1, lastInsertRowid: 0n,
+      };
     }
 
     // ── Memory root check (ensureMemoryRoot + GET /api/memory/root) ───────────
@@ -216,14 +235,22 @@ function makeDbRouter(passwordHash: string) {
       return { rows: [rootRow], columns: [], rowsAffected: 1, lastInsertRowid: 0n };
     }
 
-    // ── Entry ownership check (used by PUT, POST attributes, DELETE entry) ────
-    if (sql.startsWith('SELECT id FROM memory_entries WHERE id = ?') ||
-        sql.startsWith('SELECT id, type FROM memory_entries WHERE id = ?')) {
-      return { rows: [{ id: ENTRY_ID, type: 'person' }], columns: [], rowsAffected: 1, lastInsertRowid: 0n };
+    // ── Reachability / ownership checks, now scope-filtered ───────────────────
+    // PUT and DELETE read id+type+scope; setEntryParent reads id+scope; the
+    // parent and relation-target checks read scope alone.
+    if (sql.startsWith('SELECT id, type, scope_id FROM memory_entries') ||
+        sql.startsWith('SELECT id, scope_id FROM memory_entries')) {
+      return {
+        rows: [{ id: ENTRY_ID, type: 'person', scope_id: SCOPE_ID }],
+        columns: [], rowsAffected: 1, lastInsertRowid: 0n,
+      };
+    }
+    if (sql.startsWith('SELECT scope_id FROM memory_entries')) {
+      return { rows: [{ scope_id: SCOPE_ID }], columns: [], rowsAffected: 1, lastInsertRowid: 0n };
     }
 
-    // ── Full entry fetch with all fields (GET /api/memory/entries/:id body) ───
-    if (sql.startsWith('SELECT id, user_id, type, title, content') && sql.includes('FROM memory_entries WHERE id = ?')) {
+    // ── Full entry fetch (GET /api/memory/entries/:id), now joined to scopes ──
+    if (sql.includes('FROM memory_entries e') && sql.includes('JOIN memory_scopes s') && sql.includes('e.id = ?')) {
       return { rows: [entryRow], columns: [], rowsAffected: 1, lastInsertRowid: 0n };
     }
 
@@ -439,16 +466,20 @@ describe('Memory API — end-to-end', () => {
       // sequence, so this stays about the root path rather than about how many
       // queries happen to precede it.
       const createSequence: Array<Record<string, unknown>[]> = [
-        [],          // SELECT type='index' → empty → will create
         [],          // INSERT memory_entries
         [],          // INSERT memory_branches
+        [],          // UPDATE memory_scopes.root_entry_id
         [rootRow],   // SELECT by id after creation
       ];
       let idx = 0;
       mockExecute.mockImplementation(async (input: any) => {
         const sql = typeof input === 'string' ? input : input.sql;
+        // A scope whose root_entry_id is null is what triggers creation.
         if (sql.includes('FROM memory_scopes')) {
-          return { rows: [scopeRow], columns: [], rowsAffected: 1, lastInsertRowid: 0n };
+          return {
+            rows: [{ ...scopeRow, root_entry_id: null }],
+            columns: [], rowsAffected: 1, lastInsertRowid: 0n,
+          };
         }
         return {
           rows: createSequence[idx++] ?? [],
@@ -1018,7 +1049,8 @@ describe('Memory API — end-to-end', () => {
       // observations about one person accumulated duplicates.
       it('returns 200 and the existing row when the title already exists', async () => {
         withRouter((sql) =>
-          sql.includes('WHERE user_id = ? AND type = ? AND title = ?')
+          // resolveOrCreate's exact-match lookup, now keyed on scope
+          sql.includes('WHERE scope_id = ? AND type = ? AND title = ?')
             ? { rows: [entryRow], columns: [], rowsAffected: 1, lastInsertRowid: 0n }
             : undefined
         );
@@ -1093,7 +1125,7 @@ describe('Memory API — end-to-end', () => {
 
       it('resolves a [[wikilink]] in the content to an entry id', async () => {
         withRouter((sql) => {
-          if (sql.startsWith('SELECT id, user_id, type, title, content') && sql.includes('WHERE id = ?')) {
+          if (sql.includes('FROM memory_entries e') && sql.includes('JOIN memory_scopes s') && sql.includes('e.id = ?')) {
             return {
               rows: [{ ...entryRow, content: 'Reports to [[Bob Jones#Role]].' }],
               columns: [], rowsAffected: 1, lastInsertRowid: 0n,
@@ -1112,6 +1144,287 @@ describe('Memory API — end-to-end', () => {
         const { data } = res.json();
         expect(data.resolvedLinks['Bob Jones']).toBe('bob-id');
         expect(data.resolvedHeadings['Bob Jones']).toBe('Role');
+      });
+    });
+  });
+
+  // ── Scopes ───────────────────────────────────────────────────────────────
+  //
+  // The partition itself. A scope the caller cannot reach must be
+  // indistinguishable from one that does not exist, and nothing — parents,
+  // relations, links — may cross between them.
+
+  describe('scopes', () => {
+    /** Two scopes, both reachable, `default` being the write target. */
+    function twoScopes() {
+      const base = makeDbRouter(passwordHash);
+      mockExecute.mockImplementation(async (input: any) => {
+        const sql = typeof input === 'string' ? input : input.sql;
+        if (sql.includes('FROM memory_scopes WHERE root_entry_id = ?')) {
+          return { rows: [], columns: [], rowsAffected: 0, lastInsertRowid: 0n };
+        }
+        if (sql.includes('FROM memory_scopes')) {
+          return {
+            rows: [
+              scopeRow,
+              { ...scopeRow, id: 'scope-work-id', slug: 'work', name: 'Work', is_default: false, is_system: false },
+            ],
+            columns: [], rowsAffected: 2, lastInsertRowid: 0n,
+          };
+        }
+        return base(input);
+      });
+    }
+
+    const sqlCalls = () =>
+      mockExecute.mock.calls.map((c: any) => (typeof c[0] === 'string' ? c[0] : c[0]?.sql ?? ''));
+    const argsOf = (pattern: string) =>
+      (mockExecute.mock.calls
+        .map((c: any) => c[0])
+        .find((q: any) => typeof q?.sql === 'string' && q.sql.includes(pattern))?.args ?? []) as unknown[];
+
+    describe('GET /api/memory/scopes', () => {
+      it('lists reachable scopes with entry counts', async () => {
+        twoScopes();
+
+        const res = await app.inject({
+          method: 'GET', url: '/api/memory/scopes', headers: { cookie: sessionCookie },
+        });
+
+        expect(res.statusCode).toBe(200);
+        const slugs = res.json().data.map((s: any) => s.slug);
+        expect(slugs).toEqual(['default', 'work']);
+        expect(res.json().data[0]).toHaveProperty('entry_count');
+      });
+    });
+
+    describe('reads', () => {
+      it('spans every reachable scope when none is named', async () => {
+        twoScopes();
+
+        await app.inject({
+          method: 'GET', url: '/api/memory/entries', headers: { cookie: sessionCookie },
+        });
+
+        // Both scope ids reach the WHERE clause.
+        const args = argsOf('e.scope_id IN');
+        expect(args).toContain('scope-default-id');
+        expect(args).toContain('scope-work-id');
+      });
+
+      it('narrows to one scope when named by slug', async () => {
+        twoScopes();
+
+        const res = await app.inject({
+          method: 'GET', url: '/api/memory/entries?scope=work', headers: { cookie: sessionCookie },
+        });
+
+        expect(res.statusCode).toBe(200);
+        const args = argsOf('e.scope_id IN');
+        expect(args).toContain('scope-work-id');
+        expect(args).not.toContain('scope-default-id');
+      });
+
+      it('rejects an unreachable scope with 403 and the usable slugs', async () => {
+        twoScopes();
+
+        const res = await app.inject({
+          method: 'GET', url: '/api/memory/entries?scope=finance', headers: { cookie: sessionCookie },
+        });
+
+        expect(res.statusCode).toBe(403);
+        expect(res.json().code).toBe('SCOPE_NOT_GRANTED');
+        // Returning the list is the point — a model can correct itself next call.
+        expect(res.json().available_scopes).toEqual(['default', 'work']);
+      });
+
+      it('labels every row with the scope it came from', async () => {
+        twoScopes();
+
+        const res = await app.inject({
+          method: 'GET', url: '/api/memory/entries', headers: { cookie: sessionCookie },
+        });
+
+        expect(sqlCalls().some((s) => s.includes('s.slug AS scope'))).toBe(true);
+        expect(res.json().data[0]).toHaveProperty('scope');
+      });
+    });
+
+    describe('writes', () => {
+      it('lands in the default scope when none is named', async () => {
+        twoScopes();
+
+        await app.inject({
+          method: 'POST', url: '/api/memory/entries', headers: { cookie: sessionCookie },
+          payload: { title: 'Unscoped Note' },
+        });
+
+        expect(argsOf('INSERT INTO memory_entries')).toContain('scope-default-id');
+      });
+
+      it('lands in the named scope when one is given', async () => {
+        twoScopes();
+
+        await app.inject({
+          method: 'POST', url: '/api/memory/entries', headers: { cookie: sessionCookie },
+          payload: { title: 'Work Note', scope: 'work' },
+        });
+
+        expect(argsOf('INSERT INTO memory_entries')).toContain('scope-work-id');
+      });
+
+      it('inherits the parent\'s scope when no scope is named', async () => {
+        // "Create this under that entry" should do the obvious thing without the
+        // model reasoning about scopes at all.
+        twoScopes();
+
+        await app.inject({
+          method: 'POST', url: '/api/memory/entries', headers: { cookie: sessionCookie },
+          payload: { title: 'Child', parent_id: ENTRY_ID },
+        });
+
+        // The fixture's parent sits in the default scope.
+        expect(argsOf('INSERT INTO memory_entries')).toContain(SCOPE_ID);
+      });
+
+      it('refuses a scope that contradicts the parent, rather than picking one', async () => {
+        twoScopes();
+
+        const res = await app.inject({
+          method: 'POST', url: '/api/memory/entries', headers: { cookie: sessionCookie },
+          payload: { title: 'Contradiction', scope: 'work', parent_id: ENTRY_ID },
+        });
+
+        expect(res.statusCode).toBe(409);
+        expect(res.json().code).toBe('SCOPE_CONFLICT');
+      });
+
+      it('refuses to patch an entry\'s scope through the update route', async () => {
+        twoScopes();
+
+        const res = await app.inject({
+          method: 'PUT', url: `/api/memory/entries/${ENTRY_ID}`, headers: { cookie: sessionCookie },
+          payload: { scope: 'work' },
+        });
+
+        expect(res.statusCode).toBe(400);
+        expect(res.json().code).toBe('SCOPE_NOT_PATCHABLE');
+      });
+    });
+
+    describe('cross-scope integrity', () => {
+      it('refuses a relation whose target is in another scope', async () => {
+        // The one cross-scope rule with no database constraint behind it —
+        // memory_attributes.value is polymorphic, so no FK can be declared.
+        twoScopes();
+        const base = makeDbRouter(passwordHash);
+        mockExecute.mockImplementation(async (input: any) => {
+          const sql = typeof input === 'string' ? input : input.sql;
+          if (sql.includes('FROM memory_scopes WHERE root_entry_id = ?')) return { rows: [], columns: [], rowsAffected: 0, lastInsertRowid: 0n };
+          if (sql.includes('FROM memory_scopes')) {
+            return {
+              rows: [scopeRow, { ...scopeRow, id: 'scope-work-id', slug: 'work', is_default: false }],
+              columns: [], rowsAffected: 2, lastInsertRowid: 0n,
+            };
+          }
+          // The source is in default; the relation target is in work.
+          if (sql.startsWith('SELECT scope_id FROM memory_entries')) {
+            return { rows: [{ scope_id: 'scope-work-id' }], columns: [], rowsAffected: 1, lastInsertRowid: 0n };
+          }
+          return base(input);
+        });
+
+        const res = await app.inject({
+          method: 'POST', url: `/api/memory/entries/${ENTRY_ID}/attributes`,
+          headers: { cookie: sessionCookie },
+          payload: { type: 'relation', name: 'works_at', value: 'entry-in-work' },
+        });
+
+        expect(res.statusCode).toBe(409);
+        expect(res.json().code).toBe('CROSS_SCOPE_RELATION');
+      });
+
+      it('keeps graph relation edges inside a single scope', async () => {
+        twoScopes();
+
+        await app.inject({
+          method: 'GET', url: '/api/memory/graph', headers: { cookie: sessionCookie },
+        });
+
+        const relationQuery = sqlCalls().find((s) => s.includes("ma.type = 'relation'"));
+        expect(relationQuery).toContain('t.scope_id = e.scope_id');
+      });
+
+      it("refuses to delete a scope's index entry", async () => {
+        twoScopes();
+        const base = makeDbRouter(passwordHash);
+        mockExecute.mockImplementation(async (input: any) => {
+          const sql = typeof input === 'string' ? input : input.sql;
+          if (sql.includes('FROM memory_scopes WHERE root_entry_id = ?')) {
+            return { rows: [{ id: SCOPE_ID }], columns: [], rowsAffected: 1, lastInsertRowid: 0n };
+          }
+          return base(input);
+        });
+
+        const res = await app.inject({
+          method: 'DELETE', url: `/api/memory/entries/${ROOT_ID}`, headers: { cookie: sessionCookie },
+        });
+
+        expect(res.statusCode).toBe(400);
+        expect(res.json().code).toBe('CANNOT_DELETE_ROOT');
+      });
+    });
+
+    describe('scope CRUD', () => {
+      it('refuses a slug that near-duplicates an existing scope', async () => {
+        // An agent quietly splitting a vault into "acme" and "acme-corp" is the
+        // failure mode worth blocking; neither it nor the user will reconcile it.
+        twoScopes();
+        const base = makeDbRouter(passwordHash);
+        mockExecute.mockImplementation(async (input: any) => {
+          const sql = typeof input === 'string' ? input : input.sql;
+          if (sql.includes('similarity(slug')) {
+            return { rows: [{ slug: 'work' }], columns: [], rowsAffected: 1, lastInsertRowid: 0n };
+          }
+          if (sql.includes('FROM memory_scopes WHERE root_entry_id = ?')) return { rows: [], columns: [], rowsAffected: 0, lastInsertRowid: 0n };
+          if (sql.includes('FROM memory_scopes')) {
+            return {
+              rows: [scopeRow, { ...scopeRow, id: 'scope-work-id', slug: 'work', is_default: false }],
+              columns: [], rowsAffected: 2, lastInsertRowid: 0n,
+            };
+          }
+          return base(input);
+        });
+
+        const res = await app.inject({
+          method: 'POST', url: '/api/memory/scopes', headers: { cookie: sessionCookie },
+          payload: { name: 'Work Stuff', slug: 'works' },
+        });
+
+        expect(res.statusCode).toBe(409);
+        expect(res.json().code).toBe('SIMILAR_SCOPE');
+      });
+
+      it('rejects a reserved slug', async () => {
+        twoScopes();
+
+        const res = await app.inject({
+          method: 'POST', url: '/api/memory/scopes', headers: { cookie: sessionCookie },
+          payload: { name: 'All' },
+        });
+
+        expect(res.statusCode).toBe(400);
+      });
+
+      it('refuses to delete the default scope', async () => {
+        twoScopes();
+
+        const res = await app.inject({
+          method: 'DELETE', url: `/api/memory/scopes/${SCOPE_ID}`, headers: { cookie: sessionCookie },
+        });
+
+        expect(res.statusCode).toBe(409);
+        expect(res.json().code).toBe('CANNOT_DELETE_DEFAULT');
       });
     });
   });
