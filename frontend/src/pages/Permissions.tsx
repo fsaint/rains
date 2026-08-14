@@ -1154,8 +1154,8 @@ function MemoryScopeEditor({ agentId }: { agentId: string }) {
       <div>
         <h4 className="text-sm font-medium text-white mb-1">Memory scopes</h4>
         <p className="text-xs text-gray-500">
-          This agent can reach your whole vault. Create a second scope on the Memory page
-          to restrict it to part of it.
+          This agent can reach your whole vault. Create a second scope from the Memory
+          page — the layers icon beside “New entry” — to restrict it to part of it.
         </p>
       </div>
     );

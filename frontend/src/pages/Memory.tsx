@@ -383,13 +383,25 @@ export default function Memory() {
             <Brain className="w-5 h-5 text-trust-blue" />
             <span className="font-semibold text-white">Memory</span>
           </div>
-          <button
-            onClick={handleNewEntry}
-            className="p-1.5 rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
-            title="New entry"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            {/* Always reachable. The switcher below hides itself while there is only
+                one scope — if this lived inside it, as it first did, there would be
+                no way to create a second scope and the switcher could never appear. */}
+            <button
+              onClick={() => setManagingScopes(true)}
+              className="p-1.5 rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
+              title="Manage scopes"
+            >
+              <Layers className="w-4 h-4" />
+            </button>
+            <button
+              onClick={handleNewEntry}
+              className="p-1.5 rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
+              title="New entry"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         <ScopeSwitcher
