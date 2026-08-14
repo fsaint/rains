@@ -35,6 +35,8 @@ export const memoryCreateTool: ToolDefinition = {
   name: 'memory_create',
   description:
     'Create a new memory entry. Types: note (general), person, company, project. ' +
+    'Call this whenever you learn something durable about an entity — a name, a date, a ' +
+    'decision, a role change; it is idempotent, so recording it is always safe. ' +
     'Use [[Title]] wikilinks in content to link to other entries. ' +
     'After creating a significant entry, update the root index with memory_update.',
   inputSchema: {
@@ -98,7 +100,9 @@ export const memoryUpdateTool: ToolDefinition = {
 export const memorySearchTool: ToolDefinition = {
   name: 'memory_search',
   description:
-    'Full-text search across all memory entries. Search before creating to avoid duplicates.',
+    'Full-text search across all memory entries. Call this before answering any question ' +
+    'about a person, company, or project, even when you think you know the answer. ' +
+    'Search before creating to avoid duplicates.',
   inputSchema: {
     type: 'object',
     properties: {
