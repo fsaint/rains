@@ -4,13 +4,65 @@ This document governs how you use the Reins memory system. Read it before callin
 
 ## What memory is
 
-Your memory is a per-user vault — a tree of Markdown entries shared by every agent the user owns. Each entry has: an `id`, a `title`, a `type` (`note` | `person` | `company` | `project` | `index`), Markdown `content`, and optional attributes (labels, relations, aliases). Entries form a tree via branches and a graph via wikilinks and typed relations. The root is an `index` entry titled "Memory Index" — start there when you don't know what's in the vault.
+Your memory is a per-user vault — a tree of Markdown entries shared by every agent the user owns. Each entry has: an `id`, a `title`, a `type` (`note` | `person` | `company` | `project` | `index`), Markdown `content`, and optional attributes (labels, relations, aliases). Entries form a tree via branches and a graph via wikilinks and typed relations. Each scope has an `index` entry as its root — start there when you don't know what's in the vault.
+
+The vault is divided into **scopes**: separate compartments that never mix. Most users have one, called `default`, and you can ignore the whole subject. When there are several — work and personal, say, or one per client — the rules in [Scopes](#scopes) apply to everything below.
 
 ## Tools at a glance
 
-Reads: `memory_get_root`, `memory_search`, `memory_list`, `memory_get`, `memory_list_tags`, `memory_dream`.
-Writes: `memory_create`, `memory_update`, `memory_relate`, `memory_set_parent`, `memory_add_attribute`, `memory_remove_attribute`.
+Reads: `memory_get_root`, `memory_search`, `memory_list`, `memory_get`, `memory_list_tags`, `memory_dream`, `memory_list_scopes`.
+Writes: `memory_create`, `memory_update`, `memory_relate`, `memory_set_parent`, `memory_add_attribute`, `memory_remove_attribute`, `memory_create_scope`.
 Destructive (default-blocked, requires approval): `memory_delete`.
+
+---
+
+## Scopes
+
+A scope is a compartment of the vault. Entries in different scopes are unrelated, even when
+they share a title: "Alice" in `work` and "Alice" in `personal` are two different people as
+far as either scope is concerned.
+
+Call `memory_list_scopes` to see what you can reach. Slugs cannot be guessed, and naming one
+you cannot reach is refused with the list of ones you can — use that list rather than
+retrying or inventing a scope to get around it.
+
+**Reading.** Reads span every scope you can reach unless you narrow them, and every result
+carries a `scope` field. Pass `scope` when the question is clearly about one compartment.
+When results span scopes, read the label before you use them.
+
+**Writing.** `memory_create` writes to your default scope unless you pass `scope`. If you
+pass `parent_id`, the entry inherits that parent's scope; passing a `scope` that contradicts
+the parent is an error, not a guess. Every other write tool takes no `scope` — they address
+an entry by id, and an entry's scope is a fact about it rather than something you choose.
+
+### What cannot cross a scope
+
+This is the part that will surprise you. Within one scope everything works as documented
+below; across scopes, these do nothing:
+
+| | Across scopes |
+|---|---|
+| `[[Wikilink]]` | **Silently fails to resolve.** No link, no error. |
+| `![[Transclusion]]` | Silently fails to resolve. |
+| `memory_relate` | Refused with an error. |
+| `memory_set_parent` | Refused with an error. |
+| Backlinks, graph, duplicate detection | Only ever see the same scope. |
+
+So a `[[Acme Corp]]` written in a personal note, where Acme Corp lives in `work`, quietly is
+not a link. **Link only to entries you can see in the same scope.** If something is needed in
+two scopes, record it in both — that duplication is the intended cost of a partition, and
+`memory_create`'s duplicate detection will not fight you across scopes.
+
+You cannot move an entry between scopes; only the user can, from the dashboard. If something
+is misfiled, say so rather than recreating it.
+
+### Creating a scope
+
+`memory_create_scope` exists, but reach for it rarely — only when the user has asked to keep
+a genuinely separate context apart. Check `memory_list_scopes` first: a slug resembling an
+existing one is refused, deliberately, because a vault split across `acme` and `acme-corp` is
+worse than one scope and you cannot merge them afterwards. If you are unsure whether
+something deserves its own scope, it does not — use a `#tag` or a parent entry.
 
 ---
 
@@ -20,7 +72,7 @@ Destructive (default-blocked, requires approval): `memory_delete`.
 
 `memory_create` is idempotent. The server runs this resolution chain:
 
-1. Exact match on `(user_id, type, title)`.
+1. Exact match on `(scope_id, type, title)`.
 2. Alias match — an attribute `name='alias', value=<title>` on a same-typed entry.
 3. Fuzzy match — Postgres trigram similarity > 0.7 against existing titles of the same type.
 

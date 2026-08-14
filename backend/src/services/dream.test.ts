@@ -72,6 +72,24 @@ describe('runDreamProcess', () => {
     expect(message).toContain('alias');
   });
 
+  it('tells the agent to work one scope at a time', async () => {
+    vi.mocked(client.execute).mockResolvedValueOnce({
+      rows: [{ id: 'dep-1', management_url: 'https://agent1.fly.dev', gateway_token: 'tok-1' }],
+      columns: [], rowsAffected: 1, lastInsertRowid: 0n,
+    });
+
+    await runDreamProcess();
+
+    const { message } = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+    expect(message).toContain('memory_list_scopes');
+    expect(message).toContain('ONE SCOPE AT A TIME');
+    // set_parent cannot cross scopes and will refuse; saying so up front stops
+    // the model burning turns retrying, and stops it inventing a workaround.
+    expect(message).toContain('cannot move an entry into a different scope');
+    // One index per scope, each written from its own scope's contents.
+    expect(message).toContain("THAT SCOPE'S index");
+  });
+
   it('tells the agent not to restructure the operating map', async () => {
     vi.mocked(client.execute).mockResolvedValueOnce({
       rows: [{ id: 'dep-1', management_url: 'https://agent1.fly.dev', gateway_token: 'tok-1' }],
