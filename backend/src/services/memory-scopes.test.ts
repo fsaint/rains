@@ -225,6 +225,29 @@ describe('resolveMemoryContext', () => {
   it('returns null when neither auth mode yields a user', async () => {
     expect(await resolveMemoryContext(null, noAgent)).toBeNull();
   });
+
+  /**
+   * The migration guarantee, stated once in the place it is decided.
+   *
+   * Every agent that existed before scopes has no grant rows, and every entry
+   * that existed before scopes was backfilled into its owner's `default` scope
+   * (db/index.ts, memory backfill steps 1-2). Those two facts together are what
+   * make the feature invisible on the deploy that ships it: the agent reaches
+   * the default scope, and everything it used to see is in it.
+   */
+  it('leaves a pre-scopes agent reading and writing exactly what it did before', async () => {
+    queue(rows([
+      { ...scopeRow(), granted: false, grant_count: 0 },
+      { ...scopeRow({ id: 'scope-work', slug: 'work', name: 'Work', is_default: false }), granted: false, grant_count: 0 },
+    ]));
+
+    const ctx = await resolveMemoryContext(null, async () => ({ agentId: AGENT, userId: USER }));
+
+    // Reads reach the migrated vault…
+    expect(ctx!.scopeIds).toContain('scope-default');
+    // …and writes still land there, not somewhere new.
+    expect(ctx!.defaultScopeId).toBe('scope-default');
+  });
 });
 
 describe('pickScope', () => {

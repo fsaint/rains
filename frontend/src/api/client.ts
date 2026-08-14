@@ -726,7 +726,28 @@ export const permissions = {
       method: 'PUT',
       body: JSON.stringify(config),
     }),
+
+  // Which memory scopes this agent may reach. Narrowing only: 'all' means every
+  // scope its owner has, which is what an agent with no grants gets.
+  getAgentMemoryScopes: (agentId: string) =>
+    request<AgentMemoryScopeGrants>(`/permissions/${agentId}/memory/scopes`),
+
+  setAgentMemoryScopes: (
+    agentId: string,
+    grants: { mode: 'all' } | { mode: 'restricted'; scopeIds: string[]; defaultScopeId: string }
+  ) =>
+    request<AgentMemoryScopeGrants>(`/permissions/${agentId}/memory/scopes`, {
+      method: 'PUT',
+      body: JSON.stringify(grants),
+    }),
 };
+
+export interface AgentMemoryScopeGrants {
+  mode: 'all' | 'restricted';
+  defaultScopeId: string;
+  grantedScopeIds: string[];
+  availableScopes: Array<{ id: string; slug: string; name: string; is_default: boolean }>;
+}
 
 // ============================================================================
 // Memory System
@@ -734,9 +755,26 @@ export const permissions = {
 
 export type MemoryEntryType = 'note' | 'person' | 'company' | 'project' | 'index';
 
+/**
+ * A compartment of the vault. Entries belong to exactly one and nothing crosses
+ * between them — see MemoryScopeEditor and the Memory page's scope switcher.
+ */
+export interface MemoryScope {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  is_default: boolean;
+  archived_at: string | null;
+  entry_count: number;
+}
+
 export interface MemoryEntry {
   id: string;
   user_id?: string;
+  /** Slug of the scope this entry lives in. */
+  scope?: string;
+  scope_name?: string;
   type: MemoryEntryType;
   title: string;
   content: string | null;
@@ -769,36 +807,51 @@ export interface MemoryTreeNode {
   parent_entry_id: string | null;
   position: number;
   is_expanded: boolean;
+  scope?: string;
+  scope_name?: string;
 }
 
 export interface MemoryGraphData {
-  nodes: Array<{ id: string; type: MemoryEntryType; title: string }>;
+  nodes: Array<{ id: string; type: MemoryEntryType; title: string; scope?: string }>;
   edges: Array<{ source: string; target: string; kind: string }>;
 }
 
-export const memory = {
-  getRoot: () =>
-    request<MemoryEntry>('/memory/root'),
+/**
+ * The root index. A superset of a plain entry: the top-level fields are the
+ * default scope's root, with one entry per reachable scope in `scopes`.
+ */
+export interface MemoryRootResponse extends MemoryEntry {
+  default_scope?: string | null;
+  scopes?: Array<MemoryEntry & { scope: string; scope_name: string }>;
+}
 
-  listEntries: (params?: { q?: string; type?: MemoryEntryType; parent_id?: string; limit?: number; tag?: string }) => {
+export const memory = {
+  getRoot: (scope?: string) =>
+    request<MemoryRootResponse>(`/memory/root${scope ? `?scope=${encodeURIComponent(scope)}` : ''}`),
+
+  listEntries: (params?: { q?: string; type?: MemoryEntryType; parent_id?: string; limit?: number; tag?: string; scope?: string }) => {
     const qs = new URLSearchParams();
     if (params?.q) qs.set('q', params.q);
     if (params?.type) qs.set('type', params.type);
     if (params?.parent_id) qs.set('parent_id', params.parent_id);
     if (params?.limit) qs.set('limit', String(params.limit));
     if (params?.tag) qs.set('tag', params.tag);
+    if (params?.scope) qs.set('scope', params.scope);
     const query = qs.toString();
     return request<MemoryEntry[]>(`/memory/entries${query ? `?${query}` : ''}`);
   },
 
-  listTags: () =>
-    request<Array<{ tag: string; count: number }>>('/memory/tags'),
+  listTags: (scope?: string) =>
+    request<Array<{ tag: string; count: number }>>(
+      `/memory/tags${scope ? `?scope=${encodeURIComponent(scope)}` : ''}`
+    ),
 
   createEntry: (data: {
     title: string;
     type?: MemoryEntryType;
     content?: string;
     parent_id?: string;
+    scope?: string;
     attributes?: Array<{ type: 'label' | 'relation'; name: string; value: string }>;
   }) =>
     request<MemoryEntry>('/memory/entries', {
@@ -818,11 +871,11 @@ export const memory = {
   deleteEntry: (id: string) =>
     request<{ ok: boolean }>(`/memory/entries/${id}`, { method: 'DELETE' }),
 
-  getTree: () =>
-    request<MemoryTreeNode[]>('/memory/tree'),
+  getTree: (scope?: string) =>
+    request<MemoryTreeNode[]>(`/memory/tree${scope ? `?scope=${encodeURIComponent(scope)}` : ''}`),
 
-  getGraph: () =>
-    request<MemoryGraphData>('/memory/graph'),
+  getGraph: (scope?: string) =>
+    request<MemoryGraphData>(`/memory/graph${scope ? `?scope=${encodeURIComponent(scope)}` : ''}`),
 
   addAttribute: (entryId: string, attr: { type: 'label' | 'relation'; name: string; value: string }) =>
     request<MemoryAttribute>(`/memory/entries/${entryId}/attributes`, {
@@ -832,6 +885,45 @@ export const memory = {
 
   removeAttribute: (attrId: string) =>
     request<{ ok: boolean }>(`/memory/attributes/${attrId}`, { method: 'DELETE' }),
+
+  /** Move one entry to another scope. Owner-only; agents cannot do this. */
+  moveEntryToScope: (id: string, scope: string) =>
+    request<{ moved: boolean }>(`/memory/entries/${id}/scope`, {
+      method: 'PUT',
+      body: JSON.stringify({ scope }),
+    }),
+};
+
+export const memoryScopes = {
+  list: (includeArchived = false) =>
+    request<MemoryScope[]>(`/memory/scopes${includeArchived ? '?include_archived=true' : ''}`),
+
+  create: (data: { name: string; slug?: string; description?: string }) =>
+    request<{ id: string; slug: string; name: string }>('/memory/scopes', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  update: (id: string, data: { name?: string; slug?: string; description?: string; is_default?: boolean; archived?: boolean }) =>
+    request<MemoryScope>(`/memory/scopes/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  /**
+   * Archiving is the safe default the UI offers; a hard delete needs the scope
+   * to be empty, or `reassignTo` to move its entries somewhere first.
+   */
+  remove: (id: string, opts?: { archive?: boolean; reassignTo?: string }) => {
+    const qs = new URLSearchParams();
+    if (opts?.archive) qs.set('archive', 'true');
+    if (opts?.reassignTo) qs.set('reassign_to', opts.reassignTo);
+    const query = qs.toString();
+    return request<{ deleted?: boolean; archived?: boolean }>(
+      `/memory/scopes/${id}${query ? `?${query}` : ''}`,
+      { method: 'DELETE' }
+    );
+  },
 };
 
 // Skills types

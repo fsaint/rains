@@ -1075,6 +1075,11 @@ function InstanceConfigModal({ instanceId, onClose, onUpdate }: InstanceConfigMo
               <DrivePathEditor agentId={config.agentId} />
             )}
 
+            {/* Memory: which scopes this agent may reach */}
+            {config.serviceType === 'memory' && currentLevel !== 'none' && (
+              <MemoryScopeEditor agentId={config.agentId} />
+            )}
+
             {/* Remove Instance */}
             <div className="pt-2">
               <button
@@ -1114,6 +1119,147 @@ function InstanceConfigModal({ instanceId, onClose, onUpdate }: InstanceConfigMo
 
 interface DrivePathEditorProps {
   agentId: string;
+}
+
+/**
+ * Which memory scopes an agent may reach.
+ *
+ * Unrestricted is the default and means every scope its owner has, including
+ * ones created later. Restricting is opt-in: an agent with no grants recorded
+ * keeps working exactly as it did before scopes existed.
+ */
+function MemoryScopeEditor({ agentId }: { agentId: string }) {
+  const queryClient = useQueryClient();
+
+  const { data: grants, isLoading } = useQuery({
+    queryKey: ['permissions', agentId, 'memory-scopes'],
+    queryFn: () => permissions.getAgentMemoryScopes(agentId),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: (next: { mode: 'all' } | { mode: 'restricted'; scopeIds: string[]; defaultScopeId: string }) =>
+      permissions.setAgentMemoryScopes(agentId, next),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['permissions', agentId, 'memory-scopes'] });
+    },
+  });
+
+  if (isLoading || !grants) {
+    return <div className="text-xs text-gray-500">Loading scopes…</div>;
+  }
+
+  // Nothing to restrict to while there is only one scope.
+  if (grants.availableScopes.length < 2 && grants.mode === 'all') {
+    return (
+      <div>
+        <h4 className="text-sm font-medium text-white mb-1">Memory scopes</h4>
+        <p className="text-xs text-gray-500">
+          This agent can reach your whole vault. Create a second scope on the Memory page
+          to restrict it to part of it.
+        </p>
+      </div>
+    );
+  }
+
+  const restricted = grants.mode === 'restricted';
+  const granted = new Set(grants.grantedScopeIds);
+
+  const toggle = (scopeId: string) => {
+    const next = new Set(granted);
+    if (next.has(scopeId)) next.delete(scopeId);
+    else next.add(scopeId);
+    if (next.size === 0) return; // an empty grant set would mean "no memory at all"
+    const ids = [...next];
+    updateMutation.mutate({
+      mode: 'restricted',
+      scopeIds: ids,
+      defaultScopeId: ids.includes(grants.defaultScopeId) ? grants.defaultScopeId : ids[0],
+    });
+  };
+
+  return (
+    <div>
+      <h4 className="text-sm font-medium text-white mb-1">Memory scopes</h4>
+      <p className="text-xs text-gray-500 mb-3">
+        Which compartments of your vault this agent can read and write. Its default is
+        where entries land when it does not name a scope.
+      </p>
+
+      <div className="flex gap-2 mb-3">
+        <button
+          onClick={() => updateMutation.mutate({ mode: 'all' })}
+          className={`px-3 py-1.5 rounded text-xs transition-colors ${
+            !restricted ? 'bg-trust-blue/20 text-trust-blue' : 'bg-white/5 text-gray-400 hover:bg-white/10'
+          }`}
+        >
+          Unrestricted
+        </button>
+        <button
+          onClick={() =>
+            updateMutation.mutate({
+              mode: 'restricted',
+              scopeIds: [grants.defaultScopeId],
+              defaultScopeId: grants.defaultScopeId,
+            })
+          }
+          className={`px-3 py-1.5 rounded text-xs transition-colors ${
+            restricted ? 'bg-trust-blue/20 text-trust-blue' : 'bg-white/5 text-gray-400 hover:bg-white/10'
+          }`}
+        >
+          Restrict to selected
+        </button>
+      </div>
+
+      {restricted && (
+        <div className="space-y-1">
+          {grants.availableScopes.map((s) => {
+            const on = granted.has(s.id);
+            return (
+              <div
+                key={s.id}
+                className="flex items-center justify-between px-3 py-2 rounded bg-white/5"
+              >
+                <label className="flex items-center gap-2 cursor-pointer min-w-0">
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    onChange={() => toggle(s.id)}
+                    className="accent-trust-blue"
+                  />
+                  <span className="text-sm text-white truncate">{s.name}</span>
+                  <span className="text-[10px] text-gray-500">{s.slug}</span>
+                </label>
+                {on && (
+                  <label className="flex items-center gap-1.5 cursor-pointer shrink-0">
+                    <input
+                      type="radio"
+                      name={`default-scope-${agentId}`}
+                      checked={grants.defaultScopeId === s.id}
+                      onChange={() =>
+                        updateMutation.mutate({
+                          mode: 'restricted',
+                          scopeIds: grants.grantedScopeIds,
+                          defaultScopeId: s.id,
+                        })
+                      }
+                      className="accent-trust-blue"
+                    />
+                    <span className="text-[11px] text-gray-400">default</span>
+                  </label>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {!restricted && (
+        <p className="text-xs text-gray-500">
+          Reaches all {grants.availableScopes.length} scopes, including any you add later.
+        </p>
+      )}
+    </div>
+  );
 }
 
 function DrivePathEditor({ agentId }: DrivePathEditorProps) {
