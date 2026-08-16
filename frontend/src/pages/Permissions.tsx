@@ -1148,27 +1148,21 @@ function MemoryScopeEditor({ agentId }: { agentId: string }) {
     return <div className="text-xs text-gray-500">Loading scopes…</div>;
   }
 
-  // Nothing to restrict to while there is only one scope.
-  if (grants.availableScopes.length < 2 && grants.mode === 'all') {
-    return (
-      <div>
-        <h4 className="text-sm font-medium text-white mb-1">Memory scopes</h4>
-        <p className="text-xs text-gray-500">
-          This agent can reach your whole vault. Create a second scope from the Memory
-          page — the layers icon beside “New entry” — to restrict it to part of it.
-        </p>
-      </div>
-    );
-  }
-
   const restricted = grants.mode === 'restricted';
-  const granted = new Set(grants.grantedScopeIds);
+  // With no grant rows the agent reaches every scope, so show them all ticked.
+  // The checkbox reflects effective access, not whether a row happens to exist —
+  // "which scopes can this agent reach" is the question being asked.
+  const granted = new Set(
+    restricted ? grants.grantedScopeIds : grants.availableScopes.map((s) => s.id)
+  );
 
+  /** Ticking or unticking always lands in restricted mode — that is what a choice means. */
   const toggle = (scopeId: string) => {
     const next = new Set(granted);
     if (next.has(scopeId)) next.delete(scopeId);
     else next.add(scopeId);
-    if (next.size === 0) return; // an empty grant set would mean "no memory at all"
+    // An empty set would mean an agent with memory enabled that can reach none of it.
+    if (next.size === 0) return;
     const ids = [...next];
     updateMutation.mutate({
       mode: 'restricted',
@@ -1177,87 +1171,75 @@ function MemoryScopeEditor({ agentId }: { agentId: string }) {
     });
   };
 
+  const setDefault = (scopeId: string) => {
+    updateMutation.mutate({
+      mode: 'restricted',
+      scopeIds: [...granted],
+      defaultScopeId: scopeId,
+    });
+  };
+
+  const onlyScope = grants.availableScopes.length === 1;
+
   return (
     <div>
       <h4 className="text-sm font-medium text-white mb-1">Memory scopes</h4>
       <p className="text-xs text-gray-500 mb-3">
-        Which compartments of your vault this agent can read and write. Its default is
-        where entries land when it does not name a scope.
+        Which compartments of your vault this agent can read and write.{' '}
+        <span className="text-gray-400">Default</span> is where its entries land when it
+        does not name a scope.
       </p>
 
-      <div className="flex gap-2 mb-3">
-        <button
-          onClick={() => updateMutation.mutate({ mode: 'all' })}
-          className={`px-3 py-1.5 rounded text-xs transition-colors ${
-            !restricted ? 'bg-trust-blue/20 text-trust-blue' : 'bg-white/5 text-gray-400 hover:bg-white/10'
-          }`}
-        >
-          Unrestricted
-        </button>
-        <button
-          onClick={() =>
-            updateMutation.mutate({
-              mode: 'restricted',
-              scopeIds: [grants.defaultScopeId],
-              defaultScopeId: grants.defaultScopeId,
-            })
-          }
-          className={`px-3 py-1.5 rounded text-xs transition-colors ${
-            restricted ? 'bg-trust-blue/20 text-trust-blue' : 'bg-white/5 text-gray-400 hover:bg-white/10'
-          }`}
-        >
-          Restrict to selected
-        </button>
-      </div>
-
-      {restricted && (
-        <div className="space-y-1">
-          {grants.availableScopes.map((s) => {
-            const on = granted.has(s.id);
-            return (
-              <div
-                key={s.id}
-                className="flex items-center justify-between px-3 py-2 rounded bg-white/5"
-              >
-                <label className="flex items-center gap-2 cursor-pointer min-w-0">
+      <div className="space-y-1">
+        {grants.availableScopes.map((s) => {
+          const on = granted.has(s.id);
+          const isDefault = on && grants.defaultScopeId === s.id;
+          return (
+            <div key={s.id} className="flex items-center justify-between px-3 py-2 rounded bg-white/5">
+              <label className="flex items-center gap-2 cursor-pointer min-w-0">
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={() => toggle(s.id)}
+                  disabled={onlyScope && on}
+                  title={onlyScope && on ? 'The only scope — an agent cannot be left with none' : undefined}
+                  className="accent-trust-blue disabled:opacity-50"
+                />
+                <span className="text-sm text-white truncate">{s.name}</span>
+                <span className="text-[10px] text-gray-500">{s.slug}</span>
+              </label>
+              {on && (
+                <label className="flex items-center gap-1.5 cursor-pointer shrink-0">
                   <input
-                    type="checkbox"
-                    checked={on}
-                    onChange={() => toggle(s.id)}
+                    type="radio"
+                    name={`default-scope-${agentId}`}
+                    checked={isDefault}
+                    onChange={() => setDefault(s.id)}
                     className="accent-trust-blue"
                   />
-                  <span className="text-sm text-white truncate">{s.name}</span>
-                  <span className="text-[10px] text-gray-500">{s.slug}</span>
+                  <span className="text-[11px] text-gray-400">default</span>
                 </label>
-                {on && (
-                  <label className="flex items-center gap-1.5 cursor-pointer shrink-0">
-                    <input
-                      type="radio"
-                      name={`default-scope-${agentId}`}
-                      checked={grants.defaultScopeId === s.id}
-                      onChange={() =>
-                        updateMutation.mutate({
-                          mode: 'restricted',
-                          scopeIds: grants.grantedScopeIds,
-                          defaultScopeId: s.id,
-                        })
-                      }
-                      className="accent-trust-blue"
-                    />
-                    <span className="text-[11px] text-gray-400">default</span>
-                  </label>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
+              )}
+            </div>
+          );
+        })}
+      </div>
 
-      {!restricted && (
+      <div className="mt-2 flex items-center justify-between gap-3">
         <p className="text-xs text-gray-500">
-          Reaches all {grants.availableScopes.length} scopes, including any you add later.
+          {restricted
+            ? `Restricted to ${granted.size} of ${grants.availableScopes.length}.`
+            : `Reaches all ${grants.availableScopes.length}, including any you add later.`}
         </p>
-      )}
+        {restricted && (
+          <button
+            onClick={() => updateMutation.mutate({ mode: 'all' })}
+            className="text-xs text-trust-blue hover:underline shrink-0"
+          >
+            Reset to all scopes
+          </button>
+        )}
+      </div>
     </div>
   );
 }
