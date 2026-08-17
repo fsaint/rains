@@ -2,6 +2,8 @@
 
 The trust layer for AI agents. An MCP-native proxy gateway providing granular permission control, guided provisioning, credential health monitoring, and programmable spend authorization.
 
+**Using Helm rather than developing it?** [`docs/MULTI_AGENT_SETUP.md`](docs/MULTI_AGENT_SETUP.md) walks through running a separate agent per context — home, work, a project — each with its own memory scope, connected accounts, and approval rules, connected to Claude, Claude Code, or Cowork.
+
 ## Project Structure
 
 ```

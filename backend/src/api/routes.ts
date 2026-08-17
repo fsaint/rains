@@ -343,11 +343,17 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       `Some tools may require approval before execution. If so, the request will block until a human approves it in the Reins dashboard.`,
     ].join('\n');
 
-    // MCP JSON config snippets for different clients
+    // MCP JSON config snippets for different clients.
+    //
+    // Claude Code's remote transport is "http" — it recognises only
+    // http | sse | stdio, and skips any other type with
+    // `unknown MCP server type "..."`, which is a warning buried in
+    // `claude mcp list` rather than a visible failure. "url" was silently
+    // dropping this server for everyone who pasted the snippet.
     const claudeCodeConfig = {
       "mcpServers": {
         [`reins-${(agent.name as string).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`]: {
-          "type": "url",
+          "type": "http",
           "url": mcpUrl,
         },
       },

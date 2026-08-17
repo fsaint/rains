@@ -897,6 +897,7 @@ fly secrets set --app agenthelm-core \
 
 | File | Description |
 |------|-------------|
+| [`docs/MULTI_AGENT_SETUP.md`](docs/MULTI_AGENT_SETUP.md) | User guide: one agent per context (home/work/project) connected to Claude, Claude Code, or Cowork — scope grants, out-of-agent credentials, approval posture, per-client MCP config |
 | [`docs/BETA_RELEASE_PLAN.md`](docs/BETA_RELEASE_PLAN.md) | Beta launch plan targeting May 5 2026 — cohort size, cost gates, milestones |
 | [`docs/ops/LOCAL_DEV_SETUP.md`](docs/ops/LOCAL_DEV_SETUP.md) | Local development setup: .env variables, Google OAuth redirect URIs, Telegram tunnel, dev bots |
 | [`docs/ops/PROD_SETUP.md`](docs/ops/PROD_SETUP.md) | Production setup checklist: Google OAuth, Fly secrets, DNS, deployment steps |
@@ -909,7 +910,6 @@ fly secrets set --app agenthelm-core \
 | [`docs/TESTING_GUIDE.md`](docs/TESTING_GUIDE.md) | Guide for validating the first operational version of Reins end-to-end |
 | [`docs/TELEGRAM_AGENTS.md`](docs/TELEGRAM_AGENTS.md) | Telegram bot assignments and wiring for all platform bots |
 | [`docs/MEMORY.md`](docs/MEMORY.md) | Memory system: scopes and per-agent scope grants, architecture, DB schema, MCP tools, REST API, auth, dream process, local dev setup |
-| [`docs/AGENT_MARKET_RESEARCH.md`](docs/AGENT_MARKET_RESEARCH.md) | Reddit market research (May 2026): OpenClaw/Hermes pain points, agent frustrations, competitive dynamics, messaging insights |
 
 ### API Reference
 
