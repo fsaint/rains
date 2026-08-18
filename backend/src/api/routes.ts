@@ -1885,7 +1885,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     // Validate token by hitting the projects list endpoint
     let username: string | undefined;
     try {
-      const res = await fetch('https://studio.curl-newton.ts.net/api/mobile/projects/', {
+      const res = await fetch('https://hermeneutix.btv.pw/api/mobile/projects/', {
         headers: { Authorization: `Token ${body.token}` },
       });
       if (!res.ok) {

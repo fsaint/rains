@@ -7,7 +7,7 @@
 
 import type { ServerContext, ToolResult } from '../common/types.js';
 
-const API_BASE = 'https://studio.curl-newton.ts.net/api';
+const API_BASE = 'https://hermeneutix.btv.pw/api';
 
 async function apiRequest(
   context: ServerContext,

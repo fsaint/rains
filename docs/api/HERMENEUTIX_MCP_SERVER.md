@@ -1,10 +1,10 @@
 # Hermeneutix MCP Server
 
-MCP server for the [Hermeneutix](https://studio.curl-newton.ts.net) meeting transcription platform. Provides read-only access to projects, meetings, instances, sessions (conversation transcripts), and speaker profiles.
+MCP server for the [Hermeneutix](https://hermeneutix.btv.pw) meeting transcription platform. Provides read-only access to projects, meetings, instances, sessions (conversation transcripts), and speaker profiles.
 
 ## Authentication
 
-Requires a Hermeneutix API token. Generate one from your account settings at `https://studio.curl-newton.ts.net` or via the mobile login endpoint.
+Requires a Hermeneutix API token. Generate one from your account settings at `https://hermeneutix.btv.pw` or via the mobile login endpoint.
 
 Set the token via the environment variable `HERMENEUTIX_API_TOKEN` or pass it as `token` in the server config.
 

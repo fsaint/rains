@@ -16,7 +16,7 @@ export const definition: ServiceDefinitionWithTools = {
     type: 'api_key',
     required: true,
     instructions: 'Log in to your Hermeneutix instance and generate an API token from your account settings.',
-    keyUrl: 'https://studio.curl-newton.ts.net/api/mobile/login/',
+    keyUrl: 'https://hermeneutix.btv.pw/api/mobile/login/',
   },
   tools: hermeneutixTools,
   permissions: {
