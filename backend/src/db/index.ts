@@ -228,16 +228,8 @@ export async function initializeDatabase() {
     END $$
   `;
 
-  // Spend cap config on deployed_agents (migration)
-  await sql`
-    DO $$ BEGIN
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS spend_limit_dollars REAL;
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS spend_limit_tokens INTEGER;
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS spend_soft_stopped INTEGER DEFAULT 0;
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS spend_alerted_80 INTEGER DEFAULT 0;
-    EXCEPTION WHEN duplicate_column THEN NULL;
-    END $$
-  `;
+  // NOTE: the spend-cap columns on deployed_agents used to be added here, but
+  // that table is not created until further down. See below, after its CREATE.
 
   await sql`
     CREATE TABLE IF NOT EXISTS mcp_servers (
@@ -508,6 +500,22 @@ export async function initializeDatabase() {
       ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS telegram_groups_json TEXT;
       ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS model_credentials TEXT;
       ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS mcp_config_json TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
+
+  // Spend cap config on deployed_agents (migration).
+  // This has to run after the CREATE TABLE above. It used to sit next to the
+  // spend_records migration ~250 lines earlier, which worked on any database
+  // that already had the table and raised undefined_table on a fresh one —
+  // an error the duplicate_column handler does not catch, so initialisation
+  // died and the server never opened its port.
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS spend_limit_dollars REAL;
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS spend_limit_tokens INTEGER;
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS spend_soft_stopped INTEGER DEFAULT 0;
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS spend_alerted_80 INTEGER DEFAULT 0;
     EXCEPTION WHEN duplicate_column THEN NULL;
     END $$
   `;
