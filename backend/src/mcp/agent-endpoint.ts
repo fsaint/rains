@@ -642,12 +642,18 @@ async function executeTool(
 
   // Inject gateway token for services that call back into the Reins API.
   // memory reads/writes memory entries; gmail resolves source="upload"
-  // attachments via /api/agent-uploads; skills reads /api/agent-skills.
+  // attachments via /api/agent-uploads; skills reads /api/agent-skills;
+  // helm-admin reads and writes /api/agent-admin.
+  //
+  // Omitting a service here does not fail loudly: its handlers send no
+  // x-reins-agent-secret and every call comes back 401, which reads like a
+  // broken credential rather than a missing line in this list.
   if (
     serviceType === 'memory' ||
     serviceType === 'gmail' ||
     serviceType === 'skills' ||
-    serviceType === 'skill-authoring'
+    serviceType === 'skill-authoring' ||
+    serviceType === 'helm-admin'
   ) {
     const depRow = await client.execute({
       sql: `SELECT gateway_token FROM deployed_agents WHERE agent_id = ? AND status NOT IN ('destroyed', 'error') ORDER BY created_at DESC LIMIT 1`,

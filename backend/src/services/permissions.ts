@@ -334,6 +334,191 @@ export async function getAgentServiceConfig(
   };
 }
 
+/** The service that can change what other agents are allowed to do. */
+export const ADMIN_SERVICE_TYPE = 'helm-admin';
+
+/**
+ * What an admin agent may hold alongside helm-admin.
+ *
+ * Memory only, and the reason is narrow: a memory scope belongs to one agent and
+ * stores no outside credential, so it cannot be turned into a route to the
+ * owner's mail or files. Anything holding a credential could be, which is the
+ * whole point of keeping this agent alone.
+ */
+export const ADMIN_COMPATIBLE_SERVICES = new Set(['memory']);
+
+/** An agent anyone can drive, because its MCP endpoint takes no credential. */
+export interface OpenMcpAgent {
+  id: string;
+  name: string;
+}
+
+/** Thrown when the account is not closed enough to hold an admin agent. */
+export class UnauthenticatedEndpointsOpenError extends Error {
+  readonly code = 'UNAUTHENTICATED_ENDPOINTS_OPEN';
+  constructor(
+    message: string,
+    readonly openAgents: OpenMcpAgent[]
+  ) {
+    super(message);
+    this.name = 'UnauthenticatedEndpointsOpenError';
+  }
+}
+
+/**
+ * The owner's agents that still answer MCP calls without a token.
+ *
+ * Mirrors authenticateMcp in api/routes.ts, and the two cases have to match or
+ * this reports safe while the endpoint serves: it takes the most recent live
+ * deployment row, and treats **no live row at all** as open, because that is
+ * what the gate does before handing off to handleMCPRequest. Reading only
+ * allow_unauthenticated = true would miss every agent that has never deployed.
+ */
+export async function listOpenMcpAgents(userId: string): Promise<OpenMcpAgent[]> {
+  const result = await client.execute({
+    sql: `SELECT a.id, a.name
+          FROM agents a
+          LEFT JOIN LATERAL (
+            SELECT da.allow_unauthenticated
+            FROM deployed_agents da
+            WHERE da.agent_id = a.id AND da.status NOT IN ('destroyed', 'error')
+            ORDER BY da.created_at DESC
+            LIMIT 1
+          ) d ON true
+          WHERE a.user_id = ?
+            AND (d.allow_unauthenticated IS NULL OR d.allow_unauthenticated = true)
+          ORDER BY a.name`,
+    args: [userId],
+  });
+  return result.rows.map((row) => ({ id: row.id as string, name: row.name as string }));
+}
+
+/** Does this owner already have an agent holding helm-admin? */
+export async function userHasAdminAgent(userId: string): Promise<boolean> {
+  const result = await client.execute({
+    sql: `SELECT 1
+          FROM agents a
+          WHERE a.user_id = ?
+            AND (
+              EXISTS (SELECT 1 FROM agent_service_instances i
+                      WHERE i.agent_id = a.id AND i.service_type = ? AND i.enabled = true)
+              OR EXISTS (SELECT 1 FROM agent_service_access s
+                         WHERE s.agent_id = a.id AND s.service_type = ? AND s.enabled = true)
+            )
+          LIMIT 1`,
+    args: [userId, ADMIN_SERVICE_TYPE, ADMIN_SERVICE_TYPE],
+  });
+  return result.rows.length > 0;
+}
+
+/**
+ * Refuse to create an admin agent while any of the owner's agents can be driven
+ * by anyone holding its id.
+ *
+ * Without this the exclusivity rule is decorative: an admin agent grants Gmail
+ * to agent B, reads B's id from its own list_agents output, and POSTs to
+ * /mcp/<B>. Keeping the admin agent poor means nothing if every other agent on
+ * the account is an open door.
+ */
+export async function assertNoOpenMcpEndpoints(userId: string): Promise<void> {
+  const open = await listOpenMcpAgents(userId);
+  if (open.length === 0) return;
+
+  const names = open.map((a) => a.name).join(', ');
+  throw new UnauthenticatedEndpointsOpenError(
+    `Cannot enable Helm Admin: ${open.length} agent${open.length === 1 ? '' : 's'} still accept unauthenticated MCP calls (${names}). ` +
+      `An admin agent could grant them access and then use them directly. Close their unauthenticated endpoints, then enable this again.`,
+    open
+  );
+}
+
+/** Thrown by assertServiceCombinationAllowed. Carries what blocked the write. */
+export class ServiceCombinationError extends Error {
+  readonly code = 'SERVICE_COMBINATION_NOT_ALLOWED';
+  constructor(
+    message: string,
+    readonly serviceType: string,
+    readonly conflicting: string[]
+  ) {
+    super(message);
+    this.name = 'ServiceCombinationError';
+  }
+}
+
+/**
+ * Every service type currently live on an agent.
+ *
+ * Per type this answers exactly what isServiceEnabledForAgent answers — an
+ * enabled instance row, or failing that an enabled legacy access row — so a
+ * service that is invisible to one and live on the other cannot slip past the
+ * guard below. Kept as a union rather than a per-type loop so adding a service
+ * does not add a query.
+ */
+export async function listEnabledServiceTypes(agentId: string): Promise<string[]> {
+  const instances = await db
+    .select({ serviceType: agentServiceInstances.serviceType })
+    .from(agentServiceInstances)
+    .where(and(eq(agentServiceInstances.agentId, agentId), eq(agentServiceInstances.enabled, true)));
+
+  const legacy = await db
+    .select({ serviceType: agentServiceAccess.serviceType })
+    .from(agentServiceAccess)
+    .where(and(eq(agentServiceAccess.agentId, agentId), eq(agentServiceAccess.enabled, true)));
+
+  return [...new Set([...instances, ...legacy].map((r) => r.serviceType))];
+}
+
+/**
+ * Refuse service combinations that would let an agent grant itself capability.
+ *
+ * helm-admin can change any agent's permissions, including its own. An agent
+ * holding it plus Gmail is not an agent with two services — it is an agent with
+ * every service, reachable in two steps. So the two are mutually exclusive, and
+ * the check runs in both directions because either order produces the same pair.
+ *
+ * This lives here rather than in the MCP server so it binds every caller: the
+ * dashboard, the admin MCP itself, and anything added later. Callers that reach
+ * around it by writing agent_service_access or agent_service_instances directly
+ * would defeat it — use setServiceAccess/createServiceInstance.
+ */
+export async function assertServiceCombinationAllowed(
+  agentId: string,
+  serviceType: string
+): Promise<void> {
+  const enabled = await listEnabledServiceTypes(agentId);
+
+  if (serviceType === ADMIN_SERVICE_TYPE) {
+    const conflicting = enabled.filter(
+      (s) => s !== ADMIN_SERVICE_TYPE && !ADMIN_COMPATIBLE_SERVICES.has(s)
+    );
+    if (conflicting.length > 0) {
+      throw new ServiceCombinationError(
+        `An admin agent can hold only memory alongside Helm Admin. This agent also has: ${conflicting.join(', ')}.`,
+        serviceType,
+        conflicting
+      );
+    }
+
+    // Already enabled — re-enabling is a no-op and must stay idempotent, so it
+    // does not get re-blocked by an account state it did not change.
+    if (enabled.includes(ADMIN_SERVICE_TYPE)) return;
+
+    const [agent] = await db.select().from(agents).where(eq(agents.id, agentId));
+    if (agent?.userId) await assertNoOpenMcpEndpoints(agent.userId);
+    return;
+  }
+
+  if (ADMIN_COMPATIBLE_SERVICES.has(serviceType)) return;
+
+  if (enabled.includes(ADMIN_SERVICE_TYPE)) {
+    throw new ServiceCombinationError(
+      `This agent has Helm Admin, which can change what every agent is allowed to do. Adding ${serviceType} to it would let it grant itself access to your data. Use a separate agent.`,
+      serviceType,
+      [ADMIN_SERVICE_TYPE]
+    );
+  }
+}
+
 /**
  * Enable or disable a service for an agent
  */
@@ -342,6 +527,9 @@ export async function setServiceAccess(
   serviceType: string,
   enabled: boolean
 ): Promise<void> {
+  // Only enabling can create a forbidden pair; disabling always shrinks the set.
+  if (enabled) await assertServiceCombinationAllowed(agentId, serviceType);
+
   const now = new Date().toISOString();
 
   await client.execute({
@@ -918,6 +1106,12 @@ export async function createServiceInstance(
   const registry = await getRegistry();
   const def = registry.serviceRegistry.get(serviceType);
   if (!def) throw new Error(`Unknown service type: ${serviceType}`);
+
+  // Before the insert, not after. This function writes the instance row and
+  // only then calls setServiceAccess, so relying on the guard inside that would
+  // reject the write with the instance row already committed — the agent would
+  // show the service in tools/list while the access row said no.
+  await assertServiceCombinationAllowed(agentId, serviceType);
 
   // Check if this is the first instance of this type for this agent
   const existing = await db

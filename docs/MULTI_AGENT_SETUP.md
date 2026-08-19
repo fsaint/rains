@@ -226,6 +226,24 @@ To author or update skills, see [`docs/ops/ADDING_SKILLS_VIA_MCP.md`](ops/ADDING
 
 ---
 
+## 8b. Optional: an agent that organizes the others
+
+Once you have several agents, keeping them named and scoped sensibly is itself work. The **Helm Admin** service gives one agent tools to do it: list your agents, read what each can reach, rename them, write descriptions, and enable or disable services on them. Every change requires your approval, arriving like any other approval request.
+
+**This agent may hold nothing else except memory.** Not Gmail, not skills. The rule is enforced when you enable it, in both directions, and it is not a stylistic preference:
+
+> An agent that can change permissions and also holds Gmail is not an agent with two services. It is an agent with every service, because it can grant itself the rest. Keeping it poor is the only thing that makes the capability safe to delegate.
+
+It also cannot grant or remove Helm Admin itself — that stays in the dashboard, where you are present — and it never sees a gateway token, a credential, or an MCP URL.
+
+**You must close your unauthenticated endpoints first.** Enabling it is refused while any agent on your account still answers MCP calls without a token, and the refusal names the agents that block it. The reason is section 2's point taken to its conclusion: while the URL is the credential, an agent id *is* a credential. An admin agent could grant Gmail to your home agent and then simply POST to that agent's endpoint — the restriction above would hold on paper while your account was wide open. For the same reason, re-opening an endpoint is refused while an admin agent exists; remove Helm Admin first.
+
+An agent created *after* setup starts with no deployment row and is therefore open, so the admin agent is also refused any grant to an agent in that state until you close it.
+
+If you would rather not run one, nothing changes — this is entirely opt-in, and the dashboard does everything it does.
+
+---
+
 ## 9. Verify the setup
 
 Do this once per agent. The URL is all you need.
