@@ -190,7 +190,7 @@ vi.mock('../credentials/vault.js', () => ({
     retrieve: vi.fn().mockResolvedValue({
       serviceId: 'gmail',
       type: 'oauth2',
-      data: { accessToken: 'test-token' },
+      data: { accessToken: 'test-token', tokenType: 'Bearer' },
     }),
     getValidAccessToken: vi.fn().mockResolvedValue('test-access-token'),
   },
@@ -697,7 +697,10 @@ describe('get_result tool', () => {
     const content = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text);
     expect(content.status).toBe('pending');
     expect(content.jobId).toBe('job-1');
-    expect(content.message).toContain('http://localhost:5173/approvals');
+    // Already approved, so this must NOT be the awaiting-approval message —
+    // sending the user to /approvals would ask them to redo what they just did.
+    expect(content.message).toMatch(/still running/i);
+    expect(content.message).not.toContain('/approvals');
   });
 });
 
@@ -712,7 +715,7 @@ describe('scope guard', () => {
     vi.mocked(credentialVault.retrieve).mockResolvedValueOnce({
       serviceId: 'google',
       type: 'oauth2' as const,
-      data: { accessToken: 'test-token' },
+      data: { accessToken: 'test-token', tokenType: 'Bearer' },
     });
     vi.mocked(credentialVault.getValidAccessToken).mockResolvedValueOnce('test-access-token');
 
@@ -749,7 +752,7 @@ describe('scope guard', () => {
     vi.mocked(credentialVault.retrieve).mockResolvedValueOnce({
       serviceId: 'google',
       type: 'oauth2' as const,
-      data: { accessToken: 'test-token' },
+      data: { accessToken: 'test-token', tokenType: 'Bearer' },
     });
     vi.mocked(credentialVault.getValidAccessToken).mockResolvedValueOnce('test-access-token');
 

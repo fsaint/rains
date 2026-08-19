@@ -233,6 +233,11 @@ function pendingApprovalUserMessage(): string {
   return `The user has been asked for permission for this operation. Please check the Telegram permission request, or go to ${base}/approvals to approve.`;
 }
 
+/** The other `pending`: the user approved and the executor is still running. */
+function approvedAwaitingResultMessage(): string {
+  return 'The user approved this operation and it is still running. Keep polling; there is nothing for the user to do.';
+}
+
 /**
  * Main MCP request handler
  */
@@ -1013,7 +1018,11 @@ async function handleCallTool(
         }
         jobResult = { status: 'completed', jobId, result: parsed };
       } else {
-        jobResult = { status: 'pending', jobId };
+        // Approved, but the executor has not finished. This reports the same
+        // `pending` status as the awaiting-approval branch above and must not
+        // reuse its message: the user has already approved, so sending them
+        // back to /approvals would ask them to do a thing they just did.
+        jobResult = { status: 'pending', jobId, message: approvedAwaitingResultMessage() };
       }
     }
 

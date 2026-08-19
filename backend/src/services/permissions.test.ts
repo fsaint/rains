@@ -4,6 +4,26 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+/**
+ * The gmail tool lists, declared once.
+ *
+ * These used to be written out twice — once inside the `@reins/servers` mock and
+ * once as MOCK_GMAIL_PERMISSIONS for the assertions. Three tools were added to
+ * the first copy and not the second, and setPermissionLevel then made more
+ * db.select calls than the test had queued responses for. Hoisted so the mock
+ * factory, which vitest lifts above the imports, can reach it.
+ */
+const { GMAIL_PERMISSIONS } = vi.hoisted(() => ({
+  GMAIL_PERMISSIONS: {
+    read: [
+      'gmail_list_accounts', 'gmail_list_messages', 'gmail_get_message', 'gmail_get_attachment',
+      'gmail_search', 'gmail_list_labels', 'gmail_create_label', 'gmail_delete_label',
+    ],
+    write: ['gmail_create_draft', 'gmail_send_draft'],
+    blocked: ['gmail_send_message', 'gmail_delete_message'],
+  },
+}));
+
 // Mock modules
 vi.mock('../db/index.js', () => ({
   db: {
@@ -49,11 +69,7 @@ vi.mock('@reins/servers', () => {
       type: 'gmail',
       name: 'Gmail',
       auth: { required: true, type: 'oauth2', credentialServiceIds: ['gmail'] },
-      permissions: {
-        read: ['gmail_list_accounts', 'gmail_list_messages', 'gmail_get_message', 'gmail_get_attachment', 'gmail_search', 'gmail_list_labels', 'gmail_create_label', 'gmail_delete_label'],
-        write: ['gmail_create_draft', 'gmail_send_draft'],
-        blocked: ['gmail_send_message', 'gmail_delete_message'],
-      },
+      permissions: GMAIL_PERMISSIONS,
     },
     {
       type: 'drive',
@@ -124,11 +140,7 @@ import {
 } from './permissions.js';
 
 // Tool lists mirroring the vi.mock('@reins/servers') registry above
-const MOCK_GMAIL_PERMISSIONS = {
-  read: ['gmail_list_accounts', 'gmail_list_messages', 'gmail_get_message', 'gmail_search', 'gmail_list_labels'],
-  write: ['gmail_create_draft', 'gmail_send_draft'],
-  blocked: ['gmail_send_message', 'gmail_delete_message'],
-};
+const MOCK_GMAIL_PERMISSIONS = GMAIL_PERMISSIONS;
 
 // Helper to create mock query chain
 function mockQueryChain(result: unknown, hasWhere = true) {
@@ -590,23 +602,24 @@ describe('Permission Service', () => {
     it('should enable service and set read-only permissions', async () => {
       // setServiceAccess now uses client.execute (no db.select/insert needed for it)
 
-      // Mock setToolPermission calls - need multiple mocks for each tool
-      const gmailTools = [...MOCK_GMAIL_PERMISSIONS.read, ...MOCK_GMAIL_PERMISSIONS.write, ...MOCK_GMAIL_PERMISSIONS.blocked];
-      for (let i = 0; i < gmailTools.length; i++) {
-        vi.mocked(db.select).mockReturnValueOnce({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockResolvedValue([]),
-          }),
-        } as never);
-        vi.mocked(db.insert).mockReturnValueOnce({
-          values: vi.fn().mockResolvedValue(undefined),
-        } as never);
-      }
+      // setToolPermission runs once per gmail tool. Answer every call rather
+      // than queueing one response per tool: a counted queue silently runs dry
+      // when gmail gains a tool, and the failure surfaces as an unrelated
+      // "cannot read 'from' of undefined" deep inside the service.
+      vi.mocked(db.select).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([]),
+        }),
+      } as never);
+      vi.mocked(db.insert).mockReturnValue({
+        values: vi.fn().mockResolvedValue(undefined),
+      } as never);
 
       await setPermissionLevel('agent-1', 'gmail', 'read');
 
-      // Check that insert was called for enabling service and for tool permissions
-      expect(db.insert).toHaveBeenCalled();
+      // One insert per tool, since none existed.
+      const gmailTools = [...MOCK_GMAIL_PERMISSIONS.read, ...MOCK_GMAIL_PERMISSIONS.write, ...MOCK_GMAIL_PERMISSIONS.blocked];
+      expect(db.insert).toHaveBeenCalledTimes(gmailTools.length);
     });
   });
 

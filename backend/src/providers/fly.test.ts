@@ -13,6 +13,11 @@ describe('Fly Provider', () => {
     process.env.FLY_API_TOKEN = 'test-fly-token';
     process.env.FLY_ORG = 'test-org';
     process.env.OPENCLAW_IMAGE = 'test-image:latest';
+    // Must be set here, not in the hermes describe below. config/index.ts reads
+    // process.env once, when the first `await import('./fly.js')` pulls it in —
+    // which happens in an earlier test — so anything set later is ignored. The
+    // hermes tests passed only on machines whose .env happened to supply this.
+    process.env.HERMES_IMAGE = 'registry.fly.io/reins-hermes:test';
     process.env.ANTHROPIC_API_KEY = 'sk-test-key';
     process.env.REINS_PUBLIC_URL = 'https://reins.test.com';
   });
@@ -141,10 +146,6 @@ describe('Fly Provider', () => {
     });
 
     describe('hermes minimax key fallback', () => {
-      beforeEach(() => {
-        process.env.HERMES_IMAGE = 'registry.fly.io/reins-hermes:test';
-      });
-
       it('should use user-supplied key when both user and platform keys are set', async () => {
         process.env.MINIMAX_API_KEY = 'platform-key';
         const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true, json: () => ({ id: 'm1' }) });
