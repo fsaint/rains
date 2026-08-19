@@ -114,6 +114,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The backend imports @reins/shared and @reins/servers by their built
+      # dist/ output, so without this it exits with ERR_MODULE_NOT_FOUND. The
+      # unit-tests job already does this; the E2E job never did, which went
+      # unnoticed while it was being skipped.
+      - name: Build workspace packages
+        run: npm run build --workspace=shared --workspace=servers --if-present
+
       - name: Build stub Docker image
         run: docker build -t reins-stub-openclaw:latest docker/stub-openclaw
 
