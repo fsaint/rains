@@ -144,10 +144,13 @@ export function parseAttachments(raw: unknown): AttachmentSpec[] {
         };
 
       case 'gmail':
+        // attachmentId is optional now: Gmail rotates it per read, so it is a
+        // hint rather than a key. Either it or filename is enough to identify
+        // the attachment, and a message with one attachment needs neither.
         return {
           source,
           messageId: requireString(item, 'messageId', source, index),
-          attachmentId: requireString(item, 'attachmentId', source, index),
+          attachmentId: typeof item.attachmentId === 'string' ? item.attachmentId : undefined,
           filename: typeof item.filename === 'string' ? item.filename : undefined,
         };
 
@@ -318,7 +321,7 @@ async function resolveGmailAttachment(
   ctx: AttachmentResolverContext
 ): Promise<ResolvedAttachment> {
   const messageId = spec.messageId as string;
-  const attachmentId = spec.attachmentId as string;
+  const attachmentId = spec.attachmentId as string | undefined;
 
   // Filename and MIME type live on the message structure, not on the
   // attachment endpoint, so the message has to be fetched either way.
@@ -336,12 +339,30 @@ async function resolveGmailAttachment(
     );
   }
 
-  const meta = parts.find((part) => part.attachmentId === attachmentId);
+  // Gmail mints attachmentIds per read: two `messages.get` calls on the same
+  // message return different ids for the same bytes, so any id the caller holds
+  // is stale by the time it arrives. Matching on it alone made this source
+  // unusable, and the old error told the caller to fetch a fresh id — a loop
+  // that cannot terminate, because the next id is stale too.
+  //
+  // The message has just been re-fetched above, so `parts` already holds valid
+  // ids. Resolve the attachment by something stable and use the id from *this*
+  // read to download it.
+  const wantedFilename = typeof spec.filename === 'string' ? spec.filename : undefined;
+  const meta =
+    parts.find((part) => part.attachmentId === attachmentId) ??
+    (wantedFilename ? parts.find((part) => part.filename === wantedFilename) : undefined) ??
+    (parts.length === 1 ? parts[0] : undefined);
+
   if (!meta) {
+    const available = parts.length
+      ? parts.map((p) => `"${p.filename}" (${formatBytes(p.size)})`).join(', ')
+      : 'none';
     throw new AttachmentError(
-      `Attachment ${index + 1}: no attachment with id "${attachmentId}" on message "${messageId}". ` +
-        'Gmail attachment ids are message-scoped and can change — call gmail_get_message ' +
-        `on "${messageId}" again to get a fresh attachmentId.`
+      `Attachment ${index + 1}: could not identify which attachment on message "${messageId}" you meant. ` +
+        `That message has: ${available}. ` +
+        'Pass "filename" to name the one you want — Gmail attachment ids change between reads, ' +
+        'so the filename is the reliable way to point at it.'
     );
   }
 
@@ -350,13 +371,16 @@ async function resolveGmailAttachment(
     const response = await ctx.gmail.users.messages.attachments.get({
       userId: 'me',
       messageId,
-      id: attachmentId,
+      // meta.attachmentId, not the caller's: this one came from the fetch a few
+      // lines above and is still valid.
+      id: meta.attachmentId,
     });
     base64url = response.data.data ?? '';
   } catch {
     throw new AttachmentError(
-      `Attachment ${index + 1}: that attachment reference is no longer valid. ` +
-        `Call gmail_get_message on "${messageId}" again to get a fresh attachmentId.`
+      `Attachment ${index + 1}: could not download "${meta.filename}" from message "${messageId}". ` +
+        'The message was readable, so this is likely a transient Gmail error — retrying the ' +
+        'same call is reasonable.'
     );
   }
 

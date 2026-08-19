@@ -33,8 +33,10 @@ export const attachmentsSchema = {
     '• source="text" — a file you write yourself (CSV, markdown, plain text, HTML, JSON). ' +
     'Requires: filename, content. Optional: mimeType (inferred from the extension).\n' +
     '• source="gmail" — forward a file from an existing email WITHOUT downloading it. ' +
-    'Requires: messageId, attachmentId (both come from gmail_get_message). ' +
-    'Optional: filename to rename it.\n' +
+    'Requires: messageId. Identify which attachment with filename (from ' +
+    'gmail_get_message) — Gmail changes attachmentIds between reads, so filename is the ' +
+    'reliable way to name one. attachmentId is accepted but optional, and a message ' +
+    'with a single attachment needs neither.\n' +
     '• source="drive" — a file from Google Drive, fetched server-side. Requires: fileId ' +
     '(from drive_search or drive_list_files). Optional: filename, and exportMimeType for ' +
     'native Google Docs/Sheets/Slides (defaults to the Office equivalent).\n' +

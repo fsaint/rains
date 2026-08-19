@@ -169,7 +169,18 @@ export const createEventTool: ToolDefinition = {
       recurrence: {
         type: 'array',
         items: { type: 'string' },
-        description: 'RRULE strings for recurring events',
+        description:
+          'RRULE strings for recurring events, e.g. ["RRULE:FREQ=WEEKLY;BYDAY=TU"]. ' +
+          'Expanding a rule needs a named zone, so timeZone is filled in from the ' +
+          'calendar when you do not pass one.',
+      },
+      timeZone: {
+        type: 'string',
+        description:
+          'IANA time zone name for the event, e.g. "America/Los_Angeles". Required by ' +
+          'Google whenever recurrence is set — a fixed offset like -07:00 cannot survive ' +
+          'a DST change, so every occurrence after the transition lands an hour out. ' +
+          "Defaults to the calendar's own zone.",
       },
       reminders: {
         type: 'object',

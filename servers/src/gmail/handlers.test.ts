@@ -376,18 +376,21 @@ describe('Gmail Handlers', () => {
     });
 
     it('should return an actionable error instead of throwing on a bad attachment', async () => {
+      // messageId is the one genuinely required field for source="gmail".
+      // attachmentId is not: Gmail rotates it between reads, so requiring it
+      // made this source impossible to use.
       const result = await handleCreateDraft(
         {
           to: ['to@example.com'],
           subject: 'Bad',
           body: 'x',
-          attachments: [{ source: 'gmail', messageId: 'M1' }],
+          attachments: [{ source: 'gmail', filename: 'a.pdf' }],
         },
         mockContext
       );
 
       expect(result.success).toBe(false);
-      expect(result.error).toMatch(/missing required field "attachmentId"/);
+      expect(result.error).toMatch(/missing required field "messageId"/);
       expect(mockGmailClient.users.drafts.create).not.toHaveBeenCalled();
     });
   });

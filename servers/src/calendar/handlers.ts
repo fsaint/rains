@@ -152,6 +152,27 @@ export async function handleSearchEvents(
 /**
  * Create event handler
  */
+/**
+ * The calendar's own IANA zone, for events that repeat.
+ *
+ * Google expands an RRULE in a named zone; a fixed UTC offset cannot express
+ * "09:00 local, before and after the clocks change". Returns undefined rather
+ * than throwing so the caller can decide — for a recurring event that means a
+ * clear error, which is better than a series that silently drifts by an hour
+ * every autumn.
+ */
+async function calendarTimeZone(
+  calendar: calendar_v3.Calendar,
+  calendarId: string
+): Promise<string | undefined> {
+  try {
+    const response = await calendar.calendars.get({ calendarId });
+    return response.data.timeZone ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function handleCreateEvent(
   args: Record<string, unknown>,
   context: ServerContext
@@ -169,6 +190,7 @@ export async function handleCreateEvent(
   const endDate = args.endDate as string | undefined;
   const attendees = args.attendees as string[] | undefined;
   const recurrence = args.recurrence as string[] | undefined;
+  const requestedTimeZone = args.timeZone as string | undefined;
   const reminders = args.reminders as { useDefault?: boolean; overrides?: Array<{ method?: string; minutes?: number }> } | undefined;
   const conferenceData = args.conferenceData as boolean | undefined;
   const sendUpdates = (args.sendUpdates as string) ?? 'all';
@@ -187,9 +209,24 @@ export async function handleCreateEvent(
     event.start = { date: startDate ?? startTime?.split('T')[0] };
     event.end = { date: endDate ?? endTime?.split('T')[0] ?? event.start.date };
   } else if (startTime) {
-    event.start = { dateTime: startTime };
+    // A recurring event needs its zone by NAME. Google expands an RRULE in that
+    // zone, so a fixed offset like -07:00 puts every occurrence after the next
+    // DST transition an hour out. A one-off event is unambiguous from the
+    // offset alone, so the zone is optional there.
+    const timeZone = requestedTimeZone ?? (recurrence?.length ? await calendarTimeZone(calendar, calendarId) : undefined);
+    if (recurrence?.length && !timeZone) {
+      return {
+        success: false,
+        error:
+          'This event repeats, so it needs an IANA time zone by name (e.g. "America/Los_Angeles") ' +
+          "and the calendar's own zone could not be read. Pass timeZone explicitly.",
+      };
+    }
+
+    event.start = { dateTime: startTime, ...(timeZone ? { timeZone } : {}) };
     event.end = {
       dateTime: endTime ?? new Date(new Date(startTime).getTime() + 60 * 60 * 1000).toISOString(),
+      ...(timeZone ? { timeZone } : {}),
     };
   } else {
     // Default to 1 hour from now
@@ -256,11 +293,17 @@ export async function handleUpdateEvent(
   if (args.description !== undefined) event.description = args.description as string;
   if (args.location !== undefined) event.location = args.location as string;
 
+  // Replacing start/end wholesale would drop the timeZone the event already
+  // carries — which for a recurring event is what keeps its occurrences aligned
+  // across a DST change.
+  const updateTimeZone = (args.timeZone as string | undefined) ?? existing.data.start?.timeZone ?? undefined;
+
   if (args.startTime !== undefined) {
-    event.start = { dateTime: args.startTime as string };
+    event.start = { dateTime: args.startTime as string, ...(updateTimeZone ? { timeZone: updateTimeZone } : {}) };
   }
   if (args.endTime !== undefined) {
-    event.end = { dateTime: args.endTime as string };
+    const endZone = (args.timeZone as string | undefined) ?? existing.data.end?.timeZone ?? updateTimeZone;
+    event.end = { dateTime: args.endTime as string, ...(endZone ? { timeZone: endZone } : {}) };
   }
 
   if (args.attendees !== undefined) {

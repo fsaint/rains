@@ -18,6 +18,9 @@ vi.mock('googleapis', () => {
     calendarList: {
       list: vi.fn(),
     },
+    calendars: {
+      get: vi.fn(),
+    },
     freebusy: {
       query: vi.fn(),
     },
@@ -323,6 +326,97 @@ describe('Calendar Handlers', () => {
     });
   });
 
+  describe('handleCreateEvent — recurrence and time zones', () => {
+    it('sends the calendar\'s IANA zone by name when the event repeats', async () => {
+      // Google expands an RRULE in a named zone. A fixed offset like -07:00
+      // cannot express "09:00 local" across a DST change, so every occurrence
+      // after the transition would land an hour out.
+      vi.mocked(mockCalendarClient.calendars.get).mockResolvedValueOnce({
+        data: { timeZone: 'America/Los_Angeles' },
+      } as never);
+      vi.mocked(mockCalendarClient.events.insert).mockResolvedValueOnce({
+        data: { id: 'e1' },
+      } as never);
+
+      await handleCreateEvent(
+        {
+          summary: 'Weekly',
+          startTime: '2026-08-25T09:00:00-07:00',
+          recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=TU'],
+        },
+        mockContext
+      );
+
+      expect(mockCalendarClient.events.insert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestBody: expect.objectContaining({
+            start: expect.objectContaining({ timeZone: 'America/Los_Angeles' }),
+            end: expect.objectContaining({ timeZone: 'America/Los_Angeles' }),
+          }),
+        })
+      );
+    });
+
+    it('prefers an explicitly passed timeZone over the calendar default', async () => {
+      vi.mocked(mockCalendarClient.events.insert).mockResolvedValueOnce({
+        data: { id: 'e1' },
+      } as never);
+
+      await handleCreateEvent(
+        {
+          summary: 'Weekly',
+          startTime: '2026-08-25T09:00:00Z',
+          recurrence: ['RRULE:FREQ=WEEKLY'],
+          timeZone: 'Europe/Madrid',
+        },
+        mockContext
+      );
+
+      expect(mockCalendarClient.calendars.get).not.toHaveBeenCalled();
+      expect(mockCalendarClient.events.insert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestBody: expect.objectContaining({
+            start: expect.objectContaining({ timeZone: 'Europe/Madrid' }),
+          }),
+        })
+      );
+    });
+
+    it('refuses a recurring event rather than creating one that drifts', async () => {
+      // If the zone cannot be determined, a silently-wrong series is worse than
+      // an error: it looks right until the clocks change.
+      vi.mocked(mockCalendarClient.calendars.get).mockRejectedValueOnce(new Error('403'));
+
+      const result = await handleCreateEvent(
+        {
+          summary: 'Weekly',
+          startTime: '2026-08-25T09:00:00Z',
+          recurrence: ['RRULE:FREQ=WEEKLY'],
+        },
+        mockContext
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/time zone/i);
+      expect(mockCalendarClient.events.insert).not.toHaveBeenCalled();
+    });
+
+    it('leaves a one-off event alone — the offset is unambiguous', async () => {
+      vi.mocked(mockCalendarClient.events.insert).mockResolvedValueOnce({
+        data: { id: 'e1' },
+      } as never);
+
+      await handleCreateEvent(
+        { summary: 'One off', startTime: '2026-08-25T09:00:00-07:00' },
+        mockContext
+      );
+
+      expect(mockCalendarClient.calendars.get).not.toHaveBeenCalled();
+      const body = vi.mocked(mockCalendarClient.events.insert).mock.calls[0][0] as any;
+      expect(body.requestBody.start.timeZone).toBeUndefined();
+    });
+  });
+
   describe('handleUpdateEvent', () => {
     it('should update event summary', async () => {
       vi.mocked(mockCalendarClient.events.get).mockResolvedValueOnce({
@@ -378,6 +472,39 @@ describe('Calendar Handlers', () => {
           requestBody: expect.objectContaining({
             start: { dateTime: '2024-01-01T14:00:00Z' },
             end: { dateTime: '2024-01-01T15:00:00Z' },
+          }),
+        })
+      );
+    });
+  });
+
+  describe('handleUpdateEvent — time zones', () => {
+    it('keeps the zone the event already had when moving its start', async () => {
+      // The update path replaced start wholesale, dropping the timeZone. For a
+      // recurring event that is what keeps occurrences aligned across DST, so
+      // moving one silently broke the rest of the series.
+      vi.mocked(mockCalendarClient.events.get).mockResolvedValueOnce({
+        data: {
+          id: 'e1',
+          summary: 'Weekly',
+          start: { dateTime: '2026-08-25T09:00:00-07:00', timeZone: 'America/Los_Angeles' },
+          end: { dateTime: '2026-08-25T10:00:00-07:00', timeZone: 'America/Los_Angeles' },
+          recurrence: ['RRULE:FREQ=WEEKLY'],
+        },
+      } as never);
+      vi.mocked(mockCalendarClient.events.update).mockResolvedValueOnce({
+        data: { id: 'e1' },
+      } as never);
+
+      await handleUpdateEvent(
+        { eventId: 'e1', startTime: '2026-08-25T11:00:00-07:00' },
+        mockContext
+      );
+
+      expect(mockCalendarClient.events.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestBody: expect.objectContaining({
+            start: expect.objectContaining({ timeZone: 'America/Los_Angeles' }),
           }),
         })
       );

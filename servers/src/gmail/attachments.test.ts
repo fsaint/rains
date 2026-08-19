@@ -66,9 +66,16 @@ describe('parseAttachments — backwards compatibility', () => {
 });
 
 describe('parseAttachments — validation', () => {
-  it('names the missing field for source="gmail"', () => {
-    expect(() => parseAttachments([{ source: 'gmail', messageId: 'M1' }])).toThrow(
-      /missing required field "attachmentId"/
+  it('accepts source="gmail" without an attachmentId', () => {
+    // Gmail rotates attachmentIds between reads, so requiring one made this
+    // source unusable. messageId plus (optionally) filename is enough.
+    const [spec] = parseAttachments([{ source: 'gmail', messageId: 'M1', filename: 'a.pdf' }]);
+    expect(spec).toMatchObject({ source: 'gmail', messageId: 'M1', filename: 'a.pdf' });
+  });
+
+  it('names the missing field for source="gmail" when messageId is absent', () => {
+    expect(() => parseAttachments([{ source: 'gmail', filename: 'a.pdf' }])).toThrow(
+      /missing required field "messageId"/
     );
   });
 
@@ -201,15 +208,52 @@ describe('resolveAttachments — gmail', () => {
     expect(resolved.filename).toBe('renamed.pdf');
   });
 
-  it('tells the model to re-fetch when the attachmentId is stale', async () => {
-    const { client } = makeGmail({ parts: [pdfPart] });
+  it('succeeds with a stale attachmentId, because ids rotate between reads', async () => {
+    // The bug this replaces: Gmail mints a new attachmentId on every read, so
+    // the id a caller holds is always stale. The old code matched on it and
+    // then told the caller to fetch a fresh one — a loop with no exit, since
+    // the next id is stale too. The message is re-fetched here anyway, so the
+    // attachment is found by filename and downloaded with the current id.
+    const bytes = Buffer.from('pdf-bytes-here');
+    const { client, attachmentsGet } = makeGmail({
+      parts: [pdfPart],
+      attachmentData: bytes.toString('base64url'),
+    });
+
+    const [resolved] = await resolveAttachments(
+      parseAttachments([
+        { source: 'gmail', messageId: 'M1', attachmentId: 'STALE_FROM_AN_EARLIER_READ', filename: 'invoice.pdf' },
+      ]),
+      { gmail: client }
+    );
+
+    expect(resolved.bytes.equals(bytes)).toBe(true);
+    // Downloaded with the id from this read, never the caller's.
+    expect(attachmentsGet).toHaveBeenCalledWith(expect.objectContaining({ id: 'ATT_1' }));
+  });
+
+  it('resolves the only attachment when neither id nor filename is given', async () => {
+    const { client } = makeGmail({ parts: [pdfPart], attachmentData: 'AAAA' });
+
+    const [resolved] = await resolveAttachments(
+      parseAttachments([{ source: 'gmail', messageId: 'M1' }]),
+      { gmail: client }
+    );
+
+    expect(resolved.filename).toBe('invoice.pdf');
+  });
+
+  it('lists what is on the message when the attachment cannot be identified', async () => {
+    const second = { ...pdfPart, filename: 'other.pdf', attachmentId: 'ATT_2' };
+    const { client } = makeGmail({ parts: [pdfPart, second] });
 
     await expect(
       resolveAttachments(
-        parseAttachments([{ source: 'gmail', messageId: 'M1', attachmentId: 'GONE' }]),
+        parseAttachments([{ source: 'gmail', messageId: 'M1', filename: 'nope.pdf' }]),
         { gmail: client }
       )
-    ).rejects.toThrow(/call gmail_get_message on "M1" again/i);
+      // Names the candidates instead of sending the caller round the loop again.
+    ).rejects.toThrow(/invoice\.pdf.*other\.pdf/s);
   });
 
   it('surfaces a friendly error when the message cannot be read', async () => {
@@ -231,7 +275,7 @@ describe('resolveAttachments — gmail', () => {
         parseAttachments([{ source: 'gmail', messageId: 'M1', attachmentId: 'ATT_1' }]),
         { gmail: client }
       )
-    ).rejects.toThrow(/no longer valid/);
+    ).rejects.toThrow(/could not download "invoice\.pdf"/);
   });
 
   it('throws AttachmentError, not a raw Google error', async () => {
