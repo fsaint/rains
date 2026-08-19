@@ -155,8 +155,12 @@ jobs:
           echo "::error::Backend did not become ready on :5001 — see the 'Start backend server' step for why it exited."
           exit 1
 
+      # `vite preview` rather than a static file server: the client calls /api
+      # relatively and must share an origin with the backend, which only the
+      # proxy in vite.config.ts provides. Served statically, every API call came
+      # back as index.html and the app could never sign in.
       - name: Serve frontend build
-        run: npx serve -s frontend/dist -l 6173 &
+        run: npm run preview --workspace=frontend &
 
       - name: Wait for frontend to be ready
         run: |
