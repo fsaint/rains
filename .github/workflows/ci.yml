@@ -98,6 +98,11 @@ jobs:
       REINS_ADMIN_PASSWORD: e2etestpassword123
       REINS_PROVIDER: local
       OPENCLAW_IMAGE: reins-stub-openclaw:latest
+      # These tests create and deploy agents, which sits behind the paid plan
+      # gate. BYPASS_BILLING is the hatch the backend already ships for exactly
+      # this; it is scoped to this job, so the billing rules themselves stay
+      # covered by the unit tests in the other job.
+      BYPASS_BILLING: 'true'
       REINS_PUBLIC_URL: http://localhost:5001
       VITE_API_URL: http://localhost:5001
       # Set in GitHub repo secrets → Settings → Secrets → Actions

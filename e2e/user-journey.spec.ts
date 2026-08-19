@@ -84,9 +84,21 @@ async function login(page: Page, request: APIRequestContext) {
     path: '/',
   }]);
 
-  await page.goto('/agents');
-  // Confirm we landed on an authenticated page
-  await expect(page.locator('body')).not.toBeEmpty();
+  // The app renders the signed-out view until /api/auth/me resolves, and treats
+  // a failed call as signed-out rather than retrying. On a cold backend that
+  // first request can lose the race, which is why this passed locally and
+  // failed on CI. Wait for a signed-in marker and reload if the login screen
+  // won, instead of asserting on whatever happens to be painted first.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await page.goto('/agents');
+    const signedIn = await page
+      .getByRole('button', { name: /sign out/i })
+      .waitFor({ state: 'visible', timeout: 10_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (signedIn) return;
+  }
+  throw new Error('Signed-in UI never appeared after injecting the session cookie');
 }
 
 // ── 1. Login ──────────────────────────────────────────────────────────────────
@@ -161,6 +173,11 @@ test(
   'hosted agent deploys to Fly.io and reaches running status',
   async ({ page, request }) => {
     test.skip(!TELEGRAM_TOKEN, 'TEST_TELEGRAM_BOT_TOKEN not set — skipping hosted deploy test');
+    // This provisions a real Fly machine. CI is deliberately not given a token
+    // that can create agents — that lane belongs to the personal org — so
+    // without one the test must skip rather than fail on a missing credential.
+    // Matches the guard the memory-persistence tests below already use.
+    test.skip(!FLY_API_TOKEN, 'FLY_API_TOKEN not set — skipping hosted deploy test');
     test.setTimeout(300_000); // Fly machines take up to 90 s to start + polling + UI check
 
     await login(page, request);
