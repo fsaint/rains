@@ -132,11 +132,16 @@ jobs:
         run: |
           for i in $(seq 1 30); do
             if curl -sf http://localhost:5001/health; then
-              echo "Backend ready"
-              break
+              echo "Backend ready after ${i}s"
+              exit 0
             fi
             sleep 1
           done
+          # Without this the job carried on with no backend, and the failure
+          # surfaced as four Playwright ECONNREFUSED errors instead of the
+          # actual cause. Fail here, where the reason is legible.
+          echo "::error::Backend did not become ready on :5001 — see the 'Start backend server' step for why it exited."
+          exit 1
 
       - name: Serve frontend build
         run: npx serve -s frontend/dist -l 6173 &
@@ -145,11 +150,13 @@ jobs:
         run: |
           for i in $(seq 1 20); do
             if curl -sf http://localhost:6173; then
-              echo "Frontend ready"
-              break
+              echo "Frontend ready after ${i}s"
+              exit 0
             fi
             sleep 1
           done
+          echo "::error::Frontend did not become ready on :6173."
+          exit 1
 
       - name: Run Playwright tests
         run: npx playwright test
