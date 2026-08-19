@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { data } from '../common/test-helpers.js';
 import {
   handleGetRoot,
   handleCreate,
@@ -81,7 +82,7 @@ describe('Memory Handlers', () => {
       const result = await handleGetRoot({}, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data).toEqual({ id: 'root-1', title: 'Memory Index', content: '# hi' });
+      expect(data(result)).toEqual({ id: 'root-1', title: 'Memory Index', content: '# hi' });
     });
 
     it('returns error on non-200 response', async () => {
@@ -131,7 +132,7 @@ describe('Memory Handlers', () => {
 
       expect(result.success).toBe(true);
       // created=false because makeOkResponse uses status 200 (existing entry path)
-      expect(result.data).toEqual({ ...entry, created: false });
+      expect(data(result)).toEqual({ ...entry, created: false });
     });
 
     it('returns error on failure', async () => {
@@ -220,8 +221,8 @@ describe('Memory Handlers', () => {
       const result = await handleSearch({ query: 'test' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.entries).toEqual(entries);
-      expect(result.data.count).toBe(2);
+      expect(data(result).entries).toEqual(entries);
+      expect(data(result).count).toBe(2);
     });
   });
 
@@ -256,7 +257,7 @@ describe('Memory Handlers', () => {
       const result = await handleList({}, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.count).toBe(1);
+      expect(data(result).count).toBe(1);
     });
   });
 
@@ -337,7 +338,7 @@ describe('Memory Handlers', () => {
       const result = await handleRelate({ source_id: 'e1', relation: 'knows', target_id: 'e2' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data).toEqual(attr);
+      expect(data(result)).toEqual(attr);
     });
   });
 
@@ -362,7 +363,7 @@ describe('Memory Handlers', () => {
       const result = await handleDelete({ id: 'e1' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data).toEqual({ deleted: true, id: 'e1' });
+      expect(data(result)).toEqual({ deleted: true, id: 'e1' });
     });
 
     it('returns error on failure', async () => {
@@ -400,8 +401,8 @@ describe('Memory Handlers', () => {
       const result = await handleDream({}, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.entries).toEqual(entries);
-      expect(result.data.count).toBe(2);
+      expect(data(result).entries).toEqual(entries);
+      expect(data(result).count).toBe(2);
     });
 
     it('returns error on non-200 response', async () => {
@@ -446,7 +447,7 @@ describe('Memory Handlers', () => {
       const result = await handleSetParent({ entry_id: 'e1', parent_id: 'root' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data).toEqual({ ok: true });
+      expect(data(result)).toEqual({ ok: true });
     });
 
     it('returns error when entry not found', async () => {
@@ -488,7 +489,7 @@ describe('Memory Handlers', () => {
       const result = await handleListTags({}, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data).toEqual({ tags });
+      expect(data(result)).toEqual({ tags });
     });
 
     it('returns error on failure', async () => {
@@ -530,7 +531,7 @@ describe('Memory Handlers', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data).toEqual(attr);
+      expect(data(result)).toEqual(attr);
     });
 
     it('returns error on failure', async () => {
@@ -566,7 +567,7 @@ describe('Memory Handlers', () => {
       const result = await handleRemoveAttribute({ attribute_id: 'attr-1' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data).toEqual({ deleted: true, id: 'attr-1' });
+      expect(data(result)).toEqual({ deleted: true, id: 'attr-1' });
     });
 
     it('returns error on 404', async () => {
@@ -697,7 +698,7 @@ describe('Memory Handlers', () => {
       const result = await handleListScopes({}, mockContext);
 
       expect(mockFetch.mock.calls[0][0]).toBe('https://test.helm.mom/api/memory/scopes');
-      const scopes = (result.data as any).scopes;
+      const scopes = (data(result) as any).scopes;
       expect(scopes.map((s: any) => s.slug)).toEqual(['default', 'work']);
       expect(scopes[0].entry_count).toBe(12);
       // Ids are internal — the agent addresses scopes by slug.
@@ -716,8 +717,8 @@ describe('Memory Handlers', () => {
       const result = await handleCreateScope({ name: 'Acme' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect((result.data as any).slug).toBe('acme');
-      expect((result.data as any).next_step).toContain('scope');
+      expect((data(result) as any).slug).toBe('acme');
+      expect((data(result) as any).next_step).toContain('scope');
     });
 
     it('requires a name', async () => {
@@ -802,13 +803,13 @@ describe('Memory Handlers', () => {
       }));
 
       const result = await handleGetRoot({}, mockContext);
-      const data = result.data as any;
+      const root = data(result);
 
-      expect(data.id).toBe('root-1');
-      expect(data.title).toBe('Memory Index');
-      expect(data.content).toBe('# Memory Index');
-      expect(data.scopes).toHaveLength(2);
-      expect(data.default_scope).toBe('default');
+      expect(root.id).toBe('root-1');
+      expect(root.title).toBe('Memory Index');
+      expect(root.content).toBe('# Memory Index');
+      expect(root.scopes).toHaveLength(2);
+      expect(root.default_scope).toBe('default');
     });
 
     it('omits the scope fields entirely when the backend does not send them', async () => {
@@ -818,7 +819,7 @@ describe('Memory Handlers', () => {
 
       const result = await handleGetRoot({}, mockContext);
 
-      expect(result.data).toEqual({ id: 'root-1', title: 'Memory Index', content: '# Memory Index' });
+      expect(data(result)).toEqual({ id: 'root-1', title: 'Memory Index', content: '# Memory Index' });
     });
   });
 });

@@ -269,12 +269,13 @@ describe('applyGracePeriod', () => {
     expect(call.sql).toContain('stripe_subscription_id = ?');
 
     const graceUntil = new Date(call.args[0] as string).getTime();
-    const diffMs = graceUntil - before;
     const threeDaysMs = 3 * 24 * 60 * 60 * 1000;
 
-    // Allow 100ms of tolerance on either side
-    expect(diffMs).toBeGreaterThan(threeDaysMs - 100);
-    expect(diffMs).toBeLessThan(threeDaysMs + 100);
+    // grace_until was computed at some instant t with before <= t <= after, so
+    // the offset is bounded exactly by those two. This replaces a ±100ms fudge
+    // that would go flaky on a slow runner.
+    expect(graceUntil - after).toBeGreaterThanOrEqual(threeDaysMs - 1);
+    expect(graceUntil - before).toBeLessThanOrEqual(threeDaysMs + 1);
   });
 
   it('updates with correct stripe_subscription_id', async () => {

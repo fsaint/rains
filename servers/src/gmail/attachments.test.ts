@@ -536,7 +536,8 @@ describe('resolveAttachments — upload', () => {
     expect(resolved.mimeType).toBe('application/pdf');
     expect(resolved.bytes.toString()).toBe('generated-pdf');
 
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    // The mock is untyped, so its call tuple is `[]` — widen through unknown.
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect((init.headers as Record<string, string>)['x-reins-agent-secret']).toBe(
       'secret-token'
     );

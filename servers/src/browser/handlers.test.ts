@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { data } from '../common/test-helpers.js';
 import type { ServerContext } from '../common/types.js';
 import type { Page, ElementHandle } from 'playwright';
 
@@ -76,8 +77,8 @@ describe('Browser Handlers', () => {
       const result = await handleCreateSession({}, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.sessionId).toBe('session-123');
-      expect(result.data.message).toBe('Browser session created');
+      expect(data(result).sessionId).toBe('session-123');
+      expect(data(result).message).toBe('Browser session created');
     });
   });
 
@@ -94,8 +95,8 @@ describe('Browser Handlers', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data.url).toBe('https://example.com');
-      expect(result.data.title).toBe('Example Page');
+      expect(data(result).url).toBe('https://example.com');
+      expect(data(result).title).toBe('Example Page');
     });
 
     it('should reject blocked URLs', async () => {
@@ -152,14 +153,14 @@ describe('Browser Handlers', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data.format).toBe('jpeg');
-      expect(result.data.base64).toBeTruthy();
+      expect(data(result).format).toBe('jpeg');
+      expect(data(result).base64).toBeTruthy();
     });
 
     it('should capture element screenshot', async () => {
       const mockElement = {
         screenshot: vi.fn().mockResolvedValueOnce(Buffer.from('element-image')),
-      } as unknown as ElementHandle;
+      } as unknown as ElementHandle<HTMLElement>;
 
       mockSessionManager.getPage.mockReturnValueOnce(mockPage);
       vi.mocked(mockPage.$).mockResolvedValueOnce(mockElement);
@@ -192,7 +193,7 @@ describe('Browser Handlers', () => {
       const mockElement = {
         textContent: vi.fn().mockResolvedValueOnce('Page text content'),
         innerHTML: vi.fn(),
-      } as unknown as ElementHandle;
+      } as unknown as ElementHandle<HTMLElement>;
 
       mockSessionManager.getPage.mockReturnValueOnce(mockPage);
       vi.mocked(mockPage.$).mockResolvedValueOnce(mockElement);
@@ -203,14 +204,14 @@ describe('Browser Handlers', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data.content).toBe('Page text content');
-      expect(result.data.format).toBe('text');
+      expect(data(result).content).toBe('Page text content');
+      expect(data(result).format).toBe('text');
     });
 
     it('should get HTML content', async () => {
       const mockElement = {
         innerHTML: vi.fn().mockResolvedValueOnce('<p>HTML content</p>'),
-      } as unknown as ElementHandle;
+      } as unknown as ElementHandle<HTMLElement>;
 
       mockSessionManager.getPage.mockReturnValueOnce(mockPage);
       vi.mocked(mockPage.$).mockResolvedValueOnce(mockElement);
@@ -221,15 +222,15 @@ describe('Browser Handlers', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data.content).toBe('<p>HTML content</p>');
-      expect(result.data.format).toBe('html');
+      expect(data(result).content).toBe('<p>HTML content</p>');
+      expect(data(result).format).toBe('html');
     });
 
     it('should truncate long content', async () => {
       const longContent = 'x'.repeat(60000);
       const mockElement = {
         textContent: vi.fn().mockResolvedValueOnce(longContent),
-      } as unknown as ElementHandle;
+      } as unknown as ElementHandle<HTMLElement>;
 
       mockSessionManager.getPage.mockReturnValueOnce(mockPage);
       vi.mocked(mockPage.$).mockResolvedValueOnce(mockElement);
@@ -240,9 +241,9 @@ describe('Browser Handlers', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data.truncated).toBe(true);
-      expect(result.data.content.length).toBe(50000);
-      expect(result.data.originalLength).toBe(60000);
+      expect(data(result).truncated).toBe(true);
+      expect(data(result).content.length).toBe(50000);
+      expect(data(result).originalLength).toBe(60000);
     });
 
     it('should return error if element not found', async () => {
@@ -262,7 +263,7 @@ describe('Browser Handlers', () => {
   describe('handleClick', () => {
     it('should click element', async () => {
       mockSessionManager.getPage.mockReturnValueOnce(mockPage);
-      vi.mocked(mockPage.click).mockResolvedValueOnce();
+      vi.mocked(mockPage.click).mockResolvedValueOnce(undefined);
 
       const result = await handleClick(
         { sessionId: 'session-123', selector: 'button.submit' },
@@ -270,7 +271,7 @@ describe('Browser Handlers', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data.selector).toBe('button.submit');
+      expect(data(result).selector).toBe('button.submit');
       expect(mockPage.click).toHaveBeenCalledWith('button.submit', {
         button: 'left',
         clickCount: 1,
@@ -280,7 +281,7 @@ describe('Browser Handlers', () => {
 
     it('should support right click', async () => {
       mockSessionManager.getPage.mockReturnValueOnce(mockPage);
-      vi.mocked(mockPage.click).mockResolvedValueOnce();
+      vi.mocked(mockPage.click).mockResolvedValueOnce(undefined);
 
       await handleClick(
         { sessionId: 'session-123', selector: '#menu', button: 'right' },
@@ -310,8 +311,8 @@ describe('Browser Handlers', () => {
   describe('handleType', () => {
     it('should type text into element', async () => {
       mockSessionManager.getPage.mockReturnValueOnce(mockPage);
-      vi.mocked(mockPage.fill).mockResolvedValueOnce();
-      vi.mocked(mockPage.type).mockResolvedValueOnce();
+      vi.mocked(mockPage.fill).mockResolvedValueOnce(undefined);
+      vi.mocked(mockPage.type).mockResolvedValueOnce(undefined);
 
       const result = await handleType(
         { sessionId: 'session-123', selector: 'input#search', text: 'hello world' },
@@ -319,14 +320,14 @@ describe('Browser Handlers', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data.textLength).toBe(11);
+      expect(data(result).textLength).toBe(11);
       expect(mockPage.fill).toHaveBeenCalledWith('input#search', '');
       expect(mockPage.type).toHaveBeenCalledWith('input#search', 'hello world', { delay: 0 });
     });
 
     it('should not clear when clear=false', async () => {
       mockSessionManager.getPage.mockReturnValueOnce(mockPage);
-      vi.mocked(mockPage.type).mockResolvedValueOnce();
+      vi.mocked(mockPage.type).mockResolvedValueOnce(undefined);
 
       await handleType(
         { sessionId: 'session-123', selector: 'input', text: 'append', clear: false },
@@ -338,9 +339,9 @@ describe('Browser Handlers', () => {
 
     it('should press Enter when pressEnter=true', async () => {
       mockSessionManager.getPage.mockReturnValueOnce(mockPage);
-      vi.mocked(mockPage.fill).mockResolvedValueOnce();
-      vi.mocked(mockPage.type).mockResolvedValueOnce();
-      vi.mocked(mockPage.press).mockResolvedValueOnce();
+      vi.mocked(mockPage.fill).mockResolvedValueOnce(undefined);
+      vi.mocked(mockPage.type).mockResolvedValueOnce(undefined);
+      vi.mocked(mockPage.press).mockResolvedValueOnce(undefined);
 
       await handleType(
         { sessionId: 'session-123', selector: 'input', text: 'search', pressEnter: true },
@@ -365,7 +366,7 @@ describe('Browser Handlers', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data.result).toEqual({ width: 1920, height: 1080 });
+      expect(data(result).result).toEqual({ width: 1920, height: 1080 });
     });
 
     it('should return error for non-existent session', async () => {
@@ -383,7 +384,7 @@ describe('Browser Handlers', () => {
   describe('handleScroll', () => {
     it('should scroll down', async () => {
       mockSessionManager.getPage.mockReturnValueOnce(mockPage);
-      vi.mocked(mockPage.evaluate).mockResolvedValueOnce();
+      vi.mocked(mockPage.evaluate).mockResolvedValueOnce(undefined);
 
       const result = await handleScroll(
         { sessionId: 'session-123', direction: 'down', amount: 500 },
@@ -391,13 +392,13 @@ describe('Browser Handlers', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data.direction).toBe('down');
-      expect(result.data.amount).toBe(500);
+      expect(data(result).direction).toBe('down');
+      expect(data(result).amount).toBe(500);
     });
 
     it('should scroll element', async () => {
       mockSessionManager.getPage.mockReturnValueOnce(mockPage);
-      vi.mocked(mockPage.evaluate).mockResolvedValueOnce();
+      vi.mocked(mockPage.evaluate).mockResolvedValueOnce(undefined);
 
       await handleScroll(
         { sessionId: 'session-123', direction: 'right', selector: '#scrollable' },
@@ -419,8 +420,8 @@ describe('Browser Handlers', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data.selector).toBe('.loaded');
-      expect(result.data.state).toBe('visible');
+      expect(data(result).selector).toBe('.loaded');
+      expect(data(result).state).toBe('visible');
     });
 
     it('should use custom state and timeout', async () => {
@@ -441,7 +442,7 @@ describe('Browser Handlers', () => {
 
   describe('handleCloseSession', () => {
     it('should close session', async () => {
-      mockSessionManager.closeSession.mockResolvedValueOnce();
+      mockSessionManager.closeSession.mockResolvedValueOnce(undefined);
 
       const result = await handleCloseSession(
         { sessionId: 'session-123' },
@@ -449,8 +450,8 @@ describe('Browser Handlers', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data.sessionId).toBe('session-123');
-      expect(result.data.message).toBe('Session closed');
+      expect(data(result).sessionId).toBe('session-123');
+      expect(data(result).message).toBe('Session closed');
       expect(mockSessionManager.closeSession).toHaveBeenCalledWith('session-123');
     });
   });
@@ -465,8 +466,8 @@ describe('Browser Handlers', () => {
       const result = await handleListSessions({}, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.sessions).toHaveLength(2);
-      expect(result.data.count).toBe(2);
+      expect(data(result).sessions).toHaveLength(2);
+      expect(data(result).count).toBe(2);
     });
   });
 });

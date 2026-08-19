@@ -1,5 +1,4 @@
 import { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
-import { spawn } from 'child_process';
 import { config } from '../config/index.js';
 import { client } from '../db/index.js';
 import { policyEngine } from '../policy/engine.js';
@@ -1835,7 +1834,6 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     let orgName: string;
     let orgId: string;
     let viewerEmail: string;
-    let viewerName: string;
     try {
       const res = await fetch('https://api.linear.app/graphql', {
         method: 'POST',
@@ -1868,7 +1866,6 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       orgName = json.data.organization.name;
       orgId = json.data.organization.id;
       viewerEmail = json.data.viewer.email;
-      viewerName = json.data.viewer.name;
     } catch (err) {
       return reply.code(500).send({
         error: { code: 'SERVER_ERROR', message: 'Failed to validate Linear API key' },
@@ -3667,12 +3664,17 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'name is required' } });
     }
 
-    // Shared bot mode: use platform token when no user token provided
-    const isSharedBot = !body?.telegramToken?.trim() && !!config.sharedBotToken;
-    if (!isSharedBot && !body?.telegramToken?.trim()) {
+    // Shared bot mode: use platform token when no user token provided.
+    // Bind the trimmed token once: the guard below tested the trimmed value
+    // while the token actually sent on was body.telegramToken, so a pasted
+    // token with surrounding whitespace passed validation and then went into
+    // the api.telegram.org URL verbatim.
+    const providedToken = body?.telegramToken?.trim();
+    const isSharedBot = !providedToken && !!config.sharedBotToken;
+    if (!isSharedBot && !providedToken) {
       return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'telegramToken is required (or enable shared bot mode)' } });
     }
-    const effectiveTelegramToken = isSharedBot ? config.sharedBotToken! : body.telegramToken;
+    const effectiveTelegramToken = isSharedBot ? config.sharedBotToken! : providedToken!;
 
     // Normalize empty strings to null
     const telegramUserId = body.telegramUserId?.trim() || null;

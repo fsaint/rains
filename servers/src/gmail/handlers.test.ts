@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { data } from '../common/test-helpers.js';
 import type { ServerContext } from '../common/types.js';
 
 // Mock googleapis
@@ -126,8 +127,8 @@ describe('Gmail Handlers', () => {
       const result = await handleListMessages({}, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.messages).toHaveLength(2);
-      expect(result.data.messages[0]).toEqual({
+      expect(data(result).messages).toHaveLength(2);
+      expect(data(result).messages[0]).toEqual({
         id: 'msg1',
         threadId: 'thread1',
         snippet: 'First message snippet',
@@ -135,7 +136,7 @@ describe('Gmail Handlers', () => {
         subject: 'First Subject',
         date: '2024-01-01',
       });
-      expect(result.data.nextPageToken).toBe('next-token');
+      expect(data(result).nextPageToken).toBe('next-token');
     });
 
     it('should respect maxResults limit', async () => {
@@ -206,7 +207,7 @@ describe('Gmail Handlers', () => {
       const result = await handleGetMessage({ messageId: 'msg1' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data).toMatchObject({
+      expect(data(result)).toMatchObject({
         id: 'msg1',
         threadId: 'thread1',
         from: 'sender@example.com',
@@ -232,8 +233,8 @@ describe('Gmail Handlers', () => {
 
       const result = await handleGetMessage({ messageId: 'msg1' }, mockContext);
 
-      expect(result.data.body).toBe('<p>Hello</p>');
-      expect(result.data.isHtml).toBe(true);
+      expect(data(result).body).toBe('<p>Hello</p>');
+      expect(data(result).isHtml).toBe(true);
     });
 
     it('should extract attachments metadata', async () => {
@@ -255,7 +256,7 @@ describe('Gmail Handlers', () => {
 
       const result = await handleGetMessage({ messageId: 'msg1' }, mockContext);
 
-      expect(result.data.attachments).toEqual([
+      expect(data(result).attachments).toEqual([
         { filename: 'document.pdf', mimeType: 'application/pdf', size: 1024, attachmentId: 'att1' },
       ]);
     });
@@ -285,9 +286,9 @@ describe('Gmail Handlers', () => {
       const result = await handleSearch({ query: 'subject:test' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.query).toBe('subject:test');
-      expect(result.data.results).toHaveLength(1);
-      expect(result.data.total).toBe(50);
+      expect(data(result).query).toBe('subject:test');
+      expect(data(result).results).toHaveLength(1);
+      expect(data(result).total).toBe(50);
     });
   });
 
@@ -310,8 +311,8 @@ describe('Gmail Handlers', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data.draftId).toBe('draft1');
-      expect(result.data.message).toBe('Draft created successfully');
+      expect(data(result).draftId).toBe('draft1');
+      expect(data(result).message).toBe('Draft created successfully');
     });
 
     it('should support CC, BCC, and HTML body', async () => {
@@ -408,8 +409,8 @@ describe('Gmail Handlers', () => {
       const result = await handleSendDraft({ draftId: 'draft1' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.messageId).toBe('sent-msg1');
-      expect(result.data.message).toBe('Draft sent successfully');
+      expect(data(result).messageId).toBe('sent-msg1');
+      expect(data(result).message).toBe('Draft sent successfully');
     });
   });
 
@@ -433,8 +434,8 @@ describe('Gmail Handlers', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data.messageId).toBe('sent-msg1');
-      expect(result.data.message).toBe('Message sent successfully');
+      expect(data(result).messageId).toBe('sent-msg1');
+      expect(data(result).message).toBe('Message sent successfully');
     });
 
     it('should attach files rather than silently dropping them', async () => {
@@ -467,8 +468,8 @@ describe('Gmail Handlers', () => {
       const result = await handleDeleteMessage({ messageId: 'msg1' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.messageId).toBe('msg1');
-      expect(result.data.message).toBe('Message deleted permanently');
+      expect(data(result).messageId).toBe('msg1');
+      expect(data(result).message).toBe('Message deleted permanently');
     });
   });
 
@@ -496,8 +497,8 @@ describe('Gmail Handlers', () => {
       const result = await handleListLabels({}, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.labels).toHaveLength(2);
-      expect(result.data.labels[0]).toMatchObject({
+      expect(data(result).labels).toHaveLength(2);
+      expect(data(result).labels[0]).toMatchObject({
         id: 'INBOX',
         name: 'INBOX',
         type: 'system',
@@ -529,7 +530,7 @@ describe('Gmail Handlers', () => {
         expect(result.success).toBe(true);
         // Only the single-message path can report resulting labels; batchModify
         // returns no body.
-        expect((result.data as { labelIds: string[] }).labelIds).toEqual(['INBOX', 'Label_1']);
+        expect((data(result) as { labelIds: string[] }).labelIds).toEqual(['INBOX', 'Label_1']);
       });
 
       it('accepts messageIds and batches them in one call', async () => {
@@ -550,7 +551,7 @@ describe('Gmail Handlers', () => {
           },
         });
         expect(result.success).toBe(true);
-        expect((result.data as { modifiedCount: number }).modifiedCount).toBe(3);
+        expect((data(result) as { modifiedCount: number }).modifiedCount).toBe(3);
       });
 
       it('still accepts the legacy singular messageId', async () => {
@@ -579,7 +580,7 @@ describe('Gmail Handlers', () => {
         const calls = vi.mocked(mockGmailClient.users.messages.batchModify).mock.calls;
         expect((calls[0][0] as any).requestBody.ids).toHaveLength(GMAIL_BATCH_MODIFY_MAX);
         expect((calls[1][0] as any).requestBody.ids).toHaveLength(5);
-        expect((result.data as { modifiedCount: number }).modifiedCount).toBe(ids.length);
+        expect((data(result) as { modifiedCount: number }).modifiedCount).toBe(ids.length);
       });
 
       it('rejects a call naming no messages', async () => {

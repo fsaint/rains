@@ -44,7 +44,7 @@ describe('CredentialVault', () => {
 
     it('should use a dev key when no key provided', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      const devVault = new CredentialVault();
+      new CredentialVault(); // constructed for the warning it emits
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('development key'));
       warnSpy.mockRestore();
     });

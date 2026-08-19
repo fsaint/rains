@@ -293,7 +293,9 @@ export async function getAgentServiceConfig(
       accountEmail: cred?.accountEmail ?? null,
       accountName: cred?.accountName ?? null,
       isDefault: true,
-      status: credentialStatus === 'not_linked' ? 'missing' : credentialStatus as 'connected' | 'missing' | 'expired',
+      // Every branch above assigns connected/expired/missing, so the old
+      // not_linked guard and its cast were both unreachable.
+      status: credentialStatus,
     });
   }
 

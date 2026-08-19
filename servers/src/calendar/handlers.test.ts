@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { data } from '../common/test-helpers.js';
 import type { ServerContext } from '../common/types.js';
 
 // Mock googleapis
@@ -91,9 +92,9 @@ describe('Calendar Handlers', () => {
       const result = await handleListEvents({}, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.events).toHaveLength(2);
-      expect(result.data.events[0].summary).toBe('Meeting');
-      expect(result.data.nextPageToken).toBe('next-token');
+      expect(data(result).events).toHaveLength(2);
+      expect(data(result).events[0].summary).toBe('Meeting');
+      expect(data(result).nextPageToken).toBe('next-token');
     });
 
     it('should use custom calendar', async () => {
@@ -136,8 +137,8 @@ describe('Calendar Handlers', () => {
 
       const result = await handleListEvents({}, mockContext);
 
-      expect(result.data.events[0].allDay).toBe(true);
-      expect(result.data.events[0].start).toBe('2024-01-01');
+      expect(data(result).events[0].allDay).toBe(true);
+      expect(data(result).events[0].start).toBe('2024-01-01');
     });
 
     it('should throw error when no access token', async () => {
@@ -170,9 +171,9 @@ describe('Calendar Handlers', () => {
       const result = await handleGetEvent({ eventId: 'event1' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.summary).toBe('Team Meeting');
-      expect(result.data.attendees).toHaveLength(2);
-      expect(result.data.hangoutLink).toBe('https://meet.google.com/xyz');
+      expect(data(result).summary).toBe('Team Meeting');
+      expect(data(result).attendees).toHaveLength(2);
+      expect(data(result).hangoutLink).toBe('https://meet.google.com/xyz');
     });
   });
 
@@ -194,9 +195,9 @@ describe('Calendar Handlers', () => {
       const result = await handleSearchEvents({ query: 'project review' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.query).toBe('project review');
-      expect(result.data.events).toHaveLength(1);
-      expect(result.data.total).toBe(1);
+      expect(data(result).query).toBe('project review');
+      expect(data(result).events).toHaveLength(1);
+      expect(data(result).total).toBe(1);
     });
 
     it('should filter by time range', async () => {
@@ -245,7 +246,7 @@ describe('Calendar Handlers', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data.message).toBe('Event created successfully');
+      expect(data(result).message).toBe('Event created successfully');
     });
 
     it('should create all-day event', async () => {
@@ -441,7 +442,7 @@ describe('Calendar Handlers', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data.message).toBe('Event updated successfully');
+      expect(data(result).message).toBe('Event updated successfully');
     });
 
     it('should update event time', async () => {
@@ -518,8 +519,8 @@ describe('Calendar Handlers', () => {
       const result = await handleDeleteEvent({ eventId: 'event1' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.eventId).toBe('event1');
-      expect(result.data.message).toBe('Event deleted successfully');
+      expect(data(result).eventId).toBe('event1');
+      expect(data(result).message).toBe('Event deleted successfully');
     });
 
     it('should use sendUpdates parameter', async () => {
@@ -562,8 +563,8 @@ describe('Calendar Handlers', () => {
       const result = await handleListCalendars({}, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.calendars).toHaveLength(2);
-      expect(result.data.calendars[0].primary).toBe(true);
+      expect(data(result).calendars).toHaveLength(2);
+      expect(data(result).calendars[0].primary).toBe(true);
     });
 
     it('should show hidden calendars if requested', async () => {
@@ -603,7 +604,7 @@ describe('Calendar Handlers', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data.calendars.primary).toHaveLength(2);
+      expect(data(result).calendars.primary).toHaveLength(2);
     });
 
     it('should query multiple calendars', async () => {

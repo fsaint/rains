@@ -2,7 +2,7 @@
  * Auth Module Tests
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('../config/index.js', () => ({
   config: {

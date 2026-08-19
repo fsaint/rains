@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { data } from '../common/test-helpers.js';
 import type { ServerContext } from '../common/types.js';
 
 // Mock googleapis
@@ -78,8 +79,8 @@ describe('Drive Handlers', () => {
       const result = await handleListFiles({}, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.files).toHaveLength(2);
-      expect(result.data.nextPageToken).toBe('next-token');
+      expect(data(result).files).toHaveLength(2);
+      expect(data(result).nextPageToken).toBe('next-token');
     });
 
     it('should filter by folder', async () => {
@@ -132,8 +133,8 @@ describe('Drive Handlers', () => {
       const result = await handleGetFile({ fileId: 'file1' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.id).toBe('file1');
-      expect(result.data.name).toBe('Test Document');
+      expect(data(result).id).toBe('file1');
+      expect(data(result).name).toBe('Test Document');
     });
 
     it('should use custom fields', async () => {
@@ -169,8 +170,8 @@ describe('Drive Handlers', () => {
       const result = await handleReadFile({ fileId: 'file1' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.content).toBe('Document content here');
-      expect(result.data.exportedAs).toBe('text/plain');
+      expect(data(result).content).toBe('Document content here');
+      expect(data(result).exportedAs).toBe('text/plain');
     });
 
     it('should return message for binary files', async () => {
@@ -186,7 +187,7 @@ describe('Drive Handlers', () => {
       const result = await handleReadFile({ fileId: 'file1' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.message).toBe('Binary file - content not readable as text');
+      expect(data(result).message).toBe('Binary file - content not readable as text');
     });
 
     it('should read text files directly', async () => {
@@ -206,7 +207,7 @@ describe('Drive Handlers', () => {
       const result = await handleReadFile({ fileId: 'file1' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.content).toBe('Text file content');
+      expect(data(result).content).toBe('Text file content');
     });
 
     it('should fail if file too large', async () => {
@@ -237,8 +238,8 @@ describe('Drive Handlers', () => {
       const result = await handleSearch({ query: "name contains 'test'" }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.query).toBe("name contains 'test'");
-      expect(result.data.files).toHaveLength(1);
+      expect(data(result).query).toBe("name contains 'test'");
+      expect(data(result).files).toHaveLength(1);
     });
 
     it('should combine query with trashed filter', async () => {
@@ -275,7 +276,7 @@ describe('Drive Handlers', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data.message).toBe('File created successfully');
+      expect(data(result).message).toBe('File created successfully');
     });
 
     it('should create empty file', async () => {
@@ -333,7 +334,7 @@ describe('Drive Handlers', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data.message).toBe('File updated successfully');
+      expect(data(result).message).toBe('File updated successfully');
     });
 
     it('should update file content', async () => {
@@ -398,8 +399,8 @@ describe('Drive Handlers', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data.message).toBe('File shared successfully');
-      expect(result.data.permission.emailAddress).toBe('user@example.com');
+      expect(data(result).message).toBe('File shared successfully');
+      expect(data(result).permission.emailAddress).toBe('user@example.com');
     });
 
     it('should share file with anyone', async () => {
@@ -427,7 +428,7 @@ describe('Drive Handlers', () => {
       const result = await handleDeleteFile({ fileId: 'file1' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.message).toBe('File moved to trash');
+      expect(data(result).message).toBe('File moved to trash');
       expect(mockDriveClient.files.update).toHaveBeenCalledWith(
         expect.objectContaining({
           requestBody: { trashed: true },
@@ -444,7 +445,7 @@ describe('Drive Handlers', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data.message).toBe('File permanently deleted');
+      expect(data(result).message).toBe('File permanently deleted');
     });
   });
 
@@ -463,8 +464,8 @@ describe('Drive Handlers', () => {
       const result = await handleListSharedDrives({}, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data.drives).toHaveLength(2);
-      expect(result.data.nextPageToken).toBe('next');
+      expect(data(result).drives).toHaveLength(2);
+      expect(data(result).nextPageToken).toBe('next');
     });
 
     it('should limit page size', async () => {

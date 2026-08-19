@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { data } from '../common/test-helpers.js';
 import {
   handleWebSearch,
   handleNewsSearch,
@@ -48,7 +49,7 @@ describe('Web Search Handlers', () => {
       const result = await handleWebSearch({ query: 'test query' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data).toEqual({
+      expect(data(result)).toEqual({
         query: 'test query',
         results: [
           {
@@ -144,7 +145,7 @@ describe('Web Search Handlers', () => {
       const result = await handleNewsSearch({ query: 'breaking news' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data).toEqual({
+      expect(data(result)).toEqual({
         query: 'breaking news',
         results: [
           {
@@ -179,8 +180,8 @@ describe('Web Search Handlers', () => {
 
       const result = await handleNewsSearch({ query: 'news' }, mockContext);
 
-      expect(result.data.results[0].source).toBeUndefined();
-      expect(result.data.results[0].thumbnail).toBeUndefined();
+      expect(data(result).results[0].source).toBeUndefined();
+      expect(data(result).results[0].thumbnail).toBeUndefined();
     });
   });
 
@@ -211,7 +212,7 @@ describe('Web Search Handlers', () => {
       const result = await handleImageSearch({ query: 'cats' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data).toEqual({
+      expect(data(result)).toEqual({
         query: 'cats',
         results: [
           {
@@ -253,7 +254,7 @@ describe('Web Search Handlers', () => {
       const result = await handleSuggest({ query: 'test' }, mockContext);
 
       expect(result.success).toBe(true);
-      expect(result.data).toEqual({
+      expect(data(result)).toEqual({
         query: 'test',
         suggestions: ['test suggestion 1', 'test suggestion 2'],
       });
@@ -279,7 +280,7 @@ describe('Web Search Handlers', () => {
 
       const result = await handleSuggest({ query: 'xyz' }, mockContext);
 
-      expect(result.data.suggestions).toEqual([]);
+      expect(data(result).suggestions).toEqual([]);
     });
   });
 });

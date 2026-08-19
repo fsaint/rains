@@ -64,9 +64,10 @@ export async function handleListMeetings(
     return { success: false, error: `API error: ${response.status} ${response.statusText}` };
   }
   const raw = await response.json() as Record<string, unknown>[] | { results?: Record<string, unknown>[]; meetings?: Record<string, unknown>[] } & Record<string, unknown>;
-  const extracted = Array.isArray(raw)
-    ? raw
-    : ((raw as Record<string, unknown[]>).results ?? (raw as Record<string, unknown[]>).meetings ?? []);
+  // No casts needed: raw's non-array arm already declares results/meetings as
+  // Record<string, unknown>[]. Casting to Record<string, unknown[]> was what
+  // widened the elements to unknown and broke the assignment below.
+  const extracted = Array.isArray(raw) ? raw : (raw.results ?? raw.meetings ?? []);
   const meetings: Record<string, unknown>[] = Array.isArray(extracted) ? extracted : [];
 
   // Fetch recent instances (last 5) for each meeting in parallel
