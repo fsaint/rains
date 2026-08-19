@@ -44,6 +44,12 @@ import {
   setDrivePathConfig,
   isServiceEnabledForAgent,
   enableDefaultServices,
+  listEnabledServiceTypes,
+  listOpenMcpAgents,
+  userHasAdminAgent,
+  ServiceCombinationError,
+  UnauthenticatedEndpointsOpenError,
+  ADMIN_SERVICE_TYPE,
   type ToolPermission,
   type PermissionLevel,
   type DrivePathConfig,
@@ -349,6 +355,22 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (typeof body.allowed !== 'boolean') {
       return reply.code(400).send({
         error: { code: 'VALIDATION_ERROR', message: 'allowed must be a boolean' },
+      });
+    }
+
+    // The latch. Enabling helm-admin requires every agent on the account to be
+    // closed; without this that is a one-time formality — close everything,
+    // enable the admin agent, re-open — and the admin agent regains the ability
+    // to grant a peer access and then drive it by id.
+    if (body.allowed && (await userHasAdminAgent(userId))) {
+      return reply.code(409).send({
+        error: {
+          code: 'ADMIN_AGENT_EXISTS',
+          message:
+            'You have an agent with Helm Admin, which can change what your agents are allowed to do. ' +
+            'Re-opening an unauthenticated endpoint would let it grant access to this agent and then use it directly. ' +
+            'Remove Helm Admin from that agent first.',
+        },
       });
     }
 
@@ -1070,7 +1092,13 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       });
     }
 
-    const { instance, created } = await createServiceInstance(agentId, serviceType, label, credentialId);
+    let instance, created;
+    try {
+      ({ instance, created } = await createServiceInstance(agentId, serviceType, label, credentialId));
+    } catch (err) {
+      if (sendPermissionConflict(err, reply)) return;
+      throw err;
+    }
     if (created) {
       autoRedeployIfDeployed(agentId).catch((err) =>
         console.error('[autoRedeploy] Failed after instance create:', err)
@@ -1246,7 +1274,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         });
       }
 
-      await setServiceAccess(agentId, serviceType, enabled);
+      try {
+        await setServiceAccess(agentId, serviceType, enabled);
+      } catch (err) {
+        if (sendPermissionConflict(err, reply)) return;
+        throw err;
+      }
       const config = await getAgentServiceConfig(agentId, serviceType);
 
       return { data: config };
@@ -1298,7 +1331,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         });
       }
 
-      await setPermissionLevel(agentId, serviceType, level);
+      try {
+        await setPermissionLevel(agentId, serviceType, level);
+      } catch (err) {
+        if (sendPermissionConflict(err, reply)) return;
+        throw err;
+      }
       const config = await getAgentServiceConfig(agentId, serviceType);
       const currentLevel = await getPermissionLevel(agentId, serviceType);
 
@@ -6025,6 +6063,42 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
   const agentNotFound = { error: { code: 'NOT_FOUND', message: 'Agent not found' } };
 
+  /**
+   * Turn a refusal from the permissions guard into a 409 the dashboard can act
+   * on, and return true. Returns false for anything else, so callers rethrow.
+   *
+   * 409 rather than 403: the request is well-formed and the caller is allowed to
+   * make it — it conflicts with the account's current state, which the payload
+   * describes precisely enough for the UI to offer the fix.
+   */
+  function sendPermissionConflict(err: unknown, reply: any): boolean {
+    // `details` rather than top-level fields: that is the envelope the frontend
+    // ApiError already carries through, so the UI gets these without a client
+    // change and without a second error shape to keep in sync.
+    if (err instanceof ServiceCombinationError) {
+      reply.code(409).send({
+        error: {
+          code: err.code,
+          message: err.message,
+          // What the owner would have to turn off to proceed.
+          details: { conflicting: err.conflicting, serviceType: err.serviceType },
+        },
+      });
+      return true;
+    }
+    if (err instanceof UnauthenticatedEndpointsOpenError) {
+      reply.code(409).send({
+        error: {
+          code: err.code,
+          message: err.message,
+          details: { openAgents: err.openAgents },
+        },
+      });
+      return true;
+    }
+    return false;
+  }
+
   app.get<{ Params: { id: string } }>('/api/agents/:id/skills', async (request, reply) => {
     const { id } = request.params;
     if (!(await ownsAgent(request, id))) return reply.code(404).send(agentNotFound);
@@ -6490,6 +6564,365 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       },
     };
   });
+
+  // =========================================================================
+  // Agent Admin — /api/agent-admin/*
+  //
+  // For an agent holding helm-admin, which organizes its owner's other agents.
+  //
+  // Everything here is scoped to the calling agent's owner, resolved from its
+  // gateway token. As with skill-authoring, the boundary is enforced at these
+  // routes and not only in the MCP endpoint: every deployed agent has its own
+  // gateway token and REINS_API_URL in its environment, so an agent merely
+  // denied the tools could otherwise call these directly.
+  //
+  // What is deliberately absent matters as much as what is here. There is no
+  // route to read a gateway token, a credential, or an MCP URL; no route to
+  // create or destroy an agent; and no route to re-open an unauthenticated
+  // endpoint — that one is session-only by design, because it is the latch
+  // holding this whole arrangement together.
+  // =========================================================================
+
+  async function requireHelmAdmin(agentId: string, reply: any): Promise<boolean> {
+    if (await isServiceEnabledForAgent(agentId, ADMIN_SERVICE_TYPE)) return true;
+    reply.code(403).send({
+      error: {
+        code: 'SERVICE_NOT_ENABLED',
+        message: 'The helm-admin service is not enabled on this agent.',
+      },
+    });
+    return false;
+  }
+
+  /** Resolve the calling admin agent, or send the right refusal. Null means handled. */
+  async function resolveAdminCaller(request: any, reply: any) {
+    const agent = await resolveAgentFromGatewayToken(request);
+    if (!agent) {
+      reply.status(401).send({ error: 'Unauthorized' });
+      return null;
+    }
+    if (!(await requireHelmAdmin(agent.agentId, reply))) return null;
+    return agent;
+  }
+
+  /**
+   * A target agent belonging to this owner, or null after sending a 404.
+   *
+   * 404 rather than 403 for someone else's agent: an admin agent must not be
+   * able to probe which ids exist on other accounts.
+   */
+  async function resolveAdminTarget(agentId: string, userId: string, reply: any) {
+    const result = await client.execute({
+      sql: `SELECT * FROM agents WHERE id = ? AND user_id = ? LIMIT 1`,
+      args: [agentId, userId],
+    });
+    if (result.rows.length === 0) {
+      reply.code(404).send(agentNotFound);
+      return null;
+    }
+    return result.rows[0];
+  }
+
+  /**
+   * helm-admin is not grantable through this API, in either direction.
+   *
+   * Granting it would let an admin agent mint more admin agents. Revoking it is
+   * the first half of "remove admin from that agent, then re-open its endpoint"
+   * — the exact sequence the latch exists to prevent. Both stay in the
+   * dashboard, where a human is present.
+   */
+  function rejectAdminServiceType(serviceType: string, reply: any): boolean {
+    if (serviceType !== ADMIN_SERVICE_TYPE) return false;
+    reply.code(403).send({
+      error: {
+        code: 'SERVICE_NOT_GRANTABLE',
+        message:
+          'Helm Admin cannot be granted or removed from here. Change it in the dashboard, where your owner is present.',
+      },
+    });
+    return true;
+  }
+
+  app.get('/api/agent-admin/agents', async (request, reply) => {
+    const agent = await resolveAdminCaller(request, reply);
+    if (!agent) return;
+
+    const result = await client.execute({
+      sql: `SELECT a.id, a.name, a.description, a.status, a.created_at,
+                   d.status AS deployment_status, d.runtime, d.is_manual
+            FROM agents a
+            LEFT JOIN LATERAL (
+              SELECT da.status, da.runtime, da.is_manual
+              FROM deployed_agents da
+              WHERE da.agent_id = a.id AND da.status NOT IN ('destroyed', 'error')
+              ORDER BY da.created_at DESC LIMIT 1
+            ) d ON true
+            WHERE a.user_id = ?
+            ORDER BY a.name`,
+      args: [agent.userId],
+    });
+
+    const agentsOut = await Promise.all(
+      result.rows.map(async (row) => ({
+        id: row.id as string,
+        name: row.name as string,
+        description: (row.description as string | null) ?? null,
+        status: row.status as string,
+        runtime: (row.runtime as string | null) ?? null,
+        isManual: row.is_manual === true || row.is_manual === 1,
+        deploymentStatus: (row.deployment_status as string | null) ?? null,
+        services: await listEnabledServiceTypes(row.id as string),
+        // So the model can explain why a grant will be refused, instead of
+        // proposing one and reporting a failure it did not anticipate.
+        isSelf: row.id === agent.agentId,
+      }))
+    );
+
+    return { data: agentsOut };
+  });
+
+  app.get<{ Params: { agentId: string } }>('/api/agent-admin/agents/:agentId', async (request, reply) => {
+    const agent = await resolveAdminCaller(request, reply);
+    if (!agent) return;
+
+    const target = await resolveAdminTarget(request.params.agentId, agent.userId, reply);
+    if (!target) return;
+
+    const services = await listEnabledServiceTypes(target.id as string);
+    const withLevels = await Promise.all(
+      services.map(async (serviceType) => ({
+        serviceType,
+        level: await getPermissionLevel(target.id as string, serviceType),
+      }))
+    );
+
+    const openAgents = await listOpenMcpAgents(agent.userId);
+
+    return {
+      data: {
+        id: target.id,
+        name: target.name,
+        description: target.description ?? null,
+        status: target.status,
+        services: withLevels,
+        // Surfaced because it decides whether a grant to this agent is allowed.
+        acceptsUnauthenticatedMcp: openAgents.some((a) => a.id === target.id),
+      },
+    };
+  });
+
+  app.get('/api/agent-admin/services', async (request, reply) => {
+    const agent = await resolveAdminCaller(request, reply);
+    if (!agent) return;
+
+    const { serviceDefinitions: defs } = await import('@reins/servers');
+    return {
+      data: {
+        services: defs
+          // Not offered, because it cannot be granted from here anyway.
+          .filter((d) => d.type !== ADMIN_SERVICE_TYPE)
+          .map((d) => ({
+            serviceType: d.type,
+            name: d.name,
+            description: d.description,
+            requiresCredential: d.auth.required,
+          })),
+      },
+    };
+  });
+
+  app.patch<{ Params: { agentId: string } }>('/api/agent-admin/agents/:agentId', async (request, reply) => {
+    const agent = await resolveAdminCaller(request, reply);
+    if (!agent) return;
+
+    const target = await resolveAdminTarget(request.params.agentId, agent.userId, reply);
+    if (!target) return;
+
+    const body = request.body as { name?: unknown; description?: unknown; status?: unknown };
+    const updates: string[] = ['updated_at = ?'];
+    const args: (string | null)[] = [new Date().toISOString()];
+
+    if (typeof body.name === 'string') {
+      if (body.name.trim() === '') {
+        return reply.code(400).send({
+          error: { code: 'VALIDATION_ERROR', message: 'name cannot be empty' },
+        });
+      }
+      updates.push('name = ?');
+      args.push(body.name.trim());
+    }
+    if (typeof body.description === 'string') {
+      updates.push('description = ?');
+      args.push(body.description.trim() === '' ? null : body.description);
+    }
+    if (typeof body.status === 'string') {
+      const allowed = ['active', 'paused', 'inactive'];
+      if (!allowed.includes(body.status)) {
+        return reply.code(400).send({
+          error: { code: 'VALIDATION_ERROR', message: `status must be one of: ${allowed.join(', ')}` },
+        });
+      }
+      updates.push('status = ?');
+      args.push(body.status);
+    }
+
+    if (updates.length === 1) {
+      return reply.code(400).send({
+        error: { code: 'VALIDATION_ERROR', message: 'Nothing to change: pass name, description, or status' },
+      });
+    }
+
+    args.push(request.params.agentId, agent.userId);
+    await client.execute({
+      sql: `UPDATE agents SET ${updates.join(', ')} WHERE id = ? AND user_id = ?`,
+      args,
+    });
+
+    await auditLogger.log({
+      eventType: 'policy_change',
+      result: 'success',
+      agentId: request.params.agentId,
+      metadata: { kind: 'agent_metadata', changedByAgent: agent.agentId, fields: Object.keys(body) },
+    });
+
+    const updated = await client.execute({
+      sql: `SELECT id, name, description, status FROM agents WHERE id = ? AND user_id = ?`,
+      args: [request.params.agentId, agent.userId],
+    });
+    return { data: updated.rows[0] };
+  });
+
+  app.post<{ Params: { agentId: string } }>('/api/agent-admin/agents/:agentId/services', async (request, reply) => {
+    const agent = await resolveAdminCaller(request, reply);
+    if (!agent) return;
+
+    const target = await resolveAdminTarget(request.params.agentId, agent.userId, reply);
+    if (!target) return;
+
+    const { serviceType } = request.body as { serviceType?: string };
+    if (!serviceType || !validServiceTypes.includes(serviceType)) {
+      return reply.code(400).send({
+        error: { code: 'INVALID_SERVICE', message: `Invalid service type: ${serviceType}` },
+      });
+    }
+    if (rejectAdminServiceType(serviceType, reply)) return;
+
+    // The account-wide precondition is checked when helm-admin is enabled, but
+    // agents created afterwards start with no deployment row and are therefore
+    // open. Granting capability to one of those would hand it to anyone holding
+    // its id, so the check is repeated per grant rather than trusted from setup.
+    const open = await listOpenMcpAgents(agent.userId);
+    if (open.some((a) => a.id === request.params.agentId)) {
+      return reply.code(409).send({
+        error: {
+          code: 'TARGET_ACCEPTS_UNAUTHENTICATED_MCP',
+          message:
+            `${target.name} still accepts unauthenticated MCP calls, so anyone with its id could use what you grant it. ` +
+            'Ask your owner to close its unauthenticated endpoint first.',
+        },
+      });
+    }
+
+    try {
+      await createServiceInstance(request.params.agentId, serviceType);
+    } catch (err) {
+      if (sendPermissionConflict(err, reply)) return;
+      throw err;
+    }
+
+    await auditLogger.log({
+      eventType: 'policy_change',
+      result: 'success',
+      agentId: request.params.agentId,
+      metadata: { kind: 'service_enabled', serviceType, changedByAgent: agent.agentId },
+    });
+
+    return { data: { agentId: request.params.agentId, serviceType, enabled: true } };
+  });
+
+  app.delete<{ Params: { agentId: string; serviceType: string } }>(
+    '/api/agent-admin/agents/:agentId/services/:serviceType',
+    async (request, reply) => {
+      const agent = await resolveAdminCaller(request, reply);
+      if (!agent) return;
+
+      const target = await resolveAdminTarget(request.params.agentId, agent.userId, reply);
+      if (!target) return;
+
+      if (rejectAdminServiceType(request.params.serviceType, reply)) return;
+
+      await setPermissionLevel(request.params.agentId, request.params.serviceType, 'none');
+
+      await auditLogger.log({
+        eventType: 'policy_change',
+        result: 'success',
+        agentId: request.params.agentId,
+        metadata: {
+          kind: 'service_disabled',
+          serviceType: request.params.serviceType,
+          changedByAgent: agent.agentId,
+        },
+      });
+
+      return { data: { agentId: request.params.agentId, serviceType: request.params.serviceType, enabled: false } };
+    }
+  );
+
+  app.put<{ Params: { agentId: string; serviceType: string } }>(
+    '/api/agent-admin/agents/:agentId/services/:serviceType/level',
+    async (request, reply) => {
+      const agent = await resolveAdminCaller(request, reply);
+      if (!agent) return;
+
+      const target = await resolveAdminTarget(request.params.agentId, agent.userId, reply);
+      if (!target) return;
+
+      if (rejectAdminServiceType(request.params.serviceType, reply)) return;
+
+      const { level } = request.body as { level?: string };
+      const allowed = ['none', 'read', 'full'];
+      if (!level || !allowed.includes(level)) {
+        return reply.code(400).send({
+          error: { code: 'VALIDATION_ERROR', message: `level must be one of: ${allowed.join(', ')}` },
+        });
+      }
+
+      // Raising a level widens reach exactly as a grant does, so it carries the
+      // same open-endpoint check. 'none' only narrows and is always permitted.
+      if (level !== 'none') {
+        const open = await listOpenMcpAgents(agent.userId);
+        if (open.some((a) => a.id === request.params.agentId)) {
+          return reply.code(409).send({
+            error: {
+              code: 'TARGET_ACCEPTS_UNAUTHENTICATED_MCP',
+              message: `${target.name} still accepts unauthenticated MCP calls. Ask your owner to close its unauthenticated endpoint first.`,
+            },
+          });
+        }
+      }
+
+      try {
+        await setPermissionLevel(request.params.agentId, request.params.serviceType, level as PermissionLevel);
+      } catch (err) {
+        if (sendPermissionConflict(err, reply)) return;
+        throw err;
+      }
+
+      await auditLogger.log({
+        eventType: 'policy_change',
+        result: 'success',
+        agentId: request.params.agentId,
+        metadata: {
+          kind: 'permission_level',
+          serviceType: request.params.serviceType,
+          level,
+          changedByAgent: agent.agentId,
+        },
+      });
+
+      return { data: { agentId: request.params.agentId, serviceType: request.params.serviceType, level } };
+    }
+  );
 
   // -------------------------------------------------------------------------
   // GET /api/memory/root — the root index of every scope the caller can reach

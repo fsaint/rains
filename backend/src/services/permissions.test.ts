@@ -137,10 +137,30 @@ import {
   getCredentialsForService,
   setPermissionLevel,
   getPermissionLevel,
+  assertServiceCombinationAllowed,
+  assertNoOpenMcpEndpoints,
+  listOpenMcpAgents,
+  listEnabledServiceTypes,
+  createServiceInstance,
+  ServiceCombinationError,
+  UnauthenticatedEndpointsOpenError,
 } from './permissions.js';
 
 // Tool lists mirroring the vi.mock('@reins/servers') registry above
 const MOCK_GMAIL_PERMISSIONS = GMAIL_PERMISSIONS;
+
+/**
+ * Answer both queries listEnabledServiceTypes makes with the same set.
+ *
+ * It reads instance rows and legacy access rows and unions them, so serving one
+ * list to both is equivalent for these tests and keeps them readable.
+ */
+function mockEnabledServices(...types: string[]) {
+  const rows = types.map((serviceType) => ({ serviceType }));
+  vi.mocked(db.select).mockReturnValue({
+    from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(rows) }),
+  } as never);
+}
 
 // Helper to create mock query chain
 function mockQueryChain(result: unknown, hasWhere = true) {
@@ -273,6 +293,7 @@ describe('Permission Service', () => {
 
   describe('setServiceAccess', () => {
     it('should upsert access record when enabling', async () => {
+      mockEnabledServices();
       await setServiceAccess('agent-1', 'gmail', true);
 
       expect(client.execute).toHaveBeenCalledWith(expect.objectContaining({
@@ -288,6 +309,170 @@ describe('Permission Service', () => {
         sql: expect.stringContaining('ON CONFLICT'),
         args: expect.arrayContaining(['agent-1', 'gmail', false]),
       }));
+    });
+  });
+
+  /**
+   * The rule that makes the admin MCP safe to hand to an agent: helm-admin can
+   * change any agent's permissions, so an agent holding it plus anything with a
+   * credential is an agent that can reach everything in two steps.
+   */
+  describe('exclusivity between helm-admin and everything else', () => {
+    it('refuses helm-admin on an agent that already has a credentialed service', async () => {
+      mockEnabledServices('gmail', 'memory');
+
+      await expect(assertServiceCombinationAllowed('agent-1', 'helm-admin'))
+        .rejects.toThrow(/only memory alongside/i);
+    });
+
+    it('refuses a credentialed service on an agent that already has helm-admin', async () => {
+      mockEnabledServices('helm-admin');
+
+      await expect(assertServiceCombinationAllowed('agent-1', 'gmail'))
+        .rejects.toThrow(/grant itself access/i);
+    });
+
+    it('names what is blocking, so the caller can offer to turn it off', async () => {
+      mockEnabledServices('gmail', 'skills', 'memory');
+
+      const err = await assertServiceCombinationAllowed('agent-1', 'helm-admin')
+        .then(() => null)
+        .catch((e: unknown) => e as ServiceCombinationError);
+
+      expect(err).toBeInstanceOf(ServiceCombinationError);
+      // memory is permitted, so it must not appear as a conflict.
+      expect(err!.conflicting.sort()).toEqual(['gmail', 'skills']);
+    });
+
+    it('allows memory alongside helm-admin, in either order', async () => {
+      mockEnabledServices('helm-admin');
+      await expect(assertServiceCombinationAllowed('agent-1', 'memory')).resolves.toBeUndefined();
+
+      mockEnabledServices('memory');
+      await expect(assertServiceCombinationAllowed('agent-1', 'helm-admin')).resolves.toBeUndefined();
+    });
+
+    it('allows helm-admin on an agent that already has it', async () => {
+      // Re-enabling must be idempotent rather than self-conflicting.
+      mockEnabledServices('helm-admin');
+      await expect(assertServiceCombinationAllowed('agent-1', 'helm-admin')).resolves.toBeUndefined();
+    });
+
+    it('leaves ordinary combinations alone', async () => {
+      mockEnabledServices('gmail', 'drive', 'skills');
+      await expect(assertServiceCombinationAllowed('agent-1', 'calendar')).resolves.toBeUndefined();
+    });
+
+    it('counts a service that is live only on the legacy access row', async () => {
+      // isServiceEnabledForAgent falls back to agent_service_access when there
+      // are no instance rows. If the guard read only instances, an agent whose
+      // gmail predates instances would take helm-admin and keep gmail.
+      vi.mocked(db.select)
+        .mockReturnValueOnce({ // instances: none
+          from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+        } as never)
+        .mockReturnValueOnce({ // legacy: gmail
+          from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([{ serviceType: 'gmail' }]) }),
+        } as never);
+
+      await expect(assertServiceCombinationAllowed('agent-1', 'helm-admin')).rejects.toThrow(/gmail/);
+    });
+
+    it('setServiceAccess enforces it, and only when enabling', async () => {
+      mockEnabledServices('helm-admin');
+      await expect(setServiceAccess('agent-1', 'gmail', true)).rejects.toThrow(ServiceCombinationError);
+      expect(client.execute).not.toHaveBeenCalled();
+
+      // Disabling can only shrink the set, so it must never be blocked —
+      // otherwise an agent in a bad state could not be repaired.
+      await expect(setServiceAccess('agent-1', 'gmail', false)).resolves.toBeUndefined();
+      expect(client.execute).toHaveBeenCalled();
+    });
+
+    it('createServiceInstance rejects before writing the instance row', async () => {
+      // The guard has to run before the insert: this function writes the
+      // instance and only then calls setServiceAccess, so guarding just the
+      // latter would leave the row behind and the service would appear in
+      // tools/list while the access row said no.
+      mockEnabledServices('helm-admin');
+
+      await expect(createServiceInstance('agent-1', 'gmail')).rejects.toThrow(ServiceCombinationError);
+      expect(db.insert).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * The exclusivity rule keeps the admin agent poor. This keeps that from being
+   * decorative: on an account where any agent answers MCP calls without a token,
+   * an agent id is a credential, so an admin agent could grant a peer access and
+   * then drive the peer directly.
+   */
+  describe('open MCP endpoints', () => {
+    it('treats an agent with no live deployment row as open', async () => {
+      // The one a reimplementation gets wrong. authenticateMcp serves a request
+      // when the deployment row is missing, so "not explicitly closed" is open.
+      vi.mocked(client.execute).mockResolvedValueOnce({
+        rows: [{ id: 'agent-9', name: 'Never Deployed' }],
+        rowsAffected: 1, columns: [], lastInsertRowid: 0n,
+      } as never);
+
+      await expect(assertNoOpenMcpEndpoints('user-1')).rejects.toThrow(/Never Deployed/);
+    });
+
+    it('reports every blocking agent by name, so the owner knows what to close', async () => {
+      vi.mocked(client.execute).mockResolvedValueOnce({
+        rows: [{ id: 'a', name: 'Home' }, { id: 'b', name: 'Work' }],
+        rowsAffected: 2, columns: [], lastInsertRowid: 0n,
+      } as never);
+
+      const err = await assertNoOpenMcpEndpoints('user-1')
+        .then(() => null)
+        .catch((e: unknown) => e as UnauthenticatedEndpointsOpenError);
+
+      expect(err).toBeInstanceOf(UnauthenticatedEndpointsOpenError);
+      expect(err!.message).toContain('Home, Work');
+      expect(err!.openAgents.map((a) => a.id)).toEqual(['a', 'b']);
+    });
+
+    it('passes when every agent is closed', async () => {
+      vi.mocked(client.execute).mockResolvedValueOnce({
+        rows: [], rowsAffected: 0, columns: [], lastInsertRowid: 0n,
+      } as never);
+
+      await expect(assertNoOpenMcpEndpoints('user-1')).resolves.toBeUndefined();
+    });
+
+    it('only counts an agent closed when allow_unauthenticated is explicitly false', async () => {
+      // Guards the SQL: a NULL column, or no row from the lateral join, must
+      // both come back as open. Asserting on the query is the only way to catch
+      // a rewrite that flips this to `= true`.
+      vi.mocked(client.execute).mockResolvedValueOnce({
+        rows: [], rowsAffected: 0, columns: [], lastInsertRowid: 0n,
+      } as never);
+
+      await listOpenMcpAgents('user-1');
+
+      const { sql } = vi.mocked(client.execute).mock.calls[0][0] as { sql: string };
+      expect(sql).toContain('allow_unauthenticated IS NULL');
+      expect(sql).toContain('allow_unauthenticated = true');
+    });
+  });
+
+  describe('listEnabledServiceTypes', () => {
+    it('unions instances and legacy rows without duplicates', async () => {
+      vi.mocked(db.select)
+        .mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{ serviceType: 'gmail' }, { serviceType: 'memory' }]),
+          }),
+        } as never)
+        .mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{ serviceType: 'gmail' }, { serviceType: 'drive' }]),
+          }),
+        } as never);
+
+      expect((await listEnabledServiceTypes('agent-1')).sort()).toEqual(['drive', 'gmail', 'memory']);
     });
   });
 

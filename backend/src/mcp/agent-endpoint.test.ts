@@ -96,6 +96,9 @@ vi.mock('@reins/servers', () => ({
     ['browser', { type: 'browser', auth: { required: false } }],
   ]),
   getServiceTypeFromToolName: (name: string) => {
+    // Before the gmail_ arm, mirroring the real resolver's first-match order —
+    // these prefixes do not overlap, but the ordering is the property.
+    if (name.startsWith('helm_admin_')) return 'helm-admin';
     if (name.startsWith('gmail_')) return 'gmail';
     if (name.startsWith('drive_')) return 'drive';
     if (name.startsWith('calendar_')) return 'calendar';
@@ -916,5 +919,66 @@ describe('skill-authoring enablement boundary', () => {
 
     const toolNames = (response.result as { tools: Array<{ name: string }> }).tools.map((t) => t.name);
     expect(toolNames.some((n) => n.startsWith('skill_authoring_'))).toBe(false);
+  });
+});
+
+describe('gateway token injection', () => {
+  /**
+   * Services whose handlers call back into the platform API get the agent's
+   * gateway token in their tool context. The list of them is hardcoded in
+   * handleCallTool, and leaving a service out of it fails silently in the worst
+   * way: the handlers send no x-reins-agent-secret, every request comes back
+   * 401, and it reads like a broken credential rather than a missing line.
+   * helm-admin was added to that list after exactly this happened.
+   */
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // The same mock answers the agent lookup and the instance query, in that
+    // order: the agent must exist, and no instance rows sends the call down the
+    // legacy permission path, which is the simpler one to assert on.
+    dbWhereMock
+      .mockResolvedValueOnce([{ id: 'agent-1', name: 'Test Agent', status: 'active' }])
+      .mockResolvedValue([]);
+  });
+
+  async function callAdminTool() {
+    const callTool = vi.fn().mockResolvedValue({ success: true, data: { agents: [] } });
+    const { serverManager } = await import('./server-manager.js');
+    vi.mocked(serverManager.getServer).mockReturnValue({
+      serverType: 'helm-admin',
+      name: 'Helm Admin',
+      getToolDefinitions: () => [
+        { name: 'helm_admin_list_agents', description: 'List agents', inputSchema: { type: 'object', properties: {} } },
+      ],
+      callTool,
+    } as never);
+
+    const { getEffectivePermissions } = await import('../services/permissions.js');
+    vi.mocked(getEffectivePermissions).mockResolvedValue({
+      enabled: true,
+      tools: { helm_admin_list_agents: 'allow' },
+    } as never);
+
+    vi.mocked(client.execute).mockResolvedValue({
+      rows: [{ gateway_token: 'gw-secret', id: 'dep-1', runtime: 'openclaw', mcp_server_name: 'helm' }],
+    } as never);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'helm_admin_list_agents', arguments: {} },
+    });
+
+    return { callTool, response };
+  }
+
+  it('gives helm-admin tools the gateway token they authenticate with', async () => {
+    const { callTool, response } = await callAdminTool();
+
+    expect(response.error).toBeUndefined();
+    expect(callTool).toHaveBeenCalledWith(
+      'helm_admin_list_agents',
+      {},
+      expect.objectContaining({ gatewayToken: 'gw-secret' })
+    );
   });
 });

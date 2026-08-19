@@ -24,7 +24,7 @@ import {
   ShieldAlert,
   ShieldCheck,
 } from 'lucide-react';
-import { agents, mcpTokens, type DeployConfig, type TelegramGroup, type TopicPrompt } from '../api/client';
+import { agents, mcpTokens, ApiError, type DeployConfig, type TelegramGroup, type TopicPrompt } from '../api/client';
 import LogViewer from './LogViewer';
 import ChatModal from './ChatModal';
 import { CodexDeviceFlow } from './CodexDeviceFlow';
@@ -178,6 +178,15 @@ function McpAccessSection({ agentId }: { agentId: string }) {
                 >
                   Allow unauthenticated access again
                 </button>
+                {/* The latch. Re-opening is refused while an admin agent exists,
+                    because an agent id is a credential on an open endpoint —
+                    the admin agent could grant this one access and then use it
+                    directly. Explained here, where the click happens. */}
+                {setUnauth.isError && (setUnauth.error as ApiError)?.code === 'ADMIN_AGENT_EXISTS' && (
+                  <p className="text-xs text-amber-800 mt-2 p-2 bg-amber-50 border border-amber-200 rounded">
+                    {(setUnauth.error as ApiError).message}
+                  </p>
+                )}
               </>
             )}
           </div>

@@ -24,6 +24,7 @@ import { definition as memory } from './memory/definition.js';
 import { definition as skills } from './skills/definition.js';
 import { definition as skillAuthoring } from './skill-authoring/definition.js';
 import { definition as pipedrive } from './pipedrive/definition.js';
+import { definition as helmAdmin } from './helm-admin/definition.js';
 
 // Re-export the type from its canonical location
 export type { ServiceDefinitionWithTools } from './common/types.js';
@@ -50,6 +51,7 @@ export const serviceDefinitions: ServiceDefinitionWithTools[] = [
   skills,
   skillAuthoring,
   pipedrive,
+  helmAdmin,
   ...devOnlyServices,
 ];
 

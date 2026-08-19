@@ -5,6 +5,7 @@ import {
   permissions,
   agents,
   credentials,
+  ApiError,
   type ServiceType,
   type ToolPermission,
   type PermissionLevel,
@@ -35,8 +36,17 @@ import {
   Loader2,
   Radio,
   Send,
+  ShieldAlert,
+  ShieldCheck,
 } from 'lucide-react';
 import { DeploymentPanel } from '../components/DeploymentPanel';
+
+/**
+ * Kept in step with ADMIN_SERVICE_TYPE in backend/src/services/permissions.ts,
+ * which is where the rule is enforced. This copy only decides what the picker
+ * says before the click.
+ */
+const ADMIN_SERVICE_TYPE = 'helm-admin';
 
 const serviceIcons: Record<string, React.ReactNode> = {
   gmail: <Mail className="w-5 h-5" />,
@@ -44,6 +54,7 @@ const serviceIcons: Record<string, React.ReactNode> = {
   calendar: <Calendar className="w-5 h-5" />,
   'web-search': <Search className="w-5 h-5" />,
   browser: <Globe className="w-5 h-5" />,
+  [ADMIN_SERVICE_TYPE]: <ShieldCheck className="w-5 h-5" />,
 };
 
 const permissionColors: Record<ToolPermission, string> = {
@@ -101,7 +112,11 @@ export default function Permissions() {
   const queryClient = useQueryClient();
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
   const [selectedInstance, setSelectedInstance] = useState<string | null>(null);
-  const [addServiceAgent, setAddServiceAgent] = useState<{ agentId: string; agentName: string } | null>(null);
+  const [addServiceAgent, setAddServiceAgent] = useState<{
+    agentId: string;
+    agentName: string;
+    instances: Array<{ id: string; serviceType: string }>;
+  } | null>(null);
   const [deployAgentId, setDeployAgentId] = useState<string | null>(null);
 
   const { data: agentPerms, isLoading } = useQuery({
@@ -502,7 +517,16 @@ export default function Permissions() {
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      setAddServiceAgent({ agentId: agent.id, agentName: agent.name });
+                      setAddServiceAgent({
+                        agentId: agent.id,
+                        agentName: agent.name,
+                        // Needed to turn off a conflicting service by instance
+                        // id when Helm Admin is refused next to one.
+                        instances: agent.instances.map((i) => ({
+                          id: i.id,
+                          serviceType: i.serviceType,
+                        })),
+                      });
                     }}
                     className="w-full flex items-center justify-center gap-2 p-3 rounded-lg border-2 border-dashed border-gray-200 text-sm font-medium text-gray-400 hover:text-trust-blue hover:border-trust-blue/30 transition-colors"
                   >
@@ -536,6 +560,7 @@ export default function Permissions() {
         <AddServiceModal
           agentId={addServiceAgent.agentId}
           agentName={addServiceAgent.agentName}
+          agentInstances={addServiceAgent.instances}
           availableServices={agentPerms!.availableServices}
           onClose={() => setAddServiceAgent(null)}
           onAdded={() => {
@@ -566,18 +591,78 @@ export default function Permissions() {
 interface AddServiceModalProps {
   agentId: string;
   agentName: string;
+  agentInstances: Array<{ id: string; serviceType: string }>;
   availableServices: Array<{ type: string; name: string; icon: string; authRequired: boolean }>;
   onClose: () => void;
   onAdded: () => void;
 }
 
-function AddServiceModal({ agentId, agentName, availableServices, onClose, onAdded }: AddServiceModalProps) {
+/**
+ * What the backend refused, and enough context to offer the fix.
+ *
+ * Two distinct refusals land here. A combination conflict is resolvable in
+ * place — turn the named services off and retry. Open MCP endpoints are not:
+ * they are fixed on each agent's deployment panel, so this only explains.
+ */
+type AddServiceConflict =
+  | { kind: 'combination'; serviceType: string; message: string; conflicting: string[] }
+  | { kind: 'openEndpoints'; message: string; openAgents: Array<{ id: string; name: string }> };
+
+function AddServiceModal({
+  agentId, agentName, agentInstances, availableServices, onClose, onAdded,
+}: AddServiceModalProps) {
   const navigate = useNavigate();
+  const [conflict, setConflict] = useState<AddServiceConflict | null>(null);
 
   const createInstanceMutation = useMutation({
     mutationFn: (serviceType: string) => permissions.createInstance(agentId, serviceType),
     onSuccess: () => onAdded(),
+    onError: (err: unknown, serviceType) => {
+      if (!(err instanceof ApiError)) return;
+      const details = (err.details ?? {}) as {
+        conflicting?: string[];
+        openAgents?: Array<{ id: string; name: string }>;
+      };
+      if (err.code === 'SERVICE_COMBINATION_NOT_ALLOWED') {
+        setConflict({
+          kind: 'combination',
+          serviceType,
+          message: err.message,
+          conflicting: details.conflicting ?? [],
+        });
+      } else if (err.code === 'UNAUTHENTICATED_ENDPOINTS_OPEN') {
+        setConflict({
+          kind: 'openEndpoints',
+          message: err.message,
+          openAgents: details.openAgents ?? [],
+        });
+      }
+    },
   });
+
+  /**
+   * Turn off what is blocking, then add the service that was refused.
+   *
+   * Sequential rather than parallel: each delete re-evaluates the same guard on
+   * the server, and a batch that half-applied would leave the agent in a state
+   * neither the user nor the next retry expects.
+   */
+  const resolveConflictMutation = useMutation({
+    mutationFn: async (c: Extract<AddServiceConflict, { kind: 'combination' }>) => {
+      for (const serviceType of c.conflicting) {
+        const instance = agentInstances.find((i) => i.serviceType === serviceType);
+        if (instance) await permissions.deleteInstance(instance.id);
+      }
+      return permissions.createInstance(agentId, c.serviceType);
+    },
+    onSuccess: () => {
+      setConflict(null);
+      onAdded();
+    },
+  });
+
+  const serviceLabel = (type: string) =>
+    availableServices.find((s) => s.type === type)?.name ?? type;
 
   const { data: allCredentials = [] } = useQuery({
     queryKey: ['credentials'],
@@ -613,10 +698,95 @@ function AddServiceModal({ agentId, agentName, availableServices, onClose, onAdd
       </div>
       <div className="text-left flex-1">
         <div className="font-medium text-sm text-reins-navy">{service.name}</div>
+        {service.type === ADMIN_SERVICE_TYPE && (
+          // Said before the click, not only in the error afterwards.
+          <div className="text-xs text-amber-600 mt-0.5">
+            Must be the only service on an agent (memory aside)
+          </div>
+        )}
       </div>
       {badge}
     </button>
   );
+
+  if (conflict) {
+    return (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="bg-white rounded-xl w-full max-w-md shadow-xl p-6">
+          <div className="flex items-start gap-3 mb-4">
+            <div className="p-2 bg-amber-50 rounded-lg text-amber-600 shrink-0">
+              <ShieldAlert className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-reins-navy">
+                {conflict.kind === 'combination' ? 'These cannot share an agent' : 'Close these endpoints first'}
+              </h2>
+              <p className="text-sm text-gray-600 mt-1">{conflict.message}</p>
+            </div>
+          </div>
+
+          {conflict.kind === 'combination' ? (
+            <>
+              <div className="bg-gray-50 rounded-lg p-3 mb-4">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
+                  Would be turned off
+                </p>
+                <ul className="text-sm text-reins-navy space-y-1">
+                  {conflict.conflicting.map((type) => (
+                    <li key={type}>{serviceLabel(type)}</li>
+                  ))}
+                </ul>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => resolveConflictMutation.mutate(conflict)}
+                  disabled={resolveConflictMutation.isPending}
+                  className="flex-1 bg-trust-blue text-white px-4 py-2.5 rounded-lg text-sm font-semibold hover:bg-trust-blue/90 disabled:opacity-50"
+                >
+                  {resolveConflictMutation.isPending
+                    ? 'Applying…'
+                    : `Turn those off and add ${serviceLabel(conflict.serviceType)}`}
+                </button>
+                <button
+                  onClick={() => setConflict(null)}
+                  className="px-4 py-2.5 rounded-lg text-sm font-medium text-gray-500 hover:text-gray-700"
+                >
+                  Cancel
+                </button>
+              </div>
+              {resolveConflictMutation.isError && (
+                <p className="text-sm text-red-600 mt-3">
+                  {(resolveConflictMutation.error as Error).message}
+                </p>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="bg-gray-50 rounded-lg p-3 mb-4">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
+                  Still open
+                </p>
+                <ul className="text-sm text-reins-navy space-y-1">
+                  {conflict.openAgents.map((a) => (
+                    <li key={a.id}>{a.name}</li>
+                  ))}
+                </ul>
+                <p className="text-xs text-gray-500 mt-2">
+                  Open each one's Deploy panel and turn off unauthenticated access.
+                </p>
+              </div>
+              <button
+                onClick={() => setConflict(null)}
+                className="w-full px-4 py-2.5 rounded-lg text-sm font-medium border border-gray-200 text-gray-600 hover:bg-gray-50"
+              >
+                Back
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
