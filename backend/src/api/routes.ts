@@ -100,6 +100,12 @@ import {
   type MemoryContext,
 } from '../services/memory-scopes.js';
 import {
+  verifyAccessToken,
+  listAgentTokens,
+  revokeAccessToken,
+  type McpPrincipal,
+} from '../mcp/oauth/tokens.js';
+import {
   parseRequiredServices,
   resolveAvailability,
   resolveAssignedSkill,
@@ -287,6 +293,86 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   });
 
   // Connection prompt for an agent
+  /**
+   * MCP client tokens for one agent, and the switch that closes the
+   * unauthenticated endpoint.
+   *
+   * `lastUsedAt` is the point of the list: it is what tells an owner whether
+   * turning off the old URL will break something they forgot about.
+   */
+  app.get<{ Params: { id: string } }>('/api/agents/:id/mcp-tokens', async (request, reply) => {
+    const userId = getUserId(request);
+    if (!(await userOwnsAgent(userId, request.params.id))) {
+      return reply.code(404).send(agentNotFound);
+    }
+
+    const deployment = await client.execute({
+      sql: `SELECT allow_unauthenticated FROM deployed_agents
+            WHERE agent_id = ? AND status NOT IN ('destroyed', 'error')
+            ORDER BY created_at DESC LIMIT 1`,
+      args: [request.params.id],
+    });
+
+    return {
+      data: {
+        tokens: await listAgentTokens(request.params.id),
+        allowUnauthenticated: deployment.rows[0]?.allow_unauthenticated !== false,
+      },
+    };
+  });
+
+  app.delete<{ Params: { id: string; tokenId: string } }>(
+    '/api/agents/:id/mcp-tokens/:tokenId',
+    async (request, reply) => {
+      const userId = getUserId(request);
+      if (!(await userOwnsAgent(userId, request.params.id))) {
+        return reply.code(404).send(agentNotFound);
+      }
+      const revoked = await revokeAccessToken(request.params.tokenId, request.params.id);
+      if (!revoked) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Token not found' } });
+      return { data: { revoked: true } };
+    }
+  );
+
+  /**
+   * Open or close the unauthenticated endpoint for this agent.
+   *
+   * Reversible on purpose. An owner who closes it and then finds a client they
+   * had forgotten must be able to reopen it themselves rather than raise a
+   * ticket — which is also why the audit trail records both directions.
+   */
+  app.put<{ Params: { id: string } }>('/api/agents/:id/mcp-unauthenticated', async (request, reply) => {
+    const userId = getUserId(request);
+    if (!(await userOwnsAgent(userId, request.params.id))) {
+      return reply.code(404).send(agentNotFound);
+    }
+    const body = request.body as { allowed?: unknown };
+    if (typeof body.allowed !== 'boolean') {
+      return reply.code(400).send({
+        error: { code: 'VALIDATION_ERROR', message: 'allowed must be a boolean' },
+      });
+    }
+
+    await client.execute({
+      sql: `UPDATE deployed_agents SET allow_unauthenticated = ?, updated_at = ?
+            WHERE agent_id = ? AND status NOT IN ('destroyed', 'error')`,
+      args: [body.allowed, new Date().toISOString(), request.params.id],
+    });
+
+    await auditLogger.log({
+      eventType: 'policy_change',
+      result: 'success',
+      agentId: request.params.id,
+      metadata: {
+        kind: 'mcp_unauthenticated_access',
+        allowed: body.allowed,
+        changedBy: userId,
+      },
+    });
+
+    return { data: { allowUnauthenticated: body.allowed } };
+  });
+
   app.get<{ Params: { id: string } }>('/api/agents/:id/connect-prompt', async (request, reply) => {
     const { id } = request.params;
     const userId = getUserId(request);
@@ -3072,6 +3158,101 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // ========================================================================
 
   /**
+   * Authenticate a request to /mcp/:agentId.
+   *
+   * Three outcomes, and the middle one is the whole migration story:
+   *
+   *  - A valid Bearer token for this agent → authenticated.
+   *  - No token at all → served exactly as before, *while* this deployment
+   *    still allows it. That flag defaults true and is only ever cleared by
+   *    the owner, so no existing agent changes behaviour.
+   *  - A token that does not verify → 401, always, even where no token was
+   *    required. Falling back to unauthenticated would hide a misconfigured
+   *    client from the person who set it up.
+   */
+  async function authenticateMcp(
+    request: any,
+    agentId: string
+  ): Promise<{ ok: true; principal: McpPrincipal | null } | { ok: false; reason: string }> {
+    const header = request.headers?.authorization as string | undefined;
+    const bearer = header?.match(/^Bearer\s+(.+)$/i)?.[1];
+
+    if (bearer) {
+      const principal = await verifyAccessToken(bearer);
+      if (!principal) return { ok: false, reason: 'invalid_token' };
+      // A token is minted for one agent. Presenting it to another is a
+      // failure, not a fallback.
+      if (principal.agentId !== agentId) return { ok: false, reason: 'invalid_token' };
+      return { ok: true, principal };
+    }
+
+    const row = await client.execute({
+      sql: `SELECT allow_unauthenticated FROM deployed_agents
+            WHERE agent_id = ? AND status NOT IN ('destroyed', 'error')
+            ORDER BY created_at DESC LIMIT 1`,
+      args: [agentId],
+    });
+    // No deployment row: leave it to handleMCPRequest, which owns the
+    // agent-not-found response shape.
+    if (row.rows.length === 0) return { ok: true, principal: null };
+    if (row.rows[0].allow_unauthenticated === false) return { ok: false, reason: 'token_required' };
+    return { ok: true, principal: null };
+  }
+
+  /**
+   * Fixed-window rate limit for the MCP endpoint.
+   *
+   * There is no rate limiting anywhere else in this codebase, and the endpoint
+   * runs real side effects against live accounts — while unauthenticated URLs
+   * keep working, this is the only brake on one that leaks.
+   *
+   * In-memory, matching the existing throttle further down this file. That
+   * means it resets on restart and is per-process, which is correct only while
+   * fly.toml pins max_machines_running = 1; revisit if that ever changes.
+   */
+  const MCP_RATE_WINDOW_MS = 60_000;
+  const MCP_RATE_MAX = 240; // 4/second sustained — far above any real client
+  const mcpRateBuckets = new Map<string, { count: number; resetAt: number }>();
+
+  function checkMcpRate(key: string): boolean {
+    const now = Date.now();
+    const bucket = mcpRateBuckets.get(key);
+    if (!bucket || now >= bucket.resetAt) {
+      mcpRateBuckets.set(key, { count: 1, resetAt: now + MCP_RATE_WINDOW_MS });
+      // Opportunistic sweep so the map cannot grow without bound.
+      if (mcpRateBuckets.size > 5000) {
+        for (const [k, v] of mcpRateBuckets) if (now >= v.resetAt) mcpRateBuckets.delete(k);
+      }
+      return true;
+    }
+    bucket.count += 1;
+    return bucket.count <= MCP_RATE_MAX;
+  }
+
+  /** RFC 9728: tells a client where to go and get a token. */
+  function mcpUnauthorized(reply: any, agentId: string, reason: string) {
+    const base = (config.publicUrl || config.dashboardUrl || '').replace(/\/$/, '');
+    return reply
+      .code(401)
+      .header(
+        'WWW-Authenticate',
+        `Bearer realm="helm", error="${reason}", ` +
+          `resource_metadata="${base}/.well-known/oauth-protected-resource/mcp/${agentId}"`
+      )
+      .send({
+        jsonrpc: '2.0',
+        id: null,
+        error: {
+          code: -32000,
+          message:
+            reason === 'invalid_token'
+              ? 'Invalid or expired access token'
+              : 'This agent requires an access token. Connect a client from the Helm dashboard.',
+        },
+      });
+  }
+
+  /**
    * MCP endpoint for agent tool discovery and execution
    *
    * Implements MCP Streamable HTTP transport:
@@ -3094,6 +3275,20 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
             code: -32600,
             message: 'Invalid request: expected JSON-RPC 2.0 request body',
           },
+        });
+      }
+
+      // Authenticate before anything writes to the socket. On the SSE branch
+      // below the 200 header goes out before the handler runs, so a rejection
+      // decided later would ship as a 200 stream containing an error.
+      const auth = await authenticateMcp(request, agentId);
+      if (!auth.ok) return mcpUnauthorized(reply, agentId, auth.reason);
+
+      if (!checkMcpRate(auth.principal?.tokenId ?? `agent:${agentId}`)) {
+        return reply.code(429).send({
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: -32029, message: 'Rate limit exceeded' },
         });
       }
 
@@ -3140,6 +3335,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.get<{ Params: { agentId: string } }>(
     '/mcp/:agentId',
     async (request, reply) => {
+      const auth = await authenticateMcp(request, request.params.agentId);
+      if (!auth.ok) return mcpUnauthorized(reply, request.params.agentId, auth.reason);
+
       const accept = request.headers.accept ?? '';
 
       // If client wants SSE, return 405 (not supported yet)
@@ -3165,7 +3363,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
    */
   app.delete<{ Params: { agentId: string } }>(
     '/mcp/:agentId',
-    async (_request, reply) => {
+    async (request, reply) => {
+      const auth = await authenticateMcp(request, request.params.agentId);
+      if (!auth.ok) return mcpUnauthorized(reply, request.params.agentId, auth.reason);
       return reply.code(204).send();
     }
   );

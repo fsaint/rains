@@ -651,6 +651,85 @@ export async function initializeDatabase() {
     )
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_pending_oauth_expires ON pending_oauth_flows(expires_at)`;
+
+  // ========================================================================
+  // MCP endpoint authentication — OAuth 2.1, per the MCP specification
+  //
+  // The endpoint accepts a Bearer token; a request without one is still served
+  // while deployed_agents.allow_unauthenticated is true, which is the default
+  // and is only ever cleared by the agent's owner. Nothing here changes how an
+  // existing agent behaves.
+  //
+  // Tokens are stored as sha256 so a stolen database yields nothing usable.
+  // bcrypt — the repo's only other hash — is salted per row and so cannot be
+  // looked up by value, which would mean scanning every row on every request.
+  // ========================================================================
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
+      id TEXT PRIMARY KEY,
+      client_secret_hash TEXT,
+      client_name TEXT NOT NULL,
+      redirect_uris TEXT NOT NULL,
+      created_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS mcp_access_tokens (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      client_id TEXT,
+      name TEXT NOT NULL,
+      token_hash TEXT NOT NULL,
+      token_prefix TEXT NOT NULL,
+      expires_at TEXT,
+      last_used_at TEXT,
+      revoked_at TEXT,
+      created_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_tokens_hash ON mcp_access_tokens(token_hash)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_mcp_tokens_agent ON mcp_access_tokens(agent_id) WHERE revoked_at IS NULL`;
+
+  // Single-use and short-lived, modelled on pending_oauth_flows above:
+  // redeeming deletes the row, so a replayed code finds nothing.
+  await sql`
+    CREATE TABLE IF NOT EXISTS mcp_auth_codes (
+      code_hash TEXT PRIMARY KEY,
+      client_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      redirect_uri TEXT NOT NULL,
+      code_challenge TEXT NOT NULL,
+      client_name TEXT,
+      expires_at TEXT NOT NULL,
+      created_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_mcp_auth_codes_expires ON mcp_auth_codes(expires_at)`;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS mcp_refresh_tokens (
+      token_hash TEXT PRIMARY KEY,
+      access_token_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      client_id TEXT,
+      revoked_at TEXT,
+      created_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_mcp_refresh_access ON mcp_refresh_tokens(access_token_id)`;
+
+  // Defaults true: every existing agent keeps working untouched. Only the
+  // owner clears it, from the dashboard, once their clients are migrated.
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS allow_unauthenticated BOOLEAN DEFAULT true NOT NULL;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$
+  `;
   // Migrate existing columns to correct types for Postgres (was designed for SQLite)
   await sql`ALTER TABLE pending_oauth_flows ALTER COLUMN telegram_user_id TYPE BIGINT`;
   await sql`ALTER TABLE pending_oauth_flows ALTER COLUMN initiated_at TYPE TIMESTAMPTZ USING initiated_at::TIMESTAMPTZ`;

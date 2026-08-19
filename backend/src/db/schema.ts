@@ -266,6 +266,57 @@ export const memoryTags = pgTable('memory_tags', {
   createdAt: text('created_at').notNull().default(sql`now()`),
 }, (t) => ({ pk: primaryKey({ columns: [t.entryId, t.tag] }) }));
 
+// ============================================================================
+// MCP endpoint authentication — OAuth 2.1 per the MCP specification
+//
+// Tokens are stored as sha256 and looked up by that hash; the plaintext is
+// shown to the client once and never persisted.
+// ============================================================================
+
+export const mcpOauthClients = pgTable('mcp_oauth_clients', {
+  id: text('id').primaryKey(),
+  clientSecretHash: text('client_secret_hash'), // null for public (PKCE-only) clients
+  clientName: text('client_name').notNull(),
+  redirectUris: text('redirect_uris').notNull(), // JSON array
+  createdAt: text('created_at').default(sql`now()`).notNull(),
+});
+
+export const mcpAccessTokens = pgTable('mcp_access_tokens', {
+  id: text('id').primaryKey(),
+  agentId: text('agent_id').notNull(), // the audience: one token, one agent
+  userId: text('user_id').notNull(),
+  clientId: text('client_id'),
+  name: text('name').notNull(), // "MacBook / Claude Code"
+  tokenHash: text('token_hash').notNull(),
+  tokenPrefix: text('token_prefix').notNull(), // first 8 chars, to name a row in the UI
+  expiresAt: text('expires_at'),
+  lastUsedAt: text('last_used_at'), // the evidence an owner needs before closing the old endpoint
+  revokedAt: text('revoked_at'),
+  createdAt: text('created_at').default(sql`now()`).notNull(),
+});
+
+export const mcpAuthCodes = pgTable('mcp_auth_codes', {
+  codeHash: text('code_hash').primaryKey(),
+  clientId: text('client_id').notNull(),
+  agentId: text('agent_id').notNull(),
+  userId: text('user_id').notNull(),
+  redirectUri: text('redirect_uri').notNull(),
+  codeChallenge: text('code_challenge').notNull(), // PKCE S256
+  clientName: text('client_name'),
+  expiresAt: text('expires_at').notNull(),
+  createdAt: text('created_at').default(sql`now()`).notNull(),
+});
+
+export const mcpRefreshTokens = pgTable('mcp_refresh_tokens', {
+  tokenHash: text('token_hash').primaryKey(),
+  accessTokenId: text('access_token_id').notNull(),
+  agentId: text('agent_id').notNull(),
+  userId: text('user_id').notNull(),
+  clientId: text('client_id'),
+  revokedAt: text('revoked_at'),
+  createdAt: text('created_at').default(sql`now()`).notNull(),
+});
+
 // Skills - reusable task playbooks served to agents over MCP
 export const skills = pgTable('skills', {
   id: text('id').primaryKey(),
@@ -327,6 +378,9 @@ export const deployedAgents = pgTable('deployed_agents', {
   modelCredentials: text('model_credentials'),
   mcpConfigJson: text('mcp_config_json'),
   isManual: integer('is_manual').default(0),
+  // False only when the owner has closed the unauthenticated MCP endpoint for
+  // this agent. Defaults true so nothing that works today stops working.
+  allowUnauthenticated: boolean('allow_unauthenticated').default(true).notNull(),
   initialPrompt: text('initial_prompt'),
   hasOnboarded: integer('has_onboarded').default(0),
   flyVolumeId: text('fly_volume_id'),

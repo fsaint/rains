@@ -742,6 +742,34 @@ export const permissions = {
     }),
 };
 
+export interface McpClientToken {
+  id: string;
+  name: string;
+  tokenPrefix: string;
+  lastUsedAt: string | null;
+  createdAt: string;
+  expiresAt: string | null;
+}
+
+export const mcpTokens = {
+  list: (agentId: string) =>
+    request<{ tokens: McpClientToken[]; allowUnauthenticated: boolean }>(
+      `/agents/${agentId}/mcp-tokens`
+    ),
+
+  revoke: (agentId: string, tokenId: string) =>
+    request<{ revoked: boolean }>(`/agents/${agentId}/mcp-tokens/${tokenId}`, {
+      method: 'DELETE',
+    }),
+
+  /** Reversible on purpose — an owner who closes it must be able to reopen it. */
+  setUnauthenticated: (agentId: string, allowed: boolean) =>
+    request<{ allowUnauthenticated: boolean }>(`/agents/${agentId}/mcp-unauthenticated`, {
+      method: 'PUT',
+      body: JSON.stringify({ allowed }),
+    }),
+};
+
 export interface AgentMemoryScopeGrants {
   mode: 'all' | 'restricted';
   defaultScopeId: string;
