@@ -13,6 +13,10 @@ import {
   handleEnableService,
   handleDisableService,
   handleSetPermissionLevel,
+  handleCreateAgent,
+  handleDestroyAgent,
+  handleSetToolPermission,
+  handleResetToolPermission,
 } from './handlers.js';
 
 const agentIdProperty = {
@@ -176,14 +180,96 @@ export const setPermissionLevelTool: ToolDefinition = {
   handler: handleSetPermissionLevel,
 };
 
+export const createAgentTool: ToolDefinition = {
+  name: 'helm_admin_create_agent',
+  description:
+    'Create a new agent. It gets an MCP endpoint that requires a token from the moment it exists, ' +
+    'so unlike an agent created in the dashboard nobody can reach it just by knowing its id. ' +
+    'It has no runtime — your owner connects it to a client, or deploys it, afterwards. ' +
+    'Memory and skills are on by default; add anything else with helm_admin_enable_service. ' +
+    "Requires your owner's approval.",
+  inputSchema: {
+    type: 'object',
+    properties: {
+      name: { type: 'string', description: 'What the agent is for, e.g. "Work Email"' },
+      description: { type: 'string', description: 'One or two sentences on when to use it' },
+    },
+    required: ['name'],
+  },
+  handler: handleCreateAgent,
+};
+
+export const destroyAgentTool: ToolDefinition = {
+  name: 'helm_admin_destroy_agent',
+  description:
+    'Permanently destroy an agent: its runtime machine and all of its permissions and credentials links. ' +
+    'This cannot be undone. Notes it wrote to memory survive, because those belong to your owner. ' +
+    'You cannot destroy yourself, or any agent that has Helm Admin. ' +
+    'Read the agent with helm_admin_get_agent first and tell your owner what will be lost — ' +
+    "the approval names the agent, and they should recognise it. Requires your owner's approval.",
+  inputSchema: {
+    type: 'object',
+    properties: { ...agentIdProperty },
+    required: ['agentId'],
+  },
+  handler: handleDestroyAgent,
+};
+
+export const setToolPermissionTool: ToolDefinition = {
+  name: 'helm_admin_set_tool_permission',
+  description:
+    'Override one tool on an agent, rather than the whole service: "allow" to let it run freely, ' +
+    '"require_approval" to make it prompt your owner each time, or "block" to refuse it outright. ' +
+    'Use this to loosen or tighten a single tool without changing the rest of the service — ' +
+    'blocking gmail_send_message while leaving the rest of Gmail readable, say. ' +
+    "Requires your owner's approval.",
+  inputSchema: {
+    type: 'object',
+    properties: {
+      ...agentIdProperty,
+      toolName: {
+        type: 'string',
+        description: 'The tool to override, e.g. "gmail_send_message". Its service is worked out for you.',
+      },
+      permission: {
+        type: 'string',
+        description: 'How the agent may use that tool',
+        enum: ['allow', 'require_approval', 'block'],
+      },
+    },
+    required: ['agentId', 'toolName', 'permission'],
+  },
+  handler: handleSetToolPermission,
+};
+
+export const resetToolPermissionTool: ToolDefinition = {
+  name: 'helm_admin_reset_tool_permission',
+  description:
+    'Remove a per-tool override, so the tool goes back to whatever its service permission level implies. ' +
+    "Requires your owner's approval.",
+  inputSchema: {
+    type: 'object',
+    properties: {
+      ...agentIdProperty,
+      toolName: { type: 'string', description: 'The tool whose override should be removed' },
+    },
+    required: ['agentId', 'toolName'],
+  },
+  handler: handleResetToolPermission,
+};
+
 export const helmAdminTools: ToolDefinition[] = [
   listAgentsTool,
   getAgentTool,
   listServicesTool,
+  createAgentTool,
+  destroyAgentTool,
   renameAgentTool,
   setDescriptionTool,
   setStatusTool,
   enableServiceTool,
   disableServiceTool,
   setPermissionLevelTool,
+  setToolPermissionTool,
+  resetToolPermissionTool,
 ];

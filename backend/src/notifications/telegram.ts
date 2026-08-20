@@ -11,14 +11,17 @@ import { createMagicLinkToken } from '../auth/index.js';
 import { config } from '../config/index.js';
 import type { ApprovalRequest } from '@reins/shared';
 import {
+  ADMIN_TOOLS,
   CALENDAR_TOOLS,
   EMAIL_TOOLS,
   approveDenyKeyboard,
   escapeMarkdown,
+  formatAdminApprovalMessage,
   formatBatchScope,
   formatCalendarApprovalMessage,
   formatEmailApprovalMessage,
   withCorrectionAffordance,
+  type AdminTargetSummary,
 } from './approval-format.js';
 import { MAX_REVISIONS } from '../approvals/queue.js';
 
@@ -141,7 +144,12 @@ export class TelegramNotifier {
       const magicLinkUrl = approval.tool === 'reauth'
         ? this.buildMagicLinkUrl(owner.userId, approval.id)
         : null;
-      const { text, keyboard, parseMode } = this.formatApprovalMessage(approval, magicLinkUrl);
+      // Resolved here rather than inside the formatter, which stays pure and
+      // synchronous. Only admin tools need it, and only they pay for the query.
+      const adminTarget = ADMIN_TOOLS.has(approval.tool)
+        ? await this.resolveAdminTargetSummary(approval)
+        : null;
+      const { text, keyboard, parseMode } = this.formatApprovalMessage(approval, magicLinkUrl, adminTarget);
       const sent = await this.sendMessage(owner.chatId, text, {
         parse_mode: parseMode ?? 'Markdown',
         reply_markup: { inline_keyboard: keyboard },
@@ -582,7 +590,69 @@ export class TelegramNotifier {
     return true;
   }
 
-  private formatApprovalMessage(approval: ApprovalRequest, magicLinkUrl: string | null): {
+  /**
+   * Look up the agent a Helm Admin tool is acting on, so the approval can name
+   * it instead of showing a bare id.
+   *
+   * Returns null when the tool creates an agent (nothing exists yet) or when the
+   * id matches nothing — and the second case is deliberately not hidden: an id
+   * that resolves to no agent of yours is the single most useful thing the
+   * message can tell you.
+   */
+  private async resolveAdminTargetSummary(
+    approval: ApprovalRequest
+  ): Promise<AdminTargetSummary | null> {
+    const agentId = (approval.arguments as Record<string, unknown> | undefined)?.agentId;
+    if (typeof agentId !== 'string' || agentId === '') return null;
+
+    try {
+      const result = await client.execute({
+        sql: `SELECT a.id, a.name, a.status,
+                     d.runtime, d.status AS deployment_status
+              FROM agents a
+              LEFT JOIN LATERAL (
+                SELECT da.runtime, da.status
+                FROM deployed_agents da
+                WHERE da.agent_id = a.id AND da.status NOT IN ('destroyed', 'error')
+                ORDER BY da.created_at DESC LIMIT 1
+              ) d ON true
+              WHERE a.id = ? LIMIT 1`,
+        args: [agentId],
+      });
+      if (result.rows.length === 0) return null;
+      const row = result.rows[0];
+
+      const services = await client.execute({
+        sql: `SELECT DISTINCT service_type FROM agent_service_instances
+              WHERE agent_id = ? AND enabled = true
+              UNION
+              SELECT DISTINCT service_type FROM agent_service_access
+              WHERE agent_id = ? AND enabled = true
+              ORDER BY service_type`,
+        args: [agentId, agentId],
+      });
+
+      return {
+        id: row.id as string,
+        name: row.name as string,
+        status: (row.status as string | null) ?? null,
+        runtime: (row.runtime as string | null) ?? null,
+        deploymentStatus: (row.deployment_status as string | null) ?? null,
+        services: services.rows.map((s) => s.service_type as string),
+      };
+    } catch (err) {
+      // A failed lookup must not swallow the approval — better an id-only
+      // message than no message, since the agent is already blocked waiting.
+      console.warn('[telegram] could not resolve admin approval target:', err);
+      return null;
+    }
+  }
+
+  private formatApprovalMessage(
+    approval: ApprovalRequest,
+    magicLinkUrl: string | null,
+    adminTarget: AdminTargetSummary | null = null
+  ): {
     text: string;
     keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>>;
     parseMode?: 'Markdown' | 'HTML';
@@ -601,6 +671,8 @@ export class TelegramNotifier {
       ? formatEmailApprovalMessage(approval)
       : CALENDAR_TOOLS.has(approval.tool)
       ? formatCalendarApprovalMessage(approval)
+      : ADMIN_TOOLS.has(approval.tool)
+      ? formatAdminApprovalMessage(approval, adminTarget)
       : this.formatGenericApprovalMessage(approval);
 
     return withCorrectionAffordance(approval, formatted, MAX_REVISIONS);

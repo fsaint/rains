@@ -228,7 +228,13 @@ To author or update skills, see [`docs/ops/ADDING_SKILLS_VIA_MCP.md`](ops/ADDING
 
 ## 8b. Optional: an agent that organizes the others
 
-Once you have several agents, keeping them named and scoped sensibly is itself work. The **Helm Admin** service gives one agent tools to do it: list your agents, read what each can reach, rename them, write descriptions, and enable or disable services on them. Every change requires your approval, arriving like any other approval request.
+Once you have several agents, keeping them named and scoped sensibly is itself work. The **Helm Admin** service gives one agent tools to do it: list your agents and read what each can reach; create and destroy them; rename them and write descriptions; enable and disable services; and set access either per service (`read` / `full`) or per individual tool (`allow` / `require_approval` / `block`). Every change requires your approval, arriving like any other approval request.
+
+Those approvals name the agent rather than showing its id, and a destroy lists what that agent can currently reach — so you are approving something you can recognise, and a request aimed at the wrong agent is visible as the wrong *name* on your phone.
+
+An agent it creates is **born closed**: its MCP endpoint requires a token from the moment it exists, so knowing the id is not enough to use it. An agent you create in the dashboard keeps today's open default. The asymmetry is deliberate — an agent created by an agent is never born reachable by whoever learns its id.
+
+Destroying is permanent: the runtime machine and every permission go. Notes the agent saved to memory survive, because those belong to your scope rather than to the agent. It cannot destroy itself, and it cannot destroy another agent that holds Helm Admin.
 
 **This agent may hold nothing else except memory.** Not Gmail, not skills. The rule is enforced when you enable it, in both directions, and it is not a stylistic preference:
 

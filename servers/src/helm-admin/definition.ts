@@ -49,17 +49,21 @@ export const definition: ServiceDefinitionWithTools = {
     // to prevent. A rename is gated for the same reason as a grant: both are
     // this agent acting on your account without you watching.
     write: [
+      'helm_admin_create_agent',
+      'helm_admin_destroy_agent',
       'helm_admin_rename_agent',
       'helm_admin_set_description',
       'helm_admin_set_status',
       'helm_admin_enable_service',
       'helm_admin_disable_service',
       'helm_admin_set_permission_level',
+      'helm_admin_set_tool_permission',
+      'helm_admin_reset_tool_permission',
     ],
     blocked: [],
   },
   permissionDescriptions: {
     read: 'See your agents, what each one can reach, and its deployment status',
-    full: 'See your agents, and propose changes to their names, descriptions, and access. Every change requires your approval.',
+    full: 'See your agents, and propose changes: create and destroy them, rename them, and adjust what each can reach, down to individual tools. Every change requires your approval.',
   },
 };
