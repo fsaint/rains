@@ -829,6 +829,18 @@ export async function setPermissionLevel(
 
   if (level === 'none') {
     await setServiceAccess(agentId, serviceType, false);
+    // Instance rows too, or this does not turn the service off. Enablement is
+    // "an enabled instance, or failing that an enabled access row", so clearing
+    // only the access row leaves an instance-based agent — which is every agent
+    // created since instances landed — still holding the service, while the
+    // call reports success. Found by disabling a service and watching it stay on.
+    await db
+      .update(agentServiceInstances)
+      .set({ enabled: false, updatedAt: new Date().toISOString() })
+      .where(and(
+        eq(agentServiceInstances.agentId, agentId),
+        eq(agentServiceInstances.serviceType, serviceType)
+      ));
     return;
   }
 

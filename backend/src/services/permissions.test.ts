@@ -776,12 +776,25 @@ describe('Permission Service', () => {
     });
 
     it('should disable service for none level', async () => {
+      mockEnabledServices();
+      const set = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+      vi.mocked(db.update).mockReturnValue({ set } as never);
+
       await setPermissionLevel('agent-1', 'gmail', 'none');
 
       expect(client.execute).toHaveBeenCalledWith(expect.objectContaining({
         sql: expect.stringContaining('agent_service_access'),
         args: expect.arrayContaining(['agent-1', 'gmail', false]),
       }));
+
+      // The instance rows too. Enablement is "an enabled instance, or failing
+      // that an enabled access row", so clearing only the access row left every
+      // instance-based agent — which is every modern one — still holding the
+      // service while this reported success. Asserting only the access row is
+      // what let that ship; a live run caught it by disabling a service and
+      // watching it stay on.
+      expect(db.update).toHaveBeenCalled();
+      expect(set).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }));
     });
 
     it('should enable service and set read-only permissions', async () => {
