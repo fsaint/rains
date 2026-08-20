@@ -5,6 +5,7 @@
 import type { ToolDefinition } from '../common/base-server.js';
 import {
   handleListAuthoredSkills,
+  handleGetAuthoredSkill,
   handleCreateSkill,
   handleUpdateSkill,
   handleAssignSkill,
@@ -110,8 +111,33 @@ export const skillAuthoringUnassignTool: ToolDefinition = {
   handler: handleUnassignSkill,
 };
 
+export const skillAuthoringGetTool: ToolDefinition = {
+  name: 'skill_authoring_get',
+  description:
+    "Read one skill in full, including its body — any of your owner's skills, whether or not it is " +
+    'assigned to you and whatever services it requires. ' +
+    'Call this before skill_authoring_update: that tool replaces the whole skill, so you need the ' +
+    'current text to edit rather than rewrite from memory. ' +
+    'The body comes back exactly as stored, with {{tool:…}} and {{skill:…}} tokens intact — keep ' +
+    'them as tokens when you write it back, since they are what makes the skill work across runtimes. ' +
+    'Accepts an id from skill_authoring_list, or a slug, which is what {{skill:its-slug}} references ' +
+    'inside a body give you.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      skill_id: {
+        type: 'string',
+        description: 'Skill id from skill_authoring_list, or a slug',
+      },
+    },
+    required: ['skill_id'],
+  },
+  handler: handleGetAuthoredSkill,
+};
+
 export const skillAuthoringTools: ToolDefinition[] = [
   skillAuthoringListTool,
+  skillAuthoringGetTool,
   skillAuthoringCreateTool,
   skillAuthoringUpdateTool,
   skillAuthoringAssignTool,

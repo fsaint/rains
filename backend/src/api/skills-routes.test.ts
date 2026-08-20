@@ -717,3 +717,114 @@ describe('GET /api/skill-library', () => {
     expect(res.payload).not.toContain('secret procedure');
   });
 });
+
+/**
+ * GET /api/skill-library/:idOrSlug — what skill_authoring_get reads.
+ *
+ * The two things it must NOT do are what distinguish it from
+ * GET /api/agent-skills/:slug: it applies no assignment check, and it does not
+ * render {{tool:…}} / {{skill:…}} tokens. The second is the sharp one — an
+ * author that read a rendered body and passed it to skill_authoring_update
+ * would write one runtime's tool names into the stored skill and break it for
+ * the other.
+ */
+describe('GET /api/skill-library/:idOrSlug', () => {
+  const agentAuth = { 'x-reins-agent-secret': 'tok' };
+  const deployedRow: [RegExp, unknown] = [
+    /FROM deployed_agents da/,
+    rows([{ agent_id: 'architect', user_id: 'user-1' }]),
+  ];
+  const lookup = /FROM skills\s+WHERE \(id = \? OR slug = \?\)/;
+
+  it('rejects a request with no gateway token', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/skill-library/sk-1' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('refuses an agent without the skill-authoring service', async () => {
+    mockIsServiceEnabled.mockResolvedValue(false);
+    routeDb([deployedRow]);
+
+    const res = await app.inject({ method: 'GET', url: '/api/skill-library/sk-1', headers: agentAuth });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.code).toBe('SERVICE_NOT_ENABLED');
+  });
+
+  it('returns the body, which the list deliberately omits', async () => {
+    routeDb([deployedRow, [lookup, rows([skillRow({ body: '## Procedure' })])]]);
+
+    const res = await app.inject({ method: 'GET', url: '/api/skill-library/sk-1', headers: agentAuth });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.body).toBe('## Procedure');
+  });
+
+  it('serves a skill assigned to nobody — an author reads what it does not run', async () => {
+    // No agent_skills lookup happens at all; that is the whole difference from
+    // /api/agent-skills/:slug, which 404s an unassigned skill.
+    routeDb([deployedRow, [lookup, rows([skillRow()])]]);
+
+    const res = await app.inject({ method: 'GET', url: '/api/skill-library/sk-1', headers: agentAuth });
+
+    expect(res.statusCode).toBe(200);
+    const assignmentQuery = mockExecute.mock.calls
+      .map((c: any) => c[0])
+      .find((q: any) => typeof q?.sql === 'string' && q.sql.includes('agent_skills'));
+    expect(assignmentQuery).toBeUndefined();
+  });
+
+  it('leaves tokens unrendered, so an author can write the body back unchanged', async () => {
+    routeDb([deployedRow, [lookup, rows([
+      skillRow({ body: 'Use {{tool:gmail_search}}, then {{skill:filing}}.' }),
+    ])]]);
+
+    const res = await app.inject({ method: 'GET', url: '/api/skill-library/sk-1', headers: agentAuth });
+
+    const body = res.json().data.body;
+    expect(body).toContain('{{tool:gmail_search}}');
+    expect(body).toContain('{{skill:filing}}');
+    expect(body).not.toContain('helm__');
+  });
+
+  it('reports no availability, which would be false on every read for an author', async () => {
+    // An architect holds none of the services a skill requires, so `available:
+    // false` would be noise on every single call rather than information.
+    routeDb([deployedRow, [lookup, rows([skillRow({ required_services: '["gmail"]' })])]]);
+
+    const res = await app.inject({ method: 'GET', url: '/api/skill-library/sk-1', headers: agentAuth });
+
+    expect(res.json().data).not.toHaveProperty('available');
+    expect(res.json().data).not.toHaveProperty('missingServices');
+    // The requirement itself is still reported — an author needs to know it.
+    expect(res.json().data.requiredServices).toEqual(['gmail']);
+  });
+
+  it('accepts a slug as well as an id, and scopes both to the owner', async () => {
+    routeDb([deployedRow, [lookup, rows([skillRow()])]]);
+
+    await app.inject({ method: 'GET', url: '/api/skill-library/inbox-triage', headers: agentAuth });
+
+    const query = mockExecute.mock.calls
+      .map((c: any) => c[0])
+      .find((q: any) => typeof q?.sql === 'string' && lookup.test(q.sql));
+    expect(query.args).toEqual(['inbox-triage', 'inbox-triage', 'user-1']);
+  });
+
+  it('flags a platform skill read-only rather than letting the update fail later', async () => {
+    routeDb([deployedRow, [lookup, rows([skillRow({ id: 'sk-sys', user_id: null })])]]);
+
+    const res = await app.inject({ method: 'GET', url: '/api/skill-library/sk-sys', headers: agentAuth });
+
+    expect(res.json().data.readOnly).toBe(true);
+  });
+
+  it('404s a skill that is not on this account', async () => {
+    routeDb([deployedRow, [lookup, rows([])]]);
+
+    const res = await app.inject({ method: 'GET', url: '/api/skill-library/nope', headers: agentAuth });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json().code).toBe('SKILL_NOT_FOUND');
+  });
+});

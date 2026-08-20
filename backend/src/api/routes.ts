@@ -6278,6 +6278,64 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     };
   });
 
+  /**
+   * One skill's full source, for an architect agent.
+   *
+   * Distinct from GET /api/agent-skills/:slug in the two ways that matter to an
+   * author:
+   *
+   *  - **No assignment check.** That route serves only what is assigned to the
+   *    caller, which is the right rule for an agent *using* a skill and the
+   *    wrong one for an agent maintaining the library. An author has to read
+   *    what it does not run.
+   *  - **No token rendering, and no availability gating.** That route resolves
+   *    {{tool:…}} and {{skill:…}} into the reading agent's runtime names. An
+   *    author would then write those rendered names back on update, baking one
+   *    runtime's spelling into the stored body and breaking the skill for the
+   *    other. This returns the body exactly as stored. For the same reason the
+   *    `available` / `missingServices` fields are omitted rather than reported
+   *    as false: an architect holds none of the services a skill requires, so
+   *    they would be noise on every read.
+   *
+   * Addressable by id or slug: ids come from skill_authoring_list, and slugs
+   * come from the {{skill:its-slug}} references inside skill bodies, which is
+   * exactly what an author follows when reading around a skill.
+   */
+  app.get<{ Params: { idOrSlug: string } }>('/api/skill-library/:idOrSlug', async (request, reply) => {
+    const agent = await resolveAgentFromGatewayToken(request);
+    if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
+    if (!(await requireSkillAuthoring(agent.agentId, reply))) return;
+
+    const { idOrSlug } = request.params;
+    // Same visibility as the list: the owner's own skills plus platform ones,
+    // which are readable so an author can model new work on them even though
+    // getWritableSkill refuses to let them be edited.
+    const result = await client.execute({
+      sql: `SELECT * FROM skills
+            WHERE (id = ? OR slug = ?) AND (user_id = ? OR user_id IS NULL)
+            ORDER BY user_id NULLS LAST
+            LIMIT 1`,
+      args: [idOrSlug, idOrSlug, agent.userId],
+    });
+
+    if (result.rows.length === 0) {
+      return reply.status(404).send({
+        error: `No skill with id or slug "${idOrSlug}" exists on this account.`,
+        code: 'SKILL_NOT_FOUND',
+      });
+    }
+
+    const skill = mapSkillRow(result.rows[0]);
+    return {
+      data: {
+        ...skill,
+        // Platform skills are readable but not writable; saying so here saves
+        // an author discovering it only when the update is refused.
+        readOnly: skill.isSystem,
+      },
+    };
+  });
+
   /** A skill this owner may write: their own only, never a system skill. */
   async function getWritableSkill(id: string, userId: string) {
     const result = await client.execute({

@@ -11,6 +11,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ServerContext } from '../common/types.js';
 import {
   handleListAuthoredSkills,
+  handleGetAuthoredSkill,
   handleCreateSkill,
   handleUpdateSkill,
   handleAssignSkill,
@@ -245,5 +246,99 @@ describe('assignment', () => {
     expect((await handleAssignSkill({ skill_id: 'sk-1' }, mockContext)).success).toBe(false);
     expect((await handleAssignSkill({ agent_id: 'agent-2' }, mockContext)).success).toBe(false);
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleGetAuthoredSkill', () => {
+  /**
+   * The read an author needs: any of the owner's skills, assigned or not, and
+   * the body exactly as stored. The skills server's read is the wrong tool for
+   * this — it serves only assigned skills and renders {{tool:…}} into the
+   * reading agent's runtime names, which an author would then write back.
+   */
+  it('reads by id from the authoring library, not the assigned-skills route', async () => {
+    mockFetch.mockResolvedValueOnce(makeOkResponse({
+      id: 'sk-1', slug: 'inbox-triage', name: 'Inbox Triage',
+      description: 'Triage mail', body: 'Call {{tool:gmail_search}}.',
+      requiredServices: ['gmail'], isSystem: false,
+    }));
+
+    const result = await handleGetAuthoredSkill({ skill_id: 'sk-1' }, mockContext);
+
+    expect(result.success).toBe(true);
+    const { url, init } = lastCall();
+    // /api/skill-library/:idOrSlug applies no assignment check; /api/agent-skills/:slug does.
+    expect(url).toBe('https://test.helm.mom/api/skill-library/sk-1');
+    expect(url).not.toContain('/agent-skills/');
+    expect((init.headers as Record<string, string>)['x-reins-agent-secret']).toBe('test-gateway-token');
+  });
+
+  it('returns the body with its tokens intact', async () => {
+    // The property the whole tool exists for. A rendered body written back
+    // through skill_authoring_update would bake one runtime's tool names into
+    // the stored skill and break it for the other.
+    mockFetch.mockResolvedValueOnce(makeOkResponse({
+      id: 'sk-1', slug: 'inbox-triage', name: 'Inbox Triage',
+      description: 'Triage mail',
+      body: 'Search with {{tool:gmail_search}} then see {{skill:filing}}.',
+      requiredServices: [],
+    }));
+
+    const result = await handleGetAuthoredSkill({ skill_id: 'sk-1' }, mockContext);
+
+    const data = result.data as { body: string };
+    expect(data.body).toContain('{{tool:gmail_search}}');
+    expect(data.body).toContain('{{skill:filing}}');
+    expect(data.body).not.toContain('helm__');
+  });
+
+  it('accepts a slug, which is what {{skill:…}} references give you', async () => {
+    mockFetch.mockResolvedValueOnce(makeOkResponse({
+      id: 'sk-2', slug: 'filing', name: 'Filing', description: 'File things', body: '…',
+    }));
+
+    await handleGetAuthoredSkill({ skill_id: 'filing' }, mockContext);
+
+    expect(lastCall().url).toBe('https://test.helm.mom/api/skill-library/filing');
+  });
+
+  it('marks a platform skill read-only, so an author learns it before the update fails', async () => {
+    mockFetch.mockResolvedValueOnce(makeOkResponse({
+      id: 'sk-sys', slug: 'sys', name: 'System', description: 'd', body: 'b',
+      isSystem: true, readOnly: true,
+    }));
+
+    const result = await handleGetAuthoredSkill({ skill_id: 'sk-sys' }, mockContext);
+
+    expect((result.data as { read_only?: boolean }).read_only).toBe(true);
+  });
+
+  it('omits read_only for a skill the author can edit', async () => {
+    mockFetch.mockResolvedValueOnce(makeOkResponse({
+      id: 'sk-1', slug: 's', name: 'S', description: 'd', body: 'b', readOnly: false,
+    }));
+
+    const result = await handleGetAuthoredSkill({ skill_id: 'sk-1' }, mockContext);
+
+    expect(result.data as Record<string, unknown>).not.toHaveProperty('read_only');
+  });
+
+  it('requires an identifier rather than fetching everything', async () => {
+    const result = await handleGetAuthoredSkill({}, mockContext);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/skill_id is required/);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the backend message when the skill does not exist', async () => {
+    mockFetch.mockResolvedValueOnce(makeErrorResponse(404, {
+      error: 'No skill with id or slug "nope" exists on this account.',
+    }));
+
+    const result = await handleGetAuthoredSkill({ skill_id: 'nope' }, mockContext);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('nope');
   });
 });

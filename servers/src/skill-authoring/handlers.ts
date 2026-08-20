@@ -152,6 +152,53 @@ export async function handleCreateSkill(
   }
 }
 
+/**
+ * Read one skill's full source, including the body.
+ *
+ * skill_authoring_list omits bodies deliberately — it is for picking an id —
+ * so this is how an author sees what it is about to replace. It reads any of
+ * the owner's skills whether or not this agent has it assigned, and returns the
+ * body exactly as stored, with {{tool:…}} and {{skill:…}} tokens intact.
+ *
+ * That last part is the reason this does not go through the skills server's
+ * read: that one renders tokens into the reading agent's runtime names, and an
+ * author who read a rendered body and passed it to skill_authoring_update would
+ * write those names into the stored skill and break it for the other runtime.
+ */
+export async function handleGetAuthoredSkill(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const idOrSlug = nonEmptyString(args.skill_id) ?? nonEmptyString(args.slug);
+  if (!idOrSlug) {
+    return { success: false, error: 'skill_id is required. Call skill_authoring_list to see ids.' };
+  }
+
+  try {
+    const res = await authoringFetch(context, `/api/skill-library/${encodeURIComponent(idOrSlug)}`);
+    if (!res.ok) return toError(res, 'Could not read that skill');
+
+    const json = await res.json() as { data: Record<string, unknown> };
+    const skill = json.data ?? {};
+
+    return {
+      success: true,
+      data: {
+        id: skill.id,
+        slug: skill.slug,
+        name: skill.name,
+        description: skill.description,
+        body: skill.body,
+        requires: skill.requiredServices ?? [],
+        ...(skill.version ? { version: skill.version } : {}),
+        ...(skill.readOnly ? { read_only: true } : {}),
+      },
+    };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function handleUpdateSkill(
   args: Record<string, unknown>,
   context: ServerContext

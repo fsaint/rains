@@ -29,7 +29,11 @@ export const definition: ServiceDefinitionWithTools = {
   },
   tools: skillAuthoringTools,
   permissions: {
-    read: ['skill_authoring_list'],
+    // Reading is not a policy change, so it is not gated. The write tools below
+    // are what alter what another agent does, and an author that had to raise an
+    // approval merely to read the text it is about to edit would make every
+    // single-line fix a two-approval errand.
+    read: ['skill_authoring_list', 'skill_authoring_get'],
     // Every write requires approval: a skill body is an instruction another
     // agent follows, so each edit is a policy change worth seeing before it
     // lands. Setting defaultWritePermission to 'allow' here (as memory does)
@@ -43,7 +47,7 @@ export const definition: ServiceDefinitionWithTools = {
     blocked: [],
   },
   permissionDescriptions: {
-    read: "List your owner's skills",
-    full: "List your owner's skills. Creating, editing, and assigning them require your approval.",
+    read: "Read your owner's skills, including ones this agent does not use",
+    full: "Read your owner's skills. Creating, editing, and assigning them require your approval.",
   },
 };

@@ -187,11 +187,32 @@ blocked tools it must not plan around (`gmail_send_message`, `gmail_delete_messa
 `calendar_delete_event`, `memory_delete`) and include the approval-polling protocol from
 step 3, since any write in the skill may return `APPROVAL_PENDING`.
 
+## Reading
+
+`skill_authoring_list` omits bodies — it is for picking an id. To read one, use
+`skill_authoring_get`, which takes a `skill_id` **or a slug** (handy, since `{{skill:its-slug}}`
+references inside a body give you slugs, not ids).
+
+It reads any skill on the account, whether or not it is assigned to this agent and whatever
+services the skill declares. That is the difference from `skills_get`, which an agent uses to
+read skills it runs: that one serves only assigned skills and reports `available: false` when the
+agent lacks a required service — correct for a consumer, useless for an author, since an
+architect holds none of those services.
+
+It returns the body **exactly as stored**, with `{{tool:…}}` and `{{skill:…}}` tokens intact.
+`skills_get` renders those into the reading agent's runtime names, and if you round-tripped a
+rendered body through `skill_authoring_update` you would write one runtime's spelling into the
+stored skill and break it for the other. Keep the tokens as tokens.
+
+Platform skills come back with `read_only: true`. They are readable — model new work on them —
+but `skill_authoring_update` refuses them.
+
 ## Updating
 
 `skill_authoring_update` **replaces the whole skill**. Send the complete `name`,
-`description`, and `body` even when changing one line, and read the current version first.
-It needs the `skill_id` — from `skill_authoring_list`, or the one you captured at create time.
+`description`, and `body` even when changing one line, and read the current version first with
+`skill_authoring_get`. It needs the `skill_id` — from `skill_authoring_list`, `skill_authoring_get`,
+or the one you captured at create time.
 
 ## Gotchas
 
