@@ -565,19 +565,18 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     return { data: result.rows[0] };
   });
 
-  app.delete<{ Params: { id: string } }>('/api/agents/:id', async (request, reply) => {
-    const { id } = request.params;
-    const userId = getUserId(request);
-
-    // Verify ownership
-    const check = await client.execute({
-      sql: `SELECT id FROM agents WHERE id = ? AND user_id = ?`,
-      args: [id, userId],
-    });
-    if (check.rows.length === 0) {
-      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Agent not found' } });
-    }
-
+  /**
+   * Tear an agent down completely: its machine, then every row that references
+   * it. Ownership is the caller's to check before calling this.
+   *
+   * Shared by the dashboard's DELETE /api/agents/:id and the admin MCP's
+   * destroy tool, so the two cannot drift into deleting different sets of rows
+   * — which is exactly how orphans accumulate.
+   *
+   * Memory *entries* are deliberately kept: they live in the owner's scope, not
+   * the agent's, and destroying an agent should not destroy what it wrote down.
+   */
+  async function destroyAgentCompletely(id: string): Promise<void> {
     await mcpProxy.disconnectAgent(id);
 
     // Destroy Fly.io deployment if one exists
@@ -619,10 +618,33 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       sql: `DELETE FROM agent_credentials WHERE agent_id = ?`,
       args: [id],
     });
+    // Scope grants outlived the agent until now. Harmless in itself — nanoids
+    // are never reused — but destruction is reachable from an agent as of this
+    // change, so it is the wrong moment to keep leaving rows behind.
+    await client.execute({
+      sql: `DELETE FROM agent_memory_scopes WHERE agent_id = ?`,
+      args: [id],
+    });
     await client.execute({
       sql: `DELETE FROM agents WHERE id = ?`,
       args: [id],
     });
+  }
+
+  app.delete<{ Params: { id: string } }>('/api/agents/:id', async (request, reply) => {
+    const { id } = request.params;
+    const userId = getUserId(request);
+
+    // Verify ownership
+    const check = await client.execute({
+      sql: `SELECT id FROM agents WHERE id = ? AND user_id = ?`,
+      args: [id, userId],
+    });
+    if (check.rows.length === 0) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Agent not found' } });
+    }
+
+    await destroyAgentCompletely(id);
 
     await auditLogger.logAgentEvent(id, 'deleted');
     getPostHog()?.capture({ distinctId: userId, event: 'agent_destroyed', properties: { agentId: id } });
@@ -6631,6 +6653,19 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
    * — the exact sequence the latch exists to prevent. Both stay in the
    * dashboard, where a human is present.
    */
+  /**
+   * Which service a tool belongs to, from the registry rather than the caller.
+   *
+   * The model is not asked for it. It would sometimes get the pairing wrong,
+   * and a mismatched (serviceType, toolName) writes a permission row that never
+   * matches anything at evaluation time — a permission that silently does
+   * nothing, which is worse than one that is refused.
+   */
+  async function resolveToolServiceType(toolName: string): Promise<string | null> {
+    const { getServiceTypeFromToolName } = await import('@reins/servers');
+    return getServiceTypeFromToolName(toolName);
+  }
+
   function rejectAdminServiceType(serviceType: string, reply: any): boolean {
     if (serviceType !== ADMIN_SERVICE_TYPE) return false;
     reply.code(403).send({
@@ -6680,6 +6715,216 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     return { data: agentsOut };
   });
+
+  /**
+   * Create an agent, closed from the moment it exists.
+   *
+   * Uses the create-manual shape — an agents row plus a deployed_agents row —
+   * rather than POST /api/agents, which writes only the former. That matters:
+   * listOpenMcpAgents counts an agent with no live deployment row as open, and
+   * rightly so, since authenticateMcp serves those requests and credentials
+   * resolve by agent rather than by deployment. An agent created the other way
+   * could never then be granted anything, because every grant would hit the
+   * per-target open-endpoint check.
+   *
+   * allow_unauthenticated is set false explicitly. Dashboard-created manual
+   * agents keep the open default, which is what docs/MULTI_AGENT_SETUP.md
+   * documents and what people are using; the asymmetry is the point. An agent
+   * created by an agent is never born reachable by whoever learns its id.
+   */
+  app.post('/api/agent-admin/agents', async (request, reply) => {
+    const agent = await resolveAdminCaller(request, reply);
+    if (!agent) return;
+
+    const body = request.body as { name?: unknown; description?: unknown };
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    if (!name) {
+      return reply.code(400).send({
+        error: { code: 'VALIDATION_ERROR', message: 'name is required' },
+      });
+    }
+
+    const agentId = nanoid();
+    const deploymentId = nanoid();
+    const gatewayToken = nanoid(32);
+    const now = new Date().toISOString();
+
+    await client.execute({
+      sql: `INSERT INTO agents (id, user_id, name, description, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'active', ?, ?)`,
+      args: [agentId, agent.userId, name, typeof body.description === 'string' ? body.description : null, now, now],
+    });
+
+    await client.execute({
+      sql: `INSERT INTO deployed_agents
+              (id, agent_id, status, gateway_token, is_manual, allow_unauthenticated, created_at, updated_at)
+            VALUES (?, ?, 'running', ?, 1, false, ?, ?)`,
+      args: [deploymentId, agentId, gatewayToken, now, now],
+    });
+
+    await enableDefaultServices(agentId);
+
+    await auditLogger.logAgentEvent(agentId, 'created', {
+      name,
+      createdByAgent: agent.agentId,
+    });
+
+    return reply.code(201).send({
+      data: {
+        id: agentId,
+        name,
+        description: typeof body.description === 'string' ? body.description : null,
+        status: 'active',
+        // Stated back so the model can tell the owner what it made, and does
+        // not have to guess whether the agent is configurable yet.
+        acceptsUnauthenticatedMcp: false,
+      },
+    });
+  });
+
+  /**
+   * Destroy an agent. Irreversible: the Fly machine goes, and seven tables are
+   * hard-deleted. Memory entries survive — they belong to the owner's scope,
+   * not to the agent.
+   */
+  app.delete<{ Params: { agentId: string } }>('/api/agent-admin/agents/:agentId', async (request, reply) => {
+    const agent = await resolveAdminCaller(request, reply);
+    if (!agent) return;
+
+    const target = await resolveAdminTarget(request.params.agentId, agent.userId, reply);
+    if (!target) return;
+
+    // Deleting your own caller mid-call, and taking the account's only admin
+    // agent with it. Nothing good is on the other side of allowing this.
+    if (request.params.agentId === agent.agentId) {
+      return reply.code(403).send({
+        error: {
+          code: 'CANNOT_DESTROY_SELF',
+          message: 'An admin agent cannot destroy itself. Do it from the dashboard.',
+        },
+      });
+    }
+
+    // Same reasoning as rejectAdminServiceType: removing Helm Admin from an
+    // agent is the first half of undoing the latch that keeps unauthenticated
+    // endpoints closed, and destruction removes it rather more thoroughly.
+    if (await isServiceEnabledForAgent(request.params.agentId, ADMIN_SERVICE_TYPE)) {
+      return reply.code(403).send({
+        error: {
+          code: 'CANNOT_DESTROY_ADMIN_AGENT',
+          message:
+            `${target.name} has Helm Admin. Destroying it from here would remove that boundary without your owner present. Do it from the dashboard.`,
+        },
+      });
+    }
+
+    await destroyAgentCompletely(request.params.agentId);
+
+    await auditLogger.logAgentEvent(request.params.agentId, 'deleted', {
+      name: target.name,
+      destroyedByAgent: agent.agentId,
+    });
+
+    return { data: { id: request.params.agentId, name: target.name, destroyed: true } };
+  });
+
+  app.put<{ Params: { agentId: string; toolName: string } }>(
+    '/api/agent-admin/agents/:agentId/tools/:toolName',
+    async (request, reply) => {
+      const agent = await resolveAdminCaller(request, reply);
+      if (!agent) return;
+
+      const target = await resolveAdminTarget(request.params.agentId, agent.userId, reply);
+      if (!target) return;
+
+      const { permission } = request.body as { permission?: string };
+      const allowed: ToolPermission[] = ['allow', 'require_approval', 'block'];
+      if (!permission || !allowed.includes(permission as ToolPermission)) {
+        return reply.code(400).send({
+          error: { code: 'VALIDATION_ERROR', message: `permission must be one of: ${allowed.join(', ')}` },
+        });
+      }
+
+      const serviceType = await resolveToolServiceType(request.params.toolName);
+      if (!serviceType) {
+        return reply.code(400).send({
+          error: { code: 'UNKNOWN_TOOL', message: `Not a known tool: ${request.params.toolName}` },
+        });
+      }
+      if (rejectAdminServiceType(serviceType, reply)) return;
+
+      // 'allow' widens reach exactly as a service grant does, so it takes the
+      // same check. 'block' and 'require_approval' only narrow.
+      if (permission === 'allow') {
+        const open = await listOpenMcpAgents(agent.userId);
+        if (open.some((a) => a.id === request.params.agentId)) {
+          return reply.code(409).send({
+            error: {
+              code: 'TARGET_ACCEPTS_UNAUTHENTICATED_MCP',
+              message: `${target.name} still accepts unauthenticated MCP calls. Ask your owner to close its unauthenticated endpoint first.`,
+            },
+          });
+        }
+      }
+
+      await setToolPermission(
+        request.params.agentId,
+        serviceType,
+        request.params.toolName,
+        permission as ToolPermission
+      );
+
+      await auditLogger.log({
+        eventType: 'policy_change',
+        result: 'success',
+        agentId: request.params.agentId,
+        metadata: {
+          kind: 'tool_permission',
+          toolName: request.params.toolName,
+          serviceType,
+          permission,
+          changedByAgent: agent.agentId,
+        },
+      });
+
+      return { data: { agentId: request.params.agentId, toolName: request.params.toolName, serviceType, permission } };
+    }
+  );
+
+  app.delete<{ Params: { agentId: string; toolName: string } }>(
+    '/api/agent-admin/agents/:agentId/tools/:toolName',
+    async (request, reply) => {
+      const agent = await resolveAdminCaller(request, reply);
+      if (!agent) return;
+
+      const target = await resolveAdminTarget(request.params.agentId, agent.userId, reply);
+      if (!target) return;
+
+      const serviceType = await resolveToolServiceType(request.params.toolName);
+      if (!serviceType) {
+        return reply.code(400).send({
+          error: { code: 'UNKNOWN_TOOL', message: `Not a known tool: ${request.params.toolName}` },
+        });
+      }
+      if (rejectAdminServiceType(serviceType, reply)) return;
+
+      await resetToolPermission(request.params.agentId, serviceType, request.params.toolName);
+
+      await auditLogger.log({
+        eventType: 'policy_change',
+        result: 'success',
+        agentId: request.params.agentId,
+        metadata: {
+          kind: 'tool_permission_reset',
+          toolName: request.params.toolName,
+          serviceType,
+          changedByAgent: agent.agentId,
+        },
+      });
+
+      return { data: { agentId: request.params.agentId, toolName: request.params.toolName, serviceType, reset: true } };
+    }
+  );
 
   app.get<{ Params: { agentId: string } }>('/api/agent-admin/agents/:agentId', async (request, reply) => {
     const agent = await resolveAdminCaller(request, reply);

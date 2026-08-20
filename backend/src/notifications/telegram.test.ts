@@ -11,7 +11,7 @@ vi.mock('../db/index.js', () => ({
 }));
 
 import { formatCalendarApprovalMessage, formatEmailApprovalMessage } from './telegram.js';
-import { escapeMarkdown, withCorrectionAffordance, formatBatchScope } from './approval-format.js';
+import { escapeMarkdown, withCorrectionAffordance, formatBatchScope, formatAdminApprovalMessage } from './approval-format.js';
 import { MAX_REVISIONS } from '../approvals/queue.js';
 import type { ApprovalRequest } from '@reins/shared';
 
@@ -488,5 +488,126 @@ describe('formatBatchScope', () => {
   it('ignores a malformed messageIds value rather than guessing', () => {
     expect(formatBatchScope({ messageIds: 'not-an-array' })).toBeNull();
     expect(formatBatchScope({ messageIds: [] })).toBeNull();
+  });
+});
+
+describe('formatAdminApprovalMessage', () => {
+  /**
+   * These tools act on another agent, named in the arguments only by id. The
+   * generic formatter would render a destroy as
+   * `{"agentId":"V1StGXR8_Z5jdHi6B-myT"}` — and approving the destruction of an
+   * agent you cannot identify is not consent. That is the whole point of this
+   * formatter, so it is what these tests assert.
+   */
+  const target = {
+    id: 'agent-work',
+    name: 'Work Email',
+    status: 'active',
+    runtime: 'openclaw',
+    deploymentStatus: 'running',
+    services: ['calendar', 'gmail'],
+  };
+
+  it('names the agent being destroyed, and what it can currently reach', () => {
+    const approval = makeApproval({
+      tool: 'helm_admin_destroy_agent',
+      arguments: { agentId: 'agent-work' },
+    });
+
+    const { text } = formatAdminApprovalMessage(approval, target);
+
+    expect(text).toContain('Work Email');
+    expect(text).toContain('gmail');
+    expect(text).toContain('calendar');
+    // The id alone must never be the whole story.
+    expect(text).not.toContain('{"agentId"');
+  });
+
+  it('says the destroy is irreversible, and that memory survives', () => {
+    const approval = makeApproval({
+      tool: 'helm_admin_destroy_agent',
+      arguments: { agentId: 'agent-work' },
+    });
+
+    const { text } = formatAdminApprovalMessage(approval, target);
+
+    expect(text).toMatch(/cannot be undone/i);
+    expect(text).toMatch(/memory are kept|memory.*kept/i);
+  });
+
+  it('says plainly when the id matches no agent, rather than hiding it', () => {
+    // An id that resolves to nothing is the most useful thing the message can
+    // report: it means the agent asked to act on something that is not yours.
+    const approval = makeApproval({
+      tool: 'helm_admin_destroy_agent',
+      arguments: { agentId: 'ghost-id' },
+    });
+
+    const { text } = formatAdminApprovalMessage(approval, null);
+
+    expect(text).toMatch(/unknown agent/i);
+    expect(text).toContain('ghost-id');
+  });
+
+  it('shows the service and the level for a permission change', () => {
+    const approval = makeApproval({
+      tool: 'helm_admin_set_permission_level',
+      arguments: { agentId: 'agent-work', serviceType: 'gmail', level: 'full' },
+    });
+
+    const { text } = formatAdminApprovalMessage(approval, target);
+
+    expect(text).toContain('Work Email');
+    expect(text).toContain('gmail');
+    expect(text).toContain('full');
+  });
+
+  it('shows the tool and the new permission for a per-tool override', () => {
+    const approval = makeApproval({
+      tool: 'helm_admin_set_tool_permission',
+      arguments: { agentId: 'agent-work', toolName: 'gmail_send_message', permission: 'block' },
+    });
+
+    const { text } = formatAdminApprovalMessage(approval, target);
+
+    expect(text).toContain('gmail_send_message');
+    expect(text).toContain('block');
+  });
+
+  it('shows the new name on a create, and that the endpoint needs a token', () => {
+    const approval = makeApproval({
+      tool: 'helm_admin_create_agent',
+      arguments: { name: 'Research' },
+    });
+
+    const { text } = formatAdminApprovalMessage(approval, null);
+
+    expect(text).toContain('Research');
+    expect(text).toMatch(/require a token/i);
+  });
+
+  it('escapes HTML in an agent name so the message still renders', () => {
+    // Names are user-authored and the message is HTML parse mode; an unescaped
+    // < makes Telegram reject the send, so the approval never arrives at all.
+    const approval = makeApproval({
+      tool: 'helm_admin_destroy_agent',
+      arguments: { agentId: 'agent-x' },
+    });
+
+    const { text } = formatAdminApprovalMessage(approval, { ...target, name: '<b>Work</b> & Co' });
+
+    expect(text).toContain('&lt;b&gt;Work&lt;/b&gt; &amp; Co');
+  });
+
+  it('names the requesting agent, so an unexpected request is traceable', () => {
+    const approval = makeApproval({
+      tool: 'helm_admin_destroy_agent',
+      agentId: 'admin-agent-1',
+      arguments: { agentId: 'agent-work' },
+    });
+
+    const { text } = formatAdminApprovalMessage(approval, target);
+
+    expect(text).toContain('admin-agent-1');
   });
 });

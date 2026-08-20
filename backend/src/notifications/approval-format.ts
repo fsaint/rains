@@ -42,6 +42,41 @@ export const CALENDAR_TOOLS = new Set([
   'outlook_cal_respond_to_event',
 ]);
 
+/**
+ * Helm Admin write tools. These act on *another agent*, identified in the
+ * arguments only by id, so the generic formatter renders them as
+ * `{"agentId":"V1StGXR8_Z5jdHi6B-myT"}` — and approving the destruction of an
+ * agent you cannot identify is not consent.
+ *
+ * The id is resolved to a name by the caller, which can reach the database;
+ * this module stays pure. A hallucinated id therefore shows up as the wrong
+ * agent's *name* on the owner's phone, which is the failure this most needs to
+ * catch.
+ */
+export const ADMIN_TOOLS = new Set([
+  'helm_admin_create_agent',
+  'helm_admin_destroy_agent',
+  'helm_admin_rename_agent',
+  'helm_admin_set_description',
+  'helm_admin_set_status',
+  'helm_admin_enable_service',
+  'helm_admin_disable_service',
+  'helm_admin_set_permission_level',
+  'helm_admin_set_tool_permission',
+  'helm_admin_reset_tool_permission',
+]);
+
+/** What the caller resolved about the agent an admin tool is acting on. */
+export interface AdminTargetSummary {
+  id: string;
+  name: string;
+  status?: string | null;
+  runtime?: string | null;
+  deploymentStatus?: string | null;
+  /** Service types with their permission level, e.g. `gmail (full)`. */
+  services?: string[];
+}
+
 // Telegram body preview cap. The Telegram message hard limit is 4096 chars;
 // leave generous headroom for the headers, blockquote markup, and buttons.
 const BODY_PREVIEW_LIMIT = 3000;
@@ -594,6 +629,105 @@ export function formatCalendarApprovalMessage(approval: ApprovalRequest): Format
       : null,
     isUpdate ? `\n<i>Fields not listed are unchanged.</i>` : null,
     isDelete ? `\n<i>This cannot be undone.</i>` : null,
+    ``,
+    expiresLine(approval),
+  ].filter(Boolean);
+
+  return {
+    text: lines.join('\n'),
+    keyboard: approveDenyKeyboard(approval.id),
+    parseMode: 'HTML',
+  };
+}
+
+/**
+ * Render a Helm Admin write for approval, naming the agent it acts on.
+ *
+ * `target` is null when the tool creates an agent (there is nothing to look up
+ * yet) or when the id did not resolve — the latter is worth showing plainly
+ * rather than hiding, because an id that matches no agent of yours is itself
+ * the most useful thing the message can tell you.
+ */
+export function formatAdminApprovalMessage(
+  approval: ApprovalRequest,
+  target: AdminTargetSummary | null
+): FormattedApproval {
+  const args = (approval.arguments ?? {}) as Record<string, unknown>;
+  const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
+
+  const targetName = target
+    ? `“${escapeHtml(target.name)}”`
+    : str(args.agentId)
+      ? `<i>unknown agent</i> <code>${escapeHtml(str(args.agentId) as string)}</code>`
+      : '';
+
+  const isDestroy = approval.tool === 'helm_admin_destroy_agent';
+  const isCreate = approval.tool === 'helm_admin_create_agent';
+
+  const headings: Record<string, string> = {
+    helm_admin_create_agent: '✨ <b>Create agent</b>',
+    helm_admin_destroy_agent: '⚠️ <b>Destroy agent</b>',
+    helm_admin_rename_agent: '✏️ <b>Rename agent</b>',
+    helm_admin_set_description: '✏️ <b>Change description</b>',
+    helm_admin_set_status: '⏸ <b>Change status</b>',
+    helm_admin_enable_service: '➕ <b>Give an agent access</b>',
+    helm_admin_disable_service: '➖ <b>Remove an agent’s access</b>',
+    helm_admin_set_permission_level: '🔑 <b>Change access level</b>',
+    helm_admin_set_tool_permission: '🔧 <b>Change one tool</b>',
+    helm_admin_reset_tool_permission: '↩️ <b>Reset a tool override</b>',
+  };
+
+  // The one line that says what is actually being decided.
+  let action: string | null = null;
+  switch (approval.tool) {
+    case 'helm_admin_create_agent':
+      action = `<b>Name:</b> ${escapeHtml(str(args.name) ?? '(unnamed)')}`;
+      break;
+    case 'helm_admin_rename_agent':
+      action = `<b>New name:</b> ${escapeHtml(str(args.name) ?? '')}`;
+      break;
+    case 'helm_admin_set_description':
+      action = str(args.description)
+        ? `<b>New description:</b> ${escapeHtml(str(args.description) as string)}`
+        : '<b>Description:</b> <i>cleared</i>';
+      break;
+    case 'helm_admin_set_status':
+      action = `<b>New status:</b> ${escapeHtml(str(args.status) ?? '')}`;
+      break;
+    case 'helm_admin_enable_service':
+    case 'helm_admin_disable_service':
+      action = `<b>Service:</b> ${escapeHtml(str(args.serviceType) ?? '')}`;
+      break;
+    case 'helm_admin_set_permission_level':
+      action = `<b>Service:</b> ${escapeHtml(str(args.serviceType) ?? '')} → ${escapeHtml(str(args.level) ?? '')}`;
+      break;
+    case 'helm_admin_set_tool_permission':
+      action = `<b>Tool:</b> ${escapeHtml(str(args.toolName) ?? '')} → ${escapeHtml(str(args.permission) ?? '')}`;
+      break;
+    case 'helm_admin_reset_tool_permission':
+      action = `<b>Tool:</b> ${escapeHtml(str(args.toolName) ?? '')} → service default`;
+      break;
+  }
+
+  const lines = [
+    headings[approval.tool] ?? '<b>Agent administration</b>',
+    isCreate ? null : targetName ? `<b>Agent:</b> ${targetName}` : null,
+    action,
+    // On a destroy, what the agent currently holds is the clearest signal of
+    // whether this is the right agent — and of what stops working afterwards.
+    isDestroy && target?.services?.length
+      ? `<b>Has access to:</b> ${escapeHtml(target.services.join(', '))}`
+      : null,
+    isDestroy && target?.runtime
+      ? `<b>Runtime:</b> ${escapeHtml(target.runtime)}${target.deploymentStatus ? `, ${escapeHtml(target.deploymentStatus)}` : ''}`
+      : null,
+    isCreate
+      ? `\n<i>Its endpoint will require a token, so knowing its id is not enough to use it.</i>`
+      : null,
+    isDestroy
+      ? `\n<i>This cannot be undone. The runtime machine and all access are removed. Notes it saved to your memory are kept.</i>`
+      : null,
+    `\n<b>Requested by:</b> <code>${escapeHtml(approval.agentId)}</code>`,
     ``,
     expiresLine(approval),
   ].filter(Boolean);

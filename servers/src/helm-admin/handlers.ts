@@ -238,6 +238,100 @@ export async function handleDisableService(
   }
 }
 
+export async function handleCreateAgent(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const name = nonEmptyString(args.name);
+  if (!name) return { success: false, error: 'name is required' };
+
+  try {
+    const res = await adminFetch(context, '/api/agent-admin/agents', {
+      method: 'POST',
+      body: JSON.stringify({
+        name,
+        ...(typeof args.description === 'string' ? { description: args.description } : {}),
+      }),
+    });
+    if (!res.ok) return toError(res, 'Could not create the agent');
+
+    const json = await res.json() as { data: unknown };
+    return { success: true, data: json.data };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function handleDestroyAgent(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const agentId = nonEmptyString(args.agentId);
+  if (!agentId) return { success: false, error: 'agentId is required' };
+
+  try {
+    const res = await adminFetch(context, `/api/agent-admin/agents/${encodeURIComponent(agentId)}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) return toError(res, 'Could not destroy that agent');
+
+    const json = await res.json() as { data: unknown };
+    return { success: true, data: json.data };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function handleSetToolPermission(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const agentId = nonEmptyString(args.agentId);
+  const toolName = nonEmptyString(args.toolName);
+  const permission = nonEmptyString(args.permission);
+  if (!agentId) return { success: false, error: 'agentId is required' };
+  if (!toolName) return { success: false, error: 'toolName is required' };
+  if (!permission) return { success: false, error: 'permission is required' };
+
+  try {
+    const res = await adminFetch(
+      context,
+      `/api/agent-admin/agents/${encodeURIComponent(agentId)}/tools/${encodeURIComponent(toolName)}`,
+      { method: 'PUT', body: JSON.stringify({ permission }) }
+    );
+    if (!res.ok) return toError(res, 'Could not set that tool permission');
+
+    const json = await res.json() as { data: unknown };
+    return { success: true, data: json.data };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function handleResetToolPermission(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const agentId = nonEmptyString(args.agentId);
+  const toolName = nonEmptyString(args.toolName);
+  if (!agentId) return { success: false, error: 'agentId is required' };
+  if (!toolName) return { success: false, error: 'toolName is required' };
+
+  try {
+    const res = await adminFetch(
+      context,
+      `/api/agent-admin/agents/${encodeURIComponent(agentId)}/tools/${encodeURIComponent(toolName)}`,
+      { method: 'DELETE' }
+    );
+    if (!res.ok) return toError(res, 'Could not reset that tool permission');
+
+    const json = await res.json() as { data: unknown };
+    return { success: true, data: json.data };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function handleSetPermissionLevel(
   args: Record<string, unknown>,
   context: ServerContext

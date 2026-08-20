@@ -19,7 +19,8 @@ import cookie from '@fastify/cookie';
 const {
   mockExecute, mockGetSession, mockRequireAdmin, mockIsServiceEnabled,
   mockListEnabled, mockListOpen, mockUserHasAdmin, mockCreateInstance,
-  mockSetPermissionLevel, mockGetPermissionLevel,
+  mockSetPermissionLevel, mockGetPermissionLevel, mockSetToolPermission,
+  mockResetToolPermission, mockEnableDefaults, mockDisconnectAgent,
 } = vi.hoisted(() => ({
   mockExecute: vi.fn(),
   mockGetSession: vi.fn(),
@@ -31,6 +32,10 @@ const {
   mockCreateInstance: vi.fn(),
   mockSetPermissionLevel: vi.fn(),
   mockGetPermissionLevel: vi.fn(),
+  mockSetToolPermission: vi.fn(),
+  mockResetToolPermission: vi.fn(),
+  mockEnableDefaults: vi.fn(),
+  mockDisconnectAgent: vi.fn(),
 }));
 
 vi.mock('../db/index.js', () => ({
@@ -71,18 +76,22 @@ vi.mock('../services/permissions.js', () => {
     createServiceInstance: mockCreateInstance,
     setPermissionLevel: mockSetPermissionLevel,
     getPermissionLevel: mockGetPermissionLevel,
+    setToolPermission: mockSetToolPermission,
+    resetToolPermission: mockResetToolPermission,
+    enableDefaultServices: mockEnableDefaults,
     // Imported by routes.ts but unused by these paths.
     getPermissionMatrix: vi.fn(), getAgentServiceConfig: vi.fn(), setServiceAccess: vi.fn(),
     linkCredential: vi.fn(), autoLinkCredential: vi.fn(), unlinkCredential: vi.fn(),
-    setToolPermission: vi.fn(), resetToolPermission: vi.fn(), setServiceToolPermissions: vi.fn(),
+    setServiceToolPermissions: vi.fn(),
     getCredentialsForService: vi.fn(), addServiceCredential: vi.fn(), removeServiceCredential: vi.fn(),
     setDefaultCredential: vi.fn(), getLinkedCredentials: vi.fn(), getAgentPermissions: vi.fn(),
     getInstanceConfig: vi.fn(), updateServiceInstance: vi.fn(), deleteServiceInstance: vi.fn(),
     setInstancePermissionLevel: vi.fn(), setInstanceToolPermission: vi.fn(),
     resetInstanceToolPermission: vi.fn(), getDrivePathConfig: vi.fn(), setDrivePathConfig: vi.fn(),
-    enableDefaultServices: vi.fn(),
   };
 });
+
+vi.mock('../mcp/proxy.js', () => ({ mcpProxy: { disconnectAgent: mockDisconnectAgent } }));
 
 vi.mock('../mcp/agent-endpoint.js', () => ({ handleMCPRequest: vi.fn() }));
 vi.mock('../mcp/oauth/tokens.js', () => ({
@@ -97,7 +106,15 @@ vi.mock('@reins/servers', () => ({
     { type: 'helm-admin', name: 'Helm Admin', description: 'Admin', auth: { required: false } },
   ],
   serviceRegistry: new Map(),
-  getServiceTypeFromToolName: () => null,
+  // Real prefix resolution: the per-tool routes derive serviceType from this
+  // rather than trusting the caller, so a stub returning null would make those
+  // tests pass on a 400 and prove nothing.
+  getServiceTypeFromToolName: (name: string) => {
+    if (name.startsWith('helm_admin_')) return 'helm-admin';
+    if (name.startsWith('gmail_')) return 'gmail';
+    if (name.startsWith('memory_')) return 'memory';
+    return null;
+  },
 }));
 vi.mock('../approvals/queue.js', () => ({
   MAX_REVISIONS: 3,
@@ -121,7 +138,6 @@ vi.mock('../config/index.js', () => ({
 }));
 vi.mock('../policy/engine.js', () => ({ policyEngine: {} }));
 vi.mock('../credentials/vault.js', () => ({ credentialVault: {} }));
-vi.mock('../mcp/proxy.js', () => ({ mcpProxy: {} }));
 vi.mock('../mcp/server-manager.js', () => ({ serverManager: {} }));
 vi.mock('../notifications/apns.js', () => ({ apnsService: {} }));
 vi.mock('../notifications/telegram.js', () => ({ telegramNotifier: {} }));
@@ -191,13 +207,19 @@ beforeEach(async () => {
   vi.clearAllMocks();
   mockGetSession.mockReturnValue(null);
   mockRequireAdmin.mockReturnValue(true);
-  mockIsServiceEnabled.mockResolvedValue(true);
+  // The caller holds helm-admin; nobody else does unless a test says so. A
+  // blanket `true` would make every destroy target look like an admin agent.
+  mockIsServiceEnabled.mockImplementation(async (agentId: string) => agentId === ADMIN_AGENT);
   mockListEnabled.mockResolvedValue(['memory']);
   mockListOpen.mockResolvedValue([]);
   mockUserHasAdmin.mockResolvedValue(false);
   mockCreateInstance.mockResolvedValue({ instance: {}, created: true });
   mockSetPermissionLevel.mockResolvedValue(undefined);
   mockGetPermissionLevel.mockResolvedValue('read');
+  mockSetToolPermission.mockResolvedValue(undefined);
+  mockResetToolPermission.mockResolvedValue(undefined);
+  mockEnableDefaults.mockResolvedValue(undefined);
+  mockDisconnectAgent.mockResolvedValue(undefined);
   wireDb();
 
   app = Fastify({ logger: false });
@@ -356,6 +378,210 @@ describe('the exclusivity guard reaches this API too', () => {
     expect(res.statusCode).toBe(409);
     // Under `details`, which is the envelope the frontend ApiError carries.
     expect(res.json().error.details.conflicting).toEqual(['helm-admin']);
+  });
+});
+
+describe('creating an agent', () => {
+  it('writes both rows, with the endpoint closed from the start', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/api/agent-admin/agents', headers: auth,
+      payload: { name: 'Research', description: 'Reading and notes' },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json().data).toMatchObject({ name: 'Research', acceptsUnauthenticatedMcp: false });
+
+    // Both rows, or the agent is unreachable / uncloseable. The deployment row
+    // is what carries allow_unauthenticated, so an agents-only insert would
+    // leave it open with nowhere to record that it should not be.
+    const sqls = mockExecute.mock.calls.map((c) => (c[0] as any).sql as string);
+    expect(sqls.some((s) => s.includes('INSERT INTO agents'))).toBe(true);
+
+    const depInsert = mockExecute.mock.calls.find(
+      (c) => ((c[0] as any).sql as string).includes('INSERT INTO deployed_agents')
+    );
+    expect(depInsert).toBeTruthy();
+    expect((depInsert![0] as any).sql).toContain('allow_unauthenticated');
+    expect((depInsert![0] as any).sql).toContain('false');
+  });
+
+  it('is immediately configurable — the point of being born closed', async () => {
+    // listOpenMcpAgents counts an agent with no live deployment row as open, so
+    // an agent created the plain way could never then be granted anything.
+    // Asserting the column alone would pass while that dead end remained.
+    const created = await app.inject({
+      method: 'POST', url: '/api/agent-admin/agents', headers: auth,
+      payload: { name: 'Research' },
+    });
+    const newId = created.json().data.id;
+
+    mockListOpen.mockResolvedValue([]); // closed, as just created
+    wireDb();
+    const grant = await app.inject({
+      method: 'POST', url: `/api/agent-admin/agents/${newId}/services`, headers: auth,
+      payload: { serviceType: 'gmail' },
+    });
+
+    expect(grant.statusCode).toBe(200);
+  });
+
+  it('gives it the default services every agent gets', async () => {
+    await app.inject({
+      method: 'POST', url: '/api/agent-admin/agents', headers: auth, payload: { name: 'Research' },
+    });
+
+    const { enableDefaultServices } = await import('../services/permissions.js');
+    expect(enableDefaultServices).toHaveBeenCalled();
+  });
+
+  it('rejects an empty name', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/api/agent-admin/agents', headers: auth, payload: { name: '  ' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('destroying an agent', () => {
+  it('destroys one belonging to the owner', async () => {
+    const res = await app.inject({
+      method: 'DELETE', url: `/api/agent-admin/agents/${TARGET}`, headers: auth,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toMatchObject({ destroyed: true, name: 'Work' });
+  });
+
+  it('refuses to destroy the calling agent itself', async () => {
+    // Deleting your own caller mid-call, and taking the account's only admin
+    // agent with it.
+    mockExecute.mockImplementation(async (q: any) => {
+      const sql: string = typeof q === 'string' ? q : q.sql;
+      if (sql.includes('FROM deployed_agents da') && sql.includes('gateway_token')) {
+        return rows([{ agent_id: ADMIN_AGENT, user_id: 'user-1', runtime: 'openclaw', mcp_server_name: 'helm' }]);
+      }
+      if (sql.includes('FROM agents WHERE id = ? AND user_id = ?')) {
+        return rows([{ id: ADMIN_AGENT, name: 'Admin', description: null, status: 'active' }]);
+      }
+      return rows([]);
+    });
+
+    const res = await app.inject({
+      method: 'DELETE', url: `/api/agent-admin/agents/${ADMIN_AGENT}`, headers: auth,
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.code).toBe('CANNOT_DESTROY_SELF');
+  });
+
+  it('refuses to destroy another agent that holds helm-admin', async () => {
+    // Same reasoning as refusing to revoke it: that is how the latch comes off.
+    mockIsServiceEnabled.mockImplementation(async (_agentId: string, service: string) =>
+      service === 'helm-admin'
+    );
+
+    const res = await app.inject({
+      method: 'DELETE', url: `/api/agent-admin/agents/${TARGET}`, headers: auth,
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.code).toBe('CANNOT_DESTROY_ADMIN_AGENT');
+  });
+
+  it('404s another owner\'s agent rather than destroying it', async () => {
+    wireDb({ targetOwnedByCaller: false });
+
+    const res = await app.inject({
+      method: 'DELETE', url: '/api/agent-admin/agents/someone-elses', headers: auth,
+    });
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('clears memory scope grants, which used to outlive the agent', async () => {
+    await app.inject({ method: 'DELETE', url: `/api/agent-admin/agents/${TARGET}`, headers: auth });
+
+    const sqls = mockExecute.mock.calls.map((c) => (c[0] as any).sql as string);
+    expect(sqls.some((s) => s.includes('DELETE FROM agent_memory_scopes'))).toBe(true);
+    // Entries belong to the owner's scope, not the agent, and must survive.
+    expect(sqls.some((s) => s.includes('DELETE FROM memory_entries'))).toBe(false);
+  });
+});
+
+describe('per-tool permissions', () => {
+  it('derives the service from the tool name rather than asking the model', async () => {
+    // A mismatched (serviceType, toolName) writes a row that never matches at
+    // evaluation time — a permission that silently does nothing.
+    const res = await app.inject({
+      method: 'PUT', url: `/api/agent-admin/agents/${TARGET}/tools/gmail_send_message`, headers: auth,
+      payload: { permission: 'block' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.serviceType).toBe('gmail');
+    expect(mockSetToolPermission).toHaveBeenCalledWith(TARGET, 'gmail', 'gmail_send_message', 'block');
+  });
+
+  it('rejects a tool name that belongs to no service', async () => {
+    const res = await app.inject({
+      method: 'PUT', url: `/api/agent-admin/agents/${TARGET}/tools/not_a_real_tool`, headers: auth,
+      payload: { permission: 'block' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('UNKNOWN_TOOL');
+  });
+
+  it('rejects a permission outside the allowed set', async () => {
+    const res = await app.inject({
+      method: 'PUT', url: `/api/agent-admin/agents/${TARGET}/tools/gmail_send_message`, headers: auth,
+      payload: { permission: 'sudo' },
+    });
+
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('409s raising a tool to allow on an open target', async () => {
+    // 'allow' widens reach exactly as a service grant does.
+    mockListOpen.mockResolvedValue([{ id: TARGET, name: 'Work' }]);
+
+    const res = await app.inject({
+      method: 'PUT', url: `/api/agent-admin/agents/${TARGET}/tools/gmail_send_message`, headers: auth,
+      payload: { permission: 'allow' },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(mockSetToolPermission).not.toHaveBeenCalled();
+  });
+
+  it('still allows blocking a tool on an open target, which only narrows', async () => {
+    mockListOpen.mockResolvedValue([{ id: TARGET, name: 'Work' }]);
+
+    const res = await app.inject({
+      method: 'PUT', url: `/api/agent-admin/agents/${TARGET}/tools/gmail_send_message`, headers: auth,
+      payload: { permission: 'block' },
+    });
+
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('resets an override back to the service default', async () => {
+    const res = await app.inject({
+      method: 'DELETE', url: `/api/agent-admin/agents/${TARGET}/tools/gmail_send_message`, headers: auth,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockResetToolPermission).toHaveBeenCalledWith(TARGET, 'gmail', 'gmail_send_message');
+  });
+
+  it('will not touch a helm-admin tool', async () => {
+    const res = await app.inject({
+      method: 'PUT', url: `/api/agent-admin/agents/${TARGET}/tools/helm_admin_list_agents`, headers: auth,
+      payload: { permission: 'allow' },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.code).toBe('SERVICE_NOT_GRANTABLE');
   });
 });
 
