@@ -404,6 +404,47 @@ approval_required:
   - create_draft
 ```
 
+---
+
+## ⛔ Privileged Services — Invariants That Are Easy to Break
+
+Two of the eighteen native services differ in kind from the rest. Gmail lets an agent read
+mail; these change what agents *are allowed to do*. The rules below are enforced in code, and
+each exists because without it the capability is unsafe to delegate at all.
+
+| Service | What it can do |
+|---|---|
+| `skill-authoring` | Write the instructions other agents follow, and assign them |
+| `helm-admin` | Create and destroy agents; grant, revoke, and tune what each can reach |
+
+**1. `helm-admin` may not coexist with anything except `memory`.** Enforced in both directions
+by `assertServiceCombinationAllowed` (`backend/src/services/permissions.ts`), called from
+`createServiceInstance` *and* `setServiceAccess`. An agent holding it plus Gmail is not an
+agent with two services — it is an agent with every service, two steps away. Memory is the one
+exception because a scope belongs to a single agent and holds no outside credential.
+
+**2. Enabling `helm-admin` requires every agent on the account to be closed to unauthenticated
+MCP.** An agent id *is* a credential while `allow_unauthenticated` is true — and an agent with
+no live deployment row counts as open, because `authenticateMcp` serves it. Without this the
+first rule is decorative: an admin agent grants a peer access, then drives the peer by id.
+Re-opening an endpoint is latched shut while an admin agent exists, or the precondition is a
+one-time formality.
+
+**3. Neither service may be granted by an agent.** `helm-admin` cannot grant or revoke itself
+(that would mint peers, and revoking is how the latch comes off), and neither belongs in
+`enableDefaultServices()` — which turns memory and skills on for every new agent — or every new
+agent becomes privileged.
+
+**4. Every write on both requires approval.** Do not set `defaultWritePermission: 'allow'` on
+either definition; it defaults to `require_approval` and must stay there. Approvals for
+`helm-admin` resolve the target id to the agent's *name*
+(`backend/src/notifications/approval-format.ts`), because approving the destruction of an agent
+you cannot identify is not consent.
+
+One structural caveat: approval is decided from the permission level *before* the handler runs,
+so a call the route will refuse still raises an approval and fails after it is granted. Safe,
+but do not claim a route-level check happens "before the approval is raised".
+
 ## Phase 1 Priorities
 
 1. **P0 - MCP proxy core** - Transparent proxy with tool filtering
@@ -902,7 +943,8 @@ fly secrets set --app agenthelm-core \
 | [`docs/ops/LOCAL_DEV_SETUP.md`](docs/ops/LOCAL_DEV_SETUP.md) | Local development setup: .env variables, Google OAuth redirect URIs, Telegram tunnel, dev bots |
 | [`docs/ops/PROD_SETUP.md`](docs/ops/PROD_SETUP.md) | Production setup checklist: Google OAuth, Fly secrets, DNS, deployment steps |
 | [`docs/ops/UPDATE_API_KEY.md`](docs/ops/UPDATE_API_KEY.md) | How to update a user's LLM API key in both the DB and the running Fly machine |
-| [`docs/ops/COMMON_ERRORS.md`](docs/ops/COMMON_ERRORS.md) | Recurring operational issues: bot not responding, MiniMax startup, webhook relay 404 |
+| [`docs/ops/COMMON_ERRORS.md`](docs/ops/COMMON_ERRORS.md) | Known traps and their fixes, across agent runtime (bot not responding, MiniMax startup, webhook relay) **and the platform codebase** (env-file handling, migration ordering, two-table service enablement, adding a native MCP server, skill token rendering). Read before debugging anything odd |
+| [`docs/ops/ADDING_SKILLS_VIA_MCP.md`](docs/ops/ADDING_SKILLS_VIA_MCP.md) | Authoring, reading, updating, and assigning skills through the skill-authoring MCP |
 | [`docs/ops/ADMIN_TOOLS.md`](docs/ops/ADMIN_TOOLS.md) | Python admin scripts: setup, usage, hard-guard verification, token rotation |
 | [`docs/ops/ADMIN_PROJECT_HANDOVER.md`](docs/ops/ADMIN_PROJECT_HANDOVER.md) | Full architecture handover for a standalone admin project with core+personal Fly access |
 | [`docs/ops/DNS.md`](docs/ops/DNS.md) | DNS configuration: Vercel records, Fly app hostnames, common mistakes, fix runbook |

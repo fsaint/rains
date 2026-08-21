@@ -1429,3 +1429,338 @@ If the Fly app still exists, destroy it too:
 ```bash
 FLY_API_TOKEN=<dev-token> fly apps destroy reins-<appname> --org development-808 --yes
 ```
+
+---
+
+## `node --env-file` aborts when the file is missing (CI cannot start the backend)
+
+### Symptom
+
+The backend exits immediately on any machine without a `.env`, most visibly in CI:
+
+```
+> tsx watch --env-file=../.env src/index.ts
+node: ../.env: not found
+npm error code 9
+```
+
+Downstream this surfaces as something else entirely — Playwright reporting
+`apiRequestContext.post: connect ECONNREFUSED ::1:5001` on every spec, because the server
+was never listening.
+
+### Root Cause
+
+Node's `--env-file` is a hard error when the path does not exist. `.env` is gitignored, so
+every developer has one and no CI runner does. The failure was invisible for months because
+the E2E job was being skipped behind an unrelated failing job.
+
+### Fix
+
+Use `--env-file-if-exists`, which loads the file when present and continues when not
+(Node 20.12+). Implemented in `backend/package.json` and `onboarding/package.json`:
+
+```json
+"dev": "tsx watch --env-file-if-exists=../.env src/index.ts"
+```
+
+Local runs are unchanged; CI now boots and reads its config from the job environment.
+
+### What does NOT work
+
+Creating an empty `.env` in CI. It suppresses the crash but silently shadows nothing, and
+the next developer wonders why a file full of nothing is checked in.
+
+---
+
+## Serving the frontend build with a static file server breaks auth silently
+
+### Symptom
+
+The app loads, renders, and shows the sign-in screen forever. Injecting a valid session
+cookie changes nothing. No error appears in any log — the API calls return **200**.
+
+### Root Cause
+
+`frontend/src/api/client.ts` uses `const API_BASE = '/api'` — a *relative* path — so the
+client must share an origin with the backend. Production does that by serving both from
+`agenthelm-core`; local runs use the proxy in `frontend/vite.config.ts`. Served by a static
+file server (`npx serve -s frontend/dist`), `/api/*` falls through to the SPA fallback and
+every API call returns `index.html` with a 200:
+
+```
+through vite preview:   404  application/json   ← Fastify replied
+through npx serve:      200  text/html          ← index.html
+```
+
+Because the response is a *success*, the client cannot distinguish it from a legitimate
+"not signed in", so the failure presents as a signed-out screen rather than an error.
+
+### Fix
+
+Serve the build with `vite preview`, which now shares one proxy block with `server` in
+`frontend/vite.config.ts`. CI uses `npm run preview --workspace=frontend`.
+
+Diagnostic for any similar case — check the content type, not the status:
+
+```bash
+curl -s -o /dev/null -w "%{http_code} %{content_type}\n" http://localhost:6173/api/auth/me
+```
+
+`text/html` means the request never reached the backend.
+
+---
+
+## Backend cannot initialise an empty database
+
+### Symptom
+
+`initializeDatabase()` throws and the process exits before opening its port, on a brand-new
+database only:
+
+```
+PostgresError: relation "deployed_agents" does not exist
+  where: SQL statement "ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS spend_limit_dollars REAL"
+  code: 42P01
+```
+
+Every existing environment is unaffected, so this only appears when standing up a new one.
+
+### Root Cause
+
+A migration block ran `ALTER TABLE deployed_agents` roughly 250 lines *before* that table is
+created. On a database that already had the table it worked; on an empty one it raised
+`undefined_table`. The block's `EXCEPTION WHEN duplicate_column THEN NULL` handler does not
+catch that, so it propagated.
+
+### Fix
+
+Moved the block below the `CREATE TABLE` in `backend/src/db/index.ts`. Ordering, not
+exception handling, is the fix: swallowing `undefined_table` would have let the columns be
+skipped entirely on a fresh database.
+
+To check for others, scan for any `ALTER TABLE x` appearing before `CREATE TABLE ... x`:
+
+```bash
+python3 - <<'PY'
+import re
+lines = open('backend/src/db/index.ts').read().split('\n')
+created, altered = {}, {}
+for i, l in enumerate(lines, 1):
+    m = re.search(r'CREATE TABLE IF NOT EXISTS (\w+)', l)
+    if m and m.group(1) not in created: created[m.group(1)] = i
+    m = re.search(r'ALTER TABLE (\w+)', l)
+    if m and m.group(1) not in altered: altered[m.group(1)] = i
+print([(t, a, created.get(t)) for t, a in altered.items() if created.get(t, 10**9) > a] or 'none')
+PY
+```
+
+---
+
+## Adding a native MCP server: three things that fail silently
+
+Registering a service in `servers/src/registry.ts` is not sufficient. Each of the following
+fails in a way that looks like something else.
+
+### 1. The backend loads the *built* package
+
+**Symptom:** `{"error":{"code":"INVALID_SERVICE","message":"Invalid service type: <type>"}}`
+when enabling the service, even though the definition exists in `src/`.
+
+**Cause:** `validServiceTypes` is built from `await import('@reins/servers')`, which resolves
+to `servers/dist/index.js`. **Fix:** `npm run build --workspace=shared --workspace=servers`.
+Verify with `grep -c "<type>" servers/dist/index.js`.
+
+### 2. The gateway token is injected from a hardcoded allowlist
+
+**Symptom:** every tool returns `Unauthorized`, indistinguishable from a broken credential.
+
+**Cause:** `handleCallTool` in `backend/src/mcp/agent-endpoint.ts` attaches
+`context.gatewayToken` only for named service types. A server whose handlers call back into
+the platform API and is not on that list sends no `x-reins-agent-secret`.
+
+**Fix:** add the service type to that condition. Covered by a test in
+`agent-endpoint.test.ts` ("gateway token injection") that was verified to fail when an entry
+is removed.
+
+### 3. `REINS_API_URL` defaults to production
+
+**Symptom:** locally, handlers appear to authenticate against the wrong data — or return
+`Unauthorized` with a token that is definitely valid.
+
+**Cause:** every platform-calling server does
+`process.env.REINS_API_URL ?? 'https://app.helm.mom'`. The default is correct in production,
+where it *is* the backend. Locally, an unset variable means the in-process server calls
+**production** with a local gateway token.
+
+**Fix:** the repo `.env` sets `REINS_API_URL=http://localhost:5001`. Any ad-hoc local
+environment that omits it silently talks to prod.
+
+---
+
+## Service enablement lives in two tables — disabling one is not disabling
+
+### Symptom
+
+Turning a service off returns 200, and the service stays on. Reproduced via the admin MCP:
+disabling `skills` succeeded, and the next call still refused with
+`this agent also has: skills`.
+
+### Root Cause
+
+Enablement is *"an enabled `agent_service_instances` row, or failing that an enabled
+`agent_service_access` row"* — see `isServiceEnabledForAgent`. `setPermissionLevel(…, 'none')`
+cleared only the access row, so any agent with instances — every agent created since
+instances landed — kept the service while the call reported success.
+
+The dashboard was unaffected because it deletes the instance directly rather than going
+through that path, which is why it went unnoticed.
+
+### Fix
+
+`setPermissionLevel` now disables the instance rows too (`backend/src/services/permissions.ts`).
+
+When reading or writing enablement, always account for **both** tables. `listEnabledServiceTypes`
+is the helper that unions them correctly; `isServiceEnabledForAgent` is the per-service
+equivalent. Both carry comments saying to change them together.
+
+### What does NOT work
+
+Asserting only that the access row was written. The unit test did exactly that and passed
+throughout the bug's lifetime.
+
+---
+
+## Skill bodies are stored raw; read routes render tokens
+
+### Symptom
+
+A skill edited by an agent stops working for agents on the other runtime. Its body contains
+`reins__gmail_search` or `helm__gmail_search` where it used to contain `{{tool:gmail_search}}`.
+
+### Root Cause
+
+Bodies are stored with `{{tool:…}}` and `{{skill:…}}` tokens intact. `GET /api/agent-skills/:slug`
+resolves them into the *reading* agent's runtime names, because the two runtimes spell tool
+names differently. An author that read through that route and passed the result to
+`skill_authoring_update` wrote one runtime's spelling into the stored skill.
+
+### Fix
+
+Authoring reads go through `GET /api/skill-library/:idOrSlug` (tool: `skill_authoring_get`),
+which returns the body exactly as stored and applies no assignment or availability gating.
+Consumer reads keep using `skills_get`.
+
+Rule of thumb: **any code path that will write a body back must read it unrendered.** The
+test in `skills-routes.test.ts` ("leaves tokens unrendered") was confirmed to fail when
+rendering is introduced.
+
+---
+
+## `process.env` set after the first dynamic import is a no-op
+
+### Symptom
+
+A test sets an environment variable in `beforeEach` and the code under test does not see it.
+Passes on developer machines, fails in CI:
+
+```
+Error: HERMES_IMAGE is required for Hermes runtime
+```
+
+### Root Cause
+
+`backend/src/config/index.ts` reads `process.env` **once**, when the module is first
+imported. Tests that call `await import('./fly.js')` inside the test body trigger that import
+on the *first* test to run, freezing config from whatever the environment held then. A
+variable set in a nested `describe`'s `beforeEach` — which runs later — is never seen.
+
+It passed locally only because the repo `.env` happened to supply the value, so nobody
+noticed the assignment was inert.
+
+### Fix
+
+Set such variables in the **top-level** `beforeEach`, which runs before any test and
+therefore before the first dynamic import.
+
+To reproduce a CI-only environment failure locally, move the file aside rather than guessing:
+
+```bash
+mv .env .env.hidden && NODE_ENV=test npm test; mv .env.hidden .env
+```
+
+---
+
+## Approval is decided before the tool runs, so doomed calls still prompt
+
+### Symptom
+
+An owner receives an approval request for an operation that cannot possibly succeed — for
+example destroying an agent that the server will refuse to destroy — and the failure only
+appears after they approve it.
+
+### Root Cause
+
+The approval gate is driven by the tool's *permission level*, evaluated in
+`handleCallTool` before the handler executes. Validation inside the route (ownership,
+refusal rules, argument checks) necessarily runs afterwards. This applies to every
+approval-gated tool, not to any one service.
+
+### Fix
+
+None applied; the behaviour is structural. It is safe — an approved-but-invalid call still
+gets refused and performs nothing — but it is noisy, and any plan claiming a check happens
+"before the approval is raised" is wrong unless that check runs in the MCP endpoint before
+submission.
+
+Where the argument is an opaque id, make the approval message resolve it to something the
+owner recognises. `backend/src/notifications/approval-format.ts` does this for admin tools
+via `ADMIN_TOOLS`; the transport performs the lookup so the formatter stays pure.
+
+---
+
+## Gmail attachment IDs are minted per read and stale on arrival
+
+### Symptom
+
+Forwarding or re-attaching a Gmail attachment fails repeatedly. The error advises fetching a
+fresh `attachmentId`, and doing so fails the same way — a loop with no exit.
+
+### Root Cause
+
+Gmail issues a new `attachmentId` on every `messages.get`. Two consecutive reads of the same
+message return different ids for byte-identical content, so any id a caller holds is already
+stale. Code that matched a caller-supplied id against a freshly fetched parts list could
+never match, and the advice to re-fetch could never terminate.
+
+### Fix
+
+Identify attachments by **filename**, which is stable, falling back to the sole attachment
+when a message has exactly one. `attachmentId` is a hint only. The download uses the id from
+the fetch that just happened, never the caller's. Implemented in
+`servers/src/gmail/attachments.ts`.
+
+---
+
+## Google Calendar recurrence requires `start.timeZone` by name
+
+### Symptom
+
+A recurring event is created successfully, and every occurrence after the next DST
+transition is an hour off.
+
+### Root Cause
+
+Google expands an RRULE in a zone identified by **name**. A fixed offset (`-07:00`) cannot
+express "09:00 local" across a transition, so occurrences drift. `calendar_create_event` sent
+`start: { dateTime }` with no zone and had no `timeZone` field, so no argument combination
+could supply one.
+
+### Fix
+
+`servers/src/calendar/tools.ts` takes an optional IANA `timeZone`; when an event repeats
+without one, the calendar's own zone is read via `calendars.get` and applied. If that lookup
+fails the call is **refused** rather than creating a series that silently drifts.
+
+`handleUpdateEvent` had the mirror-image bug — it replaced `start` wholesale and dropped the
+existing `timeZone`, breaking a recurring series when one occurrence was moved. It now
+preserves it.
