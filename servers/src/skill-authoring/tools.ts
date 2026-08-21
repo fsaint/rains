@@ -8,9 +8,26 @@ import {
   handleGetAuthoredSkill,
   handleCreateSkill,
   handleUpdateSkill,
+  handleDeleteSkill,
   handleAssignSkill,
   handleUnassignSkill,
 } from './handlers.js';
+
+/**
+ * Shared by every write tool. Defined once so the wording an agent reads about
+ * platform scope cannot drift between create, update, and delete.
+ */
+const scopeProperty = {
+  scope: {
+    type: 'string',
+    enum: ['user', 'system'],
+    description:
+      'Who the skill belongs to. "user" (the default) writes a skill for your owner\'s account ' +
+      'only. "system" writes a Helm platform skill that every account on the platform can load; ' +
+      'it is refused unless your owner is a Helm admin. Never pass "system" to fix something for ' +
+      'one person.',
+  },
+} as const;
 
 export const skillAuthoringListTool: ToolDefinition = {
   name: 'skill_authoring_list',
@@ -18,7 +35,8 @@ export const skillAuthoringListTool: ToolDefinition = {
     "List every skill your owner has, with ids — including ones not assigned to you. " +
     'Call this before creating anything, so you extend an existing skill instead of duplicating it, ' +
     'and to get the skill_id that update and assign need. ' +
-    'Entries marked read_only are platform skills and cannot be edited from here.',
+    'Entries with scope "system" are Helm platform skills; editing one needs scope:"system" and ' +
+    'an admin owner. Entries marked read_only are ones you cannot edit.',
   inputSchema: {
     type: 'object',
     properties: {},
@@ -33,7 +51,9 @@ export const skillAuthoringCreateTool: ToolDefinition = {
     'literally, so write a procedure, not a description of one. ' +
     'Name tools as {{tool:gmail_search}} and other skills as {{skill:its-slug}} — those tokens are ' +
     'rendered into the exact names each reading agent sees, which differ between agent runtimes. ' +
-    'The skill does nothing until assigned with skill_authoring_assign.',
+    'The skill does nothing until assigned with skill_authoring_assign. ' +
+    'Pass scope:"system" only when the skill should ship to every account on the platform; the ' +
+    'default writes it for your owner alone.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -52,6 +72,7 @@ export const skillAuthoringCreateTool: ToolDefinition = {
       },
       slug: { type: 'string', description: 'Optional URL-safe slug; derived from name when omitted' },
       version: { type: 'string', description: 'Optional version stamp' },
+      ...scopeProperty,
     },
     required: ['name', 'description', 'body'],
   },
@@ -63,7 +84,8 @@ export const skillAuthoringUpdateTool: ToolDefinition = {
   description:
     'Replace the contents of one of your owner\'s skills, by skill_id from skill_authoring_list. ' +
     'This overwrites the whole skill, so send the complete name, description and body even when ' +
-    'changing one line — read the current version first. Platform skills cannot be edited.',
+    'changing one line — read the current version first. Editing a platform skill requires ' +
+    'scope:"system" and an admin owner; skill_authoring_get tells you which kind a skill is.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -73,6 +95,7 @@ export const skillAuthoringUpdateTool: ToolDefinition = {
       body: { type: 'string', description: 'Full replacement Markdown instructions' },
       requires: { type: 'array', items: { type: 'string' } },
       version: { type: 'string' },
+      ...scopeProperty,
     },
     required: ['skill_id', 'name', 'description', 'body'],
   },
@@ -84,7 +107,8 @@ export const skillAuthoringAssignTool: ToolDefinition = {
   description:
     "Attach a skill to one of your owner's agents, which is what makes the agent start using it. " +
     'Adds to whatever that agent already has; it never replaces the rest. ' +
-    'Refused if the target agent lacks a service the skill requires.',
+    'Refused if the target agent lacks a service the skill requires. ' +
+    "Platform skills can be attached to your owner's agents even when you cannot edit them.",
   inputSchema: {
     type: 'object',
     properties: {
@@ -135,11 +159,30 @@ export const skillAuthoringGetTool: ToolDefinition = {
   handler: handleGetAuthoredSkill,
 };
 
+export const skillAuthoringDeleteTool: ToolDefinition = {
+  name: 'skill_authoring_delete',
+  description:
+    "Permanently delete one of your owner's skills. It is detached from every agent that has it " +
+    'and the body is not recoverable — prefer skill_authoring_unassign when you only want one ' +
+    'agent to stop using it. With scope:"system" it deletes a Helm platform skill, removing it ' +
+    'from every account on the platform; that requires an admin owner.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      skill_id: { type: 'string', description: 'Skill id from skill_authoring_list' },
+      ...scopeProperty,
+    },
+    required: ['skill_id'],
+  },
+  handler: handleDeleteSkill,
+};
+
 export const skillAuthoringTools: ToolDefinition[] = [
   skillAuthoringListTool,
   skillAuthoringGetTool,
   skillAuthoringCreateTool,
   skillAuthoringUpdateTool,
+  skillAuthoringDeleteTool,
   skillAuthoringAssignTool,
   skillAuthoringUnassignTool,
 ];

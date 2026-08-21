@@ -967,6 +967,13 @@ export interface Skill {
   requiredServices: string[];
   /** Platform skill seeded from the repo — read-only unless you are an admin */
   isSystem: boolean;
+  /**
+   * Provenance of a platform skill's current content. 'template' means the repo
+   * still owns it and a deploy will overwrite it; 'admin' means someone edited
+   * it here and future template updates now skip it. Meaningless for your own
+   * skills, which always read 'admin'.
+   */
+  source?: 'template' | 'admin';
   autoAssign: boolean;
   enabled: boolean;
   assignedAgentIds?: string[];
@@ -987,6 +994,8 @@ export interface SkillInput {
   requiredServices?: string[];
   enabled?: boolean;
   autoAssign?: boolean;
+  /** Only read on create. A platform skill's id *is* its slug, so it is permanent. */
+  slug?: string;
 }
 
 // Skills API

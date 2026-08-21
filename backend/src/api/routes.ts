@@ -5850,6 +5850,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       requiredServices: parseRequiredServices(row.required_services),
       version: (row.version as string | null) ?? null,
       isSystem: row.user_id === null,
+      // Provenance of the current content; only meaningful on system rows.
+      source: ((row.source as string | null) ?? 'admin') as 'template' | 'admin',
       autoAssign: Boolean(row.auto_assign),
       enabled: Boolean(row.enabled),
       createdAt: row.created_at as string,
@@ -5907,6 +5909,30 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   }
 
   const skillNotFound = { error: { code: 'NOT_FOUND', message: 'Skill not found' } };
+
+  /**
+   * What `source` should read after an update.
+   *
+   * Editing a template-seeded platform skill takes it out of the seeder's hands
+   * — that is the mechanism that stops the next deploy reverting the edit. But
+   * only a *content* change counts. PUT /api/skills/:id is also how an admin
+   * toggles `enabled` or `autoAssign`, and detaching a stock skill from upstream
+   * fixes because someone disabled it for an afternoon is a surprise with a
+   * multi-deploy tail.
+   *
+   * A no-op for user-owned rows, which read 'admin' either way.
+   */
+  function nextSkillSource(
+    existing: Record<string, unknown>,
+    next: { name: string; description: string; body: string; requiredServices: string }
+  ): string {
+    const contentChanged =
+      next.name !== existing.name ||
+      next.description !== existing.description ||
+      next.body !== existing.body ||
+      next.requiredServices !== JSON.stringify(parseRequiredServices(existing.required_services));
+    return contentChanged ? 'admin' : ((existing.source as string | null) ?? 'admin');
+  }
 
   // --- Dashboard audience ---------------------------------------------------
 
@@ -5967,8 +5993,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     try {
       await client.execute({
-        sql: `INSERT INTO skills (id, user_id, slug, name, description, body, required_services, version, created_at, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, now(), now())`,
+        sql: `INSERT INTO skills (id, user_id, slug, name, description, body, required_services, version, source, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'admin', now(), now())`,
         args: [id, ownerId, slug, body.name!.trim(), body.description!, body.body!,
                JSON.stringify(body.requiredServices ?? []),
                (body.version as string | undefined) ?? null],
@@ -6022,18 +6048,26 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: invalid } });
     }
 
+    const nextRequiredServices = JSON.stringify(
+      body.requiredServices ?? parseRequiredServices(existing.required_services)
+    );
+
     await client.execute({
       sql: `UPDATE skills SET name = ?, description = ?, body = ?, required_services = ?,
-                  enabled = ?, auto_assign = ?, version = ?, updated_at = now()
+                  enabled = ?, auto_assign = ?, version = ?, source = ?, updated_at = now()
             WHERE id = ?`,
       args: [
         body.name!.trim(), body.description!, body.body!,
-        JSON.stringify(body.requiredServices ?? parseRequiredServices(existing.required_services)),
+        nextRequiredServices,
         body.enabled ?? Boolean(existing.enabled),
         body.autoAssign ?? Boolean(existing.auto_assign),
         // Omitting version keeps the stamped one — a dashboard edit must not
         // silently un-version a skill the installer placed.
         body.version ?? ((existing.version as string | null) ?? null),
+        nextSkillSource(existing, {
+          name: body.name!.trim(), description: body.description!,
+          body: body.body!, requiredServices: nextRequiredServices,
+        }),
         id,
       ],
     });
@@ -6219,9 +6253,13 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   //
   // Write counterparts to /api/agent-skills, for an agent running the
   // skill-authoring service. Authenticated as the *agent*, then scoped to its
-  // owner: an agent may touch its owner's skills and no one else's, and never a
-  // system skill (user_id IS NULL) — no agent can satisfy requireAdmin, so
-  // platform skills stay dashboard-only.
+  // owner: an agent may touch its owner's skills and no one else's.
+  //
+  // System skills (user_id IS NULL) are reachable, but only through two
+  // independent gates that enabling this service does not confer: the caller
+  // must pass `scope: "system"` explicitly, and the agent's *owner* must hold
+  // users.role = 'admin' (isAdminUser, not requireAdmin — see the note there).
+  // Neither gate is something an agent can grant itself.
   //
   // Reaching these routes at all requires the skill-authoring service to be
   // enabled on that agent. That enablement is the whole privilege boundary;
@@ -6236,6 +6274,65 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
    * 403 rather than 404: the caller is a valid agent of a real owner, it simply
    * is not an architect. Nothing about another user is revealed by saying so.
    */
+  /**
+   * Is this agent's owner a Helm admin, by database role?
+   *
+   * The role half of requireAdmin() with neither of its two credentials. A
+   * gateway token carries no session cookie, so requireAdmin() cannot be reused
+   * here — and must not be: it also accepts REINS_ADMIN_API_KEY, a human
+   * operator credential that an agent presenting an Authorization header would
+   * otherwise launder into platform-wide authorship.
+   *
+   * Checks status as well as role, matching the session lookup in
+   * backend/src/auth/index.ts: a suspended admin must not keep writing skills
+   * every account loads, through an agent token that is still live.
+   */
+  async function isAdminUser(userId: string): Promise<boolean> {
+    const result = await client.execute({
+      sql: `SELECT 1 FROM users WHERE id = ? AND role = 'admin' AND status = 'active' LIMIT 1`,
+      args: [userId],
+    });
+    return result.rows.length > 0;
+  }
+
+  type SkillScope = 'user' | 'system';
+
+  /**
+   * Resolve the `scope` argument on an architect write. Returns null once it has
+   * already sent the refusal.
+   *
+   * Explicit, and defaulting to 'user'. Scope is deliberately never inferred
+   * from the target row: an architect that names a platform skill id by mistake
+   * gets a 404, not a platform-wide edit — and the owner's approval prompt would
+   * have read as an ordinary skill edit either way. The opt-in *is* the safety
+   * property.
+   */
+  async function resolveSkillScope(
+    raw: unknown,
+    userId: string,
+    reply: any
+  ): Promise<SkillScope | null> {
+    if (raw === undefined || raw === null || raw === 'user') return 'user';
+    if (raw !== 'system') {
+      reply.code(400).send({
+        error: { code: 'VALIDATION_ERROR', message: 'scope must be "user" or "system"' },
+      });
+      return null;
+    }
+    if (!(await isAdminUser(userId))) {
+      reply.code(403).send({
+        error: {
+          code: 'ADMIN_REQUIRED',
+          message:
+            'Only an agent whose owner is a Helm admin may write platform skills. ' +
+            'Omit scope, or pass "user", to write a skill for this account.',
+        },
+      });
+      return null;
+    }
+    return 'system';
+  }
+
   async function requireSkillAuthoring(agentId: string, reply: any): Promise<boolean> {
     if (await isServiceEnabledForAgent(agentId, 'skill-authoring')) return true;
     reply.code(403).send({
@@ -6264,6 +6361,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
     if (!(await requireSkillAuthoring(agent.agentId, reply))) return;
 
+    // Resolved once for the list rather than per row: whether a platform skill
+    // is read-only is a fact about the *caller*, not about the skill.
+    const canEditSystem = await isAdminUser(agent.userId);
+
     const result = await client.execute({
       sql: `SELECT * FROM skills WHERE user_id = ? OR user_id IS NULL
             ORDER BY user_id NULLS FIRST, name`,
@@ -6273,7 +6374,11 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     return {
       data: result.rows.map((row) => {
         const { body: _body, ...rest } = mapSkillRow(row);
-        return rest;
+        return {
+          ...rest,
+          scope: rest.isSystem ? ('system' as const) : ('user' as const),
+          readOnly: rest.isSystem && !canEditSystem,
+        };
       }),
     };
   });
@@ -6329,9 +6434,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     return {
       data: {
         ...skill,
-        // Platform skills are readable but not writable; saying so here saves
-        // an author discovering it only when the update is refused.
-        readOnly: skill.isSystem,
+        // `scope` names the argument that reaches this row; `readOnly` answers
+        // whether this caller may use it. They are different questions now that
+        // an admin owner's architect can write platform skills, and saying both
+        // here saves an author discovering the answer only when a write fails.
+        scope: skill.isSystem ? ('system' as const) : ('user' as const),
+        readOnly: skill.isSystem && !(await isAdminUser(agent.userId)),
       },
     };
   });
@@ -6345,6 +6453,38 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     return result.rows[0] ?? null;
   }
 
+  /** A platform skill. Only reached once resolveSkillScope has cleared 'system'. */
+  async function getSystemSkill(id: string) {
+    const result = await client.execute({
+      sql: `SELECT * FROM skills WHERE id = ? AND user_id IS NULL LIMIT 1`,
+      args: [id],
+    });
+    return result.rows[0] ?? null;
+  }
+
+  /**
+   * A 404 on a user-scoped write is worth one extra lookup: if the id names a
+   * platform skill, say so and name the argument that reaches it. Nothing leaks
+   * — every account can already read every platform skill via /api/skill-library
+   * — and the alternative is an architect retrying a well-formed call forever.
+   *
+   * 409 rather than 403: the request conflicts with state the payload can fix,
+   * and the caller may well be allowed once it does.
+   */
+  async function scopeRequiredIfSystem(id: string, reply: any): Promise<boolean> {
+    const system = await getSystemSkill(id);
+    if (!system) return false;
+    reply.code(409).send({
+      error: {
+        code: 'SCOPE_REQUIRED',
+        message:
+          `"${system.slug as string}" is a platform skill. Pass scope:"system" to change it — ` +
+          'which requires your owner to be a Helm admin.',
+      },
+    });
+    return true;
+  }
+
   app.post('/api/agent-skills', async (request, reply) => {
     const agent = await resolveAgentFromGatewayToken(request);
     if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
@@ -6353,7 +6493,13 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const body = request.body as {
       name?: string; description?: string; body?: string;
       requiredServices?: string[]; slug?: string; version?: string;
+      scope?: string;
     };
+
+    // Authorization before shape: a non-admin owner must not learn which payload
+    // field is malformed on a platform write it could never have made.
+    const scope = await resolveSkillScope(body.scope, agent.userId, reply);
+    if (!scope) return;
 
     const invalid = validateSkillPayload(body);
     if (invalid) {
@@ -6365,18 +6511,30 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Could not derive a slug from name' } });
     }
 
-    const id = nanoid();
+    // Mirrors the dashboard's POST /api/skills and the seeder: a platform
+    // skill's id *is* its slug, which is what lets seedSystemSkills() update in
+    // place rather than duplicate.
+    const id = scope === 'system' ? slug : nanoid();
+    const ownerId = scope === 'system' ? null : agent.userId;
+
     try {
       await client.execute({
-        sql: `INSERT INTO skills (id, user_id, slug, name, description, body, required_services, version, created_at, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, now(), now())`,
-        args: [id, agent.userId, slug, body.name!.trim(), body.description!, body.body!,
+        sql: `INSERT INTO skills (id, user_id, slug, name, description, body, required_services, version, source, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'admin', now(), now())`,
+        args: [id, ownerId, slug, body.name!.trim(), body.description!, body.body!,
                JSON.stringify(body.requiredServices ?? []), body.version ?? null],
       });
     } catch (err) {
+      // 23505 covers both the primary key (system rows, where id = slug) and the
+      // partial unique indexes on slug.
       if ((err as { code?: string })?.code === '23505') {
         return reply.code(409).send({
-          error: { code: 'DUPLICATE_SLUG', message: `A skill with the slug "${slug}" already exists` },
+          error: {
+            code: 'DUPLICATE_SLUG',
+            message: scope === 'system'
+              ? `A platform skill with the slug "${slug}" already exists`
+              : `A skill with the slug "${slug}" already exists`,
+          },
         });
       }
       throw err;
@@ -6387,10 +6545,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     await auditLogger.log({
       eventType: 'policy_change',
       result: 'success',
-      metadata: { kind: 'skill', action: 'created', skillId: id, slug, changedBy: agent.userId, byAgent: agent.agentId },
+      metadata: { kind: 'skill', action: 'created', skillId: id, slug, scope, changedBy: agent.userId, byAgent: agent.agentId },
     });
 
-    return reply.code(201).send({ data: { id, slug } });
+    return reply.code(201).send({ data: { id, slug, scope } });
   });
 
   app.put<{ Params: { id: string } }>('/api/agent-skills/id/:id', async (request, reply) => {
@@ -6398,26 +6556,44 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
     if (!(await requireSkillAuthoring(agent.agentId, reply))) return;
 
-    const existing = await getWritableSkill(request.params.id, agent.userId);
-    if (!existing) return reply.code(404).send(skillNotFound);
-
     const body = request.body as {
       name?: string; description?: string; body?: string;
-      requiredServices?: string[]; version?: string;
+      requiredServices?: string[]; version?: string; scope?: string;
     };
+
+    const scope = await resolveSkillScope(body.scope, agent.userId, reply);
+    if (!scope) return;
+
+    const existing = scope === 'system'
+      ? await getSystemSkill(request.params.id)
+      : await getWritableSkill(request.params.id, agent.userId);
+    if (!existing) {
+      // Signpost rather than stonewall when the miss is only about scope.
+      if (scope === 'user' && (await scopeRequiredIfSystem(request.params.id, reply))) return;
+      return reply.code(404).send(skillNotFound);
+    }
+
     const invalid = validateSkillPayload(body);
     if (invalid) {
       return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: invalid } });
     }
 
+    const nextRequiredServices = JSON.stringify(
+      body.requiredServices ?? parseRequiredServices(existing.required_services)
+    );
+
     await client.execute({
       sql: `UPDATE skills SET name = ?, description = ?, body = ?, required_services = ?,
-                  version = ?, updated_at = now()
+                  version = ?, source = ?, updated_at = now()
             WHERE id = ?`,
       args: [
         body.name!.trim(), body.description!, body.body!,
-        JSON.stringify(body.requiredServices ?? parseRequiredServices(existing.required_services)),
+        nextRequiredServices,
         body.version ?? ((existing.version as string | null) ?? null),
+        nextSkillSource(existing, {
+          name: body.name!.trim(), description: body.description!,
+          body: body.body!, requiredServices: nextRequiredServices,
+        }),
         request.params.id,
       ],
     });
@@ -6427,11 +6603,11 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       result: 'success',
       metadata: {
         kind: 'skill', action: 'updated', skillId: request.params.id,
-        slug: existing.slug, changedBy: agent.userId, byAgent: agent.agentId,
+        slug: existing.slug, scope, changedBy: agent.userId, byAgent: agent.agentId,
       },
     });
 
-    return { data: { id: request.params.id, slug: existing.slug as string } };
+    return { data: { id: request.params.id, slug: existing.slug as string, scope } };
   });
 
   /**
@@ -6442,6 +6618,66 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
    * unassign every other skill on the target. This reads, merges, and writes one
    * row.
    */
+  /**
+   * Delete one of the owner's skills, or — with scope=system and an admin owner
+   * — a platform skill.
+   *
+   * Scope travels as a query parameter rather than a body: a DELETE with a JSON
+   * payload needs the client to set Content-Type and Fastify to have a body
+   * parser wired for the method, and both ends of this call are ours.
+   */
+  app.delete<{ Params: { id: string }; Querystring: { scope?: string } }>(
+    '/api/agent-skills/id/:id',
+    async (request, reply) => {
+      const agent = await resolveAgentFromGatewayToken(request);
+      if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
+      if (!(await requireSkillAuthoring(agent.agentId, reply))) return;
+
+      const scope = await resolveSkillScope(request.query.scope, agent.userId, reply);
+      if (!scope) return;
+
+      const { id } = request.params;
+      const existing = scope === 'system'
+        ? await getSystemSkill(id)
+        : await getWritableSkill(id, agent.userId);
+      if (!existing) {
+        if (scope === 'user' && (await scopeRequiredIfSystem(id, reply))) return;
+        return reply.code(404).send(skillNotFound);
+      }
+
+      // Stated as a number rather than a phrase: "removes it from every agent"
+      // is easy to nod through, "removes it from 34 agents" is not.
+      const attached = await client.execute({
+        sql: `SELECT count(*) AS n FROM agent_skills WHERE skill_id = ?`,
+        args: [id],
+      });
+      const detachedFrom = Number(attached.rows[0]?.n ?? 0);
+
+      // agent_skills rows go with it via ON DELETE CASCADE.
+      await client.execute({ sql: `DELETE FROM skills WHERE id = ?`, args: [id] });
+
+      await auditLogger.log({
+        eventType: 'policy_change',
+        result: 'success',
+        metadata: {
+          kind: 'skill', action: 'deleted', skillId: id, slug: existing.slug, scope,
+          detachedFrom, changedBy: agent.userId, byAgent: agent.agentId,
+        },
+      });
+
+      return {
+        data: {
+          id, slug: existing.slug as string, deleted: true, detachedFrom,
+          // Platform skills are re-created from templates/skills/ on every boot.
+          // Deleting one only sticks if no template ships for its slug — which
+          // this process cannot know, so it states the condition rather than
+          // guessing at it.
+          ...(existing.user_id === null ? { reseeds: true } : {}),
+        },
+      };
+    }
+  );
+
   app.post<{ Params: { agentId: string } }>('/api/agent-skills/assign/:agentId', async (request, reply) => {
     const agent = await resolveAgentFromGatewayToken(request);
     if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
@@ -6457,7 +6693,13 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
     const attach = body.attached !== false;
 
-    const skill = await getWritableSkill(body.skillId, agent.userId);
+    // Readable, not writable: attaching a platform skill to your own agent is
+    // not a privileged act, and the dashboard has always allowed it — PUT
+    // /api/agents/:id/skills resolves the same set through getReadableSkill.
+    // The write scope here also made *un*assigning one impossible, since the
+    // detach branch sits below this lookup: a platform skill the dashboard
+    // attached could never be detached by the architect managing that agent.
+    const skill = await getReadableSkill(body.skillId, agent.userId);
     if (!skill) return reply.code(404).send(skillNotFound);
 
     if (!attach) {

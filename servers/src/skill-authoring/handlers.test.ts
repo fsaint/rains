@@ -14,6 +14,7 @@ import {
   handleGetAuthoredSkill,
   handleCreateSkill,
   handleUpdateSkill,
+  handleDeleteSkill,
   handleAssignSkill,
   handleUnassignSkill,
 } from './handlers.js';
@@ -340,5 +341,155 @@ describe('handleGetAuthoredSkill', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('nope');
+  });
+});
+
+
+describe('scope forwarding', () => {
+  /**
+   * `scope` is validated here as well as in the backend, and not only for
+   * latency: the approval is queued *before* the handler runs, so a typo'd scope
+   * would otherwise cost the owner an approval prompt for a call destined to 400.
+   */
+  it('forwards scope:"system" on create', async () => {
+    mockFetch.mockResolvedValue(makeOkResponse({ id: 'stock', slug: 'stock', scope: 'system' }));
+
+    await handleCreateSkill(
+      { name: 'Stock', description: 'd', body: 'b', scope: 'system' },
+      mockContext
+    );
+
+    expect(JSON.parse(lastCall().init.body as string).scope).toBe('system');
+  });
+
+  it('omits scope entirely for a user-scoped or unscoped create', async () => {
+    for (const args of [
+      { name: 'N', description: 'd', body: 'b', scope: 'user' },
+      { name: 'N', description: 'd', body: 'b' },
+    ]) {
+      mockFetch.mockResolvedValue(makeOkResponse({ id: 'sk-1', slug: 'n' }));
+      await handleCreateSkill(args, mockContext);
+      expect(JSON.parse(lastCall().init.body as string)).not.toHaveProperty('scope');
+    }
+  });
+
+  it('forwards scope:"system" on update', async () => {
+    mockFetch.mockResolvedValue(makeOkResponse({ id: 'stock', slug: 'stock' }));
+
+    await handleUpdateSkill(
+      { skill_id: 'stock', name: 'N', description: 'd', body: 'b', scope: 'system' },
+      mockContext
+    );
+
+    expect(JSON.parse(lastCall().init.body as string).scope).toBe('system');
+  });
+
+  it('rejects an unrecognised scope without spending a round trip', async () => {
+    const result = await handleCreateSkill(
+      { name: 'N', description: 'd', body: 'b', scope: 'platform' },
+      mockContext
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('scope must be');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('points a 404 at the scope argument rather than calling platform skills uneditable', async () => {
+    mockFetch.mockResolvedValue(makeErrorResponse(404));
+
+    const result = await handleUpdateSkill(
+      { skill_id: 'stock', name: 'N', description: 'd', body: 'b' },
+      mockContext
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('scope:"system"');
+    expect(result.error).toContain('Helm admin');
+  });
+});
+
+describe('handleDeleteSkill', () => {
+  it('requires a skill_id', async () => {
+    const result = await handleDeleteSkill({}, mockContext);
+
+    expect(result.success).toBe(false);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('DELETEs the id endpoint, url-encoding the id', async () => {
+    mockFetch.mockResolvedValue(makeOkResponse({ id: 'a/b', slug: 's', deleted: true }));
+
+    await handleDeleteSkill({ skill_id: 'a/b' }, mockContext);
+
+    const { url, init } = lastCall();
+    expect(init.method).toBe('DELETE');
+    expect(url).toBe('https://test.helm.mom/api/agent-skills/id/a%2Fb');
+    expect((init.headers as Record<string, string>)['x-reins-agent-secret']).toBe('test-gateway-token');
+  });
+
+  it('sends scope in the query string, not a body — DELETE bodies are not parsed', async () => {
+    mockFetch.mockResolvedValue(makeOkResponse({ id: 'stock', slug: 'stock', deleted: true }));
+
+    await handleDeleteSkill({ skill_id: 'stock', scope: 'system' }, mockContext);
+
+    const { url, init } = lastCall();
+    expect(url).toContain('?scope=system');
+    expect(init.body).toBeUndefined();
+  });
+
+  it('warns that a deleted platform skill returns if a template still ships for it', async () => {
+    mockFetch.mockResolvedValue(
+      makeOkResponse({ id: 'stock', slug: 'stock', deleted: true, reseeds: true })
+    );
+
+    const result = await handleDeleteSkill({ skill_id: 'stock', scope: 'system' }, mockContext);
+
+    expect(result.success).toBe(true);
+    expect((result.data as { note?: string }).note).toContain('re-created from the repo templates');
+  });
+
+  it('omits the re-seed note for a skill that cannot come back', async () => {
+    mockFetch.mockResolvedValue(makeOkResponse({ id: 'sk-1', slug: 's', deleted: true }));
+
+    const result = await handleDeleteSkill({ skill_id: 'sk-1' }, mockContext);
+
+    expect(result.data as Record<string, unknown>).not.toHaveProperty('note');
+  });
+});
+
+describe('per-caller read_only', () => {
+  it('reports a platform skill as editable for an admin owner, while still naming its scope', async () => {
+    // read_only answers "may *you* write this"; scope answers "how is it
+    // addressed". They stopped being the same question once an admin owner's
+    // architect could write platform skills.
+    mockFetch.mockResolvedValue(
+      makeOkResponse({
+        id: 'stock', slug: 'stock', name: 'Stock', description: 'd', body: 'b',
+        isSystem: true, readOnly: false,
+      })
+    );
+
+    const result = await handleGetAuthoredSkill({ skill_id: 'stock' }, mockContext);
+
+    const data = result.data as Record<string, unknown>;
+    expect(data.scope).toBe('system');
+    expect(data).not.toHaveProperty('read_only');
+  });
+
+  it('falls back to isSystem when the backend does not send readOnly', async () => {
+    // Keeps an un-upgraded backend reporting platform skills as read-only rather
+    // than silently inviting a write that will be refused.
+    mockFetch.mockResolvedValue(
+      makeOkResponse([
+        { id: 'stock', slug: 'stock', name: 'S', description: 'd', requiredServices: [], isSystem: true },
+      ])
+    );
+
+    const result = await handleListAuthoredSkills({}, mockContext);
+    const skills = (result.data as { skills: Array<Record<string, unknown>> }).skills;
+
+    expect(skills[0].read_only).toBe(true);
+    expect(skills[0].scope).toBe('system');
   });
 });

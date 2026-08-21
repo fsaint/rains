@@ -15,7 +15,10 @@ Verified end-to-end on 2026-08-12/13 installing six skills.
 - The agent's MCP endpoint URL, `https://app.helm.mom/mcp/<gateway-token>`. The token in the
   path *is* the credential — treat the URL as a secret.
 - Telegram or `https://app.helm.mom/approvals` reachable by the owner. **Every
-  `skill_authoring_create` raises an approval**, one per skill.
+  write raises an approval** — create, update, delete, assign, unassign — one per
+  call. A `scope: "system"` write is rendered with a **PLATFORM-WIDE** banner, so
+  the owner can tell a change to their own library from one that ships to every
+  account.
 - Skill bodies with frontmatter. See `templates/skills/inbox-triage/SKILL.md` for the shape.
 
 ## Protocol notes
@@ -45,7 +48,9 @@ curl -sS -X POST "$HELM_MCP_URL" \
 ```
 
 Returns every skill the owner has, with ids, including ones not assigned to this agent.
-Entries marked `read_only` are platform skills and cannot be edited. Bodies are omitted —
+Entries carrying `scope: "system"` are Helm platform skills; `read_only` marks the ones
+*this caller* may not edit, which for a platform skill depends on whether the owner is an
+admin. See **Scope** below. Bodies are omitted —
 the list is for picking an id; pull one body at a time with `{{skill:slug}}` or the
 dashboard.
 
@@ -204,8 +209,8 @@ It returns the body **exactly as stored**, with `{{tool:…}}` and `{{skill:…}
 rendered body through `skill_authoring_update` you would write one runtime's spelling into the
 stored skill and break it for the other. Keep the tokens as tokens.
 
-Platform skills come back with `read_only: true`. They are readable — model new work on them —
-but `skill_authoring_update` refuses them.
+Platform skills come back with `scope: "system"`. Whether they also carry `read_only: true`
+depends on the caller: an admin owner's architect may edit them, anyone else's may not.
 
 ## Updating
 
@@ -214,12 +219,69 @@ but `skill_authoring_update` refuses them.
 `skill_authoring_get`. It needs the `skill_id` — from `skill_authoring_list`, `skill_authoring_get`,
 or the one you captured at create time.
 
+## Scope — account skills vs Helm skills
+
+Every write takes an optional `scope`:
+
+| `scope` | Writes | Requires |
+|---|---|---|
+| `"user"` (default) | A skill in the calling agent's owner's library | skill-authoring enabled on the agent |
+| `"system"` | A **Helm platform skill** every account on the platform can load | the above, **plus** the owner holding `role = 'admin'` |
+
+```jsonc
+{"method":"tools/call","params":{"name":"skill_authoring_create","arguments":{
+  "name": "Inbox Triage", "description": "Use when…", "body": "…",
+  "slug": "inbox-triage", "scope": "system"
+}}}
+```
+
+Two properties are load-bearing and worth understanding before using this:
+
+- **Scope is never inferred.** Naming a platform skill's id without `scope: "system"` returns
+  `409 SCOPE_REQUIRED` rather than editing it. The opt-in is the safety mechanism: an inferred
+  escalation would reach the owner's phone looking like an ordinary skill edit.
+- **Enabling skill-authoring does not grant platform authorship.** The role is checked against
+  the database on every call, against the *owner*, and requires an active account. No agent can
+  grant it to itself.
+
+A non-admin owner's agent gets `403 ADMIN_REQUIRED`. Note that the approval is raised before
+the route runs, so such a call still prompts the owner and then fails once granted.
+
+A platform skill's **id is its slug**, permanently — it is the address the repo templates and
+every `{{skill:…}}` reference use. A user's own skill with the same slug takes precedence for
+that user, so publishing a platform skill does not displace one someone already has.
+
+## Deleting
+
+```jsonc
+{"method":"tools/call","params":{"name":"skill_authoring_delete","arguments":{
+  "skill_id": "<id>", "scope": "system"}}}
+```
+
+Deletes the skill and, by cascade, every assignment of it. The response reports
+`detachedFrom` — how many agents just lost it. Not recoverable; prefer
+`skill_authoring_unassign` when you only want one agent to stop using it.
+
+**Deleting a platform skill does not necessarily stick.** Skills under
+`templates/skills/<slug>/` are re-seeded on every deploy, so one with a template still in the
+repo comes back. The response sets `reseeds: true` on any platform delete to say the condition
+applies; retiring such a skill for good means removing its template directory.
+
+Conversely, **editing** a template-backed platform skill takes it out of the seeder's hands
+permanently — its `source` flips from `template` to `admin` and later deploys skip it, logging
+the skip. That is deliberate: it is what stops a deploy reverting your edit. It also means the
+skill stops receiving upstream fixes.
+
 ## Gotchas
 
 | Symptom | Cause |
 |---|---|
 | `The skill-authoring service is not enabled on this agent.` | 403 `SERVICE_NOT_ENABLED` — enable skill-authoring on the agent in Permissions. Enforced on the HTTP routes, not only on tool exposure, so a direct call is refused too |
 | `A skill with the slug "…" already exists` | 409 `DUPLICATE_SLUG`; update instead of create |
+| `ADMIN_REQUIRED` | 403 — `scope: "system"` from an agent whose owner is not an active admin |
+| `SCOPE_REQUIRED` | 409 — the id names a platform skill; retry with `scope: "system"` |
+| A platform skill reappeared after I deleted it | A template still ships for its slug; remove `templates/skills/<slug>/` |
+| A fix to a stock skill never reached an account | Someone edited it there, so `source` is `admin` and the seeder now skips it — see the `[skills] Skipped …` boot log |
 | Assignment refused, names a service | Target agent lacks a `requires` entry |
 | Skill installed but agent ignores it | Not assigned, or its `description` does not read as a trigger |
 | `{{tool:...}}` visible in the agent's output | Malformed token — check the tool name exists |

@@ -414,7 +414,7 @@ each exists because without it the capability is unsafe to delegate at all.
 
 | Service | What it can do |
 |---|---|
-| `skill-authoring` | Write the instructions other agents follow, and assign them |
+| `skill-authoring` | Write the instructions other agents follow, and assign them — and, for an admin owner, the Helm platform skills every account loads |
 | `helm-admin` | Create and destroy agents; grant, revoke, and tune what each can reach |
 
 **1. `helm-admin` may not coexist with anything except `memory`.** Enforced in both directions
@@ -441,9 +441,33 @@ either definition; it defaults to `require_approval` and must stay there. Approv
 (`backend/src/notifications/approval-format.ts`), because approving the destruction of an agent
 you cannot identify is not consent.
 
+**5. `skill-authoring` does not confer platform authorship.** Writing a system skill
+(`user_id IS NULL`) needs two independent things that enabling the service does not give:
+an explicit `scope: "system"` argument, and the calling agent's *owner* holding
+`users.role = 'admin'` and an active account. The role is checked by `isAdminUser` in
+`backend/src/api/routes.ts`, deliberately **not** `requireAdmin()` — that one reads a session
+a gateway token does not have, and it also accepts `REINS_ADMIN_API_KEY`, a human operator
+credential an agent must never be able to launder into platform-wide authorship. Keep the
+scope an explicit argument rather than inferring it from the target row: an inferred
+escalation reaches the owner's phone looking like an ordinary skill edit.
+
+Related: `skills.source` (`'template' | 'admin'`) is what stops `seedSystemSkills()` reverting
+an admin's edit on the next deploy. Only a *content* change flips it, so toggling `enabled`
+does not silently detach a stock skill from upstream fixes. Never add the column as
+`NOT NULL DEFAULT 'admin'` in one statement — that stamps every template row admin-edited and
+freezes the whole fleet against template updates, silently.
+
 One structural caveat: approval is decided from the permission level *before* the handler runs,
 so a call the route will refuse still raises an approval and fails after it is granted. Safe,
-but do not claim a route-level check happens "before the approval is raised".
+but do not claim a route-level check happens "before the approval is raised". This applies to
+`scope: "system"` from a non-admin owner as much as to a blocked `helm-admin` call — the owner
+is prompted, approves, and the route then returns `ADMIN_REQUIRED`.
+
+Approvals for `skill_authoring_*` render through `formatSkillApprovalMessage`
+(`backend/src/notifications/approval-format.ts`), which leads with a **PLATFORM-WIDE** banner on
+a system-scoped write. Do not let these fall back to the generic formatter: it truncates the
+argument JSON at 200 characters, and a real skill body pushes `scope` off the end — the owner
+would approve a platform-wide change without seeing that it was one.
 
 ## Phase 1 Priorities
 
@@ -944,7 +968,7 @@ fly secrets set --app agenthelm-core \
 | [`docs/ops/PROD_SETUP.md`](docs/ops/PROD_SETUP.md) | Production setup checklist: Google OAuth, Fly secrets, DNS, deployment steps |
 | [`docs/ops/UPDATE_API_KEY.md`](docs/ops/UPDATE_API_KEY.md) | How to update a user's LLM API key in both the DB and the running Fly machine |
 | [`docs/ops/COMMON_ERRORS.md`](docs/ops/COMMON_ERRORS.md) | Known traps and their fixes, across agent runtime (bot not responding, MiniMax startup, webhook relay) **and the platform codebase** (env-file handling, migration ordering, two-table service enablement, adding a native MCP server, skill token rendering). Read before debugging anything odd |
-| [`docs/ops/ADDING_SKILLS_VIA_MCP.md`](docs/ops/ADDING_SKILLS_VIA_MCP.md) | Authoring, reading, updating, and assigning skills through the skill-authoring MCP |
+| [`docs/ops/ADDING_SKILLS_VIA_MCP.md`](docs/ops/ADDING_SKILLS_VIA_MCP.md) | Authoring, reading, updating, deleting, and assigning skills through the skill-authoring MCP, including admin-only Helm platform skills |
 | [`docs/ops/ADMIN_TOOLS.md`](docs/ops/ADMIN_TOOLS.md) | Python admin scripts: setup, usage, hard-guard verification, token rotation |
 | [`docs/ops/ADMIN_PROJECT_HANDOVER.md`](docs/ops/ADMIN_PROJECT_HANDOVER.md) | Full architecture handover for a standalone admin project with core+personal Fly access |
 | [`docs/ops/DNS.md`](docs/ops/DNS.md) | DNS configuration: Vercel records, Fly app hostnames, common mistakes, fix runbook |

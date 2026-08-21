@@ -120,7 +120,7 @@ function skillRow(over: Partial<Record<string, unknown>> = {}) {
   return {
     id: 'sk-1', user_id: 'user-1', slug: 'inbox-triage', name: 'Inbox Triage',
     description: 'Triage the inbox', body: '## Procedure',
-    required_services: '["gmail"]', auto_assign: false, enabled: true,
+    required_services: '["gmail"]', auto_assign: false, enabled: true, source: 'admin',
     created_at: 'now', updated_at: 'now', ...over,
   };
 }
@@ -490,6 +490,242 @@ describe('GET /api/agent-skills/:slug', () => {
  * agent the owner does not own. Plus the one positive guarantee that assignment
  * adds rather than replaces.
  */
+describe('scoped architect writes — platform skills', () => {
+  const agentAuth = { 'x-reins-agent-secret': 'tok' };
+  const deployedRow: [RegExp, unknown] = [
+    /FROM deployed_agents da/,
+    rows([{ agent_id: 'architect', user_id: 'user-1' }]),
+  ];
+  const adminOwner: [RegExp, unknown] = [
+    /SELECT 1 FROM users WHERE id = \? AND role = 'admin'/,
+    rows([{ '?column?': 1 }]),
+  ];
+  const systemRow = (over: Record<string, unknown> = {}) =>
+    skillRow({ id: 'stock', slug: 'stock', user_id: null, source: 'template', ...over });
+
+  const insertOf = () =>
+    mockExecute.mock.calls
+      .map((c: any) => c[0])
+      .find((q: any) => typeof q?.sql === 'string' && q.sql.includes('INSERT INTO skills'));
+
+  it('creates a platform skill for an admin owner, keyed by slug and marked admin-authored', async () => {
+    routeDb([deployedRow, adminOwner, [/INSERT INTO skills/, rows([])]]);
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/agent-skills', headers: agentAuth,
+      payload: { name: 'Stock Play', description: 'When to use.', body: '## Steps', slug: 'stock-play', scope: 'system' },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json().data.scope).toBe('system');
+    const insert = insertOf();
+    // A platform skill's id *is* its slug — that is what lets the seeder update
+    // in place rather than duplicate.
+    expect(insert.args[0]).toBe('stock-play');
+    expect(insert.args[1]).toBeNull();
+    expect(insert.sql).toContain("'admin'");
+  });
+
+  it('refuses a platform write when the owner is not an admin, and writes nothing', async () => {
+    routeDb([deployedRow, [/SELECT 1 FROM users WHERE id = \? AND role = 'admin'/, rows([])]]);
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/agent-skills', headers: agentAuth,
+      payload: { name: 'Stock Play', description: 'When to use.', body: '## Steps', scope: 'system' },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.code).toBe('ADMIN_REQUIRED');
+    expect(insertOf()).toBeUndefined();
+  });
+
+  it('refuses a suspended admin — the role check requires an active account', async () => {
+    // isAdminUser filters on status = 'active', so a suspended admin's still-live
+    // agent token stops being able to write what every account loads.
+    routeDb([deployedRow, [/SELECT 1 FROM users WHERE id = \? AND role = 'admin'/, rows([])]]);
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/agent-skills', headers: agentAuth,
+      payload: { name: 'X', description: 'd', body: 'b', scope: 'system' },
+    });
+
+    expect(res.statusCode).toBe(403);
+    const roleQuery = mockExecute.mock.calls
+      .map((c: any) => c[0])
+      .find((q: any) => typeof q?.sql === 'string' && q.sql.includes("role = 'admin'"));
+    expect(roleQuery.sql).toContain("status = 'active'");
+  });
+
+  it('rejects a scope that is neither value', async () => {
+    routeDb([deployedRow]);
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/agent-skills', headers: agentAuth,
+      payload: { name: 'X', description: 'd', body: 'b', scope: 'platform' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('checks service enablement before the owner role, so a non-architect learns nothing about its owner', async () => {
+    mockIsServiceEnabled.mockResolvedValue(false);
+    routeDb([deployedRow, adminOwner]);
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/agent-skills', headers: agentAuth,
+      payload: { name: 'X', description: 'd', body: 'b', scope: 'system' },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.code).toBe('SERVICE_NOT_ENABLED');
+    const roleQuery = mockExecute.mock.calls
+      .map((c: any) => c[0])
+      .find((q: any) => typeof q?.sql === 'string' && q.sql.includes("role = 'admin'"));
+    expect(roleQuery).toBeUndefined();
+  });
+
+  it('does not touch a platform row when scope is omitted, even for an admin owner', async () => {
+    // The explicit opt-in is the safety property: a mistyped id must not become
+    // a platform-wide edit just because the caller happens to be an admin.
+    routeDb([
+      deployedRow, adminOwner,
+      [/SELECT \* FROM skills WHERE id = \? AND user_id = \?/, rows([])],
+      [/SELECT \* FROM skills WHERE id = \? AND user_id IS NULL/, rows([systemRow()])],
+    ]);
+
+    const res = await app.inject({
+      method: 'PUT', url: '/api/agent-skills/id/stock', headers: agentAuth,
+      payload: { name: 'n', description: 'd', body: 'b' },
+    });
+
+    expect(res.statusCode).toBe(409);
+    const update = mockExecute.mock.calls
+      .map((c: any) => c[0])
+      .find((q: any) => typeof q?.sql === 'string' && q.sql.includes('UPDATE skills SET'));
+    expect(update).toBeUndefined();
+  });
+
+  it('takes a template-seeded skill out of the seeder\'s hands when its content changes', async () => {
+    routeDb([
+      deployedRow, adminOwner,
+      [/SELECT \* FROM skills WHERE id = \? AND user_id IS NULL/, rows([systemRow()])],
+      [/UPDATE skills SET/, rows([])],
+    ]);
+
+    const res = await app.inject({
+      method: 'PUT', url: '/api/agent-skills/id/stock', headers: agentAuth,
+      payload: { name: 'Inbox Triage', description: 'Triage the inbox', body: '## Rewritten', scope: 'system' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const update = mockExecute.mock.calls
+      .map((c: any) => c[0])
+      .find((q: any) => typeof q?.sql === 'string' && q.sql.includes('UPDATE skills SET'));
+    // args order: name, description, body, required_services, version, source, id
+    expect(update.args[5]).toBe('admin');
+  });
+
+  it('leaves source alone when an update changes nothing about the content', async () => {
+    // Re-sending the same text (or toggling metadata) must not detach a stock
+    // skill from future template fixes.
+    routeDb([
+      deployedRow, adminOwner,
+      [/SELECT \* FROM skills WHERE id = \? AND user_id IS NULL/, rows([systemRow()])],
+      [/UPDATE skills SET/, rows([])],
+    ]);
+
+    const res = await app.inject({
+      method: 'PUT', url: '/api/agent-skills/id/stock', headers: agentAuth,
+      payload: {
+        name: 'Inbox Triage', description: 'Triage the inbox', body: '## Procedure',
+        requiredServices: ['gmail'], scope: 'system',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const update = mockExecute.mock.calls
+      .map((c: any) => c[0])
+      .find((q: any) => typeof q?.sql === 'string' && q.sql.includes('UPDATE skills SET'));
+    expect(update.args[5]).toBe('template');
+  });
+});
+
+describe('DELETE /api/agent-skills/id/:id', () => {
+  const agentAuth = { 'x-reins-agent-secret': 'tok' };
+  const deployedRow: [RegExp, unknown] = [
+    /FROM deployed_agents da/,
+    rows([{ agent_id: 'architect', user_id: 'user-1' }]),
+  ];
+  const adminOwner: [RegExp, unknown] = [
+    /SELECT 1 FROM users WHERE id = \? AND role = 'admin'/,
+    rows([{ '?column?': 1 }]),
+  ];
+
+  const deleteOf = () =>
+    mockExecute.mock.calls
+      .map((c: any) => c[0])
+      .find((q: any) => typeof q?.sql === 'string' && q.sql.includes('DELETE FROM skills'));
+
+  it('deletes a skill the owner owns and reports how many agents lose it', async () => {
+    routeDb([
+      deployedRow,
+      [/SELECT \* FROM skills WHERE id = \? AND user_id = \?/, rows([skillRow()])],
+      [/count\(\*\) AS n FROM agent_skills/, rows([{ n: 3 }])],
+    ]);
+
+    const res = await app.inject({
+      method: 'DELETE', url: '/api/agent-skills/id/sk-1', headers: agentAuth,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.deleted).toBe(true);
+    expect(res.json().data.detachedFrom).toBe(3);
+    // A user skill cannot be resurrected by the seeder, so no warning.
+    expect(res.json().data.reseeds).toBeUndefined();
+    expect(deleteOf()).toBeDefined();
+  });
+
+  it('404s for a skill belonging to someone else, and deletes nothing', async () => {
+    routeDb([deployedRow, [/SELECT \* FROM skills WHERE id = \?/, rows([])]]);
+
+    const res = await app.inject({
+      method: 'DELETE', url: '/api/agent-skills/id/someone-elses', headers: agentAuth,
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(deleteOf()).toBeUndefined();
+  });
+
+  it('deletes a platform skill for an admin owner and warns that the template will restore it', async () => {
+    routeDb([
+      deployedRow, adminOwner,
+      [/SELECT \* FROM skills WHERE id = \? AND user_id IS NULL/, rows([skillRow({ id: 'stock', slug: 'stock', user_id: null })])],
+      [/count\(\*\) AS n FROM agent_skills/, rows([{ n: 41 }])],
+    ]);
+
+    const res = await app.inject({
+      method: 'DELETE', url: '/api/agent-skills/id/stock?scope=system', headers: agentAuth,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.detachedFrom).toBe(41);
+    expect(res.json().data.reseeds).toBe(true);
+  });
+
+  it('refuses a platform delete when the owner is not an admin', async () => {
+    routeDb([deployedRow, [/SELECT 1 FROM users WHERE id = \? AND role = 'admin'/, rows([])]]);
+
+    const res = await app.inject({
+      method: 'DELETE', url: '/api/agent-skills/id/stock?scope=system', headers: agentAuth,
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.code).toBe('ADMIN_REQUIRED');
+    expect(deleteOf()).toBeUndefined();
+  });
+});
+
 describe('agent-authored skill writes', () => {
   const agentAuth = { 'x-reins-agent-secret': 'tok' };
   const deployedRow: [RegExp, unknown] = [
@@ -526,14 +762,62 @@ describe('agent-authored skill writes', () => {
     expect(res.statusCode).toBe(404);
   });
 
-  it('refuses to edit a platform skill', async () => {
-    // A system skill has user_id IS NULL and can never satisfy `user_id = ?`,
-    // so no agent can edit one however it is addressed.
-    routeDb([deployedRow, [/SELECT \* FROM skills WHERE id = \? AND user_id = \?/, rows([])]]);
+  it('refuses to edit a platform skill without an explicit scope, and says which argument reaches it', async () => {
+    // Scope defaults to 'user', whose lookup requires `user_id = ?` and so can
+    // never match a system row. The extra system lookup only runs to *explain*
+    // the miss — it does not widen what a scopeless call can write.
+    routeDb([
+      deployedRow,
+      [/SELECT \* FROM skills WHERE id = \? AND user_id = \?/, rows([])],
+      [/SELECT \* FROM skills WHERE id = \? AND user_id IS NULL/, rows([skillRow({ id: 'system-skill', slug: 'system-skill', user_id: null })])],
+    ]);
 
     const res = await app.inject({
       method: 'PUT', url: '/api/agent-skills/id/system-skill', headers: agentAuth,
       payload: { name: 'n', description: 'd', body: 'b' },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.code).toBe('SCOPE_REQUIRED');
+    expect(res.json().error.message).toContain('scope:"system"');
+  });
+
+  it('attaches a platform skill to the owner\'s agent — assignment is not a privileged act', async () => {
+    // The regression this covers: assignment used to resolve through the *write*
+    // scope, so a platform skill the dashboard could attach was unreachable to
+    // the architect that manages the agent — and, because the detach branch sits
+    // below the same lookup, undetachable too.
+    routeDb([
+      deployedRow,
+      [/SELECT 1 FROM agents WHERE id = \? AND user_id = \?/, rows([{ '?column?': 1 }])],
+      [/SELECT \* FROM skills WHERE id = \? AND \(user_id = \? OR user_id IS NULL\)/,
+        rows([skillRow({ id: 'stock', slug: 'stock', user_id: null, required_services: '[]' })])],
+      [/INSERT INTO agent_skills/, rows([])],
+    ]);
+    mockResolveAvailability.mockResolvedValue(
+      new Map([['stock', { available: true, missingServices: [] }]])
+    );
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/agent-skills/assign/agent-2', headers: agentAuth,
+      payload: { skillId: 'stock' },
+    });
+
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('still refuses to assign a skill belonging to another account', async () => {
+    // Widening assignment to the readable scope must not become "any skill":
+    // getReadableSkill is own-or-system, and a third party's row is neither.
+    routeDb([
+      deployedRow,
+      [/SELECT 1 FROM agents WHERE id = \? AND user_id = \?/, rows([{ '?column?': 1 }])],
+      [/SELECT \* FROM skills WHERE id = \? AND \(user_id = \? OR user_id IS NULL\)/, rows([])],
+    ]);
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/agent-skills/assign/agent-2', headers: agentAuth,
+      payload: { skillId: 'someone-elses' },
     });
 
     expect(res.statusCode).toBe(404);
@@ -543,7 +827,9 @@ describe('agent-authored skill writes', () => {
     routeDb([
       deployedRow,
       [/SELECT 1 FROM agents WHERE id = \? AND user_id = \?/, rows([{ '?column?': 1 }])],
-      [/SELECT \* FROM skills WHERE id = \? AND user_id = \?/, rows([skillRow({ required_services: '[]' })])],
+      // Assignment resolves through getReadableSkill — own skills *or* platform
+      // ones — not the write-scoped lookup the other architect routes use.
+      [/SELECT \* FROM skills WHERE id = \? AND \(user_id = \? OR user_id IS NULL\)/, rows([skillRow({ required_services: '[]' })])],
       [/INSERT INTO agent_skills/, rows([])],
     ]);
     mockResolveAvailability.mockResolvedValue(

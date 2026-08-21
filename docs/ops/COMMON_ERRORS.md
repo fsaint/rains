@@ -1764,3 +1764,41 @@ fails the call is **refused** rather than creating a series that silently drifts
 `handleUpdateEvent` had the mirror-image bug — it replaced `start` wholesale and dropped the
 existing `timeZone`, breaking a recurring series when one occurrence was moved. It now
 preserves it.
+
+---
+
+## A fix to a stock Helm skill never reached an account
+
+### Symptom
+
+A `templates/skills/<slug>/SKILL.md` is edited and deployed, and one account's agents keep
+loading the old text. Other accounts get the update. Nothing errors.
+
+### Root Cause
+
+`skills.source` is `'admin'` on that row. Someone edited that platform skill through the
+dashboard or `skill_authoring_update`, which takes it out of the seeder's hands on purpose —
+without that, `seedSystemSkills()` would revert every admin edit on the next deploy, and it
+did exactly that before the column existed.
+
+The boot log says so, if you look:
+
+```
+[skills] Skipped 1 admin-edited system skill(s): inbox-triage. Their source is 'admin', …
+```
+
+Note that only a *content* change flips `source` — toggling `enabled` or `autoAssign` leaves
+it alone, so a stock skill does not silently detach because someone disabled it for an
+afternoon.
+
+### Fix
+
+Decide who owns the text. To take the template version again, delete the row in the dashboard
+and redeploy — it re-seeds as `'template'`. To keep the local edit, make the same change in
+the template file so both agree, or accept that this row is now hand-maintained.
+
+### Related: a deleted platform skill came back
+
+Deleting a platform skill whose slug still has a `templates/skills/<slug>/` directory only
+removes it until the next boot. The delete response sets `reseeds: true` to say the condition
+applies. Retiring one for good means removing the template directory too.

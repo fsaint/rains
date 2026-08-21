@@ -66,6 +66,23 @@ export const ADMIN_TOOLS = new Set([
   'helm_admin_reset_tool_permission',
 ]);
 
+/**
+ * Skill-authoring write tools.
+ *
+ * The generic formatter renders these as a 200-character JSON dump, which for a
+ * create or an update is a truncated Markdown body — unreviewable. Worse, the
+ * `scope` argument is the entire authorization difference between "a skill for
+ * my account" and "a skill every account on the platform loads", and it is
+ * precisely the field that falls off the end of that truncation.
+ */
+export const SKILL_TOOLS = new Set([
+  'skill_authoring_create',
+  'skill_authoring_update',
+  'skill_authoring_delete',
+  'skill_authoring_assign',
+  'skill_authoring_unassign',
+]);
+
 /** What the caller resolved about the agent an admin tool is acting on. */
 export interface AdminTargetSummary {
   id: string;
@@ -726,6 +743,70 @@ export function formatAdminApprovalMessage(
       : null,
     isDestroy
       ? `\n<i>This cannot be undone. The runtime machine and all access are removed. Notes it saved to your memory are kept.</i>`
+      : null,
+    `\n<b>Requested by:</b> <code>${escapeHtml(approval.agentId)}</code>`,
+    ``,
+    expiresLine(approval),
+  ].filter(Boolean);
+
+  return {
+    text: lines.join('\n'),
+    keyboard: approveDenyKeyboard(approval.id),
+    parseMode: 'HTML',
+  };
+}
+
+
+/**
+ * Skill-authoring approvals.
+ *
+ * A skill body is an instruction another agent follows literally, so the two
+ * things worth surfacing are what the instruction says and how far it reaches.
+ * A `scope: "system"` write reaches every account on the platform, and that has
+ * to be the first thing on the screen — not a JSON key two hundred characters
+ * into a truncated dump.
+ */
+export function formatSkillApprovalMessage(approval: ApprovalRequest): FormattedApproval {
+  const args = (approval.arguments ?? {}) as Record<string, unknown>;
+  const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
+
+  const isSystem = args.scope === 'system';
+  const isDelete = approval.tool === 'skill_authoring_delete';
+
+  const headings: Record<string, string> = {
+    skill_authoring_create: '📝 <b>New skill</b>',
+    // "Replace", not "edit": the tool overwrites the whole row, so what is being
+    // approved includes the loss of the current text.
+    skill_authoring_update: '✏️ <b>Replace a skill</b>',
+    skill_authoring_delete: '🗑 <b>Delete a skill</b>',
+    skill_authoring_assign: '➕ <b>Give an agent a skill</b>',
+    skill_authoring_unassign: '➖ <b>Take a skill off an agent</b>',
+  };
+
+  const requires = Array.isArray(args.requires)
+    ? (args.requires as unknown[]).filter((r): r is string => typeof r === 'string')
+    : [];
+
+  const body = str(args.body);
+  const bodyPreview = body
+    ? body.length > BODY_PREVIEW_LIMIT
+      ? `${escapeHtml(body.slice(0, BODY_PREVIEW_LIMIT))}\n…`
+      : escapeHtml(body)
+    : null;
+
+  const lines = [
+    isSystem
+      ? '🌐 <b>PLATFORM-WIDE</b>\nThis writes a Helm skill that <b>every account on the platform</b> can load.\n'
+      : null,
+    headings[approval.tool] ?? '<b>Skill authoring</b>',
+    str(args.name) ? `<b>Name:</b> ${escapeHtml(str(args.name) as string)}` : null,
+    str(args.slug) ? `<b>Slug:</b> <code>${escapeHtml(str(args.slug) as string)}</code>` : null,
+    str(args.skill_id) ? `<b>Skill:</b> <code>${escapeHtml(str(args.skill_id) as string)}</code>` : null,
+    str(args.agent_id) ? `<b>Agent:</b> <code>${escapeHtml(str(args.agent_id) as string)}</code>` : null,
+    requires.length > 0 ? `<b>Requires:</b> ${escapeHtml(requires.join(', '))}` : null,
+    bodyPreview ? `\n<blockquote>${bodyPreview}</blockquote>` : null,
+    isDelete
+      ? `\n<i>Removes it from every agent it is attached to. The body is not recoverable.</i>`
       : null,
     `\n<b>Requested by:</b> <code>${escapeHtml(approval.agentId)}</code>`,
     ``,

@@ -11,7 +11,7 @@ vi.mock('../db/index.js', () => ({
 }));
 
 import { formatCalendarApprovalMessage, formatEmailApprovalMessage } from './telegram.js';
-import { escapeMarkdown, withCorrectionAffordance, formatBatchScope, formatAdminApprovalMessage } from './approval-format.js';
+import { escapeMarkdown, withCorrectionAffordance, formatBatchScope, formatAdminApprovalMessage, formatSkillApprovalMessage } from './approval-format.js';
 import { MAX_REVISIONS } from '../approvals/queue.js';
 import type { ApprovalRequest } from '@reins/shared';
 
@@ -609,5 +609,86 @@ describe('formatAdminApprovalMessage', () => {
     const { text } = formatAdminApprovalMessage(approval, target);
 
     expect(text).toContain('admin-agent-1');
+  });
+});
+
+
+describe('formatSkillApprovalMessage', () => {
+  /**
+   * A skill body is an instruction another agent follows literally, and the
+   * `scope` argument decides whether that instruction reaches one account or
+   * every account on the platform. The generic formatter truncates the argument
+   * JSON at 200 characters, which for a real skill body lands well before
+   * `scope` — so the owner would approve a platform-wide change without ever
+   * seeing the word. That is what these tests are here to prevent.
+   */
+  it('leads with PLATFORM-WIDE when the write is system-scoped', () => {
+    const approval = makeApproval({
+      tool: 'skill_authoring_create',
+      arguments: { name: 'Inbox Triage', slug: 'inbox-triage', body: '## Steps', scope: 'system' },
+    });
+
+    const { text } = formatSkillApprovalMessage(approval);
+
+    expect(text).toContain('PLATFORM-WIDE');
+    expect(text.indexOf('PLATFORM-WIDE')).toBeLessThan(text.indexOf('Inbox Triage'));
+    expect(text).toContain('every account on the platform');
+  });
+
+  it('omits the banner for an account-scoped write', () => {
+    for (const args of [
+      { name: 'Mine', body: 'b', scope: 'user' },
+      { name: 'Mine', body: 'b' },
+    ]) {
+      const { text } = formatSkillApprovalMessage(
+        makeApproval({ tool: 'skill_authoring_create', arguments: args })
+      );
+      expect(text).not.toContain('PLATFORM-WIDE');
+      // Still better than a JSON dump — the name is readable either way.
+      expect(text).toContain('Mine');
+    }
+  });
+
+  it('keeps the scope visible even when the body is far longer than the old truncation', () => {
+    const approval = makeApproval({
+      tool: 'skill_authoring_update',
+      arguments: { skill_id: 'stock', name: 'Stock', body: 'x'.repeat(9000), scope: 'system' },
+    });
+
+    const { text } = formatSkillApprovalMessage(approval);
+
+    expect(text).toContain('PLATFORM-WIDE');
+    // The body is previewed, not dumped whole — Telegram caps a message at 4096.
+    expect(text.length).toBeLessThan(4096);
+  });
+
+  it('says an update replaces the whole skill, not that it edits part of it', () => {
+    const { text } = formatSkillApprovalMessage(
+      makeApproval({ tool: 'skill_authoring_update', arguments: { skill_id: 'sk-1', name: 'N', body: 'b' } })
+    );
+    expect(text).toContain('Replace a skill');
+  });
+
+  it('states that a delete is unrecoverable and detaches every agent', () => {
+    const { text } = formatSkillApprovalMessage(
+      makeApproval({ tool: 'skill_authoring_delete', arguments: { skill_id: 'sk-1', scope: 'system' } })
+    );
+
+    expect(text).toContain('not recoverable');
+    expect(text).toContain('every agent it is attached to');
+    expect(text).toContain('PLATFORM-WIDE');
+  });
+
+  it('escapes HTML in a skill name and body — the message is HTML parse mode', () => {
+    const { text } = formatSkillApprovalMessage(
+      makeApproval({
+        tool: 'skill_authoring_create',
+        arguments: { name: '<b>Bold</b> & Co', body: '<script>x</script>' },
+      })
+    );
+
+    expect(text).not.toContain('<b>Bold</b> & Co');
+    expect(text).toContain('&lt;b&gt;Bold&lt;/b&gt; &amp; Co');
+    expect(text).not.toContain('<script>');
   });
 });

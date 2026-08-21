@@ -12,6 +12,12 @@
  * Authorization is not decided here. The backend scopes every write to the
  * calling agent's owner, and reaching these tools at all requires the
  * skill-authoring service to be enabled on that agent.
+ *
+ * `scope: "system"` writes a platform skill every account loads, and carries a
+ * second gate the backend enforces: the owner must hold users.role = 'admin'.
+ * The `scope` argument is validated locally before any request goes out —
+ * approval is raised *before* the handler runs, so a typo'd scope would
+ * otherwise cost the owner an approval prompt for a call destined to 400.
  */
 
 import type { ServerContext, ToolResult } from '../common/types.js';
@@ -75,6 +81,23 @@ interface SkillSummary {
   requiredServices: string[];
   version?: string | null;
   isSystem?: boolean;
+  /** True when this caller may not write the skill. Per-caller, not per-skill. */
+  readOnly?: boolean;
+  scope?: 'user' | 'system';
+}
+
+/**
+ * Validate and normalise the `scope` argument.
+ *
+ * Returns the fragment to spread into a request body, or an error string. Local
+ * validation is not only about latency here: the approval is queued before this
+ * code runs, so a bad value caught here saves the owner a prompt.
+ */
+function scopeArg(args: Record<string, unknown>): { scope?: 'system' } | { error: string } {
+  const raw = args.scope;
+  if (raw === undefined || raw === null || raw === 'user') return {};
+  if (raw === 'system') return { scope: 'system' };
+  return { error: 'scope must be "user" or "system"' };
 }
 
 /**
@@ -104,8 +127,12 @@ export async function handleListAuthoredSkills(
           description: s.description,
           requires: s.requiredServices,
           ...(s.version ? { version: s.version } : {}),
-          // Platform skills are readable but not writable by any agent.
-          ...(s.isSystem ? { read_only: true } : {}),
+          // `scope` says how to address the skill; `read_only` says whether this
+          // caller may write it. Different questions, now that an admin owner's
+          // architect can edit platform skills. Falls back to isSystem so an
+          // un-upgraded backend still reports platform skills as read-only.
+          ...(s.isSystem ? { scope: 'system' as const } : {}),
+          ...((s.readOnly ?? s.isSystem) ? { read_only: true } : {}),
         })),
       },
     };
@@ -125,6 +152,9 @@ export async function handleCreateSkill(
   if (!description) return { success: false, error: 'description is required — it is the only text an agent sees before loading the skill' };
   if (!body) return { success: false, error: 'body is required' };
 
+  const scope = scopeArg(args);
+  if ('error' in scope) return { success: false, error: scope.error };
+
   try {
     const res = await authoringFetch(context, '/api/agent-skills', {
       method: 'POST',
@@ -135,6 +165,7 @@ export async function handleCreateSkill(
         requiredServices: Array.isArray(args.requires) ? args.requires : [],
         ...(typeof args.slug === 'string' ? { slug: args.slug } : {}),
         ...(typeof args.version === 'string' ? { version: args.version } : {}),
+        ...scope,
       }),
     });
     if (!res.ok) return toError(res, 'Could not create the skill');
@@ -191,6 +222,7 @@ export async function handleGetAuthoredSkill(
         body: skill.body,
         requires: skill.requiredServices ?? [],
         ...(skill.version ? { version: skill.version } : {}),
+        ...(skill.isSystem ? { scope: 'system' as const } : {}),
         ...(skill.readOnly ? { read_only: true } : {}),
       },
     };
@@ -217,6 +249,9 @@ export async function handleUpdateSkill(
     };
   }
 
+  const scope = scopeArg(args);
+  if ('error' in scope) return { success: false, error: scope.error };
+
   try {
     const res = await authoringFetch(context, `/api/agent-skills/id/${encodeURIComponent(id)}`, {
       method: 'PUT',
@@ -226,18 +261,77 @@ export async function handleUpdateSkill(
         body,
         ...(Array.isArray(args.requires) ? { requiredServices: args.requires } : {}),
         ...(typeof args.version === 'string' ? { version: args.version } : {}),
+        ...scope,
       }),
     });
     if (res.status === 404) {
       return {
         success: false,
-        error: `No skill with id "${id}" belongs to your owner. Platform skills cannot be edited by an agent.`,
+        error:
+          `No skill with id "${id}" belongs to your owner. If it is a platform skill, ` +
+          'retry with scope:"system" — which requires your owner to be a Helm admin.',
       };
     }
     if (!res.ok) return toError(res, 'Could not update the skill');
 
     const json = await res.json() as { data: { id: string; slug: string } };
     return { success: true, data: json.data };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Delete a skill outright.
+ *
+ * Separate from unassign on purpose: unassign is how you stop one agent using a
+ * skill, and it is almost always what the model actually wants. This removes the
+ * row, and the cascade takes every assignment with it.
+ */
+export async function handleDeleteSkill(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const id = nonEmptyString(args.skill_id);
+  if (!id) return { success: false, error: 'skill_id is required. Call skill_authoring_list to see ids.' };
+
+  const scope = scopeArg(args);
+  if ('error' in scope) return { success: false, error: scope.error };
+
+  try {
+    // Scope rides in the query string: a DELETE with a JSON body needs the
+    // client to set Content-Type and the server to parse bodies on that method.
+    const query = 'scope' in scope ? '?scope=system' : '';
+    const res = await authoringFetch(
+      context,
+      `/api/agent-skills/id/${encodeURIComponent(id)}${query}`,
+      { method: 'DELETE' }
+    );
+    if (res.status === 404) {
+      return {
+        success: false,
+        error:
+          `No skill with id "${id}" belongs to your owner. If it is a platform skill, ` +
+          'retry with scope:"system" — which requires your owner to be a Helm admin.',
+      };
+    }
+    if (!res.ok) return toError(res, 'Could not delete the skill');
+
+    const json = await res.json() as { data: Record<string, unknown> };
+    return {
+      success: true,
+      data: {
+        ...json.data,
+        ...(json.data?.reseeds
+          ? {
+              note:
+                'Platform skills are re-created from the repo templates on each deploy. If a ' +
+                'template still ships for this slug it will come back — tell your owner if they ' +
+                'wanted it gone for good.',
+            }
+          : {}),
+      },
+    };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
