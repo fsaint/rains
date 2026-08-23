@@ -15,6 +15,7 @@ export interface PendingOAuthFlow {
   reconnectCredentialId?: string;
   reauthApprovalId?: string;
   telegramUserId?: number;
+  returnTo?: string;
   initiatedAt: Date;
 }
 
@@ -29,6 +30,7 @@ export async function storePendingOAuthFlow(
     reconnectCredentialId?: string;
     reauthApprovalId?: string;
     telegramUserId?: number;
+    returnTo?: string;
   }
 ): Promise<void> {
   const now = new Date();
@@ -36,13 +38,14 @@ export async function storePendingOAuthFlow(
   await sql`
     INSERT INTO pending_oauth_flows (
       state, service, user_id, granted_services, reconnect_credential_id,
-      reauth_approval_id, telegram_user_id, initiated_at, expires_at
+      reauth_approval_id, telegram_user_id, return_to, initiated_at, expires_at
     )
     VALUES (
       ${state}, ${flow.service}, ${flow.userId ?? null},
       ${flow.grantedServices ? JSON.stringify(flow.grantedServices) : null},
       ${flow.reconnectCredentialId ?? null}, ${flow.reauthApprovalId ?? null},
-      ${flow.telegramUserId ?? null}, ${now.toISOString()}, ${expiresAt.toISOString()}
+      ${flow.telegramUserId ?? null}, ${flow.returnTo ?? null},
+      ${now.toISOString()}, ${expiresAt.toISOString()}
     )
     ON CONFLICT (state) DO UPDATE SET
       service = EXCLUDED.service,
@@ -51,6 +54,7 @@ export async function storePendingOAuthFlow(
       reconnect_credential_id = EXCLUDED.reconnect_credential_id,
       reauth_approval_id = EXCLUDED.reauth_approval_id,
       telegram_user_id = EXCLUDED.telegram_user_id,
+      return_to = EXCLUDED.return_to,
       initiated_at = EXCLUDED.initiated_at,
       expires_at = EXCLUDED.expires_at
   `;
@@ -70,6 +74,7 @@ export async function getPendingOAuthFlow(state: string): Promise<PendingOAuthFl
     reconnectCredentialId: row.reconnect_credential_id != null ? (row.reconnect_credential_id as string) : undefined,
     reauthApprovalId: row.reauth_approval_id != null ? (row.reauth_approval_id as string) : undefined,
     telegramUserId: row.telegram_user_id != null ? Number(row.telegram_user_id) : undefined,
+    returnTo: row.return_to != null ? (row.return_to as string) : undefined,
     initiatedAt: new Date(row.initiated_at as string),
   };
 }

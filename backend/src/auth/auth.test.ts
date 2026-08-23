@@ -13,7 +13,7 @@ vi.mock('../config/index.js', () => ({
   },
 }));
 
-import { signSession, verifySession } from './index.js';
+import { signSession, verifySession, safeReturnTo } from './index.js';
 
 describe('Auth', () => {
   describe('signSession', () => {
@@ -66,5 +66,34 @@ describe('Auth', () => {
       const payload = verifySession(tampered);
       expect(payload).toBeNull();
     });
+  });
+});
+
+describe('safeReturnTo', () => {
+  const dash = 'https://app.helm.mom';
+
+  it('falls back to the dashboard when next is missing', () => {
+    expect(safeReturnTo(undefined, dash)).toBe(dash);
+  });
+
+  it('accepts a same-origin absolute URL', () => {
+    const next = 'https://app.helm.mom/mcp/oauth/authorize?client_id=x&resource=y';
+    expect(safeReturnTo(next, dash)).toBe(next);
+  });
+
+  it('accepts a relative path and resolves it against the dashboard', () => {
+    expect(safeReturnTo('/mcp/oauth/authorize?a=1', dash)).toBe(`${dash}/mcp/oauth/authorize?a=1`);
+  });
+
+  it('rejects a foreign origin', () => {
+    expect(safeReturnTo('https://evil.example/steal', dash)).toBe(dash);
+  });
+
+  it('rejects a protocol-relative URL', () => {
+    expect(safeReturnTo('//evil.example/steal', dash)).toBe(dash);
+  });
+
+  it('rejects non-http schemes', () => {
+    expect(safeReturnTo('javascript:alert(1)', dash)).toBe(dash);
   });
 });

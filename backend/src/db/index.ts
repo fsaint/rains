@@ -742,6 +742,9 @@ export async function initializeDatabase() {
   await sql`ALTER TABLE pending_oauth_flows ALTER COLUMN telegram_user_id TYPE BIGINT`;
   await sql`ALTER TABLE pending_oauth_flows ALTER COLUMN initiated_at TYPE TIMESTAMPTZ USING initiated_at::TIMESTAMPTZ`;
   await sql`ALTER TABLE pending_oauth_flows ALTER COLUMN expires_at TYPE TIMESTAMPTZ USING expires_at::TIMESTAMPTZ`;
+  // Where to send the browser after a login started from `?next=` (the MCP
+  // OAuth consent page bounces through the dashboard login and must come back).
+  await sql`ALTER TABLE pending_oauth_flows ADD COLUMN IF NOT EXISTS return_to TEXT`;
 
   // initial_prompt_templates table
   await sql`
