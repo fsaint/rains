@@ -271,3 +271,41 @@ describe('rate limiting', () => {
     expect(last).toBe(429);
   });
 });
+
+describe('new agents are born closed', () => {
+  function insertedDeployment(): { sql: string; args: unknown[] } {
+    const call = mockExecute.mock.calls
+      .map((c) => c[0])
+      .find((q: any) => typeof q !== 'string' && /INSERT INTO deployed_agents/i.test(q.sql));
+    expect(call, 'expected a deployed_agents insert').toBeDefined();
+    return call as { sql: string; args: unknown[] };
+  }
+
+  it('create-manual writes allow_unauthenticated = false explicitly', async () => {
+    const authed = Fastify({ logger: false });
+    await authed.register(cookie);
+    authed.addHook('onRequest', async (req: any) => { req.session = { userId: 'user-1' }; });
+    await authed.register(apiRoutes);
+    await authed.ready();
+
+    const res = await authed.inject({
+      method: 'POST',
+      url: '/api/agents/create-manual',
+      payload: { name: 'Closed by default' },
+    });
+    expect(res.statusCode).toBe(201);
+
+    const insert = insertedDeployment();
+    // The column must be named and set false in the statement itself — not
+    // left to the schema default, which is one ALTER away from flipping.
+    expect(insert.sql).toMatch(/allow_unauthenticated/);
+    const cols = insert.sql.match(/\(([^)]*)\)\s*VALUES/i)![1].split(',').map((s) => s.trim());
+    const vals = insert.sql.match(/VALUES\s*\(([^)]*)\)/i)![1].split(',').map((s) => s.trim());
+    const idx = cols.indexOf('allow_unauthenticated');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    const literal = vals[idx];
+    const bound = literal === '?' ? insert.args[vals.slice(0, idx).filter((v) => v === '?').length] : literal;
+    expect(String(bound)).toBe('false');
+    expect(res.json().data.acceptsUnauthenticatedMcp).toBe(false);
+  });
+});
