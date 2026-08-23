@@ -170,6 +170,20 @@ async function registerAgentBotWebhook(
   }
 }
 
+/**
+ * Key an agent's entry in a client MCP config: `reins-<kebab name>`.
+ * Leading/trailing separators are stripped so a name like " My Agent! "
+ * yields `reins-my-agent`, never `reins--my-agent-`; an empty name falls
+ * back to `reins-agent`.
+ */
+export function mcpServerKey(agentName: string): string {
+  const slug = agentName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `reins-${slug || 'agent'}`;
+}
+
 export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // Helper to get userId from authenticated request
   function getUserId(request: any): string {
@@ -459,7 +473,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     // dropping this server for everyone who pasted the snippet.
     const claudeCodeConfig = {
       "mcpServers": {
-        [`reins-${(agent.name as string).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`]: {
+        [mcpServerKey(agent.name as string)]: {
           "type": "http",
           "url": mcpUrl,
         },
@@ -469,7 +483,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const openaiClawConfig = {
       "mcpServers": [
         {
-          "name": `reins-${(agent.name as string).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+          "name": mcpServerKey(agent.name as string),
           "type": "url",
           "url": mcpUrl,
         },
@@ -5863,8 +5877,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     return value
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 64);
+      .slice(0, 64)
+      .replace(/^-+|-+$/g, '');
   }
 
   /**
@@ -8176,8 +8190,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       .toLowerCase()
       .trim()
       .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 48);
+      .slice(0, 48)
+      .replace(/^-+|-+$/g, '');
   }
 
   // GET /api/memory/scopes — what the caller can reach, with entry counts.
