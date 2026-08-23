@@ -170,6 +170,20 @@ async function registerAgentBotWebhook(
   }
 }
 
+/**
+ * Key an agent's entry in a client MCP config: `reins-<kebab name>`.
+ * Leading/trailing separators are stripped so a name like " My Agent! "
+ * yields `reins-my-agent`, never `reins--my-agent-`; an empty name falls
+ * back to `reins-agent`.
+ */
+export function mcpServerKey(agentName: string): string {
+  const slug = agentName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `reins-${slug || 'agent'}`;
+}
+
 export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // Helper to get userId from authenticated request
   function getUserId(request: any): string {
@@ -459,7 +473,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     // dropping this server for everyone who pasted the snippet.
     const claudeCodeConfig = {
       "mcpServers": {
-        [`reins-${(agent.name as string).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`]: {
+        [mcpServerKey(agent.name as string)]: {
           "type": "http",
           "url": mcpUrl,
         },
@@ -469,7 +483,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const openaiClawConfig = {
       "mcpServers": [
         {
-          "name": `reins-${(agent.name as string).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+          "name": mcpServerKey(agent.name as string),
           "type": "url",
           "url": mcpUrl,
         },
@@ -3559,11 +3573,13 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       args: [agentId, userId, body.name.trim(), body.description || null, now, now],
     });
 
-    // Create deployment record — no fly app, no machine, is_manual=1
+    // Create deployment record — no fly app, no machine, is_manual=1.
+    // Born closed: the MCP URL alone does not reach this agent; a client has
+    // to authenticate (OAuth) first. The owner can open it from the dashboard.
     await client.execute({
       sql: `INSERT INTO deployed_agents
-              (id, agent_id, status, gateway_token, soul_md, is_manual, created_at, updated_at)
-            VALUES (?, ?, 'running', ?, ?, 1, ?, ?)`,
+              (id, agent_id, status, gateway_token, soul_md, is_manual, allow_unauthenticated, created_at, updated_at)
+            VALUES (?, ?, 'running', ?, ?, 1, false, ?, ?)`,
       args: [deploymentId, agentId, gatewayToken, body.soulMd || null, now, now],
     });
 
@@ -3574,6 +3590,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         id: agentId,
         name: body.name.trim(),
         status: 'active',
+        acceptsUnauthenticatedMcp: false,
         deployment: {
           id: deploymentId,
           status: 'running',
@@ -3899,7 +3916,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         : null;
 
       await client.execute({
-        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_bot_username, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openai_api_key, telegram_groups_json, model_credentials, mcp_config_json, openclaw_webhook_url, webhook_relay_secret, runtime, initial_prompt, is_shared_bot, fly_volume_id, mcp_server_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_bot_username, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openai_api_key, telegram_groups_json, model_credentials, mcp_config_json, openclaw_webhook_url, webhook_relay_secret, runtime, initial_prompt, is_shared_bot, fly_volume_id, mcp_server_name, allow_unauthenticated, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, false, ?, ?)`,
         args: [
           deploymentId, agentId,
           result.appName, result.machineId, 'running', result.managementUrl,
@@ -4100,7 +4117,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         : null;
 
       await client.execute({
-        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_bot_username, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openclaw_webhook_url, webhook_relay_secret, runtime, mcp_server_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO deployed_agents (id, agent_id, fly_app_name, fly_machine_id, status, management_url, telegram_token, telegram_bot_username, telegram_user_id, soul_md, model_provider, model_name, region, gateway_token, openclaw_webhook_url, webhook_relay_secret, runtime, mcp_server_name, allow_unauthenticated, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, false, ?, ?)`,
         args: [
           deploymentId,
           id,
@@ -5863,8 +5880,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     return value
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 64);
+      .slice(0, 64)
+      .replace(/^-+|-+$/g, '');
   }
 
   /**
@@ -7027,10 +7044,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
    * could never then be granted anything, because every grant would hit the
    * per-target open-endpoint check.
    *
-   * allow_unauthenticated is set false explicitly. Dashboard-created manual
-   * agents keep the open default, which is what docs/MULTI_AGENT_SETUP.md
-   * documents and what people are using; the asymmetry is the point. An agent
-   * created by an agent is never born reachable by whoever learns its id.
+   * allow_unauthenticated is set false explicitly, as it is on every creation
+   * path now: an agent is never born reachable by whoever learns its id. The
+   * owner can open a dashboard-created agent later; one created by an agent
+   * has no such switch offered to it.
    */
   app.post('/api/agent-admin/agents', async (request, reply) => {
     const agent = await resolveAdminCaller(request, reply);
@@ -8176,8 +8193,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       .toLowerCase()
       .trim()
       .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 48);
+      .slice(0, 48)
+      .replace(/^-+|-+$/g, '');
   }
 
   // GET /api/memory/scopes — what the caller can reach, with entry counts.

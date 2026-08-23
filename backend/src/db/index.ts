@@ -664,9 +664,9 @@ export async function initializeDatabase() {
   // MCP endpoint authentication — OAuth 2.1, per the MCP specification
   //
   // The endpoint accepts a Bearer token; a request without one is still served
-  // while deployed_agents.allow_unauthenticated is true, which is the default
-  // and is only ever cleared by the agent's owner. Nothing here changes how an
-  // existing agent behaves.
+  // while deployed_agents.allow_unauthenticated is true. New agents are created
+  // with it false; agents that predate that keep it true until their owner
+  // clears it. Nothing here changes how an existing agent behaves.
   //
   // Tokens are stored as sha256 so a stolen database yields nothing usable.
   // bcrypt — the repo's only other hash — is salted per row and so cannot be
@@ -731,13 +731,18 @@ export async function initializeDatabase() {
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_mcp_refresh_access ON mcp_refresh_tokens(access_token_id)`;
 
-  // Defaults true: every existing agent keeps working untouched. Only the
-  // owner clears it, from the dashboard, once their clients are migrated.
+  // Added as DEFAULT true so every agent that existed at the time kept
+  // working untouched; only the owner clears it, from the dashboard.
   await sql`
     DO $$ BEGIN
       ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS allow_unauthenticated BOOLEAN DEFAULT true NOT NULL;
     EXCEPTION WHEN duplicate_column THEN NULL; END $$
   `;
+  // Since the authenticated path works end-to-end, a *new* agent is born
+  // closed: its URL is not a credential. SET DEFAULT touches no existing row,
+  // so agents deployed before this keep whatever the owner chose. The live
+  // insert sites also name the column explicitly rather than lean on this.
+  await sql`ALTER TABLE deployed_agents ALTER COLUMN allow_unauthenticated SET DEFAULT false`;
   // Migrate existing columns to correct types for Postgres (was designed for SQLite)
   await sql`ALTER TABLE pending_oauth_flows ALTER COLUMN telegram_user_id TYPE BIGINT`;
   await sql`ALTER TABLE pending_oauth_flows ALTER COLUMN initiated_at TYPE TIMESTAMPTZ USING initiated_at::TIMESTAMPTZ`;

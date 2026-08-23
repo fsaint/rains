@@ -383,7 +383,7 @@ export const deployedAgents = pgTable('deployed_agents', {
   isManual: integer('is_manual').default(0),
   // False only when the owner has closed the unauthenticated MCP endpoint for
   // this agent. Defaults true so nothing that works today stops working.
-  allowUnauthenticated: boolean('allow_unauthenticated').default(true).notNull(),
+  allowUnauthenticated: boolean('allow_unauthenticated').default(false).notNull(),
   initialPrompt: text('initial_prompt'),
   hasOnboarded: integer('has_onboarded').default(0),
   flyVolumeId: text('fly_volume_id'),
