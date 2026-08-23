@@ -58,4 +58,49 @@ describe('Login', () => {
     renderLogin();
     expect(screen.queryByRole('img', { name: /alert/i })).not.toBeInTheDocument();
   });
+
+  describe('next parameter', () => {
+    let hrefSetter: ReturnType<typeof vi.fn>;
+    beforeEach(() => {
+      hrefSetter = vi.fn();
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: { href: 'http://localhost/', origin: 'http://localhost', assign: vi.fn() },
+      });
+      Object.defineProperty(window.location, 'href', { configurable: true, set: hrefSetter, get: () => 'http://localhost/' });
+    });
+
+    it('forwards next to the Google login endpoint', () => {
+      const next = 'http://localhost/mcp/oauth/authorize?client_id=x';
+      renderLogin(`?next=${encodeURIComponent(next)}`);
+      fireEvent.click(screen.getByRole('button', { name: /continue with google/i }));
+      expect(hrefSetter).toHaveBeenCalledWith(
+        `/api/auth/google?next=${encodeURIComponent('/mcp/oauth/authorize?client_id=x')}`
+      );
+    });
+
+    it('goes to the Google login endpoint without next when absent', () => {
+      renderLogin();
+      fireEvent.click(screen.getByRole('button', { name: /continue with google/i }));
+      expect(hrefSetter).toHaveBeenCalledWith('/api/auth/google');
+    });
+
+    it('returns to next after a successful password login', async () => {
+      const next = '/mcp/oauth/authorize?client_id=x';
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+      renderLogin(`?next=${encodeURIComponent(next)}`);
+      fireEvent.click(screen.getByRole('button', { name: /sign in with email/i }));
+      fireEvent.change(screen.getByPlaceholderText(/email/i), { target: { value: 'a@b.c' } });
+      fireEvent.change(screen.getByPlaceholderText(/password/i), { target: { value: 'pw' } });
+      fireEvent.submit(screen.getByRole('button', { name: /^sign in$/i }).closest('form')!);
+      await vi.waitFor(() => expect(hrefSetter).toHaveBeenCalledWith(next));
+      vi.unstubAllGlobals();
+    });
+
+    it('ignores a foreign-origin next', () => {
+      renderLogin(`?next=${encodeURIComponent('https://evil.example/x')}`);
+      fireEvent.click(screen.getByRole('button', { name: /continue with google/i }));
+      expect(hrefSetter).toHaveBeenCalledWith('/api/auth/google');
+    });
+  });
 });

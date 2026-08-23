@@ -8,6 +8,29 @@ import { nanoid } from 'nanoid';
 import { storePendingOAuthFlow, getPendingOAuthFlow, deletePendingOAuthFlow } from '../oauth/pending-flows.js';
 import { getPostHog } from '../analytics/posthog.js';
 
+/**
+ * Where to send the browser after a login that was started with `?next=`.
+ *
+ * The MCP OAuth consent page bounces an unauthenticated user through the
+ * dashboard login and needs to get them back. A return target that came from a
+ * query string is attacker-controlled, so only a same-origin URL (or a path
+ * relative to the dashboard) is honoured; anything else falls back to the
+ * dashboard home.
+ */
+export function safeReturnTo(next: string | undefined, dashboardUrl: string): string {
+  if (!next) return dashboardUrl;
+  let target: URL;
+  try {
+    target = new URL(next, dashboardUrl);
+  } catch {
+    return dashboardUrl;
+  }
+  const dash = new URL(dashboardUrl);
+  if (target.origin !== dash.origin) return dashboardUrl;
+  if (target.protocol !== 'http:' && target.protocol !== 'https:') return dashboardUrl;
+  return target.toString();
+}
+
 const COOKIE_NAME = 'reins_session';
 const TOKEN_EXPIRY = '7d';
 
@@ -186,12 +209,18 @@ export async function registerAuth(app: FastifyInstance) {
   });
 
   // Google SSO — redirect browser to Google
-  app.get('/api/auth/google', async (_request, reply) => {
+  app.get<{ Querystring: { next?: string } }>('/api/auth/google', async (request, reply) => {
     if (!config.googleClientId || !config.googleLoginRedirectUri) {
       return reply.code(500).send({ error: 'Google login not configured' });
     }
     const state = nanoid(32);
-    await storePendingOAuthFlow(state, { service: 'google_login' });
+    // Validated now and again on the way out: the stored value is only ever
+    // something safeReturnTo already accepted, and the callback re-checks it.
+    const returnTo = safeReturnTo(request.query.next, config.dashboardUrl);
+    await storePendingOAuthFlow(state, {
+      service: 'google_login',
+      returnTo: returnTo === config.dashboardUrl ? undefined : returnTo,
+    });
     const params = new URLSearchParams({
       client_id: config.googleClientId,
       redirect_uri: config.googleLoginRedirectUri,
@@ -267,7 +296,7 @@ export async function registerAuth(app: FastifyInstance) {
         });
 
         getPostHog()?.capture({ distinctId: user.id as string, event: 'user_logged_in', properties: { method: 'google_sso' } });
-        return reply.redirect(config.dashboardUrl);
+        return reply.redirect(safeReturnTo(pendingFlow.returnTo, config.dashboardUrl));
       } catch (err) {
         console.error('[auth/google] callback error:', err);
         return reply.redirect(`${config.dashboardUrl}/?login_error=internal`);

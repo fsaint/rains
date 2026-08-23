@@ -15,8 +15,24 @@ const ERROR_MESSAGES: Record<string, string> = {
   true: 'Sign-in failed. Please try again.',
 };
 
+/**
+ * Only a same-origin `next` is honoured — it arrives in the query string and
+ * would otherwise be an open redirect. Returns a path relative to this origin.
+ */
+function safeNext(raw: string | null): string | null {
+  if (!raw) return null;
+  try {
+    const url = new URL(raw, window.location.origin);
+    if (url.origin !== window.location.origin) return null;
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return null;
+  }
+}
+
 export default function Login(_props: LoginProps) {
   const [params] = useSearchParams();
+  const next = safeNext(params.get('next'));
   const [loading, setLoading] = useState(false);
   const [showPasswordForm, setShowPasswordForm] = useState(false);
   const [email, setEmail] = useState('');
@@ -36,7 +52,9 @@ export default function Login(_props: LoginProps) {
 
   const handleGoogleLogin = () => {
     setLoading(true);
-    window.location.href = '/api/auth/google';
+    window.location.href = next
+      ? `/api/auth/google?next=${encodeURIComponent(next)}`
+      : '/api/auth/google';
   };
 
   const handlePasswordLogin = async (e: React.FormEvent) => {
@@ -50,7 +68,7 @@ export default function Login(_props: LoginProps) {
         body: JSON.stringify({ email, password }),
       });
       if (res.ok) {
-        window.location.href = '/';
+        window.location.href = next ?? '/';
       } else {
         const data = await res.json() as { error?: { message?: string } };
         setPasswordError(data?.error?.message ?? 'Invalid email or password.');
