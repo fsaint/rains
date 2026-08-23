@@ -53,6 +53,22 @@ function htmlEscape(value: string): string {
 }
 
 export function registerMcpOAuthRoutes(app: FastifyInstance): void {
+  // RFC 6749 §4.1.3 requires the token request be form-encoded, the consent
+  // page is a plain HTML form, and Fastify parses only JSON by default — so
+  // without this every real OAuth client got a 415 at the token step. Parsers
+  // are keyed by content type, so registering one here changes nothing about
+  // how JSON routes elsewhere parse. Values are small strings; cap the body so
+  // the one unauthenticated endpoint this adds cannot be used to buffer much.
+  if (!app.hasContentTypeParser('application/x-www-form-urlencoded')) {
+    app.addContentTypeParser(
+      'application/x-www-form-urlencoded',
+      { parseAs: 'string', bodyLimit: 64 * 1024 },
+      (_request, body, done) => {
+        done(null, Object.fromEntries(new URLSearchParams(body as string)));
+      }
+    );
+  }
+
   // ── Discovery ──────────────────────────────────────────────────────────────
 
   /**

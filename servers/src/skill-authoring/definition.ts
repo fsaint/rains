@@ -4,13 +4,21 @@ import { skillAuthoringTools } from './tools.js';
 /**
  * Skill authoring — the write half of the skills system.
  *
- * **This service is the privilege boundary.** There is no agent role in this
- * codebase; an agent can author skills exactly when this service is enabled on
- * it, and every other agent gets SERVICE_NOT_ENABLED and never even sees the
- * tool names in tools/list. Enable it on the one architect agent and nowhere
- * else — in particular it must stay out of `enableDefaultServices()` in
- * backend/src/services/permissions.ts, which turns memory and skills on for
- * every new agent.
+ * **This service is the privilege boundary for account skills.** There is no
+ * agent role in this codebase; an agent can author its owner's skills exactly
+ * when this service is enabled on it, and every other agent gets
+ * SERVICE_NOT_ENABLED and never even sees the tool names in tools/list. Enable
+ * it on the one architect agent and nowhere else — in particular it must stay
+ * out of `enableDefaultServices()` in backend/src/services/permissions.ts,
+ * which turns memory and skills on for every new agent.
+ *
+ * **Platform skills have a second, independent gate.** Writing one (`scope:
+ * "system"`, a skill every account on the platform loads) additionally requires
+ * the agent's *owner* to hold `users.role = 'admin'`, checked against the
+ * database by `isAdminUser` in backend/src/api/routes.ts. Enabling this service
+ * does not confer that, and no agent can grant it to itself. The scope must
+ * stay an explicit argument rather than being inferred from the target row: an
+ * inferred escalation would reach the owner as an ordinary skill-edit approval.
  *
  * `toolPrefix` must not be a prefix of, or prefixed by, another service's:
  * getServiceTypeFromToolName resolves by first match over the definitions
@@ -41,6 +49,7 @@ export const definition: ServiceDefinitionWithTools = {
     write: [
       'skill_authoring_create',
       'skill_authoring_update',
+      'skill_authoring_delete',
       'skill_authoring_assign',
       'skill_authoring_unassign',
     ],
@@ -48,6 +57,6 @@ export const definition: ServiceDefinitionWithTools = {
   },
   permissionDescriptions: {
     read: "Read your owner's skills, including ones this agent does not use",
-    full: "Read your owner's skills. Creating, editing, and assigning them require your approval.",
+    full: "Read your owner's skills. Creating, editing, deleting, and assigning them require your approval. If your owner is a Helm admin, this agent can also write the platform skills every account loads.",
   },
 };

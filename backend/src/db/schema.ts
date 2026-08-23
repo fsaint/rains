@@ -329,6 +329,9 @@ export const skills = pgTable('skills', {
   autoAssign: boolean('auto_assign').notNull().default(false), // system rows only
   enabled: boolean('enabled').notNull().default(true),
   version: text('version'), // stamped by the installer; null = unversioned
+  // 'template' | 'admin' — provenance of the current content, system rows only.
+  // seedSystemSkills() overwrites a row only while it still reads 'template'.
+  source: text('source').notNull().default('admin'),
 
   createdAt: text('created_at').notNull().default(sql`now()`),
   updatedAt: text('updated_at').notNull().default(sql`now()`),

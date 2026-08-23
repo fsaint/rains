@@ -1072,6 +1072,7 @@ export async function initializeDatabase() {
       auto_assign BOOLEAN DEFAULT false NOT NULL,
       enabled BOOLEAN DEFAULT true NOT NULL,
       version TEXT,
+      source TEXT NOT NULL DEFAULT 'admin',
       created_at TEXT DEFAULT now() NOT NULL,
       updated_at TEXT DEFAULT now() NOT NULL
     )
@@ -1086,6 +1087,38 @@ export async function initializeDatabase() {
     EXCEPTION WHEN duplicate_column THEN NULL;
     END $$
   `;
+
+  // Provenance of a system skill's *current content*, so a deploy can tell an
+  // untouched template row from one an admin has since edited. Only meaningful
+  // when user_id IS NULL; user skills carry the 'admin' default and nothing
+  // reads it.
+  //
+  //   'template' — last written by seedSystemSkills() from templates/skills/
+  //   'admin'    — last written by a human or an agent through the API
+  //
+  // Added nullable, backfilled, then constrained — deliberately three steps. A
+  // single `ADD COLUMN source TEXT NOT NULL DEFAULT 'admin'` would stamp every
+  // existing template-seeded row 'admin' and freeze the whole fleet against
+  // future template updates, and it would do it silently: the symptom is a fix
+  // to a stock skill not arriving, a deploy later.
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE skills ADD COLUMN IF NOT EXISTS source TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
+  // One-shot: guarded on IS NULL, so it is a no-op on every subsequent boot.
+  // Every pre-existing system row is claimed by the template, which is the
+  // truthful description of the status quo — before this column the seeder
+  // overwrote all of them on every boot regardless. An admin-created system
+  // skill with no templates/skills/<slug>/ directory is labelled 'template'
+  // too, but the seeder never visits a slug it has no directory for, so
+  // nothing follows from it. Same for BOOT_SKILL_SLUG ('helm-boot'), which
+  // has no template directory either.
+  await sql`UPDATE skills SET source = 'template' WHERE source IS NULL AND user_id IS NULL`;
+  await sql`UPDATE skills SET source = 'admin' WHERE source IS NULL`;
+  await sql`ALTER TABLE skills ALTER COLUMN source SET DEFAULT 'admin'`;
+  await sql`ALTER TABLE skills ALTER COLUMN source SET NOT NULL`;
 
   await sql`CREATE INDEX IF NOT EXISTS idx_skills_user ON skills(user_id)`;
   // Slugs are unique within a scope: once globally for system skills, once
@@ -1273,6 +1306,7 @@ async function seedSystemSkills() {
   }
 
   let seeded = 0;
+  const skipped: string[] = [];
   for (const slug of entries) {
     let raw: string;
     try {
@@ -1288,9 +1322,18 @@ async function seedSystemSkills() {
     const autoAssign = meta.autoAssign === 'true' || meta.auto_assign === 'true';
     const version = typeof meta.version === 'string' && meta.version ? meta.version : null;
 
-    await sql`
-      INSERT INTO skills (id, user_id, slug, name, description, body, required_services, auto_assign, version, created_at, updated_at)
-      VALUES (${slug}, NULL, ${slug}, ${name}, ${description}, ${body}, ${JSON.stringify(requires)}, ${autoAssign}, ${version}, now(), now())
+    // The WHERE on the conflict action is the whole point: an admin edit sets
+    // source to 'admin', and from then on the template no longer wins. Rows
+    // still marked 'template' keep receiving updates, so a fix to a stock skill
+    // still reaches every account that has not customised it.
+    //
+    // `skills.user_id IS NULL` is belt-and-braces. A system row's id equals its
+    // slug and a user skill's id is a nanoid, so the two cannot collide today —
+    // but the guard means a future id scheme cannot quietly turn this upsert
+    // into an overwrite of somebody's private skill.
+    const result = await sql`
+      INSERT INTO skills (id, user_id, slug, name, description, body, required_services, auto_assign, version, source, created_at, updated_at)
+      VALUES (${slug}, NULL, ${slug}, ${name}, ${description}, ${body}, ${JSON.stringify(requires)}, ${autoAssign}, ${version}, 'template', now(), now())
       ON CONFLICT (id) DO UPDATE SET
         name = ${name},
         description = ${description},
@@ -1298,12 +1341,26 @@ async function seedSystemSkills() {
         required_services = ${JSON.stringify(requires)},
         auto_assign = ${autoAssign},
         version = ${version},
+        source = 'template',
         updated_at = now()
+      WHERE skills.user_id IS NULL AND skills.source = 'template'
+      RETURNING id
     `;
-    seeded++;
+    // A conflicting row whose WHERE is false raises no error and returns no
+    // row. That empty result is the only signal the skip happened, so it has to
+    // be read here — silence would recreate the footgun this column removes.
+    if (result.length === 0) skipped.push(slug);
+    else seeded++;
   }
 
   if (seeded > 0) console.log(`Seeded ${seeded} system skill(s)`);
+  if (skipped.length > 0) {
+    console.log(
+      `[skills] Skipped ${skipped.length} admin-edited system skill(s): ${skipped.join(', ')}. ` +
+      `Their source is 'admin', so templates/skills/ no longer overwrites them. ` +
+      `Delete the row in the dashboard to take the template version again.`
+    );
+  }
 }
 
 async function seedInitialPromptTemplates() {

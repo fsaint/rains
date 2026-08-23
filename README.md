@@ -155,7 +155,7 @@ Eighteen services live in `servers/src`, each with a `definition.ts` declaring i
 | Privileged | `skill-authoring`, `helm-admin` |
 | Dev only | `dev-sandbox` |
 
-**The two privileged services are different in kind.** `skill-authoring` writes the instructions other agents follow; `helm-admin` changes what other agents are allowed to do. An agent holding `helm-admin` may hold nothing else except `memory` — enforced in `backend/src/services/permissions.ts`, in both directions — and enabling it requires every agent on the account to have its unauthenticated MCP endpoint closed first. Without that second rule the first is decorative: an agent id is a credential on an open endpoint.
+**The two privileged services are different in kind.** `skill-authoring` writes the instructions other agents follow — and, when its owner is an admin, the Helm platform skills every account loads, which needs an explicit `scope: "system"` and the owner's role, neither of which enabling the service confers; `helm-admin` changes what other agents are allowed to do. An agent holding `helm-admin` may hold nothing else except `memory` — enforced in `backend/src/services/permissions.ts`, in both directions — and enabling it requires every agent on the account to have its unauthenticated MCP endpoint closed first. Without that second rule the first is decorative: an agent id is a credential on an open endpoint.
 
 To add a service, use the `/new-mcp-server` skill, and read [`servers/ADDING_TOOLS.md`](servers/ADDING_TOOLS.md) — a tool touches six files, and missing one produces tools that appear in the UI but cannot be permission-managed.
 
@@ -191,7 +191,7 @@ Key flows:
 | [`docs/MULTI_AGENT_SETUP.md`](docs/MULTI_AGENT_SETUP.md) | Running one agent per context, as a user |
 | [`docs/ops/COMMON_ERRORS.md`](docs/ops/COMMON_ERRORS.md) | Known traps and their fixes — read this before debugging anything odd |
 | [`docs/ops/LOCAL_DEV_SETUP.md`](docs/ops/LOCAL_DEV_SETUP.md) | Local environment, OAuth, dev bots |
-| [`docs/ops/ADDING_SKILLS_VIA_MCP.md`](docs/ops/ADDING_SKILLS_VIA_MCP.md) | Authoring and assigning skills |
+| [`docs/ops/ADDING_SKILLS_VIA_MCP.md`](docs/ops/ADDING_SKILLS_VIA_MCP.md) | Authoring, scoping, and assigning skills |
 | [`TESTING.md`](TESTING.md) | Every test tier and when to run it |
 | [`servers/ADDING_TOOLS.md`](servers/ADDING_TOOLS.md) | The six-file checklist for a new tool |
 

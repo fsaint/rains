@@ -14,9 +14,11 @@ import {
   ADMIN_TOOLS,
   CALENDAR_TOOLS,
   EMAIL_TOOLS,
+  SKILL_TOOLS,
   approveDenyKeyboard,
   escapeMarkdown,
   formatAdminApprovalMessage,
+  formatSkillApprovalMessage,
   formatBatchScope,
   formatCalendarApprovalMessage,
   formatEmailApprovalMessage,
@@ -673,6 +675,8 @@ export class TelegramNotifier {
       ? formatCalendarApprovalMessage(approval)
       : ADMIN_TOOLS.has(approval.tool)
       ? formatAdminApprovalMessage(approval, adminTarget)
+      : SKILL_TOOLS.has(approval.tool)
+      ? formatSkillApprovalMessage(approval)
       : this.formatGenericApprovalMessage(approval);
 
     return withCorrectionAffordance(approval, formatted, MAX_REVISIONS);
