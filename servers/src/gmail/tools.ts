@@ -154,12 +154,22 @@ export const searchTool: ToolDefinition = {
 };
 
 /**
- * Create a draft email
+ * Create a draft email.
+ *
+ * Step one of two. Sending is deliberately split so the approval lands on
+ * gmail_send_draft, where the user sees the rendered message before it leaves.
+ * The cost of that split is a failure mode worth naming in the description:
+ * an agent asked to *send* stops at the draft and reports the job done, so the
+ * mail silently never goes out.
  */
 export const createDraftTool: ToolDefinition = {
   name: 'gmail_create_draft',
   description:
-    'Create a draft email. The draft will be saved but not sent. Use gmail_send_draft to send it.',
+    'Create a draft email — step one of two. The draft is saved and is NOT sent. ' +
+    'If the user asked for the email to be sent, this call does not finish the job: ' +
+    'follow it with gmail_send_draft, passing the draftId this returns. ' +
+    'Stop at the draft only when the user actually asked for a draft. ' +
+    'Never report an email as sent when only this call was made.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -207,11 +217,21 @@ export const createDraftTool: ToolDefinition = {
 };
 
 /**
- * Send a draft email
+ * Send a draft email — the only call that delivers mail.
+ *
+ * gmail_send_message is blocked, so this is the sole delivery path. It carries
+ * the approval for the send, which is why the description tells the model to
+ * treat its result, not the create_draft result, as proof the mail went out.
  */
 export const sendDraftTool: ToolDefinition = {
   name: 'gmail_send_draft',
-  description: 'Send a previously created draft email.',
+  description:
+    'Send a draft created by gmail_create_draft, using the draftId it returned. ' +
+    'This is the call that actually delivers the email, and the only one that does — ' +
+    'when the user asks for mail to be sent, the job is not complete until this succeeds. ' +
+    'Say an email was sent only after this call returns successfully; a saved draft is not a sent email. ' +
+    'If it fails, the approval is already spent and delivery is unconfirmed: report that and ' +
+    'have the user check Sent rather than retrying, which risks sending twice.',
   inputSchema: {
     type: 'object',
     properties: {
