@@ -36,7 +36,11 @@ const INDEX_TYPE_MAP: Record<string, string> = {
 };
 
 function slugify(text: string): string {
-  return text.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]/g, '');
+  return text
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^\w-]/g, '')
+    .replace(/^-+|-+$/g, '');
 }
 
 /** Simple Markdown renderer (subset) */
