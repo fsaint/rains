@@ -40,6 +40,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { DeploymentPanel } from '../components/DeploymentPanel';
+import AgentSkillToggles from '../components/AgentSkillToggles';
 
 /**
  * Kept in step with ADMIN_SERVICE_TYPE in backend/src/services/permissions.ts,
@@ -168,6 +169,10 @@ export default function Permissions() {
     const interval = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(interval);
   }, [pendingList?.length]);
+
+  // Skills and Memory never sign in, so "no account" is not a gap for them.
+  const serviceNeedsAccount = (serviceType: string) =>
+    agentPerms?.availableServices.find((s) => s.type === serviceType)?.authRequired ?? true;
 
   const toggleAgent = (agentId: string) => {
     setExpandedAgents((prev) => {
@@ -498,7 +503,9 @@ export default function Permissions() {
                             )}
                           </div>
                           <div className="text-xs text-gray-400 truncate mt-0.5">
-                            {instance.credentialEmail || 'No account linked'}
+                            {serviceNeedsAccount(instance.serviceType)
+                              ? (instance.credentialEmail || 'No account linked')
+                              : 'No sign-in needed'}
                           </div>
                         </div>
 
@@ -548,6 +555,7 @@ export default function Permissions() {
       {selectedInstance && (
         <InstanceConfigModal
           instanceId={selectedInstance}
+          authRequired={serviceNeedsAccount}
           onClose={() => setSelectedInstance(null)}
           onUpdate={() => {
             queryClient.invalidateQueries({ queryKey: ['permissions'] });
@@ -605,7 +613,7 @@ interface AddServiceModalProps {
  * they are fixed on each agent's deployment panel, so this only explains.
  */
 type AddServiceConflict =
-  | { kind: 'combination'; serviceType: string; message: string; conflicting: string[] }
+  | { kind: 'combination'; serviceType: string; credentialId?: string; message: string; conflicting: string[] }
   | { kind: 'openEndpoints'; message: string; openAgents: Array<{ id: string; name: string }> };
 
 function AddServiceModal({
@@ -613,11 +621,14 @@ function AddServiceModal({
 }: AddServiceModalProps) {
   const navigate = useNavigate();
   const [conflict, setConflict] = useState<AddServiceConflict | null>(null);
+  // Set while the user is choosing which of several accounts a service should use.
+  const [accountPick, setAccountPick] = useState<{ serviceType: string; credentialId: string } | null>(null);
 
   const createInstanceMutation = useMutation({
-    mutationFn: (serviceType: string) => permissions.createInstance(agentId, serviceType),
+    mutationFn: ({ serviceType, credentialId }: { serviceType: string; credentialId?: string }) =>
+      permissions.createInstance(agentId, serviceType, undefined, credentialId),
     onSuccess: () => onAdded(),
-    onError: (err: unknown, serviceType) => {
+    onError: (err: unknown, { serviceType, credentialId }) => {
       if (!(err instanceof ApiError)) return;
       const details = (err.details ?? {}) as {
         conflicting?: string[];
@@ -627,6 +638,7 @@ function AddServiceModal({
         setConflict({
           kind: 'combination',
           serviceType,
+          credentialId,
           message: err.message,
           conflicting: details.conflicting ?? [],
         });
@@ -653,7 +665,7 @@ function AddServiceModal({
         const instance = agentInstances.find((i) => i.serviceType === serviceType);
         if (instance) await permissions.deleteInstance(instance.id);
       }
-      return permissions.createInstance(agentId, c.serviceType);
+      return permissions.createInstance(agentId, c.serviceType, undefined, c.credentialId);
     },
     onSuccess: () => {
       setConflict(null);
@@ -686,10 +698,24 @@ function AddServiceModal({
     (s) => s.authRequired && getMatchingCredentials(s.type).length === 0
   );
 
+  /**
+   * Add a service, asking which account first when there is more than one to
+   * choose from. One account is not a guess; several would be, and a guess
+   * the user then has to find and correct is worse than a question.
+   */
+  const addService = (serviceType: string) => {
+    const matching = getMatchingCredentials(serviceType);
+    if (matching.length > 1) {
+      setAccountPick({ serviceType, credentialId: matching[0].id });
+      return;
+    }
+    createInstanceMutation.mutate({ serviceType, credentialId: matching[0]?.id });
+  };
+
   const serviceButton = (service: { type: string; name: string; icon: string }, badge?: React.ReactNode) => (
     <button
       key={service.type}
-      onClick={() => createInstanceMutation.mutate(service.type)}
+      onClick={() => addService(service.type)}
       disabled={createInstanceMutation.isPending}
       className="w-full flex items-center gap-3 p-4 rounded-lg border-2 border-gray-200 hover:border-trust-blue/30 hover:bg-trust-blue/5 transition-all disabled:opacity-50"
     >
@@ -708,6 +734,80 @@ function AddServiceModal({
       {badge}
     </button>
   );
+
+  // A refusal from the server outranks the picker it was raised from.
+  if (accountPick && !conflict) {
+    const name = serviceLabel(accountPick.serviceType);
+    const options = getMatchingCredentials(accountPick.serviceType);
+    return (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="bg-white rounded-xl w-full max-w-md shadow-xl p-6">
+          <div className="flex items-start gap-3 mb-4">
+            <div className="p-2 bg-trust-blue/10 rounded-lg text-trust-blue shrink-0">
+              <Key className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-reins-navy">Which account should {name} use?</h2>
+              <p className="text-sm text-gray-600 mt-1">
+                {agentName} will act as this account. You can change it later in the service details.
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-2 mb-4">
+            {options.map((cred) => {
+              const isSelected = accountPick.credentialId === cred.id;
+              return (
+                <label
+                  key={cred.id}
+                  className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition-all ${
+                    isSelected ? 'border-trust-blue bg-trust-blue/5' : 'border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="add-service-account"
+                    checked={isSelected}
+                    onChange={() => setAccountPick({ ...accountPick, credentialId: cred.id })}
+                    className="h-4 w-4 text-trust-blue focus:ring-trust-blue"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-sm text-reins-navy truncate">
+                      {cred.accountEmail || cred.type}
+                    </div>
+                    {cred.accountName && (
+                      <div className="text-xs text-gray-400 truncate">{cred.accountName}</div>
+                    )}
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+
+          <div className="flex gap-2">
+            <button
+              onClick={() => createInstanceMutation.mutate(accountPick)}
+              disabled={createInstanceMutation.isPending}
+              className="flex-1 bg-trust-blue text-white px-4 py-2.5 rounded-lg text-sm font-semibold hover:bg-trust-blue/90 disabled:opacity-50"
+            >
+              {createInstanceMutation.isPending ? 'Adding…' : `Add ${name}`}
+            </button>
+            <button
+              onClick={() => setAccountPick(null)}
+              className="px-4 py-2.5 rounded-lg text-sm font-medium text-gray-500 hover:text-gray-700"
+            >
+              Back
+            </button>
+          </div>
+          {createInstanceMutation.isError && (
+            <p className="text-sm text-red-600 mt-3">
+              {(createInstanceMutation.error as Error).message}
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (conflict) {
     return (
@@ -883,11 +983,13 @@ function AddServiceModal({
 
 interface InstanceConfigModalProps {
   instanceId: string;
+  /** Whether a service type signs in to an account — no-auth services get no Account section. */
+  authRequired: (serviceType: string) => boolean;
   onClose: () => void;
   onUpdate: () => void;
 }
 
-function InstanceConfigModal({ instanceId, onClose, onUpdate }: InstanceConfigModalProps) {
+function InstanceConfigModal({ instanceId, authRequired, onClose, onUpdate }: InstanceConfigModalProps) {
   const queryClient = useQueryClient();
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [editingLabel, setEditingLabel] = useState(false);
@@ -1082,8 +1184,13 @@ function InstanceConfigModal({ instanceId, onClose, onUpdate }: InstanceConfigMo
               </div>
             </div>
 
-            {/* Credential / Account Section */}
-            {currentLevel !== 'none' && (
+            {/* Skills: pick what the agent can use, in place of an account */}
+            {config.serviceType === 'skills' && (
+              <AgentSkillToggles agentId={config.agentId} />
+            )}
+
+            {/* Credential / Account Section — only for services that sign in */}
+            {currentLevel !== 'none' && authRequired(config.serviceType) && (
               <div className="p-4 bg-gray-50 rounded-lg">
                 <div className="flex items-center gap-3 mb-3">
                   <Key className="w-5 h-5 text-gray-400" />

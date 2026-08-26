@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { ArrowLeft, Loader2, ChevronDown, ChevronUp, Mail, MessageCircle } from 'lucide-react';
+import { ArrowLeft, Loader2, ChevronDown, ChevronUp, Mail, MessageCircle, Plug } from 'lucide-react';
 import { agents, initialPromptTemplates, config as apiConfig, auth, oauth, credentials, permissions, billing, type CreateAndDeployData, type Credential } from '../api/client';
 
 const DEFAULT_SOUL = `You are a helpful AI assistant. Be concise, friendly, and thoughtful in your responses.`;
@@ -246,8 +246,9 @@ export default function AgentNew() {
       description: form.description || undefined,
       soulMd: form.soulMd || undefined,
     }),
-    onSuccess: (result) => {
-      navigate(`/agents/${result.id}`);
+    onSuccess: () => {
+      // Nothing left to configure here — the endpoint lives on the agent card.
+      navigate('/agents');
     },
     onError: (err: unknown) => {
       setError(err instanceof Error ? err.message : 'Failed to create agent');
@@ -488,7 +489,7 @@ export default function AgentNew() {
               : agentType === 'custom'
               ? 'Custom agent'
               : agentType === 'manual'
-              ? 'Manual agent — MCP endpoint only'
+              ? 'Bring your own agent — MCP endpoint only'
               : 'Configure and deploy a new AI agent'}
           </p>
         </div>
@@ -498,7 +499,18 @@ export default function AgentNew() {
       {!agentType && (
         <div className="space-y-4">
           <p className="text-sm text-gray-500">What kind of agent do you want?</p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <button
+              type="button"
+              onClick={() => setAgentType('manual')}
+              className="p-5 rounded-xl border-2 border-gray-200 hover:border-trust-blue hover:bg-trust-blue/5 text-left transition-all"
+            >
+              <Plug className="w-6 h-6 text-trust-blue mb-3" />
+              <p className="font-semibold text-reins-navy">Bring your own agent</p>
+              <p className="text-xs text-gray-400 mt-1">
+                Get an MCP endpoint URL for Claude Desktop, Claude Code, or any MCP client. No hosted runtime.
+              </p>
+            </button>
             <button
               type="button"
               onClick={() => {
@@ -526,15 +538,6 @@ export default function AgentNew() {
               <p className="text-xs text-gray-400 mt-1">
                 Define your own personality, model, and tools. Full control over everything.
               </p>
-            </button>
-          </div>
-          <div className="text-center pt-2">
-            <button
-              type="button"
-              onClick={() => setAgentType('manual')}
-              className="text-xs text-gray-300 hover:text-gray-500 transition-colors underline underline-offset-2"
-            >
-              Bring your own agent (MCP endpoint only)
             </button>
           </div>
         </div>
