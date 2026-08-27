@@ -309,9 +309,12 @@ opposite.
 
 ## Built-in tools and the approval layer
 
-Beyond the service tools, the endpoint always injects `get_result`, and injects
+Beyond the service tools, the endpoint always injects `get_result` and `whoami`, and injects
 `mark_onboarded` while the deployment has not completed first-run setup
-(`backend/src/mcp/agent-endpoint.ts`).
+(`backend/src/mcp/agent-endpoint.ts`). `whoami` takes no arguments and returns the calling
+agent's `{ agentId, name }` — an agent has no other way to learn its own id, which memory
+scopes, `helm-admin`, and skill assignment all take as an argument. It is read-only and
+bypasses the policy layer, since the request is already authenticated as that agent.
 
 A `tools/call` on a tool marked `require_approval` does **not** block. It returns
 immediately with `isError: true` and an `APPROVAL_PENDING` body naming a jobId; the executor

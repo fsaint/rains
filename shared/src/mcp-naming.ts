@@ -23,6 +23,7 @@ export type AgentRuntime = 'openclaw' | 'hermes';
 export const BUILTIN_TOOLS = {
   getResult: 'get_result',
   markOnboarded: 'mark_onboarded',
+  whoami: 'whoami',
 } as const;
 
 /**

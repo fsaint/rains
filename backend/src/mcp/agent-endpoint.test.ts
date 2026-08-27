@@ -982,3 +982,43 @@ describe('gateway token injection', () => {
     );
   });
 });
+
+describe('whoami tool', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Earlier suites leave the agent lookup returning nothing; restore the default row.
+    dbWhereMock.mockResolvedValue([{ id: 'agent-1', name: 'Test Agent', status: 'active' }]);
+    vi.mocked(client.execute).mockResolvedValue({ rows: [] } as any);
+  });
+
+  it('appears in tools/list for any agent, whatever services it has', async () => {
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/list',
+    });
+    const toolNames = (response.result as { tools: Array<{ name: string }> }).tools.map((t) => t.name);
+    expect(toolNames).toContain('whoami');
+  });
+
+  it('is listed for a Hermes deployment too — it does not depend on runtime', async () => {
+    vi.mocked(client.execute).mockResolvedValue({
+      rows: [{ id: 'dep-1', runtime: 'hermes', mcp_server_name: 'helm', has_onboarded: true }],
+    } as any);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/list',
+    });
+    const toolNames = (response.result as { tools: Array<{ name: string }> }).tools.map((t) => t.name);
+    expect(toolNames).toContain('whoami');
+  });
+
+  it('returns the calling agent\'s id and name', async () => {
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 7, method: 'tools/call',
+      params: { name: 'whoami', arguments: {} },
+    });
+
+    expect(response.error).toBeUndefined();
+    const text = (response.result as { content: Array<{ text: string }> }).content[0].text;
+    expect(JSON.parse(text)).toEqual({ agentId: 'agent-1', name: 'Test Agent' });
+  });
+});

@@ -448,6 +448,21 @@ async function handleListTools(
     },
   });
 
+  // Built-in: whoami — always present. An agent has no other way to learn its
+  // own id, and several tools (memory scopes, helm-admin, skill assignment)
+  // take one as an argument.
+  tools.push({
+    name: BUILTIN_TOOLS.whoami,
+    description:
+      'Return the identity of the agent making this call: its Helm agent id and name. ' +
+      'Use the id wherever a tool or skill asks for an agent id (memory scopes, helm-admin, skill assignment).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  });
+
   // Inject mark_onboarded if this agent has not yet completed first-run setup
   const deploymentRow = await client.execute({
     sql: `SELECT id, fly_app_name, fly_machine_id, has_onboarded, runtime, mcp_server_name FROM deployed_agents WHERE agent_id = ? ORDER BY created_at DESC LIMIT 1`,
@@ -940,6 +955,18 @@ async function handleCallTool(
   // names, but agents deployed before the rename — and skills that name the old
   // tools in prose — keep working.
   const toolName = canonicalToolName(rawToolName);
+
+  // Built-in tool: whoami — the calling agent's own id and name. Read-only and
+  // already authenticated by the time we are here, so no policy check applies.
+  if (toolName === BUILTIN_TOOLS.whoami) {
+    const [self] = await db.select().from(agents).where(eq(agents.id, agentId));
+    return {
+      jsonrpc: '2.0', id: requestId,
+      result: {
+        content: [{ type: 'text', text: JSON.stringify({ agentId, name: self?.name ?? null }) }],
+      },
+    };
+  }
 
   // Built-in tool: get_result — poll for deferred approval job status
   if (toolName === BUILTIN_TOOLS.getResult) {
