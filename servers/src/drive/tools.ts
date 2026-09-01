@@ -142,29 +142,43 @@ export const searchTool: ToolDefinition = {
 export const createFileTool: ToolDefinition = {
   name: 'drive_create_file',
   description:
-    'Create a new file in Google Drive. Can create folders, documents, spreadsheets, or upload content.',
+    'Create a new file in Google Drive: folders, documents, spreadsheets, inline text content — ' +
+    'or upload a real file (PDF, image, anything binary) via the `file` parameter.',
   inputSchema: {
     type: 'object',
     properties: {
       name: {
         type: 'string',
-        description: 'Name of the file',
+        description: 'Name of the file. Defaults to the filename carried by `file` when omitted.',
       },
       mimeType: {
         type: 'string',
         description:
-          'MIME type (e.g., "application/vnd.google-apps.document", "application/vnd.google-apps.folder", "text/plain")',
+          'Target MIME type (e.g., "application/vnd.google-apps.document", "application/vnd.google-apps.folder", ' +
+          '"text/plain"). With a `file` source, naming a Google Workspace type converts the upload ' +
+          '(e.g. a .docx file into a Google Doc).',
       },
       content: {
         type: 'string',
-        description: 'File content (for text files)',
+        description: 'File content (for text files). For binary or staged files use `file` instead.',
+      },
+      file: {
+        type: 'object',
+        description:
+          'The file bytes, from a reference source — use this to upload real files. Same shape as a ' +
+          'Gmail attachment: {"source":"upload","uploadId":…} for a file staged via /api/agent-uploads ' +
+          '(up to 20 MB; the bytes never enter your context), {"source":"base64","filename":…,"mimeType":…,"data":…} ' +
+          'for small inline files (≤384 KB decoded), {"source":"url","url":…} to fetch over HTTPS, ' +
+          '{"source":"gmail","messageId":…,"attachmentId":…} to save an email attachment to Drive, ' +
+          '{"source":"drive","fileId":…} to copy or export an existing Drive file, or ' +
+          '{"source":"text","filename":…,"content":…}. Mutually exclusive with content.',
       },
       parentId: {
         type: 'string',
         description: 'ID of parent folder (default: root)',
       },
     },
-    required: ['name'],
+    required: [],
   },
   handler: handleCreateFile,
 };
@@ -175,7 +189,8 @@ export const createFileTool: ToolDefinition = {
 export const updateFileTool: ToolDefinition = {
   name: 'drive_update_file',
   description:
-    'Update an existing file content or metadata.',
+    'Update an existing file: metadata, or replace its content with `content` (plain text) or ' +
+    '`file` (real bytes from any source).',
   inputSchema: {
     type: 'object',
     properties: {
@@ -189,8 +204,20 @@ export const updateFileTool: ToolDefinition = {
       },
       content: {
         type: 'string',
-        description: 'New content (for text files)',
+        description: 'New content (for text files). For binary or staged files use `file` instead.',
       },
+      file: {
+        type: 'object',
+        description:
+          'The file bytes, from a reference source — use this to upload real files. Same shape as a ' +
+          'Gmail attachment: {"source":"upload","uploadId":…} for a file staged via /api/agent-uploads ' +
+          '(up to 20 MB; the bytes never enter your context), {"source":"base64","filename":…,"mimeType":…,"data":…} ' +
+          'for small inline files (≤384 KB decoded), {"source":"url","url":…} to fetch over HTTPS, ' +
+          '{"source":"gmail","messageId":…,"attachmentId":…} to save an email attachment to Drive, ' +
+          '{"source":"drive","fileId":…} to copy or export an existing Drive file, or ' +
+          '{"source":"text","filename":…,"content":…}. Mutually exclusive with content.',
+      },
+
       addParents: {
         type: 'array',
         items: { type: 'string' },

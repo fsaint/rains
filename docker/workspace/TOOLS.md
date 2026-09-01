@@ -63,6 +63,16 @@ curl -sS -X POST "$REINS_API_URL/api/agent-uploads?filename=report.pdf&mimeType=
 
 Then pass `attachments: [{ "source": "upload", "uploadId": "<id from the response>" }]`. Uploads are limited to 25 MB and expire after 24 hours.
 
+### Uploading files to Google Drive
+
+`drive_create_file` and `drive_update_file` take the same reference spec in their `file` parameter — stage the file exactly as above, then:
+
+```jsonc
+drive_create_file({ "file": { "source": "upload", "uploadId": "<id>" }, "parentId": "<folder id>" })
+```
+
+`name` defaults to the staged filename. The other sources work too: `{"source":"gmail","messageId":…,"attachmentId":…}` saves an email attachment straight to Drive without the bytes ever entering your context, and `{"source":"url","url":"https://…"}` fetches a public file. Files resolved this way are capped at 20 MB.
+
 ## MCP Servers
 You may have access to additional tools via MCP servers. Their tools appear as `<server>__<tool>` (e.g., `helm__list_sessions`).
 

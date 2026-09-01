@@ -2,9 +2,12 @@
  * Google Drive MCP Server Tool Handlers
  */
 
+import { Readable } from 'node:stream';
 import { google, type drive_v3 } from 'googleapis';
 import type { ServerContext, ToolResult } from '../common/types.js';
 import { resolvePermission, canRead, canWrite, type PermissionLevel } from './path-rules.js';
+import { parseAndResolveAttachments, AttachmentError } from '../gmail/attachments.js';
+import type { ResolvedAttachment } from '../gmail/mime.js';
 
 type DriveClient = drive_v3.Drive;
 
@@ -31,6 +34,43 @@ function getDriveClient(context: ServerContext): DriveClient {
   const auth = new google.auth.OAuth2();
   auth.setCredentials({ access_token: context.accessToken });
   return google.drive({ version: 'v3', auth });
+}
+
+/**
+ * Resolve the optional `file` argument — one Gmail-style attachment spec — into
+ * real bytes via the shared resolver (base64, upload, url, gmail, drive, text).
+ * Returns null when absent; an AttachmentError becomes a failed ToolResult so
+ * the model sees an actionable sentence rather than a stack trace (mirrors
+ * resolveAttachmentsOrFail in ../gmail/handlers.ts).
+ */
+async function resolveFileSource(
+  fileArg: unknown,
+  context: ServerContext
+): Promise<{ resolved: ResolvedAttachment } | { errorResult: ToolResult } | null> {
+  if (fileArg === undefined || fileArg === null) return null;
+  try {
+    const [resolved] = await parseAndResolveAttachments([fileArg], {
+      // Lazy getter: only a source:"gmail" file needs a Gmail client, and the
+      // same Google token carries the Gmail scopes alongside Drive's.
+      get gmail() {
+        if (!context.accessToken) throw new AttachmentError('No access token available');
+        const auth = new google.auth.OAuth2();
+        auth.setCredentials({ access_token: context.accessToken });
+        return google.gmail({ version: 'v1', auth });
+      },
+      drive: context.accessToken ? () => getDriveClient(context) : undefined,
+      driveDefaultLevel: context.driveDefaultLevel,
+      drivePathRules: context.drivePathRules,
+      gatewayToken: context.gatewayToken,
+    });
+    if (!resolved) return { errorResult: { success: false, error: 'file resolved to no content' } };
+    return { resolved };
+  } catch (error) {
+    if (error instanceof AttachmentError) {
+      return { errorResult: { success: false, error: error.message } };
+    }
+    throw error;
+  }
 }
 
 /**
@@ -290,17 +330,53 @@ export async function handleCreateFile(
 
   const drive = getDriveClient(context);
 
-  const name = args.name as string;
+  const name = args.name as string | undefined;
   const mimeType = args.mimeType as string | undefined;
   const content = args.content as string | undefined;
 
+  if (content !== undefined && args.file !== undefined) {
+    return { success: false, error: 'Pass either content (inline text) or file (a byte source), not both.' };
+  }
+  const fileSource = await resolveFileSource(args.file, context);
+  if (fileSource && 'errorResult' in fileSource) return fileSource.errorResult;
+  const resolved = fileSource?.resolved;
+
+  const effectiveName = name ?? resolved?.filename;
+  if (!effectiveName) {
+    return { success: false, error: 'name is required when file does not carry a filename.' };
+  }
+
   const fileMetadata: drive_v3.Schema$File = {
-    name,
+    name: effectiveName,
+    // Still the TARGET type: with a file source, naming a Google Workspace
+    // type here converts on upload (e.g. a .docx becomes a Google Doc).
     mimeType,
     parents: parentId ? [parentId] : undefined,
   };
 
-  if (content) {
+  if (resolved) {
+    // Upload real bytes. A stream, not the Buffer itself: googleapis' media
+    // path treats a bare object unreliably, a Readable is the documented form.
+    const media = {
+      mimeType: resolved.mimeType,
+      body: Readable.from(resolved.bytes),
+    };
+
+    const response = await drive.files.create({
+      requestBody: fileMetadata,
+      media,
+      fields: DEFAULT_FIELDS,
+      supportsAllDrives: true,
+    });
+
+    return {
+      success: true,
+      data: {
+        ...response.data,
+        message: 'File created successfully',
+      },
+    };
+  } else if (content) {
     // Create with content
     const media = {
       mimeType: mimeType ?? 'text/plain',
@@ -361,7 +437,37 @@ export async function handleUpdateFile(
   const fileMetadata: drive_v3.Schema$File = {};
   if (name) fileMetadata.name = name;
 
-  if (content) {
+  if (content !== undefined && args.file !== undefined) {
+    return { success: false, error: 'Pass either content (inline text) or file (a byte source), not both.' };
+  }
+  const fileSource = await resolveFileSource(args.file, context);
+  if (fileSource && 'errorResult' in fileSource) return fileSource.errorResult;
+  const resolved = fileSource?.resolved;
+
+  if (resolved) {
+    const media = {
+      mimeType: resolved.mimeType,
+      body: Readable.from(resolved.bytes),
+    };
+
+    const response = await drive.files.update({
+      fileId,
+      requestBody: fileMetadata,
+      media,
+      addParents: addParents?.join(','),
+      removeParents: removeParents?.join(','),
+      fields: DEFAULT_FIELDS,
+      supportsAllDrives: true,
+    });
+
+    return {
+      success: true,
+      data: {
+        ...response.data,
+        message: 'File updated successfully',
+      },
+    };
+  } else if (content) {
     // Update with new content
     const media = {
       mimeType: 'text/plain',
