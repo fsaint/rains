@@ -19,8 +19,9 @@ export interface FormattedApproval {
 }
 
 // Email-sending tools get a rich To/Cc/Subject/Body preview instead of a
-// truncated JSON dump. *_send_draft tools only carry a draftId, so they are
-// intentionally excluded and keep the generic branch.
+// truncated JSON dump. *_send_draft tools carry only a draftId, so they render
+// through formatDraftSendApprovalMessage instead, with the draft's content
+// resolved by the notifier (DRAFT_SEND_TOOLS below).
 export const EMAIL_TOOLS = new Set([
   'gmail_send_message',
   'gmail_create_draft',
@@ -41,6 +42,27 @@ export const CALENDAR_TOOLS = new Set([
   'outlook_cal_delete_event',
   'outlook_cal_respond_to_event',
 ]);
+
+/**
+ * Draft-send tools. Their arguments are only `{ account?, draftId }`, yet the
+ * send is the consequential act — the one approval that most needs to show the
+ * email. The notifier resolves the draft's content (from the creating
+ * approval's stored arguments, or live from Gmail) and passes a
+ * DraftSendSummary in; the formatter stays pure, like the admin tools below.
+ */
+export const DRAFT_SEND_TOOLS = new Set(['gmail_send_draft']);
+
+/** What the notifier resolved about the draft a send-draft approval delivers. */
+export interface DraftSendSummary {
+  to?: string;
+  cc?: string;
+  bcc?: string;
+  subject?: string;
+  bodyPreview?: string;
+  account?: string;
+  /** 'creation-approval' = replayed from the create_draft approval; 'gmail' = fetched live. */
+  resolvedFrom: 'creation-approval' | 'gmail';
+}
 
 /**
  * Helm Admin write tools. These act on *another agent*, identified in the
@@ -298,6 +320,53 @@ export function summarizeAttachments(raw: unknown): string[] | null {
  * Rich Telegram preview for email approval requests (gmail_* / outlook_mail_*).
  * Exported for unit testing without a live bot.
  */
+/**
+ * Rich preview for a send-draft approval.
+ *
+ * `draft` is what the notifier could resolve; null means it could not — the
+ * message then says so explicitly rather than showing a JSON dump, because
+ * "approve this opaque id" is precisely the message this formatter exists to
+ * kill. HTML parse mode also stops the legacy-Markdown parser eating the
+ * underscores in the tool name.
+ */
+export function formatDraftSendApprovalMessage(
+  approval: ApprovalRequest,
+  draft: DraftSendSummary | null
+): FormattedApproval {
+  const args = approval.arguments as { draftId?: string; account?: string } | undefined;
+  const draftId = typeof args?.draftId === 'string' ? args.draftId : '';
+  const account = draft?.account ?? args?.account;
+
+  const lines = [
+    '📧 <b>Send draft</b> — this delivers the email',
+    account ? `<b>From account:</b> ${escapeHtml(account)}` : null,
+    ...(draft
+      ? [
+          draft.to ? `<b>To:</b> ${escapeHtml(draft.to)}` : null,
+          draft.cc ? `<b>Cc:</b> ${escapeHtml(draft.cc)}` : null,
+          draft.bcc ? `<b>Bcc:</b> ${escapeHtml(draft.bcc)}` : null,
+          draft.subject ? `<b>Subject:</b> ${escapeHtml(draft.subject)}` : null,
+        ]
+      : [
+          "\u26a0\ufe0f <b>Could not load this draft's content.</b> Approve only if you recognise this draft.",
+        ]),
+    `<b>Agent:</b> <code>${escapeHtml(approval.agentId)}</code>`,
+    draftId ? `<b>Draft:</b> <code>${escapeHtml(draftId)}</code>` : null,
+    draft?.bodyPreview
+      ? `<blockquote>${truncateBody(draft.bodyPreview)}</blockquote>` +
+        (draft.resolvedFrom === 'gmail' ? '\n<i>(preview from Gmail)</i>' : '')
+      : null,
+    ``,
+    expiresLine(approval),
+  ].filter(Boolean);
+
+  return {
+    text: lines.join('\n'),
+    keyboard: approveDenyKeyboard(approval.id),
+    parseMode: 'HTML',
+  };
+}
+
 export function formatEmailApprovalMessage(approval: ApprovalRequest): FormattedApproval {
   const args = approval.arguments as {
     account?: string;

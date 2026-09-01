@@ -11,7 +11,7 @@ vi.mock('../db/index.js', () => ({
 }));
 
 import { formatCalendarApprovalMessage, formatEmailApprovalMessage } from './telegram.js';
-import { escapeMarkdown, withCorrectionAffordance, formatBatchScope, formatAdminApprovalMessage, formatSkillApprovalMessage } from './approval-format.js';
+import { escapeMarkdown, withCorrectionAffordance, formatBatchScope, formatAdminApprovalMessage, formatSkillApprovalMessage, formatDraftSendApprovalMessage, type DraftSendSummary } from './approval-format.js';
 import { MAX_REVISIONS } from '../approvals/queue.js';
 import type { ApprovalRequest } from '@reins/shared';
 
@@ -689,6 +689,75 @@ describe('formatSkillApprovalMessage', () => {
 
     expect(text).not.toContain('<b>Bold</b> & Co');
     expect(text).toContain('&lt;b&gt;Bold&lt;/b&gt; &amp; Co');
+    expect(text).not.toContain('<script>');
+  });
+});
+
+describe('formatDraftSendApprovalMessage', () => {
+  const sendDraftApproval = makeApproval({
+    tool: 'gmail_send_draft',
+    arguments: { account: 'fsaint@gmail.com', draftId: 'r-5037708881230496567' },
+  });
+
+  it('renders the email the draft would deliver, replayed from the creating approval', () => {
+    const draft: DraftSendSummary = {
+      to: 'alice@example.com',
+      subject: 'Q3 numbers',
+      bodyPreview: 'Hi Alice,\n\nNumbers attached.',
+      account: 'fsaint@gmail.com',
+      resolvedFrom: 'creation-approval',
+    };
+
+    const { text, keyboard, parseMode } = formatDraftSendApprovalMessage(sendDraftApproval, draft);
+
+    expect(parseMode).toBe('HTML');
+    expect(text).toContain('<b>Send draft</b>');
+    expect(text).toContain('this delivers the email');
+    expect(text).toContain('<b>From account:</b> fsaint@gmail.com');
+    expect(text).toContain('<b>To:</b> alice@example.com');
+    expect(text).toContain('<b>Subject:</b> Q3 numbers');
+    expect(text).toContain('<blockquote>Hi Alice,');
+    expect(text).toContain('r-5037708881230496567');
+    expect(actionsOf(keyboard)).toContain('ap:appr-1:approve');
+    expect(actionsOf(keyboard)).toContain('ap:appr-1:deny');
+  });
+
+  it('marks a live-fetched preview as coming from Gmail', () => {
+    const draft: DraftSendSummary = {
+      to: 'bob@example.com',
+      subject: 'Contract',
+      bodyPreview: 'Please find attached…',
+      resolvedFrom: 'gmail',
+    };
+
+    const { text } = formatDraftSendApprovalMessage(sendDraftApproval, draft);
+
+    expect(text).toContain('<i>(preview from Gmail)</i>');
+  });
+
+  it('says so plainly when the draft could not be resolved — never a JSON dump', () => {
+    const { text, parseMode } = formatDraftSendApprovalMessage(sendDraftApproval, null);
+
+    expect(parseMode).toBe('HTML');
+    expect(text).toContain("Could not load this draft's content");
+    expect(text).toContain('Approve only if you recognise this draft');
+    // The id stays visible so the owner can still correlate it manually.
+    expect(text).toContain('r-5037708881230496567');
+    expect(text).not.toContain('{"account"');
+  });
+
+  it('escapes HTML in resolved fields', () => {
+    const draft: DraftSendSummary = {
+      to: 'a@b.c',
+      subject: '<b>urgent</b> & important',
+      bodyPreview: '<script>x</script>',
+      resolvedFrom: 'creation-approval',
+    };
+
+    const { text } = formatDraftSendApprovalMessage(sendDraftApproval, draft);
+
+    expect(text).toContain('&lt;b&gt;urgent&lt;/b&gt; &amp; important');
+    expect(text).toContain('&lt;script&gt;');
     expect(text).not.toContain('<script>');
   });
 });

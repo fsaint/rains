@@ -21,11 +21,17 @@ import {
   formatSkillApprovalMessage,
   formatBatchScope,
   formatCalendarApprovalMessage,
+  formatDraftSendApprovalMessage,
   formatEmailApprovalMessage,
+  htmlToText,
+  joinRecipients,
   withCorrectionAffordance,
+  DRAFT_SEND_TOOLS,
   type AdminTargetSummary,
+  type DraftSendSummary,
 } from './approval-format.js';
 import { MAX_REVISIONS } from '../approvals/queue.js';
+import { credentialVault } from '../credentials/vault.js';
 
 // Re-exported so existing callers and tests can keep importing from the
 // transport module; the formatters themselves live in ./approval-format.ts.
@@ -147,11 +153,14 @@ export class TelegramNotifier {
         ? this.buildMagicLinkUrl(owner.userId, approval.id)
         : null;
       // Resolved here rather than inside the formatter, which stays pure and
-      // synchronous. Only admin tools need it, and only they pay for the query.
+      // synchronous. Only the tools that need a lookup pay for it.
       const adminTarget = ADMIN_TOOLS.has(approval.tool)
         ? await this.resolveAdminTargetSummary(approval)
         : null;
-      const { text, keyboard, parseMode } = this.formatApprovalMessage(approval, magicLinkUrl, adminTarget);
+      const draftSummary = DRAFT_SEND_TOOLS.has(approval.tool)
+        ? await this.resolveDraftSendSummary(approval)
+        : null;
+      const { text, keyboard, parseMode } = this.formatApprovalMessage(approval, magicLinkUrl, adminTarget, draftSummary);
       const sent = await this.sendMessage(owner.chatId, text, {
         parse_mode: parseMode ?? 'Markdown',
         reply_markup: { inline_keyboard: keyboard },
@@ -601,6 +610,120 @@ export class TelegramNotifier {
    * that resolves to no agent of yours is the single most useful thing the
    * message can tell you.
    */
+  /**
+   * What a send-draft approval would actually deliver.
+   *
+   * The draftId in the arguments is either the jobId of the create_draft
+   * approval (executeTool resolves it at execution), or the real Gmail draft
+   * id that approval's result returned — in both cases the creating approval's
+   * stored arguments carry the full email, so no Gmail call is needed. Only a
+   * draft Reins never created falls through to a live metadata fetch. Any
+   * failure returns null: the formatter then says the content could not be
+   * loaded, and the approval still goes out — the agent is already waiting.
+   */
+  private async resolveDraftSendSummary(approval: ApprovalRequest): Promise<DraftSendSummary | null> {
+    const args = approval.arguments as { draftId?: string; account?: string } | undefined;
+    const draftId = args?.draftId;
+    if (typeof draftId !== 'string' || draftId === '') return null;
+
+    try {
+      // 1. draftId is the create_draft approval's own jobId.
+      const byId = await client.execute({
+        sql: `SELECT tool, agent_id, arguments_json FROM approvals WHERE id = ?`,
+        args: [draftId],
+      });
+      const row = byId.rows[0] as
+        | { tool?: string; agent_id?: string; arguments_json?: string | null }
+        | undefined;
+      let argsJson: string | null = null;
+      if (row && row.tool === 'gmail_create_draft' && row.agent_id === approval.agentId) {
+        argsJson = row.arguments_json ?? null;
+      }
+
+      // 2. Or the real Gmail id an executed create_draft returned.
+      if (!argsJson) {
+        const byResult = await client.execute({
+          sql: `SELECT arguments_json FROM approvals
+                WHERE agent_id = ? AND tool = 'gmail_create_draft' AND result_json LIKE ?
+                ORDER BY requested_at DESC LIMIT 1`,
+          args: [approval.agentId, `%${draftId}%`],
+        });
+        argsJson = (byResult.rows[0]?.arguments_json as string | undefined) ?? null;
+      }
+
+      if (argsJson) {
+        const created = JSON.parse(argsJson) as Record<string, unknown>;
+        const bodyText =
+          typeof created.body === 'string' && created.body.length > 0
+            ? created.body
+            : typeof created.htmlBody === 'string'
+            ? htmlToText(created.htmlBody)
+            : undefined;
+        return {
+          to: joinRecipients(created.to) || undefined,
+          cc: joinRecipients(created.cc) || undefined,
+          bcc: joinRecipients(created.bcc) || undefined,
+          subject: typeof created.subject === 'string' ? created.subject : undefined,
+          bodyPreview: bodyText,
+          account: (typeof created.account === 'string' ? created.account : undefined) ?? args?.account,
+          resolvedFrom: 'creation-approval',
+        };
+      }
+
+      // 3. A draft Reins did not create — read headers + snippet from Gmail.
+      const token = await this.gmailAccessTokenFor(approval.agentId, args?.account);
+      if (!token) return null;
+      const url =
+        `https://gmail.googleapis.com/gmail/v1/users/me/drafts/${encodeURIComponent(draftId)}` +
+        `?format=metadata&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Bcc&metadataHeaders=Subject`;
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) return null;
+      const draft = (await res.json()) as {
+        message?: { snippet?: string; payload?: { headers?: Array<{ name?: string; value?: string }> } };
+      };
+      const headers = draft.message?.payload?.headers ?? [];
+      const header = (name: string) =>
+        headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value || undefined;
+      return {
+        to: header('To'),
+        cc: header('Cc'),
+        bcc: header('Bcc'),
+        subject: header('Subject'),
+        bodyPreview: draft.message?.snippet || undefined,
+        account: args?.account,
+        resolvedFrom: 'gmail',
+      };
+    } catch (err) {
+      console.warn('[telegram] could not resolve send_draft preview:', err);
+      return null;
+    }
+  }
+
+  /** Access token for the agent's Gmail credential matching `account`, else its default. */
+  private async gmailAccessTokenFor(agentId: string, account?: string): Promise<string | null> {
+    const rows = await client.execute({
+      sql: `SELECT asi.credential_id, asi.is_default, c.account_email
+            FROM agent_service_instances asi
+            JOIN credentials c ON c.id = asi.credential_id
+            WHERE asi.agent_id = ? AND asi.service_type = 'gmail' AND asi.enabled = true`,
+      args: [agentId],
+    });
+    const instances = rows.rows as Array<{
+      credential_id: string;
+      is_default: boolean | number;
+      account_email: string | null;
+    }>;
+    if (instances.length === 0) return null;
+    const match = account
+      ? instances.find((i) => i.account_email === account)
+      : instances.find((i) => i.is_default === true || i.is_default === 1) ?? instances[0];
+    if (!match) return null;
+    return credentialVault.getValidAccessToken(match.credential_id);
+  }
+
   private async resolveAdminTargetSummary(
     approval: ApprovalRequest
   ): Promise<AdminTargetSummary | null> {
@@ -653,7 +776,8 @@ export class TelegramNotifier {
   private formatApprovalMessage(
     approval: ApprovalRequest,
     magicLinkUrl: string | null,
-    adminTarget: AdminTargetSummary | null = null
+    adminTarget: AdminTargetSummary | null = null,
+    draftSummary: DraftSendSummary | null = null
   ): {
     text: string;
     keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>>;
@@ -669,7 +793,9 @@ export class TelegramNotifier {
 
     // Everything below is a tool call the agent can revise, so it gets the
     // correction affordance. reauth and telegram_group above deliberately do not.
-    const formatted = EMAIL_TOOLS.has(approval.tool)
+    const formatted = DRAFT_SEND_TOOLS.has(approval.tool)
+      ? formatDraftSendApprovalMessage(approval, draftSummary)
+      : EMAIL_TOOLS.has(approval.tool)
       ? formatEmailApprovalMessage(approval)
       : CALENDAR_TOOLS.has(approval.tool)
       ? formatCalendarApprovalMessage(approval)
