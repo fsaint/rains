@@ -390,13 +390,19 @@ export class ApprovalQueue extends EventEmitter<ApprovalEvents> {
     extraArgs: Record<string, unknown> = {},
     expiryMs: number = 7 * 24 * 60 * 60 * 1000,
   ): Promise<{ id: string; isNew: boolean; emailThrottled: boolean }> {
-    // Check for an existing pending reauth for this agent + provider
+    // Dedup per agent + provider + credential. The credential matters: with two
+    // Google accounts on one agent, "gmail is broken" collapsing into a single
+    // pending row hides that a second account is broken too — and the row that
+    // survives names the wrong account. Producers without a credentialId
+    // (codex, minimax, provisioning) keep the per-provider dedup: null = null.
+    const credentialKey = (extraArgs.credentialId as string | null | undefined) ?? null;
     const existing = await client.execute({
       sql: `SELECT id, email_last_sent_at FROM approvals
             WHERE status = 'pending' AND tool = 'reauth' AND agent_id = ?
               AND arguments_json::jsonb->>'provider' = ?
+              AND arguments_json::jsonb->>'credentialId' IS NOT DISTINCT FROM ?
             LIMIT 1`,
-      args: [agentId, provider],
+      args: [agentId, provider, credentialKey],
     });
 
     if (existing.rows.length > 0) {

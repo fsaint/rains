@@ -46,6 +46,7 @@ function getTimeRemaining(expiresAt: string) {
 
 export function ReauthApprovalCard({ approval, onReauth }: Props) {
   const provider = (approval.arguments.provider as string) ?? 'unknown';
+  const account = (approval.arguments.accountEmail ?? approval.arguments.email) as string | undefined;
   const source = approval.arguments.source as string | undefined;
   const providerLabel = PROVIDER_LABELS[provider] ?? provider;
   const isFromToolCall = source === 'mcp_tool_call';
@@ -74,6 +75,12 @@ export function ReauthApprovalCard({ approval, onReauth }: Props) {
           </div>
 
           <div className="grid grid-cols-2 gap-4 mt-4">
+            {account && (
+              <div>
+                <p className="text-xs text-gray-500 uppercase tracking-wider">Account</p>
+                <p className="font-medium text-sm truncate">{account}</p>
+              </div>
+            )}
             <div>
               <p className="text-xs text-gray-500 uppercase tracking-wider">Agent</p>
               <p className="font-medium text-sm">{approval.agentId}</p>

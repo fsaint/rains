@@ -213,7 +213,7 @@ async function runOAuthExpiryCheck(): Promise<void> {
       agentId,
       reauthProvider,
       context,
-      { credentialId, email: email ?? undefined, source: 'oauth_monitor' },
+      { credentialId, email: email ?? undefined, accountEmail: email ?? undefined, source: 'oauth_monitor' },
     );
 
     if (isNew) {

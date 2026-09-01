@@ -647,3 +647,36 @@ describe('ApprovalQueue', () => {
     });
   });
 });
+
+describe('submitReauth dedup', () => {
+  let queue: ApprovalQueue;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    queue = new ApprovalQueue();
+  });
+
+  it('dedups per credential, not only per provider', async () => {
+    // Two Google accounts on one agent can both break; collapsing them into
+    // one pending row hides the second and names the wrong account.
+    vi.mocked(client.execute).mockResolvedValueOnce({ ...EMPTY }); // no existing pending
+
+    await queue.submitReauth('agent-1', 'gmail', 'hint', { credentialId: 'cred-a' });
+
+    const lookup = vi.mocked(client.execute).mock.calls[0][0] as { sql: string; args: unknown[] };
+    expect(lookup.sql).toContain("arguments_json::jsonb->>'credentialId' IS NOT DISTINCT FROM ?");
+    expect(lookup.args).toEqual(['agent-1', 'gmail', 'cred-a']);
+  });
+
+  it('keys credential-less producers on null, preserving per-provider dedup', async () => {
+    vi.mocked(client.execute).mockResolvedValueOnce({
+      rows: [{ id: 'existing-1', email_last_sent_at: null }], rowsAffected: 1, lastInsertRowid: 0n,
+    } as never);
+
+    const result = await queue.submitReauth('agent-1', 'minimax', 'hint');
+
+    expect(result).toEqual({ id: 'existing-1', isNew: false, emailThrottled: false });
+    const lookup = vi.mocked(client.execute).mock.calls[0][0] as { sql: string; args: unknown[] };
+    expect(lookup.args).toEqual(['agent-1', 'minimax', null]);
+  });
+});

@@ -881,6 +881,9 @@ export class TelegramNotifier {
     const provider = (approval.arguments.provider as string) ?? 'unknown';
     const providerLabel = PROVIDER_LABELS[provider] ?? provider;
     const source = approval.arguments.source as string | undefined;
+    // Which account this is about — with several Google accounts on one
+    // agent, "re-authenticate Gmail" alone is not actionable.
+    const accountEmail = (approval.arguments.accountEmail ?? approval.arguments.email) as string | undefined;
     const renewalUrl = PROVIDER_KEY_RENEWAL_URL[provider];
 
     const sourceNote = source === 'mcp_tool_call'
@@ -895,6 +898,7 @@ export class TelegramNotifier {
       `🔑 *Re-authentication Required*`,
       ``,
       `*Service:* ${providerLabel}`,
+      accountEmail ? `*Account:* ${escapeMarkdown(accountEmail)}` : null,
       `*Agent:* \`${approval.agentId}\``,
       `*Reason:* ${sourceNote}`,
       approval.context ? `\n${approval.context}` : null,

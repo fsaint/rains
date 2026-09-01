@@ -185,13 +185,30 @@ async function createMCPReauthApproval(
   serviceType: string,
   credentialId?: string | null,
 ): Promise<void> {
-  const hint = `The ${serviceType} credentials for your agent have expired, are invalid, or lack a newly required permission. Please re-authenticate to restore access.`;
+  // Name the account. "The gmail credentials for your agent" is not actionable
+  // for an owner with two Google accounts — they cannot tell which to reconnect.
+  let accountEmail: string | null = null;
+  if (credentialId) {
+    try {
+      const cred = await client.execute({
+        sql: `SELECT account_email FROM credentials WHERE id = ?`,
+        args: [credentialId],
+      });
+      accountEmail = (cred.rows[0]?.account_email as string | undefined) ?? null;
+    } catch {
+      // Fall back to the generic wording — never block the reauth on a lookup.
+    }
+  }
+
+  const hint = accountEmail
+    ? `The ${serviceType} credentials for ${accountEmail} have expired, are invalid, or lack a newly required permission. Please re-authenticate to restore access.`
+    : `The ${serviceType} credentials for your agent have expired, are invalid, or lack a newly required permission. Please re-authenticate to restore access.`;
 
   const { id: approvalId, isNew, emailThrottled } = await approvalQueue.submitReauth(
     agentId,
     serviceType,
     hint,
-    { credentialId: credentialId ?? null, source: 'mcp_tool_call' },
+    { credentialId: credentialId ?? null, accountEmail: accountEmail ?? undefined, source: 'mcp_tool_call' },
     7 * 24 * 60 * 60 * 1000,
   );
 

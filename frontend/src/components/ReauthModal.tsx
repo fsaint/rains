@@ -51,6 +51,7 @@ export function ReauthModal({ approval, onComplete, onDismiss }: Props) {
   const queryClient = useQueryClient();
   const provider = (approval.arguments.provider as string) ?? 'unknown';
   const credentialId = approval.arguments.credentialId as string | undefined;
+  const account = (approval.arguments.accountEmail ?? approval.arguments.email) as string | undefined;
   const providerLabel = PROVIDER_LABELS[provider] ?? provider;
 
   const [status, setStatus] = useState<'idle' | 'working' | 'waiting' | 'done' | 'error'>('idle');
@@ -292,12 +293,12 @@ export function ReauthModal({ approval, onComplete, onDismiss }: Props) {
               <KeyRound className="w-4 h-4 text-trust-blue" />
             </div>
             <div>
-              <h2 className="font-semibold text-gray-900 text-base">Re-authenticate {providerLabel}</h2>
+              <h2 className="font-semibold text-gray-900 text-base">
+                Re-authenticate {providerLabel}
+                {account && <span className="font-normal text-gray-500"> — {account}</span>}
+              </h2>
               <p className="text-xs text-gray-500 mt-0.5">
                 Agent: {approval.agentId}
-                {!!approval.arguments.email && (
-                  <> &middot; {approval.arguments.email as string}</>
-                )}
               </p>
             </div>
           </div>

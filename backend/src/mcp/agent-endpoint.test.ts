@@ -924,6 +924,38 @@ describe('auth-failure reauth hook', () => {
     expect(approvalQueue.submitReauth).not.toHaveBeenCalled();
   });
 
+  it('names the account in the reauth it raises', async () => {
+    // "The gmail credentials for your agent" is not actionable with two Google
+    // accounts connected; the approval must say which one to reconnect.
+    const { client } = await import('../db/index.js');
+    vi.mocked(client.execute).mockImplementation(async (q: unknown) => {
+      const sql = typeof q === 'string' ? q : (q as { sql: string }).sql;
+      if (sql.includes('SELECT account_email FROM credentials')) {
+        return { rows: [{ account_email: 'fsaint@helloseer.com' }] } as never;
+      }
+      return { rows: [] } as never;
+    });
+    await wireVault();
+    wireLegacyCredential();
+    const { serverManager } = await import('./server-manager.js');
+    const server = serverManager.getServer('calendar')!;
+    vi.mocked(server.callTool).mockResolvedValueOnce({ success: false, error: 'API error: 401 Unauthorized' });
+
+    await handleMCPRequest('agent-1', listCall());
+
+    const { approvalQueue } = await import('../approvals/queue.js');
+    expect(approvalQueue.submitReauth).toHaveBeenCalledWith(
+      'agent-1',
+      'calendar',
+      expect.stringContaining('fsaint@helloseer.com'),
+      expect.objectContaining({ credentialId: 'cred-1', accountEmail: 'fsaint@helloseer.com' }),
+      expect.any(Number),
+    );
+    // Restore the plain default for the tests that follow.
+    vi.mocked(client.execute).mockReset();
+    vi.mocked(client.execute).mockResolvedValue({ rows: [] } as never);
+  });
+
   it('throttles repeat failures on the same credential', async () => {
     const { serverManager } = await import('./server-manager.js');
     const { approvalQueue } = await import('../approvals/queue.js');
