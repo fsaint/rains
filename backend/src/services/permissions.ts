@@ -7,7 +7,7 @@
 
 import { db, client } from '../db/index.js';
 import { agentServiceAccess, agentToolPermissions, agentServiceCredentials, agentServiceInstances, agents, credentials, deployedAgents } from '../db/schema.js';
-import { eq, and, inArray } from 'drizzle-orm';
+import { eq, and, inArray, isNull } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { serverManager } from '../mcp/server-manager.js';
 import { credentialVault } from '../credentials/vault.js';
@@ -629,6 +629,9 @@ export async function setToolPermission(
   toolName: string,
   permission: ToolPermission
 ): Promise<void> {
+  // Only the agent-level row (no instance). With several instances of one
+  // service, a lookup by (agent, service, tool) alone would land on whichever
+  // sibling's row sorts first and overwrite that account's setting.
   const [existing] = await db
     .select()
     .from(agentToolPermissions)
@@ -636,7 +639,8 @@ export async function setToolPermission(
       and(
         eq(agentToolPermissions.agentId, agentId),
         eq(agentToolPermissions.serviceType, serviceType),
-        eq(agentToolPermissions.toolName, toolName)
+        eq(agentToolPermissions.toolName, toolName),
+        isNull(agentToolPermissions.instanceId)
       )
     );
 
@@ -1125,25 +1129,27 @@ export async function createServiceInstance(
   // show the service in tools/list while the access row said no.
   await assertServiceCombinationAllowed(agentId, serviceType);
 
-  // Check if this is the first instance of this type for this agent
   const existing = await db
     .select()
     .from(agentServiceInstances)
     .where(and(eq(agentServiceInstances.agentId, agentId), eq(agentServiceInstances.serviceType, serviceType)));
 
-  // Idempotent: return the existing instance without creating a duplicate or triggering a redeploy.
-  // The `created: false` flag tells the caller to skip autoRedeployIfDeployed.
-  if (existing.length > 0) {
-    return { instance: (await getInstanceById(existing[0].id)) as ServiceInstance, created: false };
-  }
+  // Idempotency is keyed on the *account*, not the service type. An agent may
+  // hold several accounts of one service (two Gmail inboxes), each as its own
+  // instance — so only two adds are no-ops: one that names an account already
+  // attached, and one that names no account at all (memory, skills, helm-admin
+  // and other credential-less services, whose callers retry). Both return the
+  // existing row with `created: false` so the route skips the redeploy.
+  const asExisting = async (id: string) =>
+    ({ instance: (await getInstanceById(id)) as ServiceInstance, created: false });
 
-  const isDefault = true; // first instance (existing was empty)
-  const id = nanoid();
+  let resolvedCredentialId = credentialId ?? null;
+  if (!resolvedCredentialId && existing.length > 0) return asExisting(existing[0].id);
+
   const now = new Date().toISOString();
 
   // If no credential was explicitly provided, find the first matching one for this agent's user.
   // This handles the common case where the credential already exists when the service is added.
-  let resolvedCredentialId = credentialId ?? null;
   if (!resolvedCredentialId) {
     const [agent] = await db.select().from(agents).where(eq(agents.id, agentId));
     if (agent?.userId) {
@@ -1157,6 +1163,31 @@ export async function createServiceInstance(
       }
     }
   }
+
+  if (resolvedCredentialId) {
+    const same = existing.find((i) => i.credentialId === resolvedCredentialId);
+    if (same) return asExisting(same.id);
+
+    // An instance created before its account was connected (or whose auto-link
+    // never ran) sits with no credential. Attach to it rather than leaving it
+    // unlinked beside a new sibling — the same repair autoLinkCredential makes.
+    const unlinked = existing.find((i) => !i.credentialId);
+    if (unlinked) {
+      await db
+        .update(agentServiceInstances)
+        .set({ credentialId: resolvedCredentialId, updatedAt: now })
+        .where(eq(agentServiceInstances.id, unlinked.id));
+      try {
+        await addServiceCredential(agentId, serviceType, resolvedCredentialId, unlinked.isDefault);
+      } catch {
+        // May already exist
+      }
+      return asExisting(unlinked.id);
+    }
+  }
+
+  const isDefault = existing.length === 0;
+  const id = nanoid();
 
   await db.insert(agentServiceInstances).values({
     id,

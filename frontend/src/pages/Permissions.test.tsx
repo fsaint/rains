@@ -86,6 +86,7 @@ const agentPerms = {
 const googleCreds = [
   { id: 'cred-1', serviceId: 'google', grantedServices: ['gmail', 'calendar'], accountEmail: 'one@example.com', type: 'oauth2', status: 'active' },
   { id: 'cred-2', serviceId: 'google', grantedServices: ['gmail', 'calendar'], accountEmail: 'two@example.com', type: 'oauth2', status: 'active' },
+  { id: 'cred-3', serviceId: 'google', grantedServices: ['gmail', 'calendar'], accountEmail: 'three@example.com', type: 'oauth2', status: 'active' },
 ];
 
 async function expandAgent() {
@@ -112,8 +113,13 @@ describe('Permissions page', () => {
     }) as any);
   });
 
+  /**
+   * The agent already has Gmail on cred-1. A second account is added as a
+   * sibling instance, so the modal offers the accounts *not yet* on this agent
+   * — offering cred-1 again would be a silent no-op on the server.
+   */
   describe('adding a service that needs an account', () => {
-    it('asks which account to use when more than one is connected, instead of guessing', async () => {
+    it('offers only accounts not already on this agent, and asks when more than one remains', async () => {
       render(<Permissions />, { wrapper: createWrapper() });
       await expandAgent();
       fireEvent.click(screen.getByRole('button', { name: /Add Service/ }));
@@ -123,17 +129,19 @@ describe('Permissions page', () => {
 
       expect(await screen.findByText(/Which account should Gmail use/)).toBeInTheDocument();
       expect(permissions.createInstance).not.toHaveBeenCalled();
+      expect(screen.queryByLabelText(/one@example.com/)).not.toBeInTheDocument();
+      expect(screen.getByLabelText(/two@example.com/)).toBeInTheDocument();
 
-      fireEvent.click(screen.getByLabelText(/two@example.com/));
+      fireEvent.click(screen.getByLabelText(/three@example.com/));
       fireEvent.click(screen.getByRole('button', { name: /^Add Gmail/ }));
 
       await waitFor(() => {
-        expect(permissions.createInstance).toHaveBeenCalledWith('a1', 'gmail', undefined, 'cred-2');
+        expect(permissions.createInstance).toHaveBeenCalledWith('a1', 'gmail', undefined, 'cred-3');
       });
     });
 
-    it('adds straight away when exactly one account is connected', async () => {
-      vi.mocked(credentials.list).mockResolvedValue([googleCreds[0]] as any);
+    it('adds straight away when exactly one account remains to attach', async () => {
+      vi.mocked(credentials.list).mockResolvedValue([googleCreds[0], googleCreds[1]] as any);
       render(<Permissions />, { wrapper: createWrapper() });
       await expandAgent();
       fireEvent.click(screen.getByRole('button', { name: /Add Service/ }));
@@ -142,8 +150,20 @@ describe('Permissions page', () => {
       fireEvent.click(await add.findByRole('button', { name: /Gmail/ }));
 
       await waitFor(() => {
-        expect(permissions.createInstance).toHaveBeenCalledWith('a1', 'gmail', undefined, 'cred-1');
+        expect(permissions.createInstance).toHaveBeenCalledWith('a1', 'gmail', undefined, 'cred-2');
       });
+    });
+
+    it('does not offer a service whose every account is already on the agent', async () => {
+      vi.mocked(credentials.list).mockResolvedValue([googleCreds[0]] as any);
+      render(<Permissions />, { wrapper: createWrapper() });
+      await expandAgent();
+      fireEvent.click(screen.getByRole('button', { name: /Add Service/ }));
+
+      const add = modal(/Choose a service to add/);
+      expect(await add.findByText(/already connected/i)).toBeInTheDocument();
+      expect(add.queryByRole('button', { name: /Gmail/ })).not.toBeInTheDocument();
+      expect(permissions.createInstance).not.toHaveBeenCalled();
     });
   });
 

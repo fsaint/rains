@@ -123,6 +123,7 @@ vi.mock('@reins/servers', () => {
 });
 
 import { db, client } from '../db/index.js';
+import { agents, credentials, agentServiceInstances, agentServiceCredentials } from '../db/schema.js';
 import {
   getPermissionMatrix,
   getAgentServiceConfig,
@@ -935,6 +936,112 @@ describe('Permission Service', () => {
       const result = await getPermissionLevel('agent-1', 'gmail');
 
       expect(result).toBe('custom');
+    });
+  });
+  /**
+   * One agent, several accounts of the same service. The instance table has no
+   * unique on (agent, service) by design; what must stay idempotent is re-adding
+   * the *same* account, and adding with no account at all (memory, skills,
+   * helm-admin), because those callers retry.
+   */
+  describe('createServiceInstance with several accounts of one service', () => {
+    const agentRow = { id: 'agent-1', userId: 'user-1' };
+    const cred1 = { id: 'cred-1', serviceId: 'gmail', userId: 'user-1', accountEmail: 'one@example.com', expiresAt: null };
+    const cred2 = { id: 'cred-2', serviceId: 'gmail', userId: 'user-1', accountEmail: 'two@example.com', expiresAt: null };
+    const inst1 = { id: 'inst-1', agentId: 'agent-1', serviceType: 'gmail', credentialId: 'cred-1', enabled: true, isDefault: true, label: null };
+
+    /**
+     * Serve rows by table identity rather than call order. createServiceInstance
+     * makes a dozen selects (the combination guard, the instance lookup, the
+     * credential resolve, then everything getInstanceById reads back), so a
+     * queue of mockReturnValueOnce would break on any reordering.
+     */
+    function mockTables(rows: Map<object, unknown[]>) {
+      vi.mocked(db.select).mockReturnValue({
+        from: vi.fn((table: object) => ({ where: vi.fn().mockResolvedValue(rows.get(table) ?? []) })),
+      } as never);
+      const values = vi.fn().mockResolvedValue(undefined);
+      vi.mocked(db.insert).mockReturnValue({ values } as never);
+      vi.mocked(db.update).mockReturnValue({
+        set: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) }),
+      } as never);
+      // Pair each insert(table) with the row handed to the values() that follows it.
+      const inserted = (table: object) =>
+        vi.mocked(db.insert).mock.calls
+          .map((call, i) => [call[0], values.mock.calls[i]?.[0]] as const)
+          .filter(([t]) => t === table)
+          .map(([, row]) => row);
+      return { inserted };
+    }
+
+    it('makes the first instance of a service the default', async () => {
+      const { inserted } = mockTables(new Map<object, unknown[]>([
+        [agents, [agentRow]], [credentials, [cred1]], [agentServiceInstances, []],
+      ]));
+
+      const { created } = await createServiceInstance('agent-1', 'gmail');
+
+      expect(created).toBe(true);
+      expect(inserted(agentServiceInstances)).toEqual([
+        expect.objectContaining({ isDefault: true, credentialId: 'cred-1' }),
+      ]);
+    });
+
+    it('adds a second account as a non-default sibling instance', async () => {
+      const { inserted } = mockTables(new Map<object, unknown[]>([
+        [agents, [agentRow]], [credentials, [cred1, cred2]], [agentServiceInstances, [inst1]],
+      ]));
+
+      const { created } = await createServiceInstance('agent-1', 'gmail', undefined, 'cred-2');
+
+      expect(created).toBe(true);
+      expect(inserted(agentServiceInstances)).toEqual([
+        expect.objectContaining({ isDefault: false, credentialId: 'cred-2' }),
+      ]);
+      // The legacy junction must not have its default flipped to the newcomer.
+      expect(inserted(agentServiceCredentials)).toEqual([
+        expect.objectContaining({ credentialId: 'cred-2', isDefault: false }),
+      ]);
+    });
+
+    it('re-adding the same account returns the existing instance without writing', async () => {
+      const { inserted } = mockTables(new Map<object, unknown[]>([
+        [agents, [agentRow]], [credentials, [cred1]], [agentServiceInstances, [inst1]],
+      ]));
+
+      const { instance, created } = await createServiceInstance('agent-1', 'gmail', undefined, 'cred-1');
+
+      expect(created).toBe(false);
+      expect(instance.id).toBe('inst-1');
+      expect(inserted(agentServiceInstances)).toEqual([]);
+    });
+
+    it('adding with no account when one instance exists returns it (memory, skills, helm-admin retry)', async () => {
+      const { inserted } = mockTables(new Map<object, unknown[]>([
+        [agents, [agentRow]], [credentials, [cred1, cred2]], [agentServiceInstances, [inst1]],
+      ]));
+
+      const { instance, created } = await createServiceInstance('agent-1', 'gmail');
+
+      expect(created).toBe(false);
+      expect(instance.id).toBe('inst-1');
+      expect(inserted(agentServiceInstances)).toEqual([]);
+    });
+
+    it('attaches the account to an unlinked existing instance instead of creating a sibling', async () => {
+      const { inserted } = mockTables(new Map<object, unknown[]>([
+        [agents, [agentRow]], [credentials, [cred1]],
+        [agentServiceInstances, [{ ...inst1, credentialId: null }]],
+      ]));
+
+      const { created } = await createServiceInstance('agent-1', 'gmail', undefined, 'cred-1');
+
+      expect(created).toBe(false);
+      expect(inserted(agentServiceInstances)).toEqual([]);
+      expect(db.update).toHaveBeenCalledWith(agentServiceInstances);
+      expect(inserted(agentServiceCredentials)).toEqual([
+        expect.objectContaining({ credentialId: 'cred-1', isDefault: true }),
+      ]);
     });
   });
 });

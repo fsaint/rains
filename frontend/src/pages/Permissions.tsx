@@ -116,7 +116,7 @@ export default function Permissions() {
   const [addServiceAgent, setAddServiceAgent] = useState<{
     agentId: string;
     agentName: string;
-    instances: Array<{ id: string; serviceType: string }>;
+    instances: Array<{ id: string; serviceType: string; credentialId: string | null }>;
   } | null>(null);
   const [deployAgentId, setDeployAgentId] = useState<string | null>(null);
 
@@ -532,6 +532,7 @@ export default function Permissions() {
                         instances: agent.instances.map((i) => ({
                           id: i.id,
                           serviceType: i.serviceType,
+                          credentialId: i.credentialId,
                         })),
                       });
                     }}
@@ -599,7 +600,7 @@ export default function Permissions() {
 interface AddServiceModalProps {
   agentId: string;
   agentName: string;
-  agentInstances: Array<{ id: string; serviceType: string }>;
+  agentInstances: Array<{ id: string; serviceType: string; credentialId: string | null }>;
   availableServices: Array<{ type: string; name: string; icon: string; authRequired: boolean }>;
   onClose: () => void;
   onAdded: () => void;
@@ -687,11 +688,28 @@ function AddServiceModal({
     );
   }
 
+  /**
+   * The accounts that could still be added: each account becomes its own
+   * instance, so one already on this agent is not offered again — the server
+   * would answer with the instance it already has, and the modal would close
+   * as if something happened.
+   */
+  function getAvailableCredentials(serviceType: string) {
+    const attached = new Set(
+      agentInstances.filter((i) => i.serviceType === serviceType && i.credentialId).map((i) => i.credentialId)
+    );
+    return getMatchingCredentials(serviceType).filter((c) => !attached.has(c.id));
+  }
+
   // Services that don't need credentials — always addable
   const noAuthServices = availableServices.filter((s) => !s.authRequired);
-  // Services that need credentials and have them connected
+  // Services that need credentials and have one not yet on this agent
   const servicesWithCreds = availableServices.filter(
-    (s) => s.authRequired && getMatchingCredentials(s.type).length > 0
+    (s) => s.authRequired && getAvailableCredentials(s.type).length > 0
+  );
+  // Services whose every connected account is already on this agent
+  const servicesFullyAttached = availableServices.filter(
+    (s) => s.authRequired && getMatchingCredentials(s.type).length > 0 && getAvailableCredentials(s.type).length === 0
   );
   // Services that need credentials but none connected yet
   const servicesNeedingCreds = availableServices.filter(
@@ -704,12 +722,12 @@ function AddServiceModal({
    * the user then has to find and correct is worse than a question.
    */
   const addService = (serviceType: string) => {
-    const matching = getMatchingCredentials(serviceType);
-    if (matching.length > 1) {
-      setAccountPick({ serviceType, credentialId: matching[0].id });
+    const available = getAvailableCredentials(serviceType);
+    if (available.length > 1) {
+      setAccountPick({ serviceType, credentialId: available[0].id });
       return;
     }
-    createInstanceMutation.mutate({ serviceType, credentialId: matching[0]?.id });
+    createInstanceMutation.mutate({ serviceType, credentialId: available[0]?.id });
   };
 
   const serviceButton = (service: { type: string; name: string; icon: string }, badge?: React.ReactNode) => (
@@ -738,7 +756,7 @@ function AddServiceModal({
   // A refusal from the server outranks the picker it was raised from.
   if (accountPick && !conflict) {
     const name = serviceLabel(accountPick.serviceType);
-    const options = getMatchingCredentials(accountPick.serviceType);
+    const options = getAvailableCredentials(accountPick.serviceType);
     return (
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
         <div className="bg-white rounded-xl w-full max-w-md shadow-xl p-6">
@@ -911,7 +929,7 @@ function AddServiceModal({
             </>
           )}
 
-          {noAuthServices.length > 0 && servicesWithCreds.length > 0 && (
+          {noAuthServices.length > 0 && (servicesWithCreds.length > 0 || servicesFullyAttached.length > 0) && (
             <div className="flex items-center gap-2 py-2">
               <div className="flex-1 border-t border-gray-100" />
               <span className="text-xs text-gray-400">Connected accounts</span>
@@ -919,14 +937,14 @@ function AddServiceModal({
             </div>
           )}
 
-          {servicesWithCreds.length > 0 && noAuthServices.length === 0 && (
+          {(servicesWithCreds.length > 0 || servicesFullyAttached.length > 0) && noAuthServices.length === 0 && (
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-1 pb-1">
               Connected accounts
             </p>
           )}
 
           {servicesWithCreds.map((service) => {
-            const count = getMatchingCredentials(service.type).length;
+            const count = getAvailableCredentials(service.type).length;
             return serviceButton(service,
               <span className="flex items-center gap-1 text-xs font-medium text-safe-green bg-safe-green/10 px-2 py-0.5 rounded-full">
                 <span className="w-1.5 h-1.5 rounded-full bg-safe-green inline-block" />
@@ -935,7 +953,33 @@ function AddServiceModal({
             );
           })}
 
-          {servicesNeedingCreds.length > 0 && (servicesWithCreds.length > 0 || noAuthServices.length > 0) && (
+          {servicesFullyAttached.map((service) => {
+            const count = getMatchingCredentials(service.type).length;
+            return (
+              <div
+                key={service.type}
+                className="w-full flex items-center gap-3 p-4 rounded-lg border-2 border-dashed border-gray-200 bg-gray-50/50"
+              >
+                <div className="p-2 bg-gray-100 rounded-lg text-gray-400">
+                  {serviceIcons[service.type] ?? <Globe className="w-5 h-5" />}
+                </div>
+                <div className="text-left flex-1">
+                  <div className="font-medium text-sm text-gray-400">{service.name}</div>
+                  <div className="text-xs text-gray-400">
+                    {count === 1 ? 'Already connected' : `All ${count} accounts already connected`}
+                  </div>
+                </div>
+                <button
+                  onClick={() => { onClose(); navigate(`/credentials?connect=${service.type}`); }}
+                  className="text-xs font-medium text-trust-blue hover:underline whitespace-nowrap"
+                >
+                  Connect another →
+                </button>
+              </div>
+            );
+          })}
+
+          {servicesNeedingCreds.length > 0 && (servicesWithCreds.length > 0 || servicesFullyAttached.length > 0 || noAuthServices.length > 0) && (
             <div className="flex items-center gap-2 py-2">
               <div className="flex-1 border-t border-gray-100" />
               <span className="text-xs text-gray-400">No credentials yet</span>
