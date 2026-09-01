@@ -14,17 +14,18 @@ export const definition: ServiceDefinitionWithTools = {
   },
   tools: skillsTools,
   permissions: {
-    // Both tools are read-only, so no approval flow is ever triggered.
+    // All three tools are read-only, so no approval flow is ever triggered.
     read: [
       'skills_list',
       'skills_get',
+      'skills_list_library',
     ],
     write: [],
     defaultWritePermission: 'allow',
     blocked: [],
   },
   permissionDescriptions: {
-    read: 'Read the skills assigned to this agent',
-    full: 'Read the skills assigned to this agent',
+    read: "Read the skills assigned to this agent and browse the owner's library",
+    full: "Read the skills assigned to this agent and browse the owner's library",
   },
 };

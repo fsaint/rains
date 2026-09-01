@@ -70,10 +70,10 @@ async function apiPost<T = unknown>(context: ServerContext, path: string, body: 
     method: 'POST',
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Memory API POST ${path} returned ${res.status}: ${text}`);
-  }
+  // readError, not the raw body: VERSION_CONFLICT and CROSS_SCOPE_RELATION are
+  // written as sentences the model can act on, and wrapping them in
+  // "Memory API POST … returned 409: {json}" buries the sentence.
+  if (!res.ok) throw new Error(await readError(res, `Create failed (${path})`));
   const json = await res.json() as { data: T };
   return json.data;
 }
@@ -83,10 +83,7 @@ async function apiPut<T = unknown>(context: ServerContext, path: string, body: u
     method: 'PUT',
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Memory API PUT ${path} returned ${res.status}: ${text}`);
-  }
+  if (!res.ok) throw new Error(await readError(res, `Update failed (${path})`));
   const json = await res.json() as { data: T };
   return json.data;
 }
@@ -120,6 +117,9 @@ export async function handleGetRoot(
       title: string;
       content: string;
       scope?: string;
+      scope_name?: string;
+      updated_at?: string;
+      version?: number;
       default_scope?: string | null;
       scopes?: Array<Record<string, unknown>>;
     }>(context, `/api/memory/root${query ? `?${query}` : ''}`);
@@ -131,6 +131,9 @@ export async function handleGetRoot(
         title: entry.title,
         content: entry.content,
         ...(entry.scope ? { scope: entry.scope } : {}),
+        ...(entry.scope_name ? { scope_name: entry.scope_name } : {}),
+        ...(entry.updated_at ? { updated_at: entry.updated_at } : {}),
+        ...(entry.version !== undefined ? { version: entry.version } : {}),
         ...(entry.default_scope ? { default_scope: entry.default_scope } : {}),
         ...(entry.scopes ? { scopes: entry.scopes } : {}),
       },
@@ -305,24 +308,49 @@ export async function handleGet(
 ): Promise<ToolResult> {
   try {
     let id = args.id as string | undefined;
+    let matchedBy: 'id' | 'title' = 'id';
 
     // If only title provided, look it up first. `scope` narrows that lookup;
     // it is meaningless once an id is known, since an id determines its scope.
     if (!id && args.title) {
-      const params = new URLSearchParams({ q: String(args.title), limit: '5' });
+      const params = new URLSearchParams({ title: String(args.title), limit: '10' });
       if (args.scope) params.set('scope', String(args.scope));
+      if (args.type) params.set('type', String(args.type));
       const res = await memoryFetch(context, `/api/memory/entries?${params}`);
-      if (!res.ok) throw new Error(await readError(res, 'Search failed'));
-      const json = await res.json() as { data: Array<{ id: string; title: string }> };
-      const exact = json.data.find((e) => e.title.toLowerCase() === String(args.title).toLowerCase());
-      if (!exact) return { success: false, error: `No entry found with title "${args.title}"` };
-      id = exact.id;
+      if (!res.ok) throw new Error(await readError(res, 'Title lookup failed'));
+      const json = await res.json() as {
+        data: Array<{ id: string; title: string; type: string; scope?: string; scope_name?: string }>;
+      };
+      const matches = json.data ?? [];
+
+      if (matches.length === 0) {
+        return {
+          success: false,
+          error:
+            `No entry titled "${args.title}"${args.scope ? ` in scope ${args.scope}` : ''}. ` +
+            'Titles match exactly (case-insensitive); use memory_search for partial names or aliases.',
+        };
+      }
+      if (matches.length > 1) {
+        // Never pick silently: the same title in two scopes names two different
+        // things (see MEMORY_POLICY.md). The candidates live in the error
+        // string because a failed ToolResult carries nothing else to the model.
+        const list = matches.map((m) => `${m.type} in ${m.scope ?? 'unknown scope'} (id ${m.id})`).join('; ');
+        const scopes = new Set(matches.map((m) => m.scope));
+        const hint = scopes.size > 1 ? 'Pass id, or narrow with scope.' : 'Pass id, or narrow with type.';
+        return {
+          success: false,
+          error: `AMBIGUOUS_TITLE: "${args.title}" matches ${matches.length} entries: ${list}. ${hint}`,
+        };
+      }
+      id = matches[0].id;
+      matchedBy = 'title';
     }
 
     if (!id) return { success: false, error: 'id or title is required' };
 
-    const entry = await apiGet(context, `/api/memory/entries/${id}`);
-    return { success: true, data: entry };
+    const entry = await apiGet<Record<string, unknown>>(context, `/api/memory/entries/${id}`);
+    return { success: true, data: { ...entry, matched_by: matchedBy } };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }

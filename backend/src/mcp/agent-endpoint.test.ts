@@ -10,6 +10,8 @@ import {
   buildSkillCatalog,
   MCP_ERROR_CODES,
   type MCPRequest,
+  looksLikeAuthFailure,
+  _resetReauthThrottleForTests,
 } from './agent-endpoint.js';
 import { client } from '../db/index.js';
 
@@ -51,6 +53,7 @@ vi.mock('../db/index.js', () => ({
 }));
 
 vi.mock('../services/permissions.js', () => ({
+  getDrivePathConfig: vi.fn().mockResolvedValue({ defaultLevel: 'write', rules: [] }),
   getEffectivePermissions: vi.fn().mockResolvedValue({
     enabled: true,
     tools: {
@@ -482,6 +485,28 @@ describe('helm rename', () => {
     expect(text).toContain('mcp__helm__get_result');
   });
 
+  it('addresses get_result bare for a manual (Claude-connected) deployment', async () => {
+    // The client (claude.ai / Desktop / Claude Code) namespaces tools itself
+    // as mcp__<connector>__<tool>; any prefix the backend renders is wrong.
+    vi.mocked(client.execute).mockResolvedValue({
+      rows: [{ id: 'dep-1', runtime: 'openclaw', mcp_server_name: 'reins', is_manual: 1, has_onboarded: true }],
+    } as any);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 43, method: 'tools/call',
+      params: {
+        name: 'gmail_create_draft',
+        arguments: { to: 'test@example.com', subject: 'Hello', body: 'World' },
+      },
+    });
+
+    const text = (response.result as { content: Array<{ text: string }> }).content[0].text;
+    expect(text).toContain('APPROVAL_PENDING');
+    expect(text).toContain('get_result');
+    expect(text).not.toContain('reins__get_result');
+    expect(text).not.toContain('helm__get_result');
+  });
+
   it('injects mark_onboarded under its new name when setup is incomplete', async () => {
     vi.mocked(client.execute).mockResolvedValue({
       rows: [{ id: 'dep-1', fly_app_name: 'app', fly_machine_id: 'm1', has_onboarded: false }],
@@ -787,6 +812,153 @@ describe('scope guard', () => {
   });
 });
 
+describe('auth-failure reauth hook', () => {
+  const agentRow = [{ id: 'agent-1', name: 'Test Agent', status: 'active' }];
+
+  /** Legacy-path sequence: agent → no instances → no junction creds → access row → granted null. */
+  function wireLegacyCredential() {
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([]);
+    dbWhereMock.mockResolvedValueOnce([]);
+    dbWhereMock.mockResolvedValueOnce([{ credentialId: 'cred-1' }]);
+    dbWhereMock.mockResolvedValueOnce([{ grantedServices: null }]);
+  }
+
+  async function wireVault() {
+    const { credentialVault } = await import('../credentials/vault.js');
+    vi.mocked(credentialVault.retrieve).mockResolvedValueOnce({
+      serviceId: 'google',
+      type: 'oauth2' as const,
+      data: { accessToken: 'test-token', tokenType: 'Bearer' },
+    } as never);
+    vi.mocked(credentialVault.getValidAccessToken).mockResolvedValueOnce('test-access-token');
+  }
+
+  // A calendar tool, deliberately: gmail/drive tools also trigger Drive-path
+  // and gateway-token injection in executeTool, which consumes extra queries
+  // and would desync the sequential dbWhereMock wiring below.
+  const listCall = (): MCPRequest => ({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: { name: 'calendar_list_events', arguments: {} },
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetReauthThrottleForTests();
+  });
+
+  it('raises a reauth approval when the handler reports 401', async () => {
+    await wireVault();
+    wireLegacyCredential();
+    const { serverManager } = await import('./server-manager.js');
+    const server = serverManager.getServer('calendar')!;
+    vi.mocked(server.callTool).mockResolvedValueOnce({ success: false, error: 'API error: 401 Unauthorized' });
+
+    const response = await handleMCPRequest('agent-1', listCall());
+
+    const { approvalQueue } = await import('../approvals/queue.js');
+    expect(approvalQueue.submitReauth).toHaveBeenCalledWith(
+      'agent-1',
+      'calendar',
+      expect.stringContaining('re-authenticate'),
+      expect.objectContaining({ credentialId: 'cred-1', source: 'mcp_tool_call' }),
+      expect.any(Number),
+    );
+    expect((response.result as { isError?: boolean }).isError).toBe(true);
+  });
+
+  it('raises reauth when the handler throws a scope-flavoured 403', async () => {
+    // googleapis throws (init-servers.callTool does not catch), so the hook
+    // must cover the throw path, not only {success:false} returns.
+    await wireVault();
+    wireLegacyCredential();
+    const { serverManager } = await import('./server-manager.js');
+    const server = serverManager.getServer('calendar')!;
+    vi.mocked(server.callTool).mockRejectedValueOnce(
+      Object.assign(new Error('Insufficient Permission'), { status: 403 })
+    );
+
+    await handleMCPRequest('agent-1', listCall());
+
+    const { approvalQueue } = await import('../approvals/queue.js');
+    expect(approvalQueue.submitReauth).toHaveBeenCalled();
+  });
+
+  it('does not raise reauth for an ordinary tool error or a generic 403', async () => {
+    const { serverManager } = await import('./server-manager.js');
+    const { approvalQueue } = await import('../approvals/queue.js');
+    const server = serverManager.getServer('calendar')!;
+
+    await wireVault();
+    wireLegacyCredential();
+    vi.mocked(server.callTool).mockResolvedValueOnce({ success: false, error: 'Message not found' });
+    await handleMCPRequest('agent-1', listCall());
+
+    await wireVault();
+    wireLegacyCredential();
+    vi.mocked(server.callTool).mockRejectedValueOnce(
+      Object.assign(new Error('API error: 403 Forbidden'), { status: 403 })
+    );
+    await handleMCPRequest('agent-1', listCall());
+
+    expect(approvalQueue.submitReauth).not.toHaveBeenCalled();
+  });
+
+  it('does not raise reauth when no credential was resolved', async () => {
+    // Credential-less services (memory, skills) 401 when the gateway token is
+    // missing — re-consenting a human fixes nothing there. No access row →
+    // no credential resolved → the 401 stays a plain tool error.
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([]); // no instances
+    dbWhereMock.mockResolvedValueOnce([]); // no junction credentials
+    dbWhereMock.mockResolvedValueOnce([]); // no access row
+    const { serverManager } = await import('./server-manager.js');
+    const server = serverManager.getServer('calendar')!;
+    vi.mocked(server.callTool).mockResolvedValueOnce({ success: false, error: 'API error: 401 Unauthorized' });
+
+    await handleMCPRequest('agent-1', listCall());
+
+    const { approvalQueue } = await import('../approvals/queue.js');
+    expect(approvalQueue.submitReauth).not.toHaveBeenCalled();
+  });
+
+  it('throttles repeat failures on the same credential', async () => {
+    const { serverManager } = await import('./server-manager.js');
+    const { approvalQueue } = await import('../approvals/queue.js');
+    const server = serverManager.getServer('calendar')!;
+
+    for (let i = 0; i < 2; i++) {
+      await wireVault();
+      wireLegacyCredential();
+      vi.mocked(server.callTool).mockResolvedValueOnce({ success: false, error: 'API error: 401 Unauthorized' });
+      await handleMCPRequest('agent-1', listCall());
+    }
+
+    expect(approvalQueue.submitReauth).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('looksLikeAuthFailure', () => {
+  it('matches credential failures', () => {
+    expect(looksLikeAuthFailure('API error: 401 Unauthorized')).toBe(true);
+    expect(looksLikeAuthFailure('Invalid Credentials', 401)).toBe(true);
+    expect(looksLikeAuthFailure('anything at all', 401)).toBe(true);
+    expect(looksLikeAuthFailure('Insufficient Permission')).toBe(true);
+    expect(looksLikeAuthFailure('Request had insufficient authentication scopes.')).toBe(true);
+    expect(looksLikeAuthFailure('ACCESS_TOKEN_SCOPE_INSUFFICIENT')).toBe(true);
+    expect(looksLikeAuthFailure('invalid api key')).toBe(true);
+  });
+
+  it('rejects failures re-consent cannot fix', () => {
+    expect(looksLikeAuthFailure('API error: 403 Forbidden')).toBe(false);
+    expect(looksLikeAuthFailure('API error: 404 Not Found')).toBe(false);
+    expect(looksLikeAuthFailure('User rate limit exceeded')).toBe(false);
+    expect(looksLikeAuthFailure(undefined)).toBe(false);
+  });
+});
+
 describe('buildSkillCatalog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -843,6 +1015,17 @@ describe('buildSkillCatalog', () => {
     // No requirements means no noisy empty parenthetical.
     expect(catalog).toContain('- notes — Take notes.');
     expect(catalog).not.toContain('notes — Take notes. (needs:');
+  });
+
+  it('renders tool tokens bare for an external (manual) agent', async () => {
+    vi.mocked(client.execute).mockResolvedValueOnce({
+      rows: [{ slug: 'helm-boot', name: 'Boot', description: 'Use {{tool:gmail_search}}.', required_services: '[]', version: null }],
+    } as any);
+
+    const catalog = await buildSkillCatalog('agent-1', 'external', 'reins');
+
+    expect(catalog).toContain('Use gmail_search.');
+    expect(catalog).not.toContain('reins__');
   });
 
   it('tells the agent the list may be stale, since tools/list is cached per session', async () => {
@@ -1020,5 +1203,174 @@ describe('whoami tool', () => {
     expect(response.error).toBeUndefined();
     const text = (response.result as { content: Array<{ text: string }> }).content[0].text;
     expect(JSON.parse(text)).toEqual({ agentId: 'agent-1', name: 'Test Agent' });
+  });
+});
+
+describe('multi-account policy', () => {
+  const instA = { id: 'inst-a', agentId: 'agent-1', serviceType: 'gmail', enabled: true, isDefault: true, credentialId: 'cred-a' };
+  const instB = { id: 'inst-b', agentId: 'agent-1', serviceType: 'gmail', enabled: true, isDefault: false, credentialId: 'cred-b' };
+  const agentRow = [{ id: 'agent-1', name: 'Test Agent', status: 'active' }];
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    // Earlier tests can leave unconsumed mockResolvedValueOnce entries queued
+    // (clearAllMocks does not drop once-queues), and this describe depends on
+    // exact call order — start from a clean queue. Safe only because this
+    // describe is last in the file.
+    dbWhereMock.mockReset();
+    dbWhereMock.mockResolvedValue([{ id: 'agent-1', name: 'Test Agent', status: 'active' }]);
+    const { client } = await import('../db/index.js');
+    vi.mocked(client.execute).mockReset();
+    vi.mocked(client.execute).mockResolvedValue({ rows: [] } as never);
+    // Earlier tests also override getServer's return persistently; restore a
+    // stub carrying the gmail/calendar tools these tests list and call.
+    const { serverManager } = await import('./server-manager.js');
+    vi.mocked(serverManager.getServer).mockReset();
+    vi.mocked(serverManager.getServer).mockReturnValue({
+      serverType: 'gmail',
+      name: 'Gmail',
+      getToolDefinitions: () => [
+        { name: 'gmail_list_messages', description: 'List email messages', inputSchema: { type: 'object', properties: {} } },
+        { name: 'gmail_send_message', description: 'Send an email', inputSchema: { type: 'object', properties: {} } },
+        { name: 'calendar_list_events', description: 'List events', inputSchema: { type: 'object', properties: {} } },
+      ],
+      callTool: vi.fn().mockResolvedValue({ success: true, data: [] }),
+    } as never);
+    const { getEffectiveInstancePermissions } = await import('../services/permissions.js');
+    // The owner's intent: send is allowed only on account B.
+    vi.mocked(getEffectiveInstancePermissions).mockImplementation(async (id: string) => ({
+      enabled: true,
+      tools: {
+        gmail_list_messages: 'allow',
+        calendar_list_events: 'allow',
+        gmail_send_message: id === 'inst-b' ? 'allow' : 'block',
+      },
+    }) as never);
+  });
+
+  it('lists a tool permitted on any account — account: selects the instance', async () => {
+    // tools/list is a union across instances by design: the tool IS callable,
+    // with account:. Narrowing the list to the default instance would hide a
+    // working capability.
+    dbWhereMock.mockResolvedValueOnce(agentRow); // status check
+    dbWhereMock.mockResolvedValueOnce([instA, instB]);
+
+    const response = await handleMCPRequest('agent-1', { jsonrpc: '2.0', id: 1, method: 'tools/list' });
+
+    const names = (response.result as { tools: Array<{ name: string }> }).tools.map((t) => t.name);
+    expect(names).toContain('gmail_send_message');
+    expect(names).toContain('gmail_list_messages');
+  });
+
+  it('names the account that permits a tool blocked on the default one', async () => {
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([instA, instB]);
+    dbWhereMock.mockResolvedValueOnce([{ accountEmail: 'b@example.com' }]); // sibling inst-b credential
+    dbWhereMock.mockResolvedValueOnce([{ accountEmail: 'a@example.com' }]); // blocked default's credential
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'gmail_send_message', arguments: {} },
+    });
+
+    expect(response.error?.code).toBe(MCP_ERROR_CODES.TOOL_BLOCKED);
+    expect(response.error?.message).toContain('blocked for a@example.com');
+    expect(response.error?.message).toContain('b@example.com');
+    expect(response.error?.message).toContain('account:');
+    expect((response.error?.data as { permittedAccounts: string[] }).permittedAccounts).toEqual(['b@example.com']);
+  });
+
+  it('keeps the plain message when every account blocks the tool', async () => {
+    const { getEffectiveInstancePermissions } = await import('../services/permissions.js');
+    vi.mocked(getEffectiveInstancePermissions).mockResolvedValue({
+      enabled: true,
+      tools: { gmail_send_message: 'block' },
+    } as never);
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([instA, instB]);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'gmail_send_message', arguments: {} },
+    });
+
+    expect(response.error?.code).toBe(MCP_ERROR_CODES.TOOL_BLOCKED);
+    expect(response.error?.message).toBe('Tool blocked by policy');
+    expect((response.error?.data as Record<string, unknown>).permittedAccounts).toBeUndefined();
+  });
+
+  it('refuses an account that matches no instance instead of policy-checking [0]', async () => {
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([instA, instB]);
+    dbWhereMock.mockResolvedValueOnce([{ accountEmail: 'a@example.com' }]);
+    dbWhereMock.mockResolvedValueOnce([{ accountEmail: 'b@example.com' }]);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'gmail_list_messages', arguments: { account: 'nobody@example.com' } },
+    });
+
+    expect(response.error?.code).toBe(MCP_ERROR_CODES.MISSING_CREDENTIALS);
+    expect(response.error?.message).toContain('gmail_list_accounts');
+  });
+
+  it('hands drive tools the gateway token, so source:"upload" files resolve', async () => {
+    // 'drive' was absent from the injection list; a Drive upload then 401s at
+    // /api/agent-uploads, which reads like a broken credential.
+    const { getEffectiveInstancePermissions } = await import('../services/permissions.js');
+    vi.mocked(getEffectiveInstancePermissions).mockResolvedValue({
+      enabled: true,
+      tools: { drive_list_files: 'allow' },
+    } as never);
+    const { client } = await import('../db/index.js');
+    vi.mocked(client.execute).mockImplementation(async (q: unknown) => {
+      const sql = typeof q === 'string' ? q : (q as { sql: string }).sql;
+      if (sql.includes('SELECT gateway_token FROM deployed_agents')) {
+        return { rows: [{ gateway_token: 'gw-secret' }] } as never;
+      }
+      return { rows: [] } as never;
+    });
+    const driveInst = { id: 'inst-d', agentId: 'agent-1', serviceType: 'drive', enabled: true, isDefault: true, credentialId: 'cred-a' };
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([driveInst]);
+    dbWhereMock.mockResolvedValueOnce([{ grantedServices: null }]); // scope guard passes open
+    const { serverManager } = await import('./server-manager.js');
+    const server = serverManager.getServer('drive')!;
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'drive_list_files', arguments: {} },
+    });
+
+    expect(response.error).toBeUndefined();
+    expect(vi.mocked(server.callTool)).toHaveBeenCalledWith(
+      'drive_list_files',
+      {},
+      expect.objectContaining({ gatewayToken: 'gw-secret' })
+    );
+  });
+
+  it('runs the tool on the instance the account names', async () => {
+    // Calendar, deliberately: gmail triggers Drive-path and gateway-token
+    // injection in executeTool, which would desync the sequential wiring.
+    const cA = { ...instA, serviceType: 'calendar' };
+    const cB = { ...instB, serviceType: 'calendar' };
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([cA, cB]);
+    // permission-check account resolution
+    dbWhereMock.mockResolvedValueOnce([{ accountEmail: 'a@example.com' }]);
+    dbWhereMock.mockResolvedValueOnce([{ accountEmail: 'b@example.com' }]);
+    // executeTool re-resolves the account
+    dbWhereMock.mockResolvedValueOnce([{ accountEmail: 'a@example.com' }]);
+    dbWhereMock.mockResolvedValueOnce([{ accountEmail: 'b@example.com' }]);
+    // credentialCoversService: no granted_services restriction
+    dbWhereMock.mockResolvedValueOnce([{ grantedServices: null }]);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'calendar_list_events', arguments: { account: 'b@example.com' } },
+    });
+
+    expect(response.error).toBeUndefined();
   });
 });

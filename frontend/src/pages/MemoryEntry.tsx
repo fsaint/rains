@@ -15,7 +15,7 @@ import {
   Link as LinkIcon,
   Tag,
 } from 'lucide-react';
-import { memory } from '../api/client';
+import { memory, ApiError } from '../api/client';
 import type { MemoryEntryType, MemoryAttribute } from '../api/client';
 
 const TYPE_ICONS: Record<MemoryEntryType, React.ElementType> = {
@@ -149,14 +149,25 @@ export default function MemoryEntry() {
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [entry?.id, id]);
 
+  const [versionConflict, setVersionConflict] = useState(false);
+
   const updateMutation = useMutation({
-    mutationFn: (data: { title?: string; content?: string; type?: MemoryEntryType }) =>
+    mutationFn: (data: { title?: string; content?: string; type?: MemoryEntryType; if_version?: number }) =>
       memory.updateEntry(id!, data),
     onSuccess: () => {
+      setVersionConflict(false);
       queryClient.invalidateQueries({ queryKey: ['memory-entry', id] });
       queryClient.invalidateQueries({ queryKey: ['memory-entries'] });
       queryClient.invalidateQueries({ queryKey: ['memory-tree'] });
       setEditing(false);
+    },
+    onError: (err: unknown) => {
+      if (err instanceof ApiError && err.code === 'VERSION_CONFLICT') {
+        // Keep the draft: the user's edit is the thing worth protecting.
+        // Refetching updates `entry` (and its version) without touching drafts.
+        setVersionConflict(true);
+        queryClient.invalidateQueries({ queryKey: ['memory-entry', id] });
+      }
     },
   });
 
@@ -192,6 +203,7 @@ export default function MemoryEntry() {
       title: draftTitle,
       content: draftContent,
       type: draftType,
+      if_version: entry?.version,
     });
   };
 
@@ -307,6 +319,13 @@ export default function MemoryEntry() {
               )}
             </div>
           </div>
+
+          {versionConflict && (
+            <div className="mb-4 text-sm text-caution-amber bg-caution-amber/10 border border-caution-amber/20 rounded-lg px-3 py-2">
+              This entry was changed elsewhere while you were editing — your draft was not saved.
+              Copy your changes, click Cancel to load the current version, then re-apply them.
+            </div>
+          )}
 
           {/* Content */}
           {editing ? (

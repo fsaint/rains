@@ -21,7 +21,7 @@ const GoogleIcon = ({ className = 'w-5 h-5' }: { className?: string }) => (
 
 const GOOGLE_SERVICES = [
   { type: 'gmail', name: 'Gmail', description: 'Read, search, and draft emails', icon: Mail },
-  { type: 'drive', name: 'Google Drive', description: 'List, read, and search files', icon: HardDrive },
+  { type: 'drive', name: 'Google Drive', description: 'List, read, search, create, and update files', icon: HardDrive },
   { type: 'calendar', name: 'Google Calendar', description: 'View and manage calendar events', icon: Calendar },
 ];
 

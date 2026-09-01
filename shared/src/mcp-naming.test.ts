@@ -7,6 +7,7 @@ import {
   modelVisibleToolName,
   resolveToolTokens,
   resolveSkillTokens,
+  deploymentRuntime,
 } from './mcp-naming.js';
 
 describe('canonicalToolName', () => {
@@ -121,5 +122,37 @@ describe('resolveToolTokens', () => {
   it('leaves text without tokens untouched', () => {
     expect(resolveToolTokens('No tokens here.', 'hermes')).toBe('No tokens here.');
     expect(resolveToolTokens('', 'hermes')).toBe('');
+  });
+});
+
+describe('external runtime (manual / Claude-connected agents)', () => {
+  it('renders the bare tool name — the client adds its own prefix', () => {
+    expect(modelVisibleToolName('gmail_search', 'external')).toBe('gmail_search');
+    // Whatever server name the row carries is irrelevant: it is not the
+    // prefix the client will use, so none is rendered.
+    expect(modelVisibleToolName('gmail_search', 'external', 'reins')).toBe('gmail_search');
+  });
+
+  it('resolves tool tokens bare', () => {
+    expect(resolveToolTokens('Call {{tool:gmail_search}}.', 'external', 'reins')).toBe('Call gmail_search.');
+  });
+
+  it('resolves skill references with the bare fetch tool', () => {
+    const out = resolveSkillTokens('{{skill:deep-research}}', 'external', 'reins');
+    expect(out).toContain('open it with skills_get)');
+    expect(out).not.toContain('__skills_get');
+  });
+});
+
+describe('deploymentRuntime', () => {
+  it('maps rows to runtimes, with manual winning over everything', () => {
+    expect(deploymentRuntime(undefined)).toBe('openclaw');
+    expect(deploymentRuntime({ runtime: null })).toBe('openclaw');
+    expect(deploymentRuntime({ runtime: 'hermes' })).toBe('hermes');
+    expect(deploymentRuntime({ is_manual: 1 })).toBe('external');
+    // A manual row's runtime column is the DB default, not a fact.
+    expect(deploymentRuntime({ is_manual: true, runtime: 'hermes' })).toBe('external');
+    expect(deploymentRuntime({ is_manual: 0, runtime: 'openclaw' })).toBe('openclaw');
+    expect(deploymentRuntime({ is_manual: false })).toBe('openclaw');
   });
 });

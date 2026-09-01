@@ -170,7 +170,7 @@ Project-scoped config is the mechanism that keeps contexts apart in practice: on
 
 Four behaviours that surprise clients built against other MCP servers.
 
-**Tool names arrive bare.** `tools/list` returns `memory_search`, not `helm__memory_search` (`backend/src/mcp/agent-endpoint.ts:390-393`). Your client applies its own prefix — Claude Code produces `mcp__<your-alias>__memory_search`. One consequence worth knowing: prose *inside* approval messages and skill descriptions names tools as `helm__…`, rendered for the agent's own runtime, so it will not match the alias you chose. The names in prose are illustrative; the names your client lists are authoritative.
+**Tool names arrive bare.** `tools/list` returns `memory_search`, not `helm__memory_search`. Your client applies its own prefix — Claude Code produces `mcp__<your-alias>__memory_search`. Prose inside approval messages and skill bodies also names tools bare for a manual agent (`get_result`, `skills_get`), because the backend cannot know the prefix your client adds — prepend your connector's prefix (`mcp__<alias>__`) when calling one.
 
 **`tools/call` responses are SSE-framed.** Other methods return plain JSON. Send both:
 

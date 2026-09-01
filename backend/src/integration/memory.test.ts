@@ -238,10 +238,20 @@ function makeDbRouter(passwordHash: string) {
     // ── Reachability / ownership checks, now scope-filtered ───────────────────
     // PUT and DELETE read id+type+scope; setEntryParent reads id+scope; the
     // parent and relation-target checks read scope alone.
-    if (sql.startsWith('SELECT id, type, scope_id FROM memory_entries') ||
+    if (sql.startsWith('SELECT id, type, scope_id') ||
         sql.startsWith('SELECT id, scope_id FROM memory_entries')) {
       return {
-        rows: [{ id: ENTRY_ID, type: 'person', scope_id: SCOPE_ID }],
+        rows: [{
+          id: ENTRY_ID, type: 'person', scope_id: SCOPE_ID,
+          title: 'Alice Smith', content: 'Works at Acme Corp.\n\n## Notes\n\nOld note.\n', version: 1,
+        }],
+        columns: [], rowsAffected: 1, lastInsertRowid: 0n,
+      };
+    }
+    // PUT retry loop re-read
+    if (sql.startsWith('SELECT title, content, version FROM memory_entries')) {
+      return {
+        rows: [{ title: 'Alice Smith', content: 'Works at Acme Corp.\n\n## Notes\n\nOld note.\n', version: 2 }],
         columns: [], rowsAffected: 1, lastInsertRowid: 0n,
       };
     }
@@ -327,6 +337,15 @@ function makeDbRouter(passwordHash: string) {
     // ── Wikilink resolution (updateLinkIndex) ─────────────────────────────────
     if (sql.includes('SELECT id FROM memory_entries WHERE user_id = ? AND title = ?')) {
       return EMPTY;
+    }
+
+    // PUT — version-pinned UPDATE must report a hit or the route 409s
+    if (sql.startsWith('UPDATE memory_entries SET')) {
+      return { rows: [], columns: [], rowsAffected: 1, lastInsertRowid: 0n };
+    }
+    // PUT — conflict re-read
+    if (sql.startsWith('SELECT version, updated_at FROM memory_entries')) {
+      return { rows: [{ version: 4, updated_at: NOW }], columns: [], rowsAffected: 1, lastInsertRowid: 0n };
     }
 
     // ── Default: writes succeed, reads return empty ───────────────────────────
@@ -619,6 +638,227 @@ describe('Memory API — end-to-end', () => {
       });
 
       expect(res.statusCode).toBe(404);
+    });
+
+    it('bumps version and scopes the UPDATE itself', async () => {
+      mockExecute.mockClear(); // calls accumulate across tests in this file
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/memory/entries/${ENTRY_ID}`,
+        headers: { cookie: sessionCookie },
+        payload: { content: 'Updated' },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const update = mockExecute.mock.calls
+        .map(([q]: any[]) => (typeof q === 'string' ? q : q.sql))
+        .find((s: string) => s.startsWith('UPDATE memory_entries SET'));
+      expect(update).toContain('version = version + 1');
+      // The write re-asserts reachability; the pre-SELECT alone is a TOCTOU.
+      expect(update).toContain('scope_id IN');
+      // Even without if_version the write is pinned to the version just read.
+      expect(update).toContain('AND version = ?');
+    });
+
+    it('pins the update to if_version when given', async () => {
+      mockExecute.mockClear();
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/memory/entries/${ENTRY_ID}`,
+        headers: { cookie: sessionCookie },
+        payload: { content: 'Updated', if_version: 3 },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const call = mockExecute.mock.calls
+        .map(([q]: any[]) => (typeof q === 'string' ? { sql: q, args: [] } : q))
+        .find((q: { sql: string }) => q.sql.startsWith('UPDATE memory_entries SET'));
+      expect(call.sql).toContain('AND version = ?');
+      expect(call.args).toContain(3);
+    });
+
+    it('returns 409 VERSION_CONFLICT with the current version when the token is stale', async () => {
+      // The version-pinned UPDATE misses; the route re-reads and reports.
+      const base = mockExecute.getMockImplementation()!;
+      let missed = false;
+      mockExecute.mockImplementation(async (input: any) => {
+        const sql = typeof input === 'string' ? input : input.sql;
+        if (!missed && sql.startsWith('UPDATE memory_entries SET')) {
+          missed = true;
+          return EMPTY;
+        }
+        return base(input);
+      });
+
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/memory/entries/${ENTRY_ID}`,
+        headers: { cookie: sessionCookie },
+        payload: { content: 'Stale write', if_version: 3 },
+      });
+
+      expect(res.statusCode).toBe(409);
+      const body = res.json();
+      expect(body.code).toBe('VERSION_CONFLICT');
+      expect(body.current_version).toBe(4);
+      expect(body.error).toContain('version 4');
+      expect(body.error).toContain('Re-read');
+    });
+
+    it('rejects a non-integer if_version with 400', async () => {
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/memory/entries/${ENTRY_ID}`,
+        headers: { cookie: sessionCookie },
+        payload: { content: 'x', if_version: 'three' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().code).toBe('INVALID_VERSION');
+    });
+
+    it('append adds on a new line and re-indexes with the joined content', async () => {
+      mockExecute.mockClear();
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/memory/entries/${ENTRY_ID}`,
+        headers: { cookie: sessionCookie },
+        payload: { append: '- met at the #acme offsite' },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.applied).toBe('append');
+      const update = mockExecute.mock.calls
+        .map(([q]: any[]) => (typeof q === 'string' ? { sql: q, args: [] as unknown[] } : q))
+        .find((q: { sql: string }) => q.sql.startsWith('UPDATE memory_entries SET'));
+      expect(update.args).toContain('Works at Acme Corp.\n\n## Notes\n\nOld note.\n- met at the #acme offsite\n');
+      // The tag index must be rebuilt from the joined content, not the fragment.
+      const tagInsert = mockExecute.mock.calls
+        .map(([q]: any[]) => (typeof q === 'string' ? { sql: q, args: [] as unknown[] } : q))
+        .find((q: { sql: string }) => q.sql.includes('INSERT INTO memory_tags'));
+      expect(tagInsert).toBeDefined();
+      expect(tagInsert.args).toContain('acme');
+    });
+
+    it('section replace rewrites only that heading', async () => {
+      mockExecute.mockClear();
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/memory/entries/${ENTRY_ID}`,
+        headers: { cookie: sessionCookie },
+        payload: { section: { heading: 'Notes', text: 'Fresh note.' } },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.applied).toBe('section');
+      const update = mockExecute.mock.calls
+        .map(([q]: any[]) => (typeof q === 'string' ? { sql: q, args: [] as unknown[] } : q))
+        .find((q: { sql: string }) => q.sql.startsWith('UPDATE memory_entries SET'));
+      const written = update.args.find((a: unknown) => typeof a === 'string' && (a as string).includes('## Notes'));
+      expect(written).toContain('Works at Acme Corp.');
+      expect(written).toContain('## Notes\n\nFresh note.');
+      expect(written).not.toContain('Old note.');
+    });
+
+    it('section append creates a missing heading and reports it', async () => {
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/memory/entries/${ENTRY_ID}`,
+        headers: { cookie: sessionCookie },
+        payload: { section: { heading: 'Sources', text: '- intro call', mode: 'append' } },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.section_created).toBe(true);
+    });
+
+    it('section replace on a missing heading is 404 SECTION_NOT_FOUND listing the headings', async () => {
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/memory/entries/${ENTRY_ID}`,
+        headers: { cookie: sessionCookie },
+        payload: { section: { heading: 'Nope', text: 'x' } },
+      });
+
+      expect(res.statusCode).toBe(404);
+      const body = res.json();
+      expect(body.code).toBe('SECTION_NOT_FOUND');
+      expect(body.headings).toEqual(['Notes']);
+      expect(body.error).toContain('mode "append"');
+    });
+
+    it('refuses content together with append', async () => {
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/memory/entries/${ENTRY_ID}`,
+        headers: { cookie: sessionCookie },
+        payload: { content: 'x', append: 'y' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().code).toBe('CONFLICTING_CONTENT_OPS');
+    });
+
+    it('rejects a malformed section', async () => {
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/memory/entries/${ENTRY_ID}`,
+        headers: { cookie: sessionCookie },
+        payload: { section: { heading: '', text: 'x' } },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().code).toBe('INVALID_SECTION');
+    });
+
+    it('retries against fresh content when the row moved under an append without if_version', async () => {
+      mockExecute.mockClear();
+      const base = mockExecute.getMockImplementation()!;
+      let missed = false;
+      mockExecute.mockImplementation(async (input: any) => {
+        const sql = typeof input === 'string' ? input : input.sql;
+        if (!missed && sql.startsWith('UPDATE memory_entries SET')) {
+          missed = true;
+          return EMPTY;
+        }
+        return base(input);
+      });
+
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/memory/entries/${ENTRY_ID}`,
+        headers: { cookie: sessionCookie },
+        payload: { append: '- survived the race' },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const updates = mockExecute.mock.calls
+        .map(([q]: any[]) => (typeof q === 'string' ? q : q.sql))
+        .filter((s: string) => s.startsWith('UPDATE memory_entries SET'));
+      expect(updates).toHaveLength(2);
+    });
+
+    it('does not retry when if_version was given', async () => {
+      mockExecute.mockClear();
+      const base = mockExecute.getMockImplementation()!;
+      mockExecute.mockImplementation(async (input: any) => {
+        const sql = typeof input === 'string' ? input : input.sql;
+        if (sql.startsWith('UPDATE memory_entries SET')) return EMPTY;
+        return base(input);
+      });
+
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/memory/entries/${ENTRY_ID}`,
+        headers: { cookie: sessionCookie },
+        payload: { append: '- stale', if_version: 1 },
+      });
+
+      expect(res.statusCode).toBe(409);
+      const updates = mockExecute.mock.calls
+        .map(([q]: any[]) => (typeof q === 'string' ? q : q.sql))
+        .filter((s: string) => s.startsWith('UPDATE memory_entries SET'));
+      expect(updates).toHaveLength(1);
     });
   });
 
@@ -1029,6 +1269,35 @@ describe('Memory API — end-to-end', () => {
           method: 'GET', url: '/api/memory/entries', headers: { cookie: sessionCookie },
         });
         expect(sqlCalls().some((s) => s.includes('ORDER BY e.updated_at DESC'))).toBe(true);
+      });
+
+      it('looks up an exact title case-insensitively, without ts_rank', async () => {
+        const res = await app.inject({
+          method: 'GET', url: '/api/memory/entries?title=alice%20smith', headers: { cookie: sessionCookie },
+        });
+
+        expect(res.statusCode).toBe(200);
+        const titleQuery = sqlCalls().find((s) => s.includes('LOWER(e.title) = LOWER(?)'));
+        expect(titleQuery).toBeDefined();
+        expect(titleQuery).not.toContain('plainto_tsquery');
+      });
+
+      it('title takes precedence over q', async () => {
+        await app.inject({
+          method: 'GET', url: '/api/memory/entries?title=alice&q=bob', headers: { cookie: sessionCookie },
+        });
+
+        expect(sqlCalls().some((s) => s.includes('LOWER(e.title)'))).toBe(true);
+        expect(sqlCalls().some((s) => s.includes('plainto_tsquery'))).toBe(false);
+      });
+
+      it('title lookup binds type', async () => {
+        await app.inject({
+          method: 'GET', url: '/api/memory/entries?title=alice&type=person', headers: { cookie: sessionCookie },
+        });
+
+        const titleQuery = sqlCalls().find((s) => s.includes('LOWER(e.title)'));
+        expect(titleQuery).toContain('AND e.type = ?');
       });
 
       it('binds `type` rather than interpolating it', async () => {

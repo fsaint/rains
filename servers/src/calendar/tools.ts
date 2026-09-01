@@ -256,6 +256,21 @@ export const updateEventTool: ToolDefinition = {
         items: { type: 'string' },
         description: 'Updated list of attendee emails',
       },
+      recurrence: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'Replacement RRULE strings, e.g. ["RRULE:FREQ=WEEKLY;BYDAY=TU"]. Pass [] to make ' +
+          'the series a one-off. Expanding a rule needs a named zone, so timeZone is filled ' +
+          "in from the event or the calendar when you do not pass one.",
+      },
+      timeZone: {
+        type: 'string',
+        description:
+          'IANA time zone name for the event, e.g. "America/Los_Angeles". Required by ' +
+          'Google whenever the event repeats — a fixed offset like -07:00 cannot survive ' +
+          "a DST change. Defaults to the zone the event already has, then to the calendar's own zone.",
+      },
       sendUpdates: {
         type: 'string',
         enum: ['all', 'externalOnly', 'none'],

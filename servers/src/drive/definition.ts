@@ -4,7 +4,7 @@ import { driveTools } from './tools.js';
 export const definition: ServiceDefinitionWithTools = {
   type: 'drive',
   name: 'Google Drive',
-  description: 'List, read, and search files',
+  description: 'List, read, search, create, and update files',
   icon: 'HardDrive',
   category: 'google',
   toolPrefix: 'drive_',
@@ -13,7 +13,12 @@ export const definition: ServiceDefinitionWithTools = {
     required: true,
     credentialServiceIds: ['drive', 'google'],
     oauthScopes: [
-      'https://www.googleapis.com/auth/drive.readonly',
+      // Full drive, not drive.file: drive_update_file targets arbitrary file
+      // ids and drive_create_file arbitrary parent folders — under drive.file
+      // Google hides every file the app did not create, so those 404 with no
+      // hint that scope is the problem. Same "restricted" verification tier
+      // as drive.readonly. Writes still require approval by default.
+      'https://www.googleapis.com/auth/drive',
     ],
   },
   tools: driveTools,

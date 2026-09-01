@@ -512,6 +512,107 @@ describe('Calendar Handlers', () => {
     });
   });
 
+  describe('handleUpdateEvent — recurrence', () => {
+    const updated = () =>
+      vi.mocked(mockCalendarClient.events.update).mock.calls.at(-1)![0] as unknown as { requestBody: Record<string, unknown> };
+
+    beforeEach(() => {
+      vi.mocked(mockCalendarClient.events.update).mockResolvedValue({ data: { id: 'e1' } } as never);
+    });
+
+    it('forwards a replacement recurrence to events.update', async () => {
+      vi.mocked(mockCalendarClient.events.get).mockResolvedValueOnce({
+        data: {
+          id: 'e1',
+          start: { dateTime: '2026-08-25T09:00:00-07:00', timeZone: 'America/Los_Angeles' },
+          end: { dateTime: '2026-08-25T10:00:00-07:00', timeZone: 'America/Los_Angeles' },
+        },
+      } as never);
+
+      const result = await handleUpdateEvent(
+        { eventId: 'e1', recurrence: ['RRULE:FREQ=WEEKLY'] },
+        mockContext
+      );
+
+      expect(result.success).toBe(true);
+      expect(updated().requestBody.recurrence).toEqual(['RRULE:FREQ=WEEKLY']);
+      expect(mockCalendarClient.calendars.get).not.toHaveBeenCalled();
+    });
+
+    it('fills the zone from the calendar when adding recurrence to a zoneless event', async () => {
+      vi.mocked(mockCalendarClient.events.get).mockResolvedValueOnce({
+        data: {
+          id: 'e1',
+          start: { dateTime: '2026-08-25T09:00:00Z' },
+          end: { dateTime: '2026-08-25T10:00:00Z' },
+        },
+      } as never);
+      vi.mocked(mockCalendarClient.calendars.get).mockResolvedValueOnce({
+        data: { timeZone: 'Europe/Madrid' },
+      } as never);
+
+      await handleUpdateEvent({ eventId: 'e1', recurrence: ['RRULE:FREQ=DAILY'] }, mockContext);
+
+      expect(updated().requestBody.start).toEqual(
+        expect.objectContaining({ timeZone: 'Europe/Madrid' })
+      );
+      expect(updated().requestBody.end).toEqual(
+        expect.objectContaining({ timeZone: 'Europe/Madrid' })
+      );
+    });
+
+    it('an explicit timeZone wins over the zone the event carries', async () => {
+      vi.mocked(mockCalendarClient.events.get).mockResolvedValueOnce({
+        data: {
+          id: 'e1',
+          start: { dateTime: '2026-08-25T09:00:00-07:00', timeZone: 'America/Los_Angeles' },
+          end: { dateTime: '2026-08-25T10:00:00-07:00', timeZone: 'America/Los_Angeles' },
+          recurrence: ['RRULE:FREQ=WEEKLY'],
+        },
+      } as never);
+
+      await handleUpdateEvent(
+        { eventId: 'e1', timeZone: 'Europe/Madrid', startTime: '2026-08-25T09:00:00+02:00', endTime: '2026-08-25T10:00:00+02:00' },
+        mockContext
+      );
+
+      expect(updated().requestBody.start).toEqual(
+        expect.objectContaining({ timeZone: 'Europe/Madrid' })
+      );
+      expect(updated().requestBody.end).toEqual(
+        expect.objectContaining({ timeZone: 'Europe/Madrid' })
+      );
+    });
+
+    it('refuses to add recurrence when no zone can be determined', async () => {
+      vi.mocked(mockCalendarClient.events.get).mockResolvedValueOnce({
+        data: { id: 'e1', start: { dateTime: '2026-08-25T09:00:00Z' } },
+      } as never);
+      vi.mocked(mockCalendarClient.calendars.get).mockRejectedValueOnce(new Error('403'));
+
+      const result = await handleUpdateEvent(
+        { eventId: 'e1', recurrence: ['RRULE:FREQ=DAILY'] },
+        mockContext
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/time zone/i);
+      expect(mockCalendarClient.events.update).not.toHaveBeenCalled();
+    });
+
+    it('clearing recurrence with [] needs no zone at all', async () => {
+      vi.mocked(mockCalendarClient.events.get).mockResolvedValueOnce({
+        data: { id: 'e1', start: { dateTime: '2026-08-25T09:00:00Z' }, recurrence: ['RRULE:FREQ=WEEKLY'] },
+      } as never);
+
+      const result = await handleUpdateEvent({ eventId: 'e1', recurrence: [] }, mockContext);
+
+      expect(result.success).toBe(true);
+      expect(mockCalendarClient.calendars.get).not.toHaveBeenCalled();
+      expect(updated().requestBody.recurrence).toEqual([]);
+    });
+  });
+
   describe('handleDeleteEvent', () => {
     it('should delete event', async () => {
       vi.mocked(mockCalendarClient.events.delete).mockResolvedValueOnce({} as never);

@@ -33,6 +33,7 @@ import {
   modelVisibleToolName,
   resolveToolTokens,
   resolveSkillTokens,
+  deploymentRuntime,
   type AgentRuntime,
 } from '@reins/shared';
 
@@ -51,8 +52,8 @@ import {
  * The runtime decides how tool names are rendered back to the model, and the
  * two runtimes disagree, so guessing here produces names the model cannot call.
  */
-function runtimeOf(row: { runtime?: unknown } | undefined): AgentRuntime {
-  return row?.runtime === 'hermes' ? 'hermes' : 'openclaw';
+function runtimeOf(row: { runtime?: unknown; is_manual?: unknown } | undefined): AgentRuntime {
+  return deploymentRuntime(row);
 }
 
 /**
@@ -73,7 +74,7 @@ async function getAgentToolNaming(
   agentId: string
 ): Promise<{ runtime: AgentRuntime; serverName: string }> {
   const row = await client.execute({
-    sql: `SELECT runtime, mcp_server_name FROM deployed_agents WHERE agent_id = ? AND status NOT IN ('destroyed', 'error') ORDER BY created_at DESC LIMIT 1`,
+    sql: `SELECT runtime, mcp_server_name, is_manual FROM deployed_agents WHERE agent_id = ? AND status NOT IN ('destroyed', 'error') ORDER BY created_at DESC LIMIT 1`,
     args: [agentId],
   });
   return { runtime: runtimeOf(row.rows[0]), serverName: serverNameOf(row.rows[0]) };
@@ -184,7 +185,7 @@ async function createMCPReauthApproval(
   serviceType: string,
   credentialId?: string | null,
 ): Promise<void> {
-  const hint = `The ${serviceType} credentials for your agent have expired or are invalid. Please re-authenticate to restore access.`;
+  const hint = `The ${serviceType} credentials for your agent have expired, are invalid, or lack a newly required permission. Please re-authenticate to restore access.`;
 
   const { id: approvalId, isNew, emailThrottled } = await approvalQueue.submitReauth(
     agentId,
@@ -222,6 +223,63 @@ async function createMCPReauthApproval(
       // Non-fatal — email failure should not block the MCP error response
     }
   }
+}
+
+/**
+ * Does a failure string/status mean the *credential* is the problem?
+ *
+ * 401 anywhere = the token is bad. 403 only when the API says the scope is —
+ * "Insufficient Permission" / "insufficient authentication scopes" are fixed by
+ * re-consenting, while a per-file Drive refusal, a project ACL, or a rate-limit
+ * 403 is not, so bare "403 Forbidden" deliberately does not match.
+ */
+const AUTH_FAILURE_RE =
+  /\b401\b|unauthori[sz]ed|invalid credentials|invalid[ _-]?(api[ _-]?)?(key|token)|token (has )?expired|insufficient (permission|authentication scopes)|ACCESS_TOKEN_SCOPE_INSUFFICIENT/i;
+
+export function looksLikeAuthFailure(message: string | undefined, status?: number): boolean {
+  if (status === 401) return true;
+  return !!message && AUTH_FAILURE_RE.test(message);
+}
+
+// submitReauth dedups in the DB, but every hit still costs a SELECT and, when
+// the last email send failed, another send attempt. Cap that per credential.
+const reauthRecentlyFlagged = new Map<string, number>();
+const REAUTH_FLAG_TTL_MS = 5 * 60 * 1000;
+
+async function flagAuthFailure(agentId: string, serviceType: string, credentialId: string): Promise<void> {
+  const key = `${agentId}:${credentialId}`;
+  const last = reauthRecentlyFlagged.get(key) ?? 0;
+  if (Date.now() - last < REAUTH_FLAG_TTL_MS) return;
+  reauthRecentlyFlagged.set(key, Date.now());
+  await createMCPReauthApproval(agentId, serviceType, credentialId).catch(() => {});
+}
+
+export function _resetReauthThrottleForTests(): void {
+  reauthRecentlyFlagged.clear();
+}
+
+/** Email on an instance's credential, for messages that name accounts. */
+async function accountEmailOf(inst: { credentialId: string | null }): Promise<string | null> {
+  if (!inst.credentialId) return null;
+  const [cred] = await db.select().from(credentials).where(eq(credentials.id, inst.credentialId));
+  return cred?.accountEmail ?? null;
+}
+
+/** Emails of sibling instances on which `toolName` is not blocked. */
+async function permittedSiblingAccounts(
+  instances: Array<{ id: string; credentialId: string | null }>,
+  excludeId: string,
+  toolName: string
+): Promise<string[]> {
+  const out: string[] = [];
+  for (const inst of instances) {
+    if (inst.id === excludeId) continue;
+    const { tools } = await getEffectiveInstancePermissions(inst.id);
+    if ((tools[toolName] ?? 'block') === 'block') continue;
+    const email = await accountEmailOf(inst);
+    if (email) out.push(email);
+  }
+  return out;
 }
 
 // ============================================================================
@@ -465,7 +523,7 @@ async function handleListTools(
 
   // Inject mark_onboarded if this agent has not yet completed first-run setup
   const deploymentRow = await client.execute({
-    sql: `SELECT id, fly_app_name, fly_machine_id, has_onboarded, runtime, mcp_server_name FROM deployed_agents WHERE agent_id = ? ORDER BY created_at DESC LIMIT 1`,
+    sql: `SELECT id, fly_app_name, fly_machine_id, has_onboarded, runtime, mcp_server_name, is_manual FROM deployed_agents WHERE agent_id = ? ORDER BY created_at DESC LIMIT 1`,
     args: [agentId],
   });
   const deployment = deploymentRow.rows[0];
@@ -563,18 +621,20 @@ export async function buildSkillCatalog(
   const omitted = result.rows.length - shown.length;
   if (omitted > 0) lines.push(`…and ${omitted} more.`);
 
-  // The setup notice comes out of the same budget rather than being appended
-  // past it: the skill list is the expendable part, the setup state is not.
-  const catalogBudget = SKILL_CATALOG_MAX_CHARS - (setupNotice ? setupNotice.length + 1 : 0);
+  // tools/list is typically cached per session, so the authoritative read is
+  // always the live call — say so rather than let a stale list mislead.
+  const footer = `Call skills_get with a slug to read the full instructions. This list may be stale; call skills_list for the authoritative version. skills_list_library shows every skill in your owner's library, including ones not assigned to you.`;
+
+  // The footer and setup notice come out of the same budget rather than being
+  // appended past it: the skill list is the expendable part, they are not.
+  const catalogBudget =
+    SKILL_CATALOG_MAX_CHARS - footer.length - 1 - (setupNotice ? setupNotice.length + 1 : 0);
 
   let catalog = lines.join('\n');
   if (catalog.length > catalogBudget) {
     catalog = `${catalog.slice(0, catalogBudget)}…\n(truncated)`;
   }
 
-  // tools/list is typically cached per session, so the authoritative read is
-  // always the live call — say so rather than let a stale list mislead.
-  const footer = `Call skills_get with a slug to read the full instructions. This list may be stale; call skills_list for the authoritative version.`;
   return [catalog, footer, setupNotice].filter(Boolean).join('\n');
 }
 
@@ -642,6 +702,11 @@ async function executeTool(
     agentId,
   };
 
+  // Which vault credential this call ended up using, for the post-call auth
+  // hook. Tracked separately because ToolContext.credential is the decrypted
+  // payload shape, which does not carry the row id.
+  let resolvedCredentialId: string | null = null;
+
   // Inject Drive path rules.
   //
   // These were previously set only in server-manager.ts, which is a DIFFERENT
@@ -656,9 +721,9 @@ async function executeTool(
   }
 
   // Inject gateway token for services that call back into the Reins API.
-  // memory reads/writes memory entries; gmail resolves source="upload"
-  // attachments via /api/agent-uploads; skills reads /api/agent-skills;
-  // helm-admin reads and writes /api/agent-admin.
+  // memory reads/writes memory entries; gmail and drive resolve
+  // source="upload" files via /api/agent-uploads; skills reads
+  // /api/agent-skills; helm-admin reads and writes /api/agent-admin.
   //
   // Omitting a service here does not fail loudly: its handlers send no
   // x-reins-agent-secret and every call comes back 401, which reads like a
@@ -666,6 +731,7 @@ async function executeTool(
   if (
     serviceType === 'memory' ||
     serviceType === 'gmail' ||
+    serviceType === 'drive' ||
     serviceType === 'skills' ||
     serviceType === 'skill-authoring' ||
     serviceType === 'helm-admin'
@@ -758,6 +824,7 @@ async function executeTool(
         const credential = await credentialVault.retrieve(targetInstance.credentialId);
         if (credential) {
           context.credential = credential;
+          resolvedCredentialId = targetInstance.credentialId;
           const accessToken = await credentialVault.getValidAccessToken(targetInstance.credentialId);
           if (accessToken) {
             context.accessToken = accessToken;
@@ -839,6 +906,7 @@ async function executeTool(
       const credential = await credentialVault.retrieve(targetCredentialId);
       if (credential) {
         context.credential = credential;
+        resolvedCredentialId = targetCredentialId;
         const accessToken = await credentialVault.getValidAccessToken(targetCredentialId);
         if (accessToken) {
           context.accessToken = accessToken;
@@ -873,6 +941,7 @@ async function executeTool(
         const credential = await credentialVault.retrieve(accessRecord.credentialId);
         if (credential) {
           context.credential = credential;
+          resolvedCredentialId = accessRecord.credentialId;
           const accessToken = await credentialVault.getValidAccessToken(accessRecord.credentialId);
           if (accessToken) {
             context.accessToken = accessToken;
@@ -923,15 +992,37 @@ async function executeTool(
     };
   }
 
-  const toolResult = await server.callTool(toolName, args, context);
+  // Auth failures surfacing from the handler itself — a revoked API key, a
+  // scope the token never had — otherwise die here as prose the model cannot
+  // act on: token-monitor watches only OAuth expiry, so nothing else would
+  // ever tell the owner. Both shapes are covered: native servers return
+  // {success:false, error}, while googleapis THROWS (init-servers.callTool
+  // does not catch), so the GaxiosError passes through this frame.
+  const credentialId = resolvedCredentialId;
+  let toolResult: Awaited<ReturnType<typeof server.callTool>>;
+  try {
+    toolResult = await server.callTool(toolName, args, context);
+  } catch (err) {
+    const rawCode = (err as { code?: unknown }).code;
+    const status = (err as { status?: number }).status ?? (typeof rawCode === 'number' ? rawCode : undefined);
+    const message = err instanceof Error ? err.message : String(err);
+    if (credentialId && looksLikeAuthFailure(message, status)) {
+      await flagAuthFailure(agentId, serviceType, credentialId);
+    }
+    throw err;
+  }
   if (toolResult.success) {
     return { success: true, data: toolResult.data };
+  }
+  const errorMessage = typeof toolResult.error === 'string' ? toolResult.error : 'Unknown error';
+  if (credentialId && looksLikeAuthFailure(errorMessage)) {
+    await flagAuthFailure(agentId, serviceType, credentialId);
   }
   // Tool ran but returned error (use isToolError flag, not errorCode)
   return {
     success: false,
     isToolError: true,
-    errorMessage: typeof toolResult.error === 'string' ? toolResult.error : 'Unknown error',
+    errorMessage,
   };
 }
 
@@ -1214,29 +1305,43 @@ async function handleCallTool(
   // Check tool permission (instance-based or legacy)
   let allowed: boolean;
   let requiresApproval: boolean;
+  let policyInstance: (typeof serviceInstances)[number] | undefined;
 
   if (hasInstances) {
-    // Resolve which instance to use based on `account` arg
+    // Resolve which instance to use based on `account` arg — same rule as
+    // executeTool: the named account, else the default, else the first.
     const requestedAccount = args.account as string | undefined;
-    let targetInstance = serviceInstances[0]; // default
+    let targetInstance = serviceInstances.find((i) => i.isDefault) ?? serviceInstances[0];
 
     if (requestedAccount) {
-      // Find instance by credential email
+      let found = false;
       for (const inst of serviceInstances) {
         if (inst.credentialId) {
           const [cred] = await db.select().from(credentials).where(eq(credentials.id, inst.credentialId));
           if (cred?.accountEmail === requestedAccount) {
             targetInstance = inst;
+            found = true;
             break;
           }
         }
       }
-    } else {
-      // Use default instance
-      const defaultInst = serviceInstances.find((i) => i.isDefault);
-      if (defaultInst) targetInstance = defaultInst;
+      // An unmatched account used to silently fall through to [0] and be
+      // policy-checked against an instance the caller never named. Refuse it
+      // here with the same error executeTool would produce.
+      if (!found) {
+        return {
+          jsonrpc: '2.0',
+          id: requestId,
+          error: {
+            code: MCP_ERROR_CODES.MISSING_CREDENTIALS,
+            message: `No credential found for account: ${requestedAccount}. Use ${serviceType}_list_accounts to see available accounts.`,
+            data: { service: serviceType, requestedAccount },
+          },
+        };
+      }
     }
 
+    policyInstance = targetInstance;
     const { tools: instanceToolPerms } = await getEffectiveInstancePermissions(targetInstance.id);
     const toolPerm = instanceToolPerms[toolName] ?? 'block';
     allowed = toolPerm !== 'block';
@@ -1248,9 +1353,27 @@ async function handleCallTool(
   }
 
   if (!allowed) {
+    // tools/list is a union across instances, so a tool can be advertised yet
+    // blocked on the instance this call resolved to. Say which account does
+    // permit it, so the model retries with `account:` instead of concluding
+    // the tool is off-limits.
+    let blockedMessage = 'Tool blocked by policy';
+    let blockedData: Record<string, unknown> = { tool: toolName };
+    if (policyInstance && serviceInstances.length > 1) {
+      const permitted = await permittedSiblingAccounts(serviceInstances, policyInstance.id, toolName);
+      if (permitted.length > 0) {
+        const blockedFor = (await accountEmailOf(policyInstance)) ?? 'the default account';
+        blockedMessage =
+          `${toolName} is blocked for ${blockedFor} but permitted for ${permitted.join(', ')}. ` +
+          `Call it again with account: "${permitted[0]}".`;
+        blockedData = { tool: toolName, blockedAccount: blockedFor, permittedAccounts: permitted };
+      }
+    }
+
     await auditLogger.logToolCall(agentId, toolName, args, 'blocked', Date.now() - startTime, {
       reason: 'Tool blocked by policy',
       serviceType,
+      ...(blockedData.permittedAccounts ? { permittedAccounts: blockedData.permittedAccounts } : {}),
     });
 
     return {
@@ -1258,8 +1381,8 @@ async function handleCallTool(
       id: requestId,
       error: {
         code: MCP_ERROR_CODES.TOOL_BLOCKED,
-        message: 'Tool blocked by policy',
-        data: { tool: toolName },
+        message: blockedMessage,
+        data: blockedData,
       },
     };
   }

@@ -3,7 +3,7 @@
  */
 
 import type { ToolDefinition } from '../common/base-server.js';
-import { handleListSkills, handleGetSkill } from './handlers.js';
+import { handleListSkills, handleGetSkill, handleListLibrary } from './handlers.js';
 
 /**
  * List assigned skills.
@@ -59,4 +59,16 @@ export const skillsGetTool: ToolDefinition = {
   handler: handleGetSkill,
 };
 
-export const skillsTools: ToolDefinition[] = [skillsListTool, skillsGetTool];
+export const skillsListLibraryTool: ToolDefinition = {
+  name: 'skills_list_library',
+  description:
+    "Browse your owner's whole skill library — every skill they have written or the platform provides — " +
+    'not just what is assigned to you. Read-only and grants nothing: skills_get refuses any entry with ' +
+    'assigned_to_me=false. Use it when a task looks like something your owner may already have a playbook ' +
+    'for that you were not given, then tell them which skill to assign to you in the Helm dashboard. ' +
+    'For what you can actually run, call skills_list.',
+  inputSchema: { type: 'object', properties: {} },
+  handler: handleListLibrary,
+};
+
+export const skillsTools: ToolDefinition[] = [skillsListTool, skillsGetTool, skillsListLibraryTool];

@@ -94,6 +94,7 @@ import {
   resolveOrCreate,
   parseTransclusions,
   lookupEntryByTitleOrAlias,
+  replaceSection,
 } from '../services/memory.js';
 import {
   resolveMemoryContext,
@@ -144,6 +145,7 @@ import {
   LEGACY_MCP_SERVER_NAME,
   resolveToolTokens,
   resolveSkillTokens,
+  deploymentRuntime,
   type AgentRuntime,
 } from '@reins/shared';
 
@@ -2167,6 +2169,60 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   ];
 
   /**
+   * Union of the Google scopes the named services declare (all Google services
+   * when none are named), plus the base identity scopes.
+   *
+   * The definitions in @reins/servers are the single source of truth — the
+   * dashboard flow, the onboarding-bot link, and any future flow must agree,
+   * or a credential minted by one flow fails scope checks under another.
+   */
+  async function googleScopesFor(services?: string[]): Promise<{ scopes: string[]; services: string[] }> {
+    let serviceScopes: string[] = [];
+    let requestedServices: string[] = [];
+
+    try {
+      const { serviceDefinitions } = await import('@reins/servers');
+      const googleServices = serviceDefinitions.filter((d) => d.category === 'google');
+
+      if (services && services.length > 0) {
+        requestedServices = services;
+        for (const svcType of services) {
+          const def = googleServices.find((d) => d.type === svcType);
+          if (def?.auth.oauthScopes) {
+            serviceScopes.push(...def.auth.oauthScopes);
+          }
+        }
+      }
+
+      if (serviceScopes.length === 0) {
+        requestedServices = googleServices.map((d) => d.type);
+        for (const def of googleServices) {
+          if (def.auth.oauthScopes) {
+            serviceScopes.push(...def.auth.oauthScopes);
+          }
+        }
+      }
+    } catch {
+      // Fallback if registry unavailable — keep in sync with the definitions.
+      serviceScopes = [
+        'https://www.googleapis.com/auth/gmail.readonly',
+        'https://www.googleapis.com/auth/gmail.compose',
+        'https://www.googleapis.com/auth/gmail.modify',
+        'https://www.googleapis.com/auth/gmail.send',
+        'https://www.googleapis.com/auth/drive',
+        'https://www.googleapis.com/auth/calendar.events',
+        'https://www.googleapis.com/auth/calendar.readonly',
+      ];
+      requestedServices = ['gmail', 'drive', 'calendar'];
+    }
+
+    return {
+      scopes: [...new Set([...GOOGLE_BASE_SCOPES, ...serviceScopes])],
+      services: requestedServices,
+    };
+  }
+
+  /**
    * Initiate Google OAuth flow
    * Accepts optional `services` query param (comma-separated) to request specific scopes.
    * Example: /api/oauth/google?services=gmail,drive
@@ -2186,46 +2242,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     getPostHog()?.capture({ distinctId: userId, event: 'credential_oauth_started', properties: { provider: 'google' } });
     const query = request.query as { services?: string; reconnect?: string; approvalId?: string };
 
-    // Build scopes from requested services
-    let serviceScopes: string[] = [];
-    let requestedServices: string[] = [];
-
-    try {
-      const { serviceDefinitions } = await import('@reins/servers');
-      const googleServices = serviceDefinitions.filter((d) => d.category === 'google');
-
-      if (query.services) {
-        requestedServices = query.services.split(',').map((s) => s.trim());
-        for (const svcType of requestedServices) {
-          const def = googleServices.find((d) => d.type === svcType);
-          if (def?.auth.oauthScopes) {
-            serviceScopes.push(...def.auth.oauthScopes);
-          }
-        }
-      }
-
-      // Default: request all Google service scopes
-      if (serviceScopes.length === 0) {
-        requestedServices = googleServices.map((d) => d.type);
-        for (const def of googleServices) {
-          if (def.auth.oauthScopes) {
-            serviceScopes.push(...def.auth.oauthScopes);
-          }
-        }
-      }
-    } catch {
-      // Fallback if registry unavailable
-      serviceScopes = [
-        'https://www.googleapis.com/auth/gmail.readonly',
-        'https://www.googleapis.com/auth/gmail.compose',
-        'https://www.googleapis.com/auth/gmail.modify',
-        'https://www.googleapis.com/auth/drive.readonly',
-        'https://www.googleapis.com/auth/calendar.events',
-      ];
-      requestedServices = ['gmail', 'drive', 'calendar'];
-    }
-
-    const allScopes = [...new Set([...GOOGLE_BASE_SCOPES, ...serviceScopes])];
+    // Build scopes from requested services (definitions are the source of truth)
+    const requested = query.services ? query.services.split(',').map((s) => s.trim()) : undefined;
+    const { scopes: allScopes, services: requestedServices } = await googleScopesFor(requested);
 
     // Generate state token for CSRF protection
     const state = nanoid(32);
@@ -2291,7 +2310,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       client_id: config.googleClientId,
       redirect_uri: config.googleRedirectUri,
       response_type: 'code',
-      scope: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.readonly',
+      scope: (await googleScopesFor(['gmail', 'calendar', 'drive'])).scopes.join(' '),
       state,
       access_type: 'offline',
       prompt: 'consent',
@@ -3578,9 +3597,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     // to authenticate (OAuth) first. The owner can open it from the dashboard.
     await client.execute({
       sql: `INSERT INTO deployed_agents
-              (id, agent_id, status, gateway_token, soul_md, is_manual, allow_unauthenticated, created_at, updated_at)
-            VALUES (?, ?, 'running', ?, ?, 1, false, ?, ?)`,
-      args: [deploymentId, agentId, gatewayToken, body.soulMd || null, now, now],
+              (id, agent_id, status, gateway_token, soul_md, is_manual, allow_unauthenticated, mcp_server_name, created_at, updated_at)
+            VALUES (?, ?, 'running', ?, ?, 1, false, ?, ?, ?)`,
+      args: [deploymentId, agentId, gatewayToken, body.soulMd || null, MCP_SERVER_NAME, now, now],
     });
 
     await enableDefaultServices(agentId);
@@ -5730,7 +5749,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (!agentSecret) return null;
 
     const depResult = await client.execute({
-      sql: `SELECT da.agent_id, da.runtime, da.mcp_server_name, a.user_id
+      sql: `SELECT da.agent_id, da.runtime, da.mcp_server_name, da.is_manual, a.user_id
             FROM deployed_agents da
             JOIN agents a ON a.id = da.agent_id
             WHERE da.gateway_token = ? AND da.status NOT IN ('destroyed', 'error')
@@ -5742,9 +5761,11 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     return {
       agentId: depResult.rows[0].agent_id as string,
       userId: depResult.rows[0].user_id as string,
-      // Decides how tool names are rendered back to this agent; the column
-      // predates Hermes so legacy rows are null and mean openclaw.
-      runtime: depResult.rows[0].runtime === 'hermes' ? 'hermes' : 'openclaw',
+      // Decides how tool names are rendered back to this agent. A manual row
+      // (claude.ai / Desktop / Code connect through their own client) resolves
+      // to 'external' and gets bare names — the client adds its own prefix,
+      // which the backend cannot know. Legacy null runtime means openclaw.
+      runtime: deploymentRuntime(depResult.rows[0]),
       // The name baked into this machine's MCP_CONFIG, not MCP_SERVER_NAME —
       // they differ for any agent not yet redeployed after a rename.
       serverName: (depResult.rows[0].mcp_server_name as string | null) || LEGACY_MCP_SERVER_NAME,
@@ -6825,6 +6846,50 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   });
 
   /**
+   * The owner's whole library, read-only, for ANY agent.
+   *
+   * Distinct from /api/agent-skills (what is assigned to you) and from
+   * /api/skill-library (authoring: gated on skill-authoring, carries editing
+   * metadata). This is for an agent that suspects its owner already has a
+   * playbook it was not given: names and one-liners only, with an
+   * assignedToMe flag, never a body — the assignment boundary enforced at
+   * /api/agent-skills/:slug is unchanged.
+   */
+  app.get('/api/skill-catalog', async (request, reply) => {
+    const agent = await resolveAgentFromGatewayToken(request);
+    if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const result = await client.execute({
+      sql: `SELECT s.id, s.slug, s.name, s.description, s.user_id, s.required_services,
+                   EXISTS (SELECT 1 FROM agent_skills ask
+                           WHERE ask.skill_id = s.id AND ask.agent_id = ?) AS assigned_to_me
+            FROM skills s
+            WHERE s.enabled = true AND (s.user_id = ? OR s.user_id IS NULL)
+            ORDER BY s.user_id NULLS FIRST, s.name`,
+      args: [agent.agentId, agent.userId],
+    });
+
+    const render = (text: string) =>
+      resolveSkillTokens(
+        resolveToolTokens(text ?? '', agent.runtime, agent.serverName),
+        agent.runtime,
+        agent.serverName
+      );
+
+    return {
+      data: result.rows.map((row) => ({
+        id: row.id as string,
+        slug: row.slug as string,
+        name: row.name as string,
+        description: render(String(row.description ?? '')),
+        scope: row.user_id === null ? ('system' as const) : ('user' as const),
+        requiredServices: parseRequiredServices(row.required_services),
+        assignedToMe: row.assigned_to_me === true || row.assigned_to_me === 1,
+      })),
+    };
+  });
+
+  /**
    * Skills that exist for this owner — used only to distinguish "not assigned to
    * you" from "no such skill", never to serve one. Scoped to the owner so the
    * distinction cannot reveal another user's slugs.
@@ -7074,9 +7139,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     await client.execute({
       sql: `INSERT INTO deployed_agents
-              (id, agent_id, status, gateway_token, is_manual, allow_unauthenticated, created_at, updated_at)
-            VALUES (?, ?, 'running', ?, 1, false, ?, ?)`,
-      args: [deploymentId, agentId, gatewayToken, now, now],
+              (id, agent_id, status, gateway_token, is_manual, allow_unauthenticated, mcp_server_name, created_at, updated_at)
+            VALUES (?, ?, 'running', ?, 1, false, ?, ?, ?)`,
+      args: [deploymentId, agentId, gatewayToken, MCP_SERVER_NAME, now, now],
     });
 
     await enableDefaultServices(agentId);
@@ -7512,7 +7577,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     for (const scope of wanted) {
       const rootId = await ensureMemoryRoot(userId, scope.id);
       const result = await client.execute({
-        sql: `SELECT id, type, title, content, created_at, updated_at FROM memory_entries WHERE id = ?`,
+        sql: `SELECT id, type, title, content, created_at, updated_at, version FROM memory_entries WHERE id = ?`,
         args: [rootId],
       });
       const row = result.rows[0] as Record<string, unknown> | undefined;
@@ -7537,7 +7602,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const memCtx = await resolveMemoryScopeContext(request);
     if (!memCtx) return reply.status(401).send({ error: 'Unauthorized' });
 
-    const { q, type, parent_id, limit: lim = '50', tag, since, order, scope } = request.query as Record<string, string>;
+    const { q, title, type, parent_id, limit: lim = '50', tag, since, order, scope } = request.query as Record<string, string>;
     const maxLimit = Math.min(parseInt(lim, 10) || 50, 200);
 
     // No scope given spans everything the caller can reach; naming one narrows.
@@ -7546,9 +7611,29 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const scopeIn = picked.scopeIds.map(() => '?').join(', ');
 
     let rows;
-    if (q) {
+    if (title) {
+      // Exact lookup, deliberately not ts_rank: memory_get resolves titles
+      // through here, and a ranked search can push the exact match past the
+      // limit for a common title — "not found" for an entry that exists.
+      const needle = title.trim();
       const result = await client.execute({
-        sql: `SELECT e.id, e.user_id, e.type, e.title, e.content, e.created_at, e.updated_at,
+        sql: `SELECT e.id, e.user_id, e.type, e.title, e.content, e.created_at, e.updated_at, e.version,
+                     s.slug AS scope, s.name AS scope_name
+              FROM memory_entries e
+              JOIN memory_scopes s ON s.id = e.scope_id
+              WHERE e.scope_id IN (${scopeIn}) AND e.is_deleted = false
+                AND LOWER(e.title) = LOWER(?)
+                ${type ? `AND e.type = ?` : ''}
+              ORDER BY s.is_default DESC, s.name ASC, e.type ASC
+              LIMIT ?`,
+        args: type
+          ? [...picked.scopeIds, needle, type, maxLimit]
+          : [...picked.scopeIds, needle, maxLimit],
+      });
+      rows = result.rows;
+    } else if (q) {
+      const result = await client.execute({
+        sql: `SELECT e.id, e.user_id, e.type, e.title, e.content, e.created_at, e.updated_at, e.version,
                      s.slug AS scope, s.name AS scope_name
               FROM memory_entries e
               JOIN memory_scopes s ON s.id = e.scope_id
@@ -7564,7 +7649,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       rows = result.rows;
     } else if (parent_id) {
       const result = await client.execute({
-        sql: `SELECT e.id, e.type, e.title, e.content, e.created_at, e.updated_at,
+        sql: `SELECT e.id, e.type, e.title, e.content, e.created_at, e.updated_at, e.version,
                      s.slug AS scope, s.name AS scope_name
               FROM memory_entries e
               JOIN memory_scopes s ON s.id = e.scope_id
@@ -7607,7 +7692,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
       args.push(maxLimit);
       const result = await client.execute({
-        sql: `SELECT e.id, e.type, e.title, e.content, e.created_at, e.updated_at,
+        sql: `SELECT e.id, e.type, e.title, e.content, e.created_at, e.updated_at, e.version,
                      s.slug AS scope, s.name AS scope_name
               ${fromClause}
               ${whereClause}
@@ -7687,6 +7772,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           content: row.content,
           createdAt: row.created_at,
           updatedAt: row.updated_at,
+          version: row.version,
         },
       });
     }
@@ -7726,7 +7812,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     await updateTagIndex(id, content);
 
     return reply.status(201).send({
-      data: { id, userId, scope: scopeSlug, type, title, content, createdAt: now, updatedAt: now },
+      data: { id, userId, scope: scopeSlug, type, title, content, createdAt: now, updatedAt: now, version: 1 },
     });
   });
 
@@ -7743,7 +7829,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     // Scope-filtered, not merely user-filtered: an entry outside the caller's
     // grants is a 404, indistinguishable from one that does not exist.
     const entryResult = await client.execute({
-      sql: `SELECT e.id, e.user_id, e.scope_id, e.type, e.title, e.content, e.created_at, e.updated_at,
+      sql: `SELECT e.id, e.user_id, e.scope_id, e.type, e.title, e.content, e.created_at, e.updated_at, e.version,
                    s.slug AS scope, s.name AS scope_name
             FROM memory_entries e
             JOIN memory_scopes s ON s.id = e.scope_id
@@ -7895,7 +7981,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const scopeIn = memCtx.scopeIds.map(() => '?').join(', ');
 
     const existing = await client.execute({
-      sql: `SELECT id, type, scope_id FROM memory_entries
+      sql: `SELECT id, type, scope_id, title, content, version FROM memory_entries
             WHERE id = ? AND scope_id IN (${scopeIn}) AND is_deleted = false`,
       args: [id, ...memCtx.scopeIds],
     });
@@ -7916,31 +8002,139 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.status(403).send({ error: 'Root index can only be updated by the agent' });
     }
 
+    // Optional optimistic-concurrency token. The predicate is built
+    // conditionally rather than as `(? IS NULL OR version = ?)`: postgres.js
+    // sends untyped params and Postgres cannot type a bare $n IS NULL.
+    const rawIfVersion = body.if_version;
+    const ifVersion = rawIfVersion === undefined || rawIfVersion === null ? null : Number(rawIfVersion);
+    if (ifVersion !== null && (!Number.isInteger(ifVersion) || ifVersion < 1)) {
+      return reply.status(400).send({ error: 'if_version must be a positive integer', code: 'INVALID_VERSION' });
+    }
+
+    // Exactly one way to change content per call. `append` and `section`
+    // exist so a 20k-character index never has to be resent whole to add one
+    // line — each full resend is a chance to silently drop a section.
+    const contentOps = (['content', 'append', 'section'] as const).filter((k) => body[k] !== undefined);
+    if (contentOps.length > 1) {
+      return reply.status(400).send({ error: 'Pass only one of content, append, section.', code: 'CONFLICTING_CONTENT_OPS' });
+    }
+    if (body.append !== undefined && typeof body.append !== 'string') {
+      return reply.status(400).send({ error: 'append must be a string', code: 'INVALID_APPEND' });
+    }
+    const section = body.section as { heading?: unknown; text?: unknown; mode?: unknown } | undefined;
+    if (section !== undefined) {
+      const modeOk = section?.mode === undefined || section?.mode === 'replace' || section?.mode === 'append';
+      if (
+        typeof section !== 'object' || section === null ||
+        typeof section.heading !== 'string' || !section.heading.trim() ||
+        typeof section.text !== 'string' || !modeOk
+      ) {
+        return reply.status(400).send({
+          error: 'section needs { heading: string, text: string, mode?: "replace" | "append" }',
+          code: 'INVALID_SECTION',
+        });
+      }
+    }
+
     const now = new Date().toISOString();
-    const fields: string[] = [];
-    const args: unknown[] = [];
+    const applied = contentOps[0] ?? null;
+    let sectionCreated = false;
+    let current = existing.rows[0] as { title: string; content: string | null; version: number };
 
-    if (body.title !== undefined) { fields.push('title = ?'); args.push((body.title as string).trim()); }
-    if (body.content !== undefined) { fields.push('content = ?'); args.push(body.content); }
-    if (body.type !== undefined) { fields.push('type = ?'); args.push(body.type); }
-    fields.push('updated_at = ?'); args.push(now);
-    args.push(id);
+    // Compute-and-CAS: partial ops are computed in JS against the version just
+    // read and the UPDATE is pinned to it, so a concurrent write can never be
+    // absorbed into a stale base. Without if_version an append/section retries
+    // against the fresh content; with it, the caller asked to be refused.
+    const maxAttempts = ifVersion !== null ? 1 : 3;
+    for (let attempt = 0; ; attempt++) {
+      let nextContent: string | null | undefined;
+      if (body.content !== undefined) {
+        nextContent = body.content as string | null;
+      } else if (typeof body.append === 'string') {
+        const base = (current.content ?? '').replace(/\n+$/, '');
+        nextContent = (base ? base + '\n' : '') + (body.append as string).replace(/\n+$/, '') + '\n';
+      } else if (section) {
+        const editResult = replaceSection(
+          current.content ?? '',
+          section.heading as string,
+          section.text as string,
+          (section.mode as 'replace' | 'append' | undefined) ?? 'replace'
+        );
+        if ('error' in editResult) {
+          return reply.status(404).send({
+            error:
+              `No section "${section.heading}" in "${current.title}". ` +
+              `Headings: ${editResult.headings.join(', ') || '(none)'}. Use mode "append" to create it.`,
+            code: 'SECTION_NOT_FOUND',
+            headings: editResult.headings,
+          });
+        }
+        nextContent = editResult.content;
+        sectionCreated = editResult.created;
+      }
 
-    await client.execute({
-      sql: `UPDATE memory_entries SET ${fields.join(', ')} WHERE id = ?`,
-      args,
-    });
+      const fields: string[] = [];
+      const args: unknown[] = [];
+      if (body.title !== undefined) { fields.push('title = ?'); args.push((body.title as string).trim()); }
+      if (nextContent !== undefined) { fields.push('content = ?'); args.push(nextContent); }
+      if (body.type !== undefined) { fields.push('type = ?'); args.push(body.type); }
+      fields.push('version = version + 1', 'updated_at = ?'); args.push(now);
 
-    if (body.content !== undefined) {
-      await updateLinkIndex(id, entryScopeId, body.content as string | null);
-      await updateTagIndex(id, body.content as string | null);
+      // The write re-asserts scope reachability itself: the SELECT above is
+      // advisory, and last-writer-wins between it and this statement was how a
+      // concurrent edit vanished without an error.
+      args.push(id, ...memCtx.scopeIds, ifVersion ?? current.version);
+      const updateResult = await client.execute({
+        sql: `UPDATE memory_entries SET ${fields.join(', ')} WHERE id = ? AND scope_id IN (${scopeIn}) AND is_deleted = false AND version = ?`,
+        args,
+      });
+
+      if (updateResult.rowsAffected > 0) {
+        if (nextContent !== undefined) {
+          await updateLinkIndex(id, entryScopeId, nextContent);
+          await updateTagIndex(id, nextContent);
+        }
+        break;
+      }
+
+      if (attempt >= maxAttempts - 1) {
+        const cur = await client.execute({
+          sql: `SELECT version, updated_at FROM memory_entries WHERE id = ?`,
+          args: [id],
+        });
+        const row = cur.rows[0] as { version?: number; updated_at?: string } | undefined;
+        const reason = ifVersion !== null
+          ? `you passed if_version ${ifVersion}, it is now version ${row?.version ?? 'unknown'}`
+          : `it kept changing while your ${applied ?? 'update'} was being applied (now version ${row?.version ?? 'unknown'})`;
+        return reply.status(409).send({
+          error:
+            `Entry changed since you read it: ${reason} (updated ${row?.updated_at ?? 'unknown'}). ` +
+            'Re-read it with memory_get and apply your change to the current content.',
+          code: 'VERSION_CONFLICT',
+          current_version: row?.version ?? null,
+          updated_at: row?.updated_at ?? null,
+        });
+      }
+
+      const re = await client.execute({
+        sql: `SELECT title, content, version FROM memory_entries WHERE id = ? AND is_deleted = false`,
+        args: [id],
+      });
+      if (re.rows.length === 0) return reply.status(404).send({ error: 'Not found' });
+      current = { ...current, ...(re.rows[0] as { title: string; content: string | null; version: number }) };
     }
 
     const updated = await client.execute({
-      sql: `SELECT id, user_id, type, title, content, created_at, updated_at FROM memory_entries WHERE id = ?`,
+      sql: `SELECT id, user_id, type, title, content, created_at, updated_at, version FROM memory_entries WHERE id = ?`,
       args: [id],
     });
-    return reply.send({ data: updated.rows[0] });
+    return reply.send({
+      data: {
+        ...(updated.rows[0] as Record<string, unknown>),
+        ...(applied ? { applied } : {}),
+        ...(sectionCreated ? { section_created: true } : {}),
+      },
+    });
   });
 
   // -------------------------------------------------------------------------

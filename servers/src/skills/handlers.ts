@@ -167,3 +167,57 @@ export async function handleGetSkill(
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
+
+interface CatalogEntry {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  scope: 'system' | 'user';
+  requiredServices: string[];
+  assignedToMe: boolean;
+}
+
+/**
+ * Browse the owner's whole library, assigned or not.
+ *
+ * Read-only and grants nothing: the assignment boundary lives in skills_get,
+ * which refuses anything not assigned. The point is discoverability — an agent
+ * that can see an unassigned playbook can ask its owner for it instead of
+ * reporting "I can't tell what exists".
+ */
+export async function handleListLibrary(
+  _args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  try {
+    const res = await skillsFetch(context, '/api/skill-catalog');
+    if (!res.ok) {
+      return { success: false, error: `Skills API returned ${res.status}` };
+    }
+    const json = await res.json() as { data: CatalogEntry[] };
+    const skills = json.data ?? [];
+    if (skills.length === 0) {
+      return { success: true, data: { skills: [], note: 'Your owner has no skills in their library yet.' } };
+    }
+    return {
+      success: true,
+      data: {
+        skills: skills.map((s) => ({
+          id: s.id,
+          slug: s.slug,
+          name: s.name,
+          description: s.description,
+          scope: s.scope,
+          requires: s.requiredServices,
+          assigned_to_me: s.assignedToMe,
+        })),
+        note:
+          'Entries with assigned_to_me=false are not yours to run: skills_get will refuse them. ' +
+          'Ask your owner to assign the skill to you in the Helm dashboard (Skills), naming it by name or slug.',
+      },
+    };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}

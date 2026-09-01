@@ -14,6 +14,9 @@ export const definition: ServiceDefinitionWithTools = {
     credentialServiceIds: ['calendar', 'google'],
     oauthScopes: [
       'https://www.googleapis.com/auth/calendar.events',
+      // calendarList.list (calendar_list_calendars) and calendars.get (the
+      // recurring-event time-zone fallback) are not covered by calendar.events.
+      'https://www.googleapis.com/auth/calendar.readonly',
     ],
   },
   tools: calendarTools,

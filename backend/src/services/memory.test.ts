@@ -25,6 +25,8 @@ import {
   setEntryParent,
   lookupEntryByTitleOrAlias,
   resolveOrCreate,
+  splitSections,
+  replaceSection,
 } from './memory.js';
 
 // Helper to set up a sequence of mock return values
@@ -417,8 +419,8 @@ describe('getDreamManifest', () => {
   it('returns compact entries with backlink counts, each labelled with its scope', async () => {
     vi.mocked(client.execute).mockResolvedValueOnce({
       rows: [
-        { id: 'e1', title: 'Alice', type: 'person', parent_id: 'root-1', backlink_count: 3, updated_at: '2026-05-01T00:00:00Z', scope: 'default', scope_name: 'Default' },
-        { id: 'e2', title: 'Acme', type: 'company', parent_id: null, backlink_count: 1, updated_at: '2026-05-02T00:00:00Z', scope: 'work', scope_name: 'Work' },
+        { id: 'e1', title: 'Alice', type: 'person', parent_id: 'root-1', backlink_count: 3, updated_at: '2026-05-01T00:00:00Z', version: 2, scope: 'default', scope_name: 'Default' },
+        { id: 'e2', title: 'Acme', type: 'company', parent_id: null, backlink_count: 1, updated_at: '2026-05-02T00:00:00Z', version: 1, scope: 'work', scope_name: 'Work' },
       ],
       rowsAffected: 0, lastInsertRowid: 0n, columns: [],
     });
@@ -428,7 +430,7 @@ describe('getDreamManifest', () => {
     expect(result).toHaveLength(2);
     expect(result[0]).toEqual({
       id: 'e1', title: 'Alice', type: 'person', parent_id: 'root-1', backlink_count: 3,
-      updated_at: '2026-05-01T00:00:00Z', scope: 'default', scope_name: 'Default',
+      updated_at: '2026-05-01T00:00:00Z', version: 2, scope: 'default', scope_name: 'Default',
     });
     // The label is what stops a model merging entries across the partition.
     expect(result[1].scope).toBe('work');
@@ -596,5 +598,112 @@ describe('setEntryParent', () => {
 
     expect(result).toMatchObject({ error: 'Entry not found' });
     expect(vi.mocked(client.execute)).not.toHaveBeenCalled();
+  });
+});
+
+describe('splitSections', () => {
+  it('maps nested heading levels to sections whose end covers their children', () => {
+    const md = '# A\n## B\nx\n# C';
+    const { sections } = splitSections(md);
+
+    expect(sections).toEqual([
+      { level: 1, heading: 'A', start: 0, end: 3 },
+      { level: 2, heading: 'B', start: 1, end: 3 },
+      { level: 1, heading: 'C', start: 3, end: 4 },
+    ]);
+  });
+
+  it('never treats a fenced # line as a heading, even in an unclosed fence', () => {
+    const closed = splitSections('## A\n```\n# not a heading\n```\n## B');
+    expect(closed.sections.map((s) => s.heading)).toEqual(['A', 'B']);
+
+    const tilde = splitSections('## A\n~~~\n# nope\n~~~');
+    expect(tilde.sections.map((s) => s.heading)).toEqual(['A']);
+
+    // An unclosed fence runs to EOF — nothing after it is a heading.
+    const open = splitSections('## A\n```\n# nope\n## also nope');
+    expect(open.sections.map((s) => s.heading)).toEqual(['A']);
+  });
+});
+
+describe('replaceSection', () => {
+  const doc = '# Title\n\nIntro.\n\n## Notes\n\nOld note.\n\n## Sources\n\n- a call\n';
+
+  it('replaces only the named section, keeping the heading line', () => {
+    const out = replaceSection(doc, 'Notes', 'Fresh note.', 'replace');
+    if ('error' in out) throw new Error('unexpected');
+
+    expect(out.content).toContain('## Notes\n\nFresh note.\n\n## Sources');
+    expect(out.content).toContain('Intro.');
+    expect(out.content).toContain('- a call');
+    expect(out.content).not.toContain('Old note.');
+    expect(out.created).toBe(false);
+  });
+
+  it('replacing the last section preserves the trailing-newline shape', () => {
+    const withNl = replaceSection('## A\n\nx\n', 'A', 'y', 'replace');
+    if ('error' in withNl) throw new Error('unexpected');
+    expect(withNl.content).toBe('## A\n\ny\n');
+
+    const withoutNl = replaceSection('## A\n\nx', 'A', 'y', 'replace');
+    if ('error' in withoutNl) throw new Error('unexpected');
+    expect(withoutNl.content).toBe('## A\n\ny');
+  });
+
+  it('a nested subsection is part of its parent body and is replaced with it', () => {
+    const md = '## Notes\n\n### Sub\n\ndeep\n\n## Other\n\nkeep\n';
+    const out = replaceSection(md, 'Notes', 'flat', 'replace');
+    if ('error' in out) throw new Error('unexpected');
+
+    expect(out.content).not.toContain('### Sub');
+    expect(out.content).toContain('## Other\n\nkeep');
+  });
+
+  it('matches case-insensitively, ignoring trailing hashes and whitespace', () => {
+    const out = replaceSection('## notes ##\n\nx\n', 'Notes', 'y', 'replace');
+    if ('error' in out) throw new Error('unexpected');
+    expect(out.content).toContain('y');
+  });
+
+  it('the first of two identical headings wins', () => {
+    const md = '## Notes\n\nfirst\n\n## Notes\n\nsecond\n';
+    const out = replaceSection(md, 'Notes', 'edited', 'replace');
+    if ('error' in out) throw new Error('unexpected');
+
+    expect(out.content.indexOf('edited')).toBeLessThan(out.content.indexOf('second'));
+    expect(out.content).toContain('second');
+    expect(out.content).not.toContain('first');
+  });
+
+  it('append keeps the existing body and adds after it, one blank line before the next heading', () => {
+    const out = replaceSection(doc, 'Notes', '- added', 'append');
+    if ('error' in out) throw new Error('unexpected');
+
+    expect(out.content).toContain('Old note.\n- added\n\n## Sources');
+  });
+
+  it('append into an empty section yields heading, blank, text, blank', () => {
+    const out = replaceSection('## Notes\n\n## Sources\n', 'Notes', 'x', 'append');
+    if ('error' in out) throw new Error('unexpected');
+
+    expect(out.content).toContain('## Notes\n\nx\n\n## Sources');
+  });
+
+  it('append creates a missing heading at the end and reports created', () => {
+    const out = replaceSection('Some prose.\n', 'Sources', '- a call', 'append');
+    if ('error' in out) throw new Error('unexpected');
+
+    expect(out.content).toBe('Some prose.\n\n## Sources\n\n- a call\n');
+    expect(out.created).toBe(true);
+
+    const empty = replaceSection('', 'Sources', '- a call', 'append');
+    if ('error' in empty) throw new Error('unexpected');
+    expect(empty.content).toBe('## Sources\n\n- a call\n');
+  });
+
+  it('replace on a missing heading reports the headings that exist, in order', () => {
+    const out = replaceSection(doc, 'Nope', 'x', 'replace');
+
+    expect(out).toEqual({ error: 'not_found', headings: ['Title', 'Notes', 'Sources'] });
   });
 });

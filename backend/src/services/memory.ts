@@ -129,6 +129,90 @@ export function parseTags(content: string): string[] {
   return [...set];
 }
 
+export interface MdSection {
+  level: number;
+  heading: string;
+  /** Line index of the heading; end is exclusive and covers nested subsections. */
+  start: number;
+  end: number;
+}
+
+/**
+ * Split Markdown into ATX-heading sections. Lines inside ``` / ~~~ fences are
+ * never headings; an unclosed fence runs to the end of the document. A
+ * section's body runs to the next heading of the same or a higher level, so
+ * nested subsections belong to their parent's body.
+ */
+export function splitSections(md: string): { lines: string[]; sections: MdSection[] } {
+  const lines = md.split('\n');
+  const heads: Array<{ level: number; heading: string; line: number }> = [];
+  let fence: string | null = null;
+  lines.forEach((line, i) => {
+    const f = line.match(/^\s*(`{3,}|~{3,})/);
+    if (f) {
+      if (!fence) fence = f[1][0];
+      else if (f[1][0] === fence) fence = null;
+      return;
+    }
+    if (fence) return;
+    const m = line.match(/^(#{1,6})\s+(.+?)\s*#*\s*$/);
+    if (m) heads.push({ level: m[1].length, heading: m[2].trim(), line: i });
+  });
+  const sections = heads.map((h, idx) => {
+    const next = heads.slice(idx + 1).find((n) => n.level <= h.level);
+    return { level: h.level, heading: h.heading, start: h.line, end: next ? next.line : lines.length };
+  });
+  return { lines, sections };
+}
+
+export type SectionEdit =
+  | { content: string; created: boolean }
+  | { error: 'not_found'; headings: string[] };
+
+/**
+ * Replace or extend one section of a Markdown document.
+ *
+ * Heading match is case-insensitive on the text after the #s (trailing #s and
+ * whitespace ignored), any level, first match wins. `replace` keeps the
+ * heading line and swaps everything under it up to the next heading of the
+ * same or higher level — nested subsections included. `append` adds to the end
+ * of the section's body, creating `## Heading` at the end of the document when
+ * the heading does not exist; `replace` on a missing heading reports the
+ * headings that do exist instead of guessing.
+ */
+export function replaceSection(
+  md: string,
+  heading: string,
+  text: string,
+  mode: 'replace' | 'append'
+): SectionEdit {
+  const { lines, sections } = splitSections(md);
+  const needle = heading.trim().toLowerCase();
+  const hit = sections.find((s) => s.heading.toLowerCase() === needle);
+  const body = text.replace(/\s+$/, '').split('\n');
+  const endsWithNewline = md.endsWith('\n') || md === '';
+
+  if (!hit) {
+    if (mode === 'replace') return { error: 'not_found', headings: sections.map((s) => s.heading) };
+    const base = md.replace(/\s+$/, '');
+    const content = (base ? base + '\n\n' : '') + `## ${heading.trim()}\n\n${body.join('\n')}\n`;
+    return { content, created: true };
+  }
+
+  const head = lines.slice(0, hit.start + 1);
+  const rest = lines.slice(hit.end);
+  const existing = lines.slice(hit.start + 1, hit.end);
+  while (existing.length && existing[existing.length - 1].trim() === '') existing.pop();
+  while (existing.length && existing[0].trim() === '') existing.shift();
+
+  const middle = mode === 'replace' ? body : [...existing, ...body];
+  let out = [...head, '', ...middle, ''];
+  if (rest.length) out = [...out, ...rest];
+  let content = out.join('\n');
+  if (!rest.length) content = content.replace(/\n*$/, endsWithNewline ? '\n' : '');
+  return { content, created: false };
+}
+
 /** Replace the tag index for an entry (delete+insert). */
 export async function updateTagIndex(entryId: string, content: string | null): Promise<void> {
   await client.execute({ sql: `DELETE FROM memory_tags WHERE entry_id = ?`, args: [entryId] });
@@ -168,6 +252,7 @@ export interface DreamManifestEntry {
   parent_id: string | null;
   backlink_count: number;
   updated_at: string;
+  version: number;
   scope: string;
   scope_name: string;
 }
@@ -184,14 +269,14 @@ export async function getDreamManifest(scopeIds: string[]): Promise<DreamManifes
     sql: `SELECT e.id, e.title, e.type,
                  b.parent_entry_id AS parent_id,
                  COUNT(ml.source_id) AS backlink_count,
-                 e.updated_at,
+                 e.updated_at, e.version,
                  s.slug AS scope, s.name AS scope_name
           FROM memory_entries e
           JOIN memory_scopes s ON s.id = e.scope_id
           LEFT JOIN memory_branches b ON b.entry_id = e.id
           LEFT JOIN memory_links ml ON ml.target_id = e.id
           WHERE e.scope_id IN (${placeholders}) AND e.is_deleted = false
-          GROUP BY e.id, e.title, e.type, b.parent_entry_id, e.updated_at, s.slug, s.name
+          GROUP BY e.id, e.title, e.type, b.parent_entry_id, e.updated_at, e.version, s.slug, s.name
           ORDER BY s.name ASC, e.type ASC, e.title ASC`,
     args: scopeIds,
   });
@@ -202,6 +287,7 @@ export async function getDreamManifest(scopeIds: string[]): Promise<DreamManifes
     parent_id: (r.parent_id as string | null) ?? null,
     backlink_count: Number(r.backlink_count ?? 0),
     updated_at: r.updated_at as string,
+    version: Number(r.version ?? 1),
     scope: r.scope as string,
     scope_name: r.scope_name as string,
   }));
@@ -280,6 +366,7 @@ export interface MemoryEntryRow {
   content: string | null;
   created_at: string;
   updated_at: string;
+  version: number;
 }
 
 const ENTRY_TEMPLATES: Partial<Record<string, string>> = {
@@ -314,7 +401,7 @@ export async function resolveOrCreate(opts: {
 
   // 1. Exact title match
   const exact = await client.execute({
-    sql: `SELECT id, user_id, scope_id, type, title, content, created_at, updated_at
+    sql: `SELECT id, user_id, scope_id, type, title, content, created_at, updated_at, version
           FROM memory_entries
           WHERE scope_id = ? AND type = ? AND title = ? AND is_deleted = false
           LIMIT 1`,
@@ -324,7 +411,7 @@ export async function resolveOrCreate(opts: {
 
   // 2. Alias match (memory_attributes with name='alias')
   const aliasHit = await client.execute({
-    sql: `SELECT e.id, e.user_id, e.scope_id, e.type, e.title, e.content, e.created_at, e.updated_at
+    sql: `SELECT e.id, e.user_id, e.scope_id, e.type, e.title, e.content, e.created_at, e.updated_at, e.version
           FROM memory_attributes a
           JOIN memory_entries e ON e.id = a.entry_id
           WHERE e.scope_id = ? AND e.type = ? AND e.is_deleted = false
@@ -336,7 +423,7 @@ export async function resolveOrCreate(opts: {
 
   // 3. Fuzzy match via pg_trgm similarity
   const fuzzy = await client.execute({
-    sql: `SELECT id, user_id, scope_id, type, title, content, created_at, updated_at
+    sql: `SELECT id, user_id, scope_id, type, title, content, created_at, updated_at, version
           FROM memory_entries
           WHERE scope_id = ? AND type = ? AND is_deleted = false
             AND similarity(title, ?) > 0.7
@@ -358,7 +445,7 @@ export async function resolveOrCreate(opts: {
   return {
     row: {
       id, user_id: userId, scope_id: scopeId, type, title,
-      content: effectiveContent, created_at: now, updated_at: now,
+      content: effectiveContent, created_at: now, updated_at: now, version: 1,
     },
     created: true,
   };

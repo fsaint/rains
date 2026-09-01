@@ -135,7 +135,11 @@ When an entity has multiple common names, register each as an alias:
 memory_add_attribute({ entry_id: <Mariana>, type: 'label', name: 'alias', value: 'Mari' })
 ```
 
-Aliases are honored by `memory_create`'s duplicate detection and by transclusion (`![[Mari]]`). They are **not** honored by `memory_get({title: 'Mari'})` — that does case-insensitive exact title match only. When you don't have an id, use `memory_search`.
+Aliases are honored by `memory_create`'s duplicate detection and by transclusion (`![[Mari]]`). They are **not** honored by `memory_get({title: 'Mari'})` — that does case-insensitive exact title match only. When you don't have an id, use `memory_search`. `memory_get` refuses an ambiguous title — the same title in two scopes, or two types in one scope — and lists the candidates with their ids; pass `id`, or narrow with `scope`/`type`.
+
+### Updating an entry
+
+Prefer partial edits. `memory_update({ id, append })` adds text at the end; `memory_update({ id, section: { heading, text, mode } })` rewrites or extends one heading's body. Reserve `content` for a full rewrite of a small entry — resending a large entry whole is a chance to silently drop a section. For the index in particular: add a new link with `section: { heading: 'People', text: '- [[Mariana Lopez]] — VP Eng at Acme', mode: 'append' }`; never resend the whole index. Pass `if_version` from the entry you read; `VERSION_CONFLICT` means someone else wrote first — re-read and re-apply.
 
 ---
 
@@ -166,7 +170,7 @@ Cap: 200 results.
 
 ### `memory_get_root` and `memory_dream`
 
-- `memory_get_root` — returns the user's Memory Index entry. Read it once when you're new to the vault.
+- `memory_get_root` — returns the user's Memory Index entry. Read it once when you're new to the vault. It also returns `version`; pass it back as `if_version` when you update an index, so a concurrent edit is refused instead of overwritten.
 - `memory_dream` — compact manifest of every non-deleted entry (`id`, `title`, `type`, `parent_id`, `backlink_count`, `updated_at`). Use when you need a single-shot scan of the whole vault.
 
 ---

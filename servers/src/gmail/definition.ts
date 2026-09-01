@@ -16,6 +16,10 @@ export const definition: ServiceDefinitionWithTools = {
       'https://www.googleapis.com/auth/gmail.readonly',
       'https://www.googleapis.com/auth/gmail.compose',
       'https://www.googleapis.com/auth/gmail.modify',
+      // gmail_send_message / gmail_send_draft are blocked by default but the
+      // owner can enable them per agent; without this scope that override
+      // fails at Google instead of at policy. Onboarding always requested it.
+      'https://www.googleapis.com/auth/gmail.send',
     ],
   },
   tools: gmailTools,

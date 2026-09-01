@@ -293,17 +293,43 @@ export async function handleUpdateEvent(
   if (args.description !== undefined) event.description = args.description as string;
   if (args.location !== undefined) event.location = args.location as string;
 
+  if (args.recurrence !== undefined) event.recurrence = args.recurrence as string[];
+  const recurrence = args.recurrence !== undefined
+    ? (args.recurrence as string[])
+    : existing.data.recurrence ?? undefined;
+
   // Replacing start/end wholesale would drop the timeZone the event already
   // carries — which for a recurring event is what keeps its occurrences aligned
-  // across a DST change.
-  const updateTimeZone = (args.timeZone as string | undefined) ?? existing.data.start?.timeZone ?? undefined;
+  // across a DST change. Precedence: explicit arg > the event's own zone > the
+  // calendar's zone (needed only when the result repeats).
+  let updateTimeZone = (args.timeZone as string | undefined) ?? existing.data.start?.timeZone ?? undefined;
+  if (!updateTimeZone && recurrence?.length) {
+    updateTimeZone = await calendarTimeZone(calendar, calendarId);
+    if (!updateTimeZone) {
+      return {
+        success: false,
+        error:
+          'This event repeats, so it needs an IANA time zone by name (e.g. "America/Los_Angeles") ' +
+          "and the calendar's own zone could not be read. Pass timeZone explicitly.",
+      };
+    }
+  }
+
+  // A zone change (explicit timeZone, or a rule added to a zoneless event) must
+  // reach start/end even when the times themselves are not being moved.
+  const rezone = args.timeZone !== undefined || (recurrence?.length ?? 0) > 0;
 
   if (args.startTime !== undefined) {
     event.start = { dateTime: args.startTime as string, ...(updateTimeZone ? { timeZone: updateTimeZone } : {}) };
+  } else if (rezone && updateTimeZone && event.start?.dateTime) {
+    event.start = { ...event.start, timeZone: updateTimeZone };
   }
   if (args.endTime !== undefined) {
     const endZone = (args.timeZone as string | undefined) ?? existing.data.end?.timeZone ?? updateTimeZone;
     event.end = { dateTime: args.endTime as string, ...(endZone ? { timeZone: endZone } : {}) };
+  } else if (rezone && updateTimeZone && event.end?.dateTime) {
+    const endZone = (args.timeZone as string | undefined) ?? existing.data.end?.timeZone ?? updateTimeZone;
+    event.end = { ...event.end, timeZone: endZone };
   }
 
   if (args.attendees !== undefined) {

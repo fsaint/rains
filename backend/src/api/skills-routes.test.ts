@@ -414,6 +414,27 @@ describe('GET /api/agent-skills/:slug', () => {
     expect(res.json().error).toContain('not assigned');
   });
 
+  it('renders tokens bare for a manual agent, whose client adds its own prefix', async () => {
+    routeDb([
+      [/FROM deployed_agents da/, rows([{ agent_id: 'agent-1', user_id: 'user-1', mcp_server_name: 'reins', is_manual: 1 }])],
+      [/JOIN agent_skills ask/, rows([skillRow({ body: 'run {{tool:gmail_search}} then see {{skill:deep-research}}' })])],
+    ]);
+    mockResolveAvailability.mockResolvedValue(
+      new Map([['sk-1', { available: true, missingServices: [] }]])
+    );
+
+    const res = await app.inject({
+      method: 'GET', url: '/api/agent-skills/inbox-triage',
+      headers: { 'x-reins-agent-secret': 'tok' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json().data.body;
+    expect(body).toContain('run gmail_search then');
+    expect(body).toContain('open it with skills_get)');
+    expect(body).not.toContain('reins__');
+  });
+
   it('renders {{skill:...}} into an instruction naming the fetch tool', async () => {
     routeDb([
       [/FROM deployed_agents da/, rows([{ agent_id: 'agent-1', user_id: 'user-1', mcp_server_name: 'helm' }])],
@@ -940,6 +961,82 @@ describe('skill-authoring enablement boundary (HTTP)', () => {
  * /api/skills, which resolves its caller from a session and so threw a 500 on
  * every call from a gateway token.
  */
+describe('GET /api/skill-catalog (any-agent audience)', () => {
+  let app: FastifyInstance;
+  const agentAuth = { 'x-reins-agent-secret': 'tok' };
+  const deployedRow: [RegExp, unknown] = [
+    /FROM deployed_agents da/,
+    rows([{ agent_id: 'agent-1', user_id: 'user-1', mcp_server_name: 'helm' }]),
+  ];
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockGetSession.mockReturnValue(null);
+    mockResolveAvailability.mockResolvedValue(new Map());
+    app = await buildApp();
+  });
+
+  it('rejects a request with no gateway token', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/skill-catalog' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('does not require the skill-authoring service', async () => {
+    // That gate guards editing; this is browse-only discovery for every agent.
+    mockIsServiceEnabled.mockResolvedValue(false);
+    routeDb([deployedRow, [/AS assigned_to_me/, rows([])]]);
+
+    const res = await app.inject({ method: 'GET', url: '/api/skill-catalog', headers: agentAuth });
+
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('returns owner and platform skills with the assigned flag and never a body', async () => {
+    routeDb([
+      deployedRow,
+      [/AS assigned_to_me/, rows([
+        { ...skillRow({ id: 'sk-sys', user_id: null, slug: 'stock', name: 'Stock', body: 'PLATFORM-SECRET' }), assigned_to_me: false },
+        { ...skillRow({ id: 'sk-1', body: 'OWNER-SECRET' }), assigned_to_me: true },
+      ])],
+    ]);
+
+    const res = await app.inject({ method: 'GET', url: '/api/skill-catalog', headers: agentAuth });
+
+    expect(res.statusCode).toBe(200);
+    const data = res.json().data;
+    expect(data[0]).toEqual(expect.objectContaining({ slug: 'stock', scope: 'system', assignedToMe: false }));
+    expect(data[1]).toEqual(expect.objectContaining({ id: 'sk-1', scope: 'user', assignedToMe: true }));
+    expect(res.payload).not.toContain('SECRET');
+    expect(data[0].body).toBeUndefined();
+    expect(data[0].readOnly).toBeUndefined();
+  });
+
+  it('scopes the query to the calling agent and its owner', async () => {
+    routeDb([deployedRow, [/AS assigned_to_me/, rows([])]]);
+
+    await app.inject({ method: 'GET', url: '/api/skill-catalog', headers: agentAuth });
+
+    const call = mockExecute.mock.calls.find(
+      ([q]) => typeof q === 'object' && (q as { sql: string }).sql.includes('assigned_to_me')
+    );
+    expect(call).toBeDefined();
+    expect((call![0] as { args: unknown[] }).args).toEqual(['agent-1', 'user-1']);
+  });
+
+  it("renders tokens in descriptions for the caller's runtime", async () => {
+    routeDb([
+      deployedRow,
+      [/AS assigned_to_me/, rows([
+        { ...skillRow({ description: 'Use {{tool:gmail_search}}' }), assigned_to_me: true },
+      ])],
+    ]);
+
+    const res = await app.inject({ method: 'GET', url: '/api/skill-catalog', headers: agentAuth });
+
+    expect(res.json().data[0].description).toBe('Use helm__gmail_search');
+  });
+});
+
 describe('GET /api/skill-library', () => {
   const agentAuth = { 'x-reins-agent-secret': 'tok' };
   const deployedRow: [RegExp, unknown] = [

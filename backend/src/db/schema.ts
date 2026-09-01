@@ -228,6 +228,7 @@ export const memoryEntries = pgTable('memory_entries', {
   type: text('type').notNull().default('note'), // 'note' | 'person' | 'company' | 'project'
   title: text('title').notNull(),
   content: text('content'), // Markdown body
+  version: integer('version').default(1).notNull(), // optimistic-concurrency token
   isDeleted: boolean('is_deleted').default(false).notNull(),
   createdAt: text('created_at').default(sql`now()`).notNull(),
   updatedAt: text('updated_at').default(sql`now()`).notNull(),

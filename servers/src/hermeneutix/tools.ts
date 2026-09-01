@@ -29,13 +29,28 @@ export const listProjectsTool: ToolDefinition = {
 export const listMeetingsTool: ToolDefinition = {
   name: 'hermeneutix_list_meetings',
   description:
-    'List all meetings (recurring meeting series) in a project. Each meeting includes a recent_instances array with the last 5 instance IDs for quick lookback without an extra call.',
+    'List meetings (recurring meeting series) in a project, paginated. Returns up to `limit` ' +
+    'meetings (default 25, max 100) starting at `offset`, with `total` and `has_more`. Set ' +
+    'include_recent_instances=true to attach the last 5 instances per meeting — one extra ' +
+    'request per meeting, so leave it off when you only need names and ids.',
   inputSchema: {
     type: 'object',
     properties: {
       project_id: {
         type: 'string',
         description: 'The project ID to list meetings for',
+      },
+      limit: {
+        type: 'number',
+        description: 'Maximum number of meetings to return (default 25, max 100)',
+      },
+      offset: {
+        type: 'number',
+        description: 'Number of meetings to skip for offset-based pagination',
+      },
+      include_recent_instances: {
+        type: 'boolean',
+        description: 'Attach recent_instances (last 5) to each meeting. Default false.',
       },
     },
     required: ['project_id'],

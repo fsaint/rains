@@ -200,7 +200,7 @@ entry by id, and an entry's scope is a fact about it rather than a parameter.
 | `memory_list_scopes` | read | — | The scopes this agent can reach |
 | `memory_create` | write | ✓ | Create an entry (idempotent — check `created`) |
 | `memory_create_scope` | write | — | Create a new scope |
-| `memory_update` | write | — | Update title, type, or content |
+| `memory_update` | write | — | Update title, type, or content — whole via `content`, or partial via `append` / `section {heading,text,mode}`; optional `if_version` refuses a concurrent overwrite (409 `VERSION_CONFLICT`) |
 | `memory_relate` | write | — | Named relationship between two entries in the same scope |
 | `memory_set_parent` | write | — | Move an entry in the tree, within its scope |
 | `memory_add_attribute` | write | — | Add a label or relation |
@@ -225,10 +225,10 @@ nonexistent are deliberately indistinguishable.
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/memory/root` | Root index per reachable scope (superset shape — see below) |
-| `GET` | `/api/memory/entries` | List / search (`?q=`, `?type=`, `?parent_id=`, `?tag=`, `?since=`, `?order=`, `?scope=`, `?limit=`) |
+| `GET` | `/api/memory/entries` | List / search (`?q=`, `?title=` exact case-insensitive — takes precedence over `q`, `?type=`, `?parent_id=`, `?tag=`, `?since=`, `?order=`, `?scope=`, `?limit=`) |
 | `POST` | `/api/memory/entries` | Create — idempotent, 200 + `created:false` on a match |
 | `GET` | `/api/memory/entries/:id` | Entry with attributes, backlinks, tags, resolved links, transclusions |
-| `PUT` | `/api/memory/entries/:id` | Update (root index is read-only for session users) |
+| `PUT` | `/api/memory/entries/:id` | Update; one of `content`/`append`/`section` per call, optional `if_version` (409 on conflict). Root index is read-only for session users |
 | `DELETE` | `/api/memory/entries/:id` | Soft-delete. A scope's root cannot be deleted |
 | `PUT` | `/api/memory/entries/:id/parent` | Move in tree, within the scope |
 | `PUT` | `/api/memory/entries/:id/scope` | **Session only.** Move between scopes |

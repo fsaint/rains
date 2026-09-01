@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { handleListSkills, handleGetSkill } from './handlers.js';
+import { handleListSkills, handleGetSkill, handleListLibrary } from './handlers.js';
 import type { ServerContext } from '../common/types.js';
 
 const mockFetch = vi.fn();
@@ -242,5 +242,53 @@ describe('handleGetSkill', () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain('slug is required');
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleListLibrary', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it('reads the catalog route with the gateway token and maps the flag', async () => {
+    mockFetch.mockResolvedValueOnce(makeOkResponse([
+      { id: 's1', slug: 'inbox-triage', name: 'Inbox Triage', description: 'Use when…', scope: 'user', requiredServices: ['gmail'], assignedToMe: true },
+      { id: 's2', slug: 'stock', name: 'Stock', description: 'Platform.', scope: 'system', requiredServices: [], assignedToMe: false },
+    ]));
+
+    const result = await handleListLibrary({}, mockContext);
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'https://test.helm.mom/api/skill-catalog',
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'x-reins-agent-secret': 'test-gateway-token' }),
+      })
+    );
+    expect(result.success).toBe(true);
+    const data = result.data as { skills: Array<Record<string, unknown>>; note: string };
+    expect(data.skills[0].assigned_to_me).toBe(true);
+    expect(data.skills[1]).toEqual(
+      expect.objectContaining({ slug: 'stock', scope: 'system', assigned_to_me: false })
+    );
+    // The note is what turns "I can't tell" into "ask your owner to assign X".
+    expect(data.note).toContain('assign');
+  });
+
+  it('says so when the library is empty', async () => {
+    mockFetch.mockResolvedValueOnce(makeOkResponse([]));
+
+    const result = await handleListLibrary({}, mockContext);
+
+    expect(result.success).toBe(true);
+    expect((result.data as { note: string }).note).toContain('no skills');
+  });
+
+  it('surfaces a non-OK status as an error', async () => {
+    mockFetch.mockResolvedValueOnce(makeErrorResponse(500));
+
+    const result = await handleListLibrary({}, mockContext);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('500');
   });
 });

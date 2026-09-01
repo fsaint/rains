@@ -13,8 +13,16 @@ export const MCP_SERVER_NAME = 'helm';
 /** Separator MCP clients place between server name and tool name. */
 export const TOOL_NAMESPACE_SEPARATOR = '__';
 
-/** Agent runtimes that consume the MCP server. */
-export type AgentRuntime = 'openclaw' | 'hermes';
+/**
+ * Agent runtimes that consume the MCP server.
+ *
+ * 'external' is a manual agent — claude.ai / Claude Desktop / Claude Code
+ * connect through their own MCP client, which adds a prefix of its own that
+ * the backend cannot know (e.g. `mcp__claude_ai_<ConnectorName>__`). The bare
+ * tool name is the only spelling that is still correct after that client
+ * namespaces it.
+ */
+export type AgentRuntime = 'openclaw' | 'hermes' | 'external';
 
 /**
  * Built-in tools served directly by the agent endpoint rather than by a
@@ -55,6 +63,9 @@ export function canonicalToolName(toolName: string): string {
  * - Hermes    `mcp__<server>__<tool>`   → `mcp__helm__gmail_search`
  *   (hermes-agent `tools/mcp_tool.py` → `mcp_prefixed_tool_name`, which uses the
  *   `mcp__` convention shared with Claude Code and Codex)
+ * - External  `<tool>`                  → `gmail_search`
+ *   (a manual agent's own client adds its prefix; anything we prepend here
+ *   would be wrong for every one of them)
  *
  * Use this for any tool name embedded in text the model reads — instructions,
  * skill bodies, approval prompts. Using the bare server-side name there is a
@@ -69,8 +80,25 @@ export function modelVisibleToolName(
   runtime: AgentRuntime = 'openclaw',
   serverName: string = MCP_SERVER_NAME
 ): string {
+  if (runtime === 'external') return toolName;
   const namespaced = `${serverName}${TOOL_NAMESPACE_SEPARATOR}${toolName}`;
   return runtime === 'hermes' ? `mcp${TOOL_NAMESPACE_SEPARATOR}${namespaced}` : namespaced;
+}
+
+/**
+ * Runtime of a deployed_agents row.
+ *
+ * A manual row (is_manual) has no hosted runtime at all — the DB default
+ * 'openclaw' on its runtime column is meaningless — so it is 'external'
+ * regardless of that column. Rows predating the runtime column are null,
+ * which means openclaw. Lives here so the two readers (agent-endpoint and
+ * resolveAgentFromGatewayToken in routes) cannot drift.
+ */
+export function deploymentRuntime(
+  row: { runtime?: unknown; is_manual?: unknown } | undefined
+): AgentRuntime {
+  if (row?.is_manual === 1 || row?.is_manual === true) return 'external';
+  return row?.runtime === 'hermes' ? 'hermes' : 'openclaw';
 }
 
 /**

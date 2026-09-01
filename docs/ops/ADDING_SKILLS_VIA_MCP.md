@@ -55,7 +55,9 @@ the list is for picking an id; pull one body at a time with `{{skill:slug}}` or 
 dashboard.
 
 Backed by `GET /api/skill-library`, which is gateway-token authenticated and scoped to the
-calling agent's owner. Not the dashboard's `/api/skills`: that route resolves its caller
+calling agent's owner. (An ordinary agent without skill-authoring can still *see* what
+exists via `skills_list_library` — read-only names and descriptions, no bodies — and ask
+its owner to assign one.) Not the dashboard's `/api/skills`: that route resolves its caller
 from a session, which an agent does not have.
 
 ### 2. Create
@@ -167,7 +169,8 @@ body:        resolveToolTokens(skill.body ?? '', agent.runtime),
 
 So write `{{tool:gmail_search}}`, never `gmail_search` and never `helm__gmail_search` — the
 model-visible name differs per runtime (OpenClaw sees `helm__gmail_search`, Hermes an
-`mcp__` form), and a hardcoded name is wrong for one of them. Use `{{skill:its-slug}}` to
+`mcp__` form, a Claude-connected manual agent the bare `gmail_search`), and a hardcoded
+name is wrong for at least one of them. Use `{{skill:its-slug}}` to
 reference another skill.
 
 Author with canonical names: `get_result`, `mark_onboarded`. Legacy spellings

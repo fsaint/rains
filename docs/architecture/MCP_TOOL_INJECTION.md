@@ -322,9 +322,11 @@ closure is parked in memory, and the agent polls `get_result`, which long-polls 
 call. The in-memory executor map is why `fly.toml` pins `max_machines_running = 1`.
 
 Tool names in any text the model reads must be the **model-visible** form, which differs per
-runtime — see `modelVisibleToolName()` in `shared/src/mcp-naming.ts`. Pre-rename names
-(`reins_get_result`, `reins__mark_onboarded`) are still accepted on `tools/call` but are no
-longer advertised on `tools/list`.
+runtime — see `modelVisibleToolName()` in `shared/src/mcp-naming.ts`. A manual (`is_manual`)
+deployment resolves to runtime `external`, which renders *bare* names: its MCP client
+(claude.ai / Claude Desktop / Claude Code) adds a prefix of its own that the backend cannot
+know. Pre-rename names (`reins_get_result`, `reins__mark_onboarded`) are still accepted on
+`tools/call` but are no longer advertised on `tools/list`.
 
 ---
 

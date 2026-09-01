@@ -43,7 +43,8 @@ export const memoryGetRootTool: ToolDefinition = {
   description:
     'Get the user\'s root memory index — a Markdown document linking to all significant memory entries. ' +
     'Call this at the start of every conversation to orient yourself with what you know. ' +
-    'Returns your default scope\'s index, plus one for every other scope you can reach.',
+    'Returns your default scope\'s index, plus one for every other scope you can reach. ' +
+    'Each root carries `version` — keep it and pass it as if_version to memory_update.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -106,18 +107,54 @@ export const memoryCreateTool: ToolDefinition = {
 export const memoryUpdateTool: ToolDefinition = {
   name: 'memory_update',
   description:
-    'Update an existing memory entry — title, content, or type. ' +
-    'Use this to keep entries current and to update the root index when you add significant knowledge.',
+    'Update an existing memory entry. For content, choose exactly one of: `content` (replace ' +
+    'everything), `append` (add at the end), or `section` (edit one heading). Prefer section/append ' +
+    'for large entries and for every index update — a full resend is a chance to silently drop a ' +
+    'section. Returns the new `version`.',
   inputSchema: {
     type: 'object',
     properties: {
       id: { type: 'string', description: 'Entry ID to update' },
       title: { type: 'string', description: 'New title (optional)' },
-      content: { type: 'string', description: 'New Markdown content (optional — replaces existing)' },
+      content: {
+        type: 'string',
+        description: 'New Markdown content — replaces the whole body. Prefer `section` or `append` for partial edits.',
+      },
+      append: {
+        type: 'string',
+        description:
+          'Text to add at the end of the entry on a new line (include a leading blank line yourself ' +
+          'for a paragraph break). Use this for "add a line to the index" — never resend the whole ' +
+          'content. Mutually exclusive with content and section.',
+      },
+      section: {
+        type: 'object',
+        properties: {
+          heading: { type: 'string', description: 'Heading text without the #s, e.g. "People". Case-insensitive, any level, first match wins.' },
+          text: { type: 'string', description: 'Markdown for the section body.' },
+          mode: {
+            type: 'string',
+            enum: ['replace', 'append'],
+            description:
+              'replace (default) swaps the body under the heading — nested subsections included — up to ' +
+              'the next heading of the same or higher level, keeping the heading line; append adds text ' +
+              'at the end of the section, creating "## Heading" at the end of the entry if it is missing.',
+          },
+        },
+        required: ['heading', 'text'],
+        description: 'Edit one Markdown section. Mutually exclusive with content and append.',
+      },
       type: {
         type: 'string',
         enum: ['note', 'person', 'company', 'project', 'index'],
         description: 'New type (optional)',
+      },
+      if_version: {
+        type: 'number',
+        description:
+          'The version you read (memory_get and memory_get_root return it). The update is refused ' +
+          'with VERSION_CONFLICT if the entry changed since — re-read and re-apply your change. ' +
+          'Always pass it when editing an index.',
       },
     },
     required: ['id'],
@@ -179,12 +216,20 @@ export const memoryGetTool: ToolDefinition = {
   name: 'memory_get',
   description:
     'Get a single memory entry by ID or title, including its attributes and backlinks. ' +
+    'A title must match exactly (case-insensitive). If the same title exists in more than ' +
+    'one scope, or as two types in one scope, the call is refused and the candidates are ' +
+    'listed with their ids — pass id, or narrow with scope/type. ' +
     'Use to drill into a specific person, company, project, or note.',
   inputSchema: {
     type: 'object',
     properties: {
       id: { type: 'string', description: 'Entry ID (takes precedence over title)' },
       title: { type: 'string', description: 'Exact entry title (used if id is not provided)' },
+      type: {
+        type: 'string',
+        enum: ['note', 'person', 'company', 'project', 'index'],
+        description: 'Narrow a title lookup by type (optional; ignored when id is given)',
+      },
       scope: {
         ...SCOPE_ARG,
         description:

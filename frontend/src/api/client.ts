@@ -26,10 +26,16 @@ async function request<T>(
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: { code: 'UNKNOWN', message: 'Unknown error' } }));
+    // Two error shapes exist: most routes send { error: { code, message } },
+    // the memory routes a flat { error: string, code, ...fields }. Without the
+    // fallback every memory error reached the UI as UNKNOWN / Request failed.
     throw new ApiError(
-      error.error?.code || 'UNKNOWN',
-      error.error?.message || 'Request failed',
-      error.error?.details
+      error.error?.code || error.code || 'UNKNOWN',
+      error.error?.message ||
+        (typeof error.error === 'string' ? error.error : undefined) ||
+        error.message ||
+        'Request failed',
+      error.error?.details ?? error
     );
   }
 
@@ -808,6 +814,8 @@ export interface MemoryEntry {
   content: string | null;
   created_at: string;
   updated_at: string;
+  /** Optimistic-concurrency token; pass back as if_version on update. */
+  version?: number;
 }
 
 export interface MemoryAttribute {
@@ -890,7 +898,7 @@ export const memory = {
   getEntry: (id: string) =>
     request<MemoryEntryDetail>(`/memory/entries/${id}`),
 
-  updateEntry: (id: string, data: { title?: string; content?: string; type?: MemoryEntryType }) =>
+  updateEntry: (id: string, data: { title?: string; content?: string; type?: MemoryEntryType; if_version?: number }) =>
     request<MemoryEntry>(`/memory/entries/${id}`, {
       method: 'PUT',
       body: JSON.stringify(data),

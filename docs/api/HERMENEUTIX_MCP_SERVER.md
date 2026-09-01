@@ -24,15 +24,18 @@ List all active projects available to the authenticated user.
 
 ### `hermeneutix_list_meetings`
 
-List all recurring meeting series in a project. Each meeting includes a `recent_instances` array with the last 5 instance IDs for quick lookback without an extra call.
+List recurring meeting series in a project, paginated. Pass `include_recent_instances: true` to attach the last 5 instances per meeting — one extra request per meeting, so leave it off for discovery.
 
 **Parameters:**
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `project_id` | string (uuid) | yes | Project to list meetings for |
+| `limit` | number | no | Max meetings per page (default 25, max 100) |
+| `offset` | number | no | Meetings to skip |
+| `include_recent_instances` | boolean | no | Attach `recent_instances` (last 5) per meeting. Default false |
 
-**Returns:** `{ meetings: Meeting[] }` where each meeting includes `recent_instances: string[]`
+**Returns:** `{ meetings: Meeting[], total, offset, limit, has_more }`; each meeting carries `recent_instances` only when requested
 
 ---
 
@@ -161,7 +164,7 @@ Search across all meeting instances in a project by keyword, date range, or topi
 
 ### Browse a project's meeting history
 1. `hermeneutix_list_projects` — get `project_id`
-2. `hermeneutix_list_meetings` — get meeting series; `recent_instances` gives you last 5 instance IDs
+2. `hermeneutix_list_meetings` — get meeting series (add `include_recent_instances: true` for the last 5 instance IDs)
 3. `hermeneutix_list_meeting_instances` — paginate further back if needed
 4. `hermeneutix_get_meeting_instance` — full detail with transcripts; use `previous_instance_id` / `next_instance_id` to walk history
 

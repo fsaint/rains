@@ -179,6 +179,64 @@ describe('Memory Handlers', () => {
 
       expect(result.success).toBe(false);
     });
+
+    it('forwards append, section and if_version untouched', async () => {
+      mockFetch.mockResolvedValueOnce(makeOkResponse({ id: 'entry-1', version: 4 }));
+
+      await handleUpdate(
+        { id: 'entry-1', section: { heading: 'People', text: '- [[X]]', mode: 'append' }, if_version: 3 },
+        mockContext
+      );
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1]?.body as string);
+      expect(body.section).toEqual({ heading: 'People', text: '- [[X]]', mode: 'append' });
+      expect(body.if_version).toBe(3);
+    });
+
+    it('passes a SECTION_NOT_FOUND body through as a sentence', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: async () => ({
+          error: 'No section "Nope" in "Alice". Headings: Role, Notes. Use mode "append" to create it.',
+          code: 'SECTION_NOT_FOUND',
+          headings: ['Role', 'Notes'],
+        }),
+      });
+
+      const result = await handleUpdate({ id: 'entry-1', section: { heading: 'Nope', text: 'x' } }, mockContext);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Headings: Role, Notes');
+    });
+
+    it('forwards if_version in the PUT body', async () => {
+      mockFetch.mockResolvedValueOnce(makeOkResponse({ id: 'entry-1', version: 4 }));
+
+      await handleUpdate({ id: 'entry-1', content: 'x', if_version: 3 }, mockContext);
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1]?.body as string);
+      expect(body.if_version).toBe(3);
+    });
+
+    it('surfaces a VERSION_CONFLICT sentence, not a wrapped JSON blob', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          error: 'Entry changed since you read it: you passed if_version 3, it is now version 4 (updated x). Re-read it with memory_get and apply your change to the current content.',
+          code: 'VERSION_CONFLICT',
+          current_version: 4,
+        }),
+      });
+
+      const result = await handleUpdate({ id: 'entry-1', content: 'x', if_version: 3 }, mockContext);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('version 4');
+      expect(result.error).toContain('Re-read');
+      expect(result.error).not.toContain('Update failed');
+    });
   });
 
   // ==========================================================================
@@ -275,11 +333,11 @@ describe('Memory Handlers', () => {
       expect(url).toBe('https://test.helm.mom/api/memory/entries/e1');
     });
 
-    it('searches by title when only title provided', async () => {
-      // First call: search by title
+    it('resolves a title through the exact-title lookup, not ranked search', async () => {
+      // First call: exact title lookup
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ data: [{ id: 'e1', title: 'Alice' }] }),
+        json: async () => ({ data: [{ id: 'e1', title: 'Alice', type: 'person', scope: 'default' }] }),
       });
       // Second call: get by id
       mockFetch.mockResolvedValueOnce(makeOkResponse({ id: 'e1', title: 'Alice' }));
@@ -287,7 +345,69 @@ describe('Memory Handlers', () => {
       const result = await handleGet({ title: 'Alice' }, mockContext);
 
       expect(mockFetch).toHaveBeenCalledTimes(2);
+      const [url] = mockFetch.mock.calls[0];
+      expect(url).toContain('title=Alice');
+      expect(url).not.toContain('q=');
       expect(result.success).toBe(true);
+      expect(data(result).matched_by).toBe('title');
+    });
+
+    it('refuses an ambiguous title, listing every candidate with its id', async () => {
+      // The same title in two scopes names two different things; picking one
+      // silently is how the wrong Registry got edited on Aug 19.
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: [
+          { id: 'e1', title: 'Registry', type: 'note', scope: 'work' },
+          { id: 'e2', title: 'Registry', type: 'note', scope: 'personal' },
+        ] }),
+      });
+
+      const result = await handleGet({ title: 'Registry' }, mockContext);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('AMBIGUOUS_TITLE');
+      expect(result.error).toContain('e1');
+      expect(result.error).toContain('e2');
+      expect(result.error).toContain('work');
+      expect(result.error).toContain('personal');
+      expect(result.error).toContain('scope');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('suggests narrowing by type when both candidates share a scope', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: [
+          { id: 'e1', title: 'Acme', type: 'company', scope: 'work' },
+          { id: 'e2', title: 'Acme', type: 'project', scope: 'work' },
+        ] }),
+      });
+
+      const result = await handleGet({ title: 'Acme' }, mockContext);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('narrow with type');
+    });
+
+    it('forwards a type narrowing to the lookup', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: [{ id: 'e1', title: 'Acme', type: 'company', scope: 'work' }] }),
+      });
+      mockFetch.mockResolvedValueOnce(makeOkResponse({ id: 'e1', title: 'Acme' }));
+
+      await handleGet({ title: 'Acme', type: 'company' }, mockContext);
+
+      expect(mockFetch.mock.calls[0][0]).toContain('type=company');
+    });
+
+    it('marks an id lookup as matched_by id', async () => {
+      mockFetch.mockResolvedValueOnce(makeOkResponse({ id: 'e1', title: 'Alice' }));
+
+      const result = await handleGet({ id: 'e1' }, mockContext);
+
+      expect(data(result).matched_by).toBe('id');
     });
 
     it('returns error when title not found', async () => {
@@ -300,6 +420,7 @@ describe('Memory Handlers', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('Nonexistent');
+      expect(result.error).toContain('memory_search');
     });
 
     it('returns error when neither id nor title provided', async () => {
@@ -810,6 +931,20 @@ describe('Memory Handlers', () => {
       expect(root.content).toBe('# Memory Index');
       expect(root.scopes).toHaveLength(2);
       expect(root.default_scope).toBe('default');
+    });
+
+    it('passes scope_name, updated_at and version through when the backend sends them', async () => {
+      mockFetch.mockResolvedValueOnce(makeOkResponse({
+        id: 'root-1', title: 'Memory Index', content: '# hi',
+        scope: 'default', scope_name: 'Default', updated_at: '2026-08-30T00:00:00.000Z', version: 7,
+      }));
+
+      const result = await handleGetRoot({}, mockContext);
+      const root = data(result);
+
+      expect(root.scope_name).toBe('Default');
+      expect(root.updated_at).toBe('2026-08-30T00:00:00.000Z');
+      expect(root.version).toBe(7);
     });
 
     it('omits the scope fields entirely when the backend does not send them', async () => {

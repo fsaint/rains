@@ -294,8 +294,7 @@ export async function initializeDatabase() {
       permission TEXT NOT NULL,
       instance_id TEXT,
       created_at TEXT DEFAULT now() NOT NULL,
-      updated_at TEXT DEFAULT now() NOT NULL,
-      UNIQUE(agent_id, service_type, tool_name)
+      updated_at TEXT DEFAULT now() NOT NULL
     )
   `;
 
@@ -306,6 +305,39 @@ export async function initializeDatabase() {
       ALTER TABLE agent_tool_permissions ADD COLUMN IF NOT EXISTS instance_id TEXT;
     EXCEPTION WHEN duplicate_column THEN NULL;
     END $$
+  `;
+
+  // Tool permissions are unique per *instance*, not per service. The table
+  // predates instances and shipped with UNIQUE(agent_id, service_type,
+  // tool_name); with two Gmail accounts on one agent, the second instance's
+  // first override collides with the first's and the level change 500s. The
+  // constraint's name was auto-generated, so look it up by shape rather than
+  // guessing it. NULL instance rows (agent-level, pre-instance) stay unique
+  // among themselves via COALESCE.
+  await sql`
+    DO $$
+    DECLARE c RECORD;
+    BEGIN
+      FOR c IN
+        SELECT con.conname
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        WHERE rel.relname = 'agent_tool_permissions'
+          AND con.contype = 'u'
+          AND (
+            SELECT array_agg(att.attname::text ORDER BY att.attname)
+            FROM unnest(con.conkey) AS k(attnum)
+            JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k.attnum
+          ) = ARRAY['agent_id', 'service_type', 'tool_name']
+      LOOP
+        EXECUTE format('ALTER TABLE agent_tool_permissions DROP CONSTRAINT %I', c.conname);
+      END LOOP;
+    END $$
+  `;
+
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_tool_perm_instance
+      ON agent_tool_permissions(agent_id, service_type, tool_name, COALESCE(instance_id, ''))
   `;
 
   await sql`
@@ -817,6 +849,15 @@ export async function initializeDatabase() {
     EXCEPTION WHEN duplicate_column THEN NULL; END $$
   `;
 
+  // Optimistic-concurrency token. Every update bumps it; an update carrying
+  // if_version writes only if it still matches. Backfills to 1 for every
+  // existing row, so it is safe on any deploy.
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$
+  `;
+
   await sql`CREATE EXTENSION IF NOT EXISTS pg_trgm`;
   await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_user ON memory_entries(user_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_user_type ON memory_entries(user_id, type)`;
@@ -830,6 +871,9 @@ export async function initializeDatabase() {
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_entries_id_scope ON memory_entries(id, scope_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_search ON memory_entries USING GIN(search_vector)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_title_trgm ON memory_entries USING GIN(title gin_trgm_ops) WHERE is_deleted = false`;
+  // Exact-title lookup (?title= on the list route) — memory_get resolves
+  // titles through it, so it must not depend on ts_rank ordering.
+  await sql`CREATE INDEX IF NOT EXISTS idx_memory_entries_scope_lower_title ON memory_entries(scope_id, LOWER(title)) WHERE is_deleted = false`;
 
   // Trigger to keep search_vector in sync with title + content
   await sql`

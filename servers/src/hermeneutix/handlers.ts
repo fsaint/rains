@@ -59,39 +59,55 @@ export async function handleListMeetings(
   const projectId = args.project_id as string;
   if (!projectId) return { success: false, error: 'project_id is required' };
 
-  const response = await apiRequest(context, `/projects/${projectId}/meetings/`);
+  const limit = Math.min(Math.max(Math.trunc(Number(args.limit ?? 25)) || 25, 1), 100);
+  const offset = Math.max(Math.trunc(Number(args.offset ?? 0)) || 0, 0);
+  const includeRecent = args.include_recent_instances === true;
+
+  const response = await apiRequest(context, `/projects/${projectId}/meetings/`, { limit, offset });
   if (!response.ok) {
     return { success: false, error: `API error: ${response.status} ${response.statusText}` };
   }
-  const raw = await response.json() as Record<string, unknown>[] | { results?: Record<string, unknown>[]; meetings?: Record<string, unknown>[] } & Record<string, unknown>;
-  // No casts needed: raw's non-array arm already declares results/meetings as
-  // Record<string, unknown>[]. Casting to Record<string, unknown[]> was what
-  // widened the elements to unknown and broke the assignment below.
+  const raw = await response.json() as Record<string, unknown>[] | { results?: Record<string, unknown>[]; meetings?: Record<string, unknown>[]; count?: unknown; next?: unknown } & Record<string, unknown>;
   const extracted = Array.isArray(raw) ? raw : (raw.results ?? raw.meetings ?? []);
-  const meetings: Record<string, unknown>[] = Array.isArray(extracted) ? extracted : [];
+  const all: Record<string, unknown>[] = Array.isArray(extracted) ? extracted : [];
 
-  // Fetch recent instances (last 5) for each meeting in parallel
-  const meetingsWithInstances = await Promise.all(
-    meetings.map(async (meeting) => {
-      const meetingId = meeting.id as string;
-      if (!meetingId) return meeting;
-      try {
-        const instResp = await apiRequest(context, `/v1/meetings/${meetingId}/instances/`, {
-          limit: 5,
-          sort_order: 'desc',
-        });
-        if (instResp.ok) {
-          const instData = await instResp.json() as Record<string, unknown>;
-          return { ...meeting, recent_instances: instData.instances ?? instData };
+  // A DRF envelope means upstream paginated; a bare array means it ignored the
+  // params, so the page is cut here — either way the tool's contract holds.
+  let meetings: Record<string, unknown>[];
+  let total: number;
+  if (Array.isArray(raw)) {
+    total = all.length;
+    meetings = all.slice(offset, offset + limit);
+  } else {
+    meetings = all;
+    total = typeof raw.count === 'number' ? raw.count : offset + all.length + (raw.next ? 1 : 0);
+  }
+
+  // The instance fan-out is one request per meeting and ~6x the output, so it
+  // is opt-in: discovery ("what series exist") must not pay for lookback.
+  if (includeRecent) {
+    meetings = await Promise.all(
+      meetings.map(async (meeting) => {
+        const meetingId = meeting.id as string;
+        if (!meetingId) return meeting;
+        try {
+          const instResp = await apiRequest(context, `/v1/meetings/${meetingId}/instances/`, {
+            limit: 5,
+            sort_order: 'desc',
+          });
+          if (instResp.ok) {
+            const instData = await instResp.json() as Record<string, unknown>;
+            return { ...meeting, recent_instances: instData.instances ?? instData };
+          }
+        } catch {
+          // Non-fatal: return meeting without recent_instances
         }
-      } catch {
-        // Non-fatal: return meeting without recent_instances
-      }
-      return meeting;
-    })
-  );
+        return meeting;
+      })
+    );
+  }
 
-  return { success: true, data: { meetings: meetingsWithInstances } };
+  return { success: true, data: { meetings, total, offset, limit, has_more: offset + meetings.length < total } };
 }
 
 /**
