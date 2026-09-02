@@ -1802,3 +1802,35 @@ the template file so both agree, or accept that this row is now hand-maintained.
 Deleting a platform skill whose slug still has a `templates/skills/<slug>/` directory only
 removes it until the next boot. The delete response sets `reseeds: true` to say the condition
 applies. Retiring one for good means removing the template directory too.
+
+---
+
+## A new `ServerContext` field never reaches the handler
+
+### Symptom
+
+You add a field to `ServerContext` (`servers/src/common/types.ts`), populate it in the backend,
+and the handler always sees `undefined`. Tests that build the context by hand pass; the live
+agent path does not. Pipedrive's `companydomain` sat in exactly this state.
+
+### Root Cause
+
+Three separate places must agree, and none of them fails loudly:
+
+1. `backend/src/mcp/init-servers.ts` `createServerWrapper` forwards context fields to the
+   handler by an **explicit whitelist**, not a spread. A field missing from that list is
+   dropped silently.
+2. There are **two** paths that build the context: `executeTool` in
+   `backend/src/mcp/agent-endpoint.ts` (the live `/mcp/:agentId` path) and
+   `ServerManager.callTool` in `backend/src/mcp/server-manager.ts` (the older in-process path).
+   Populating only one of them is what broke `companydomain` and, earlier, Drive path rules.
+3. `ToolContext` in `server-manager.ts` is a separate interface from `ServerContext`; the
+   field has to exist on both for the whitelist line to type-check.
+
+### Fix
+
+When adding a field: `ServerContext` → `ToolContext` → the whitelist in `init-servers.ts` →
+both `executeTool` and `callTool`. Then write a test on `agent-endpoint.test.ts` that asserts
+the handler received it — that is the only test that exercises the whole chain.
+`instanceConfig` (per-instance settings such as the Hermeneutix pinned project) is the
+reference example of a field wired through all of them.

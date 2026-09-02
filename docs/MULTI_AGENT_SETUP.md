@@ -65,6 +65,8 @@ Memory is one vault per user, divided into **scopes** that never mix. Full model
 
 An agent with no grants recorded reaches **every** scope its owner has — grants narrow, they do not enable. So restricting is a deliberate act, and a new agent starts able to see everything until you narrow it.
 
+**Other services narrow the same way.** Drive has per-folder path rules, and Hermeneutix can be pinned to one project when it is added to an agent (Permissions → **Add service** → Hermeneutix → pick the project; **All projects** leaves it unscoped, and the choice is editable later in the service details). A pinned instance fills `project_id` in automatically, refuses any other project, and verifies that every meeting, instance, and conversation it returns belongs to that project.
+
 **The part that will surprise you:** nothing crosses a scope. Parents, relations, transclusions, and wikilinks are all confined to one, and a `[[Wikilink]]` pointing at an entry in another scope **fails silently** — no link is created and no error is raised. If you need the same fact in two contexts, record it in both. That duplication is the intended cost of a hard partition.
 
 ---

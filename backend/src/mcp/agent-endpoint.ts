@@ -16,6 +16,7 @@ import {
   getEffectiveInstancePermissions,
   canAccessTool,
   getDrivePathConfig,
+  parseInstanceConfig,
   type ToolPermission,
 } from '../services/permissions.js';
 import { approvalQueue, MAX_REVISIONS } from '../approvals/queue.js';
@@ -811,6 +812,11 @@ async function executeTool(
       // Strip `account` from args before passing to handler
       const { account: _account, ...cleanArgs } = args;
       args = cleanArgs;
+
+      // The instance's own settings travel with the call. This is the only
+      // place a handler learns them, so a hermeneutix instance scoped to one
+      // project would otherwise search every project the token can see.
+      context.instanceConfig = parseInstanceConfig(targetInstance.config) ?? undefined;
 
       // Auto-heal: if instance has no credential, try to find a matching one now.
       if (!targetInstance.credentialId) {

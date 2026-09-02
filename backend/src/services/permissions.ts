@@ -1054,12 +1054,34 @@ export async function getLinkedCredentials(
 // Service Instance Functions
 // ============================================================================
 
+/**
+ * Decode the `config` column of an instance row.
+ *
+ * Anything that is not a JSON object — null, empty, malformed, an array, a
+ * scalar — reads as "no config". A handler must never see a half-parsed value,
+ * and a bad row must not take the whole instance list down with it.
+ */
+export function parseInstanceConfig(raw: string | null | undefined): Record<string, unknown> | null {
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export interface ServiceInstance {
   id: string;
   agentId: string;
   serviceType: string;
   serviceName: string;
   label: string | null;
+  /** Per-instance settings, or null. Shape is owned by the service. */
+  config: Record<string, unknown> | null;
   credentialId: string | null;
   credentialEmail: string | null;
   credentialName: string | null;
@@ -1117,7 +1139,8 @@ export async function createServiceInstance(
   agentId: string,
   serviceType: string,
   label?: string,
-  credentialId?: string
+  credentialId?: string,
+  config?: Record<string, unknown> | null
 ): Promise<{ instance: ServiceInstance; created: boolean }> {
   const registry = await getRegistry();
   const def = registry.serviceRegistry.get(serviceType);
@@ -1197,6 +1220,7 @@ export async function createServiceInstance(
     credentialId: resolvedCredentialId,
     enabled: true,
     isDefault,
+    config: config ? JSON.stringify(config) : null,
     createdAt: now,
     updatedAt: now,
   });
@@ -1284,7 +1308,7 @@ export async function deleteServiceInstance(instanceId: string): Promise<void> {
  */
 export async function updateServiceInstance(
   instanceId: string,
-  updates: { label?: string; credentialId?: string; enabled?: boolean }
+  updates: { label?: string; credentialId?: string; enabled?: boolean; config?: Record<string, unknown> | null }
 ): Promise<ServiceInstance | null> {
   const [instance] = await db
     .select()
@@ -1296,6 +1320,8 @@ export async function updateServiceInstance(
   if (updates.label !== undefined) setValues.label = updates.label;
   if (updates.credentialId !== undefined) setValues.credentialId = updates.credentialId;
   if (updates.enabled !== undefined) setValues.enabled = updates.enabled;
+  // Omitted leaves the config alone; null clears it.
+  if (updates.config !== undefined) setValues.config = updates.config ? JSON.stringify(updates.config) : null;
 
   await db
     .update(agentServiceInstances)
@@ -1353,6 +1379,7 @@ export async function getAgentInstances(agentId: string): Promise<ServiceInstanc
       serviceType: inst.serviceType,
       serviceName: def?.name ?? inst.serviceType,
       label: inst.label,
+      config: parseInstanceConfig(inst.config),
       credentialId: inst.credentialId,
       credentialEmail: credInfo.email,
       credentialName: credInfo.name,
@@ -1389,6 +1416,7 @@ async function getInstanceById(instanceId: string): Promise<ServiceInstance | nu
     serviceType: inst.serviceType,
     serviceName: def?.name ?? inst.serviceType,
     label: inst.label,
+    config: parseInstanceConfig(inst.config),
     credentialId: inst.credentialId,
     credentialEmail: credInfo.email,
     credentialName: credInfo.name,

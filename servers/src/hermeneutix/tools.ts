@@ -14,11 +14,14 @@ import {
   handleSearchInstances,
   handleListProjectSessions,
   handleListInstanceSessions,
+  pinnedProject,
 } from './handlers.js';
 
 export const listProjectsTool: ToolDefinition = {
   name: 'hermeneutix_list_projects',
-  description: 'List all active projects available to the authenticated user.',
+  description:
+    'List all active projects available to the authenticated user. When this agent is limited ' +
+    'to one project, returns only that permitted project.',
   inputSchema: {
     type: 'object',
     properties: {},
@@ -38,7 +41,7 @@ export const listMeetingsTool: ToolDefinition = {
     properties: {
       project_id: {
         type: 'string',
-        description: 'The project ID to list meetings for',
+        description: 'The project ID to list meetings for. Omit when this agent is limited to one project; it is filled in.',
       },
       limit: {
         type: 'number',
@@ -53,7 +56,6 @@ export const listMeetingsTool: ToolDefinition = {
         description: 'Attach recent_instances (last 5) to each meeting. Default false.',
       },
     },
-    required: ['project_id'],
   },
   handler: handleListMeetings,
 };
@@ -121,10 +123,9 @@ export const listSpeakersTool: ToolDefinition = {
     properties: {
       project_id: {
         type: 'string',
-        description: 'The project ID to list speakers for',
+        description: 'The project ID to list speakers for. Omit when this agent is limited to one project; it is filled in.',
       },
     },
-    required: ['project_id'],
   },
   handler: handleListSpeakers,
 };
@@ -174,7 +175,7 @@ export const searchInstancesTool: ToolDefinition = {
     properties: {
       project_id: {
         type: 'string',
-        description: 'The project ID to search within',
+        description: 'The project ID to search within. Omit when this agent is limited to one project; it is filled in.',
       },
       q: {
         type: 'string',
@@ -197,7 +198,6 @@ export const searchInstancesTool: ToolDefinition = {
         description: 'Number of results to skip for pagination',
       },
     },
-    required: ['project_id'],
   },
   handler: handleSearchInstances,
 };
@@ -213,7 +213,7 @@ export const listProjectSessionsTool: ToolDefinition = {
     properties: {
       project_id: {
         type: 'string',
-        description: 'List sessions in this project (use either project_id or instance_id)',
+        description: 'List sessions in this project (use either project_id or instance_id). Omit when this agent is limited to one project; it is filled in.',
       },
       instance_id: {
         type: 'string',
@@ -236,7 +236,7 @@ export const listProjectSessionsTool: ToolDefinition = {
   },
   handler: async (args, context) => {
     if (args.instance_id) return handleListInstanceSessions(args, context);
-    if (args.project_id) return handleListProjectSessions(args, context);
+    if (args.project_id || pinnedProject(context)) return handleListProjectSessions(args, context);
     return { success: false, error: 'Either project_id or instance_id is required' };
   },
 };

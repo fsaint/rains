@@ -52,6 +52,12 @@ export interface ServerContext {
   drivePathRules?: DrivePathRule[];
   /** Gateway token for services that call back into the Reins API (e.g. memory) */
   gatewayToken?: string;
+  /**
+   * Per-instance settings chosen when the service was added to the agent
+   * (e.g. Hermeneutix `{ projectId, projectName }`). Absent when the instance
+   * has no settings. Must be forwarded by the init-servers whitelist.
+   */
+  instanceConfig?: Record<string, unknown>;
 }
 
 /**

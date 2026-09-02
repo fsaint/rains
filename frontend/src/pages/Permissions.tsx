@@ -12,6 +12,7 @@ import {
   type PendingRegistration,
   type DrivePathConfig,
   type DrivePathRule,
+  type HermeneutixInstanceConfig,
   skills as skillsApi,
 } from '../api/client';
 import {
@@ -507,6 +508,11 @@ export default function Permissions() {
                               ? (instance.credentialEmail || 'No account linked')
                               : 'No sign-in needed'}
                           </div>
+                          {typeof instance.config?.projectName === 'string' && (
+                            <div className="text-xs text-gray-500 truncate mt-0.5">
+                              Project: {instance.config.projectName}
+                            </div>
+                          )}
                         </div>
 
                         {/* Permission Level Badge */}
@@ -624,10 +630,16 @@ function AddServiceModal({
   const [conflict, setConflict] = useState<AddServiceConflict | null>(null);
   // Set while the user is choosing which of several accounts a service should use.
   const [accountPick, setAccountPick] = useState<{ serviceType: string; credentialId: string } | null>(null);
+  // Set while the user is choosing which project Hermeneutix should be pinned to.
+  // `projectId: null` is "All projects" — the instance is created without config.
+  const [projectPick, setProjectPick] = useState<{ credentialId?: string; projectId: string | null } | null>(null);
 
   const createInstanceMutation = useMutation({
-    mutationFn: ({ serviceType, credentialId }: { serviceType: string; credentialId?: string }) =>
-      permissions.createInstance(agentId, serviceType, undefined, credentialId),
+    mutationFn: ({ serviceType, credentialId, config }: {
+      serviceType: string;
+      credentialId?: string;
+      config?: Record<string, unknown>;
+    }) => permissions.createInstance(agentId, serviceType, undefined, credentialId, config),
     onSuccess: () => onAdded(),
     onError: (err: unknown, { serviceType, credentialId }) => {
       if (!(err instanceof ApiError)) return;
@@ -727,7 +739,19 @@ function AddServiceModal({
       setAccountPick({ serviceType, credentialId: available[0].id });
       return;
     }
-    createInstanceMutation.mutate({ serviceType, credentialId: available[0]?.id });
+    confirmAccount(serviceType, available[0]?.id);
+  };
+
+  /**
+   * The account is settled; create the instance — except Hermeneutix, which
+   * asks one more question first: which project the instance is scoped to.
+   */
+  const confirmAccount = (serviceType: string, credentialId?: string) => {
+    if (serviceType === HERMENEUTIX_SERVICE_TYPE) {
+      setProjectPick({ credentialId, projectId: null });
+      return;
+    }
+    createInstanceMutation.mutate({ serviceType, credentialId });
   };
 
   const serviceButton = (service: { type: string; name: string; icon: string }, badge?: React.ReactNode) => (
@@ -754,6 +778,28 @@ function AddServiceModal({
   );
 
   // A refusal from the server outranks the picker it was raised from.
+  if (projectPick && !conflict) {
+    return (
+      <HermeneutixProjectPickScreen
+        agentId={agentId}
+        agentName={agentName}
+        pick={projectPick}
+        onPick={(projectId) => setProjectPick({ ...projectPick, projectId })}
+        onConfirm={(config) =>
+          createInstanceMutation.mutate({
+            serviceType: HERMENEUTIX_SERVICE_TYPE,
+            credentialId: projectPick.credentialId,
+            config,
+          })
+        }
+        // Back lands on the account question when there was one to ask.
+        onBack={() => setProjectPick(null)}
+        pending={createInstanceMutation.isPending}
+        error={createInstanceMutation.isError ? (createInstanceMutation.error as Error).message : null}
+      />
+    );
+  }
+
   if (accountPick && !conflict) {
     const name = serviceLabel(accountPick.serviceType);
     const options = getAvailableCredentials(accountPick.serviceType);
@@ -804,7 +850,7 @@ function AddServiceModal({
 
           <div className="flex gap-2">
             <button
-              onClick={() => createInstanceMutation.mutate(accountPick)}
+              onClick={() => confirmAccount(accountPick.serviceType, accountPick.credentialId)}
               disabled={createInstanceMutation.isPending}
               className="flex-1 bg-trust-blue text-white px-4 py-2.5 rounded-lg text-sm font-semibold hover:bg-trust-blue/90 disabled:opacity-50"
             >
@@ -1059,7 +1105,7 @@ function InstanceConfigModal({ instanceId, authRequired, onClose, onUpdate }: In
   });
 
   const updateInstanceMutation = useMutation({
-    mutationFn: (data: { label?: string; credentialId?: string; enabled?: boolean }) =>
+    mutationFn: (data: { label?: string; credentialId?: string; enabled?: boolean; config?: Record<string, unknown> | null }) =>
       permissions.updateInstance(instanceId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['permissions'] });
@@ -1401,6 +1447,11 @@ function InstanceConfigModal({ instanceId, authRequired, onClose, onUpdate }: In
               <MemoryScopeEditor agentId={config.agentId} />
             )}
 
+            {/* Hermeneutix: which project this instance is pinned to */}
+            {config.serviceType === HERMENEUTIX_SERVICE_TYPE && currentLevel !== 'none' && (
+              <HermeneutixProjectEditor instance={config} />
+            )}
+
             {/* Remove Instance */}
             <div className="pt-2">
               <button
@@ -1430,6 +1481,203 @@ function InstanceConfigModal({ instanceId, authRequired, onClose, onUpdate }: In
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// Hermeneutix project scope
+// ============================================================================
+
+const HERMENEUTIX_SERVICE_TYPE = 'hermeneutix';
+
+/** Load the projects a Hermeneutix account can see; the same query backs both pickers. */
+function useHermeneutixProjects(agentId: string, credentialId?: string | null) {
+  return useQuery({
+    queryKey: ['permissions', agentId, 'hermeneutix-projects', credentialId ?? null],
+    queryFn: () => permissions.listHermeneutixProjects(agentId, credentialId ?? undefined),
+  });
+}
+
+/**
+ * Why the project list could not be loaded. A stale token is the one cause
+ * the user can fix themselves, so it gets a way there rather than just a message.
+ */
+function HermeneutixProjectsError({ error }: { error: unknown }) {
+  const message = error instanceof Error ? error.message : 'Could not load projects';
+  const staleToken = error instanceof ApiError && error.code === 'INVALID_TOKEN';
+  return (
+    <p className="text-sm text-red-600">
+      {message}
+      {staleToken && (
+        <>
+          {' '}
+          <Link to="/credentials" className="underline hover:text-red-700">
+            Reconnect it on the credentials page
+          </Link>
+          .
+        </>
+      )}
+    </p>
+  );
+}
+
+interface HermeneutixProjectPickScreenProps {
+  agentId: string;
+  agentName: string;
+  pick: { credentialId?: string; projectId: string | null };
+  onPick: (projectId: string | null) => void;
+  onConfirm: (config: HermeneutixInstanceConfig | undefined) => void;
+  onBack: () => void;
+  pending: boolean;
+  error: string | null;
+}
+
+/**
+ * The project step of adding Hermeneutix. "All projects" is first and
+ * preselected: it is the default and means the instance carries no config.
+ */
+function HermeneutixProjectPickScreen({
+  agentId, agentName, pick, onPick, onConfirm, onBack, pending, error,
+}: HermeneutixProjectPickScreenProps) {
+  const { data: projects, isLoading, error: loadError } = useHermeneutixProjects(agentId, pick.credentialId);
+
+  const chosen = projects?.find((p) => p.id === pick.projectId);
+  const confirm = () =>
+    onConfirm(chosen ? { projectId: chosen.id, projectName: chosen.name } : undefined);
+
+  const option = (id: string | null, name: string, hint?: string) => {
+    const isSelected = pick.projectId === id;
+    return (
+      <label
+        key={id ?? '__all__'}
+        className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition-all ${
+          isSelected ? 'border-trust-blue bg-trust-blue/5' : 'border-gray-200 hover:border-gray-300'
+        }`}
+      >
+        <input
+          type="radio"
+          name="add-service-project"
+          checked={isSelected}
+          onChange={() => onPick(id)}
+          className="h-4 w-4 text-trust-blue focus:ring-trust-blue"
+        />
+        <div className="flex-1 min-w-0">
+          <div className="font-medium text-sm text-reins-navy truncate">{name}</div>
+          {hint && <div className="text-xs text-gray-400 truncate">{hint}</div>}
+        </div>
+      </label>
+    );
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-xl w-full max-w-md shadow-xl p-6">
+        <div className="flex items-start gap-3 mb-4">
+          <div className="p-2 bg-trust-blue/10 rounded-lg text-trust-blue shrink-0">
+            <Key className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-reins-navy">Which project should Hermeneutix use?</h2>
+            <p className="text-sm text-gray-600 mt-1">
+              {agentName} will only see meetings from the project you pick. You can change it later in the service details.
+            </p>
+          </div>
+        </div>
+
+        <div className="space-y-2 mb-4 max-h-80 overflow-y-auto">
+          {option(null, 'All projects', 'Every project this account can see')}
+          {isLoading && <div className="text-xs text-gray-500 px-3 py-2">Loading projects…</div>}
+          {loadError ? <div className="px-3 py-2"><HermeneutixProjectsError error={loadError} /></div> : null}
+          {projects?.map((p) => option(p.id, p.name))}
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={confirm}
+            disabled={pending}
+            className="flex-1 bg-trust-blue text-white px-4 py-2.5 rounded-lg text-sm font-semibold hover:bg-trust-blue/90 disabled:opacity-50"
+          >
+            {pending ? 'Adding…' : 'Add Hermeneutix'}
+          </button>
+          <button
+            onClick={onBack}
+            className="px-4 py-2.5 rounded-lg text-sm font-medium text-gray-500 hover:text-gray-700"
+          >
+            Back
+          </button>
+        </div>
+        {error && <p className="text-sm text-red-600 mt-3">{error}</p>}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Change which project an existing Hermeneutix instance is pinned to.
+ * Saves on change; "All projects" clears the config rather than storing an empty one.
+ */
+function HermeneutixProjectEditor({ instance }: { instance: { id: string; agentId: string; credentialId: string | null; config: Record<string, unknown> | null } }) {
+  const queryClient = useQueryClient();
+  const { data: projects, isLoading, error } = useHermeneutixProjects(instance.agentId, instance.credentialId);
+
+  const updateMutation = useMutation({
+    mutationFn: (config: HermeneutixInstanceConfig | null) =>
+      permissions.updateInstance(instance.id, { config }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['permissions', 'instance', instance.id] });
+      queryClient.invalidateQueries({ queryKey: ['permissions', 'agents'] });
+    },
+  });
+
+  const current = typeof instance.config?.projectId === 'string' ? instance.config.projectId : '';
+  const selectId = `hermeneutix-project-${instance.id}`;
+
+  const onChange = (projectId: string) => {
+    if (!projectId) {
+      updateMutation.mutate(null);
+      return;
+    }
+    const project = projects?.find((p) => p.id === projectId);
+    if (project) updateMutation.mutate({ projectId: project.id, projectName: project.name });
+  };
+
+  return (
+    <div className="p-4 bg-gray-50 rounded-lg">
+      <div className="flex items-center gap-3 mb-3">
+        <Search className="w-5 h-5 text-gray-400" />
+        <div>
+          <label htmlFor={selectId} className="font-medium text-reins-navy">Project</label>
+          <div className="text-sm text-gray-500">
+            Limit this agent to one project, or let it see every project this account can.
+          </div>
+        </div>
+      </div>
+
+      <select
+        id={selectId}
+        value={current}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={isLoading || updateMutation.isPending}
+        className="w-full text-sm px-3 py-2 rounded-lg border border-gray-200 bg-white text-reins-navy focus:border-trust-blue focus:ring-trust-blue disabled:opacity-50"
+      >
+        <option value="">All projects</option>
+        {/* Keep the pinned project selectable while the list is still loading. */}
+        {!projects && current && (
+          <option value={current}>
+            {typeof instance.config?.projectName === 'string' ? instance.config.projectName : current}
+          </option>
+        )}
+        {projects?.map((p) => (
+          <option key={p.id} value={p.id}>{p.name}</option>
+        ))}
+      </select>
+
+      {isLoading && <p className="text-xs text-gray-500 mt-2">Loading projects…</p>}
+      {error ? <div className="mt-2"><HermeneutixProjectsError error={error} /></div> : null}
+      {updateMutation.isError && (
+        <p className="text-sm text-red-600 mt-2">{(updateMutation.error as Error).message}</p>
+      )}
     </div>
   );
 }

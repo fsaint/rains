@@ -53,6 +53,16 @@ vi.mock('../db/index.js', () => ({
 }));
 
 vi.mock('../services/permissions.js', () => ({
+  // Mirrors the real decoder: a JSON object or nothing.
+  parseInstanceConfig: (raw: string | null | undefined) => {
+    if (!raw) return null;
+    try {
+      const v = JSON.parse(raw);
+      return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
+    } catch {
+      return null;
+    }
+  },
   getDrivePathConfig: vi.fn().mockResolvedValue({ defaultLevel: 'write', rules: [] }),
   getEffectivePermissions: vi.fn().mockResolvedValue({
     enabled: true,
@@ -1380,6 +1390,51 @@ describe('multi-account policy', () => {
       {},
       expect.objectContaining({ gatewayToken: 'gw-secret' })
     );
+  });
+
+  /**
+   * Per-instance settings reach the handler as context.instanceConfig. For
+   * hermeneutix that is the project the instance is scoped to; a handler that
+   * does not receive it would silently search every project the token can see.
+   */
+  it('hands the resolved instance config to the handler as instanceConfig', async () => {
+    const projectConfig = { projectId: '11111111-1111-4111-8111-111111111111', projectName: 'Roadmap' };
+    const cA = { ...instA, serviceType: 'calendar', config: JSON.stringify(projectConfig) };
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([cA]);
+    // credentialCoversService: no granted_services restriction
+    dbWhereMock.mockResolvedValueOnce([{ grantedServices: null }]);
+    const { serverManager } = await import('./server-manager.js');
+    const server = serverManager.getServer('calendar')!;
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'calendar_list_events', arguments: {} },
+    });
+
+    expect(response.error).toBeUndefined();
+    expect(server.callTool).toHaveBeenCalledWith(
+      'calendar_list_events',
+      {},
+      expect.objectContaining({ instanceConfig: projectConfig })
+    );
+  });
+
+  it('leaves instanceConfig unset when the instance has no config', async () => {
+    const cA = { ...instA, serviceType: 'calendar', config: null };
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([cA]);
+    dbWhereMock.mockResolvedValueOnce([{ grantedServices: null }]);
+    const { serverManager } = await import('./server-manager.js');
+    const server = serverManager.getServer('calendar')!;
+
+    await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'calendar_list_events', arguments: {} },
+    });
+
+    const [, , context] = vi.mocked(server.callTool).mock.calls[0];
+    expect(context.instanceConfig).toBeUndefined();
   });
 
   it('runs the tool on the instance the account names', async () => {

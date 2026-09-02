@@ -186,6 +186,43 @@ export function mcpServerKey(agentName: string): string {
   return `reins-${slug || 'agent'}`;
 }
 
+/** Hermeneutix project list — also the endpoint an API token is validated against. */
+const HERMENEUTIX_PROJECTS_URL = 'https://hermeneutix.btv.pw/api/mobile/projects/';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Check a per-instance `config` body before it is stored.
+ *
+ * The column is generic JSON; the shape belongs to the service, and this is
+ * the one place it is enforced — the service layer stores whatever it is
+ * given. Returns a message for the 400, or null when the config is fine.
+ * Null and undefined are always fine (undefined leaves it alone on PUT,
+ * null clears it).
+ */
+function validateInstanceConfig(serviceType: string, config: unknown): string | null {
+  if (config === undefined || config === null) return null;
+  if (!isPlainObject(config)) return 'config must be an object or null';
+
+  if (serviceType === 'hermeneutix') {
+    const allowed = ['projectId', 'projectName'];
+    const unknown = Object.keys(config).filter((k) => !allowed.includes(k));
+    if (unknown.length > 0) return `config has unsupported keys for hermeneutix: ${unknown.join(', ')}`;
+    if (typeof config.projectId !== 'string' || !UUID_RE.test(config.projectId)) {
+      return 'config.projectId must be a project UUID';
+    }
+    if (config.projectName !== undefined && typeof config.projectName !== 'string') {
+      return 'config.projectName must be a string';
+    }
+  }
+
+  return null;
+}
+
 export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // Helper to get userId from authenticated request
   function getUserId(request: any): string {
@@ -1119,10 +1156,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
    */
   app.post<{
     Params: { agentId: string };
-    Body: { serviceType: string; label?: string; credentialId?: string };
+    Body: { serviceType: string; label?: string; credentialId?: string; config?: Record<string, unknown> | null };
   }>('/api/permissions/:agentId/instances', async (request, reply) => {
     const { agentId } = request.params;
-    const { serviceType, label, credentialId } = request.body;
+    const { serviceType, label, credentialId, config: instanceConfig } = request.body;
 
     if (!serviceType || !validServiceTypes.includes(serviceType)) {
       return reply.code(400).send({
@@ -1130,9 +1167,14 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       });
     }
 
+    const configError = validateInstanceConfig(serviceType, instanceConfig);
+    if (configError) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: configError } });
+    }
+
     let instance, created;
     try {
-      ({ instance, created } = await createServiceInstance(agentId, serviceType, label, credentialId));
+      ({ instance, created } = await createServiceInstance(agentId, serviceType, label, credentialId, instanceConfig ?? undefined));
     } catch (err) {
       if (sendPermissionConflict(err, reply)) return;
       throw err;
@@ -1144,6 +1186,102 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
     return { data: instance };
   });
+
+  /**
+   * GET /api/permissions/:agentId/hermeneutix/projects?credentialId=<id>
+   *
+   * The projects a Hermeneutix account can see, for the dashboard's project
+   * picker when scoping an instance. The credential must be a hermeneutix
+   * account belonging to the agent's owner; with no credentialId the agent's
+   * default hermeneutix instance supplies it. The agent itself is looked up
+   * under the session user, like the other agent routes.
+   */
+  app.get<{ Params: { agentId: string }; Querystring: { credentialId?: string } }>(
+    '/api/permissions/:agentId/hermeneutix/projects',
+    async (request, reply) => {
+      const { agentId } = request.params;
+      const userId = getUserId(request);
+
+      const agentResult = await client.execute({
+        sql: `SELECT id, user_id FROM agents WHERE id = ? AND user_id = ?`,
+        args: [agentId, userId],
+      });
+      if (agentResult.rows.length === 0) {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Agent not found' } });
+      }
+      const ownerId = agentResult.rows[0].user_id as string;
+
+      let credentialId = request.query.credentialId?.trim() || undefined;
+      if (!credentialId) {
+        const inst = await client.execute({
+          sql: `SELECT credential_id FROM agent_service_instances
+                WHERE agent_id = ? AND service_type = 'hermeneutix' AND enabled = true AND credential_id IS NOT NULL
+                ORDER BY is_default DESC, created_at ASC LIMIT 1`,
+          args: [agentId],
+        });
+        credentialId = (inst.rows[0]?.credential_id as string | undefined) ?? undefined;
+      }
+      if (!credentialId) {
+        return reply.code(400).send({
+          error: { code: 'VALIDATION_ERROR', message: 'credentialId is required: this agent has no Hermeneutix account linked' },
+        });
+      }
+
+      const credResult = await client.execute({
+        sql: `SELECT id, service_id, user_id FROM credentials WHERE id = ?`,
+        args: [credentialId],
+      });
+      const cred = credResult.rows[0];
+      if (!cred) {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Credential not found' } });
+      }
+      if (cred.service_id !== 'hermeneutix' || cred.user_id !== ownerId) {
+        return reply.code(403).send({
+          error: { code: 'FORBIDDEN', message: "Credential is not a Hermeneutix account of this agent's owner" },
+        });
+      }
+
+      const token = await credentialVault.getValidAccessToken(credentialId);
+      if (!token) {
+        return reply.code(401).send({ error: { code: 'INVALID_TOKEN', message: 'Hermeneutix token is missing or expired' } });
+      }
+
+      let res: Response;
+      try {
+        res = await fetch(HERMENEUTIX_PROJECTS_URL, { headers: { Authorization: `Token ${token}` } });
+      } catch {
+        return reply.code(502).send({ error: { code: 'SERVER_ERROR', message: 'Could not reach Hermeneutix API' } });
+      }
+      if (res.status === 401 || res.status === 403) {
+        return reply.code(401).send({ error: { code: 'INVALID_TOKEN', message: 'Hermeneutix rejected the API token' } });
+      }
+      if (!res.ok) {
+        return reply.code(502).send({ error: { code: 'SERVER_ERROR', message: `Hermeneutix API returned ${res.status}` } });
+      }
+
+      // Upstream answers { projects: [...] }; tolerate a bare array too.
+      let body: unknown;
+      try {
+        body = await res.json();
+      } catch {
+        return reply.code(502).send({ error: { code: 'SERVER_ERROR', message: 'Hermeneutix API returned malformed JSON' } });
+      }
+      const list = Array.isArray(body)
+        ? body
+        : isPlainObject(body) && Array.isArray(body.projects)
+          ? body.projects
+          : null;
+      if (!list) {
+        return reply.code(502).send({ error: { code: 'SERVER_ERROR', message: 'Hermeneutix API returned an unexpected shape' } });
+      }
+
+      const data = list
+        .filter(isPlainObject)
+        .filter((p) => p.id !== undefined && p.id !== null)
+        .map((p) => ({ id: String(p.id), name: typeof p.name === 'string' ? p.name : String(p.id) }));
+      return { data };
+    }
+  );
 
   /**
    * Get instance config with tools
@@ -1162,20 +1300,44 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   );
 
   /**
-   * Update instance (label, credential, enabled)
+   * Update instance (label, credential, enabled, config).
+   *
+   * `config` is validated against the instance's service type; null clears
+   * it, omitting it leaves it alone. A config change is read at call time by
+   * the MCP endpoint, so unlike `enabled` it does not need a redeploy.
    */
   app.put<{
     Params: { instanceId: string };
-    Body: { label?: string; credentialId?: string; enabled?: boolean };
+    Body: { label?: string; credentialId?: string; enabled?: boolean; config?: Record<string, unknown> | null };
   }>('/api/permissions/instances/:instanceId', async (request, reply) => {
-    const result = await updateServiceInstance(request.params.instanceId, request.body);
+    const { label, credentialId, enabled, config: instanceConfig } = request.body ?? {};
+    const updates: Parameters<typeof updateServiceInstance>[1] = {};
+    if (label !== undefined) updates.label = label;
+    if (credentialId !== undefined) updates.credentialId = credentialId;
+    if (enabled !== undefined) updates.enabled = enabled;
+
+    if (instanceConfig !== undefined) {
+      const existing = await getInstanceConfig(request.params.instanceId);
+      if (!existing) {
+        return reply.code(404).send({
+          error: { code: 'NOT_FOUND', message: 'Instance not found' },
+        });
+      }
+      const configError = validateInstanceConfig(existing.serviceType, instanceConfig);
+      if (configError) {
+        return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: configError } });
+      }
+      updates.config = instanceConfig;
+    }
+
+    const result = await updateServiceInstance(request.params.instanceId, updates);
     if (!result) {
       return reply.code(404).send({
         error: { code: 'NOT_FOUND', message: 'Instance not found' },
       });
     }
     // Enabling/disabling a service changes what's in MCP_CONFIG — trigger redeploy
-    if ('enabled' in request.body) {
+    if (enabled !== undefined) {
       autoRedeployIfDeployed(result.agentId).catch((err) =>
         console.error('[autoRedeploy] Failed after instance update:', err)
       );
@@ -2044,7 +2206,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     // Validate token by hitting the projects list endpoint
     let username: string | undefined;
     try {
-      const res = await fetch('https://hermeneutix.btv.pw/api/mobile/projects/', {
+      const res = await fetch(HERMENEUTIX_PROJECTS_URL, {
         headers: { Authorization: `Token ${body.token}` },
       });
       if (!res.ok) {
