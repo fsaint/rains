@@ -184,6 +184,12 @@ export const agentServiceInstances = pgTable('agent_service_instances', {
   credentialId: text('credential_id'),
   enabled: boolean('enabled').default(true).notNull(),
   isDefault: boolean('is_default').default(false).notNull(),
+  /**
+   * Per-instance settings as a JSON object, or null. Generic on purpose: the
+   * shape belongs to the service (hermeneutix stores the project the instance
+   * is scoped to). Read it through parseInstanceConfig, never JSON.parse.
+   */
+  config: text('config'),
   createdAt: text('created_at').default(sql`now()`).notNull(),
   updatedAt: text('updated_at').default(sql`now()`).notNull(),
 });

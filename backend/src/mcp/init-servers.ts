@@ -17,9 +17,12 @@ const logger = pino({ name: 'init-servers' });
 let browserSessionManager: { start: () => void; stop: () => Promise<void> } | null = null;
 
 /**
- * Create a wrapper that implements NativeServer interface
+ * Create a wrapper that implements NativeServer interface.
+ *
+ * The context is copied field by field — a whitelist, so a field left out of
+ * it never reaches the handler and fails silently there. Exported for tests.
  */
-function createServerWrapper(
+export function createServerWrapper(
   serverType: string,
   name: string,
   tools: ToolDefinition[],
@@ -51,6 +54,7 @@ function createServerWrapper(
         driveDefaultLevel: context.driveDefaultLevel,
         drivePathRules: context.drivePathRules,
         gatewayToken: context.gatewayToken,
+        instanceConfig: context.instanceConfig,
       });
     },
   };

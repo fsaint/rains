@@ -357,6 +357,14 @@ export async function initializeDatabase() {
   await sql`CREATE INDEX IF NOT EXISTS idx_asi_agent ON agent_service_instances(agent_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_asi_agent_service ON agent_service_instances(agent_id, service_type)`;
 
+  // Per-instance settings (JSON object). See agentServiceInstances.config in schema.ts.
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE agent_service_instances ADD COLUMN IF NOT EXISTS config TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `;
+
   // Backfill agent_service_credentials from agent_service_access
   {
     const existing = await sql`SELECT COUNT(*) as count FROM agent_service_credentials`;

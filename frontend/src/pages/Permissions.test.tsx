@@ -7,7 +7,11 @@ import Permissions from './Permissions';
 vi.mock('../components/DeploymentPanel', () => ({ DeploymentPanel: () => null }));
 
 vi.mock('../api/client', () => ({
-  ApiError: class ApiError extends Error {},
+  ApiError: class ApiError extends Error {
+    constructor(public code: string, message: string, public details?: Record<string, unknown>) {
+      super(message);
+    }
+  },
   permissions: {
     getAgentPermissions: vi.fn(),
     getInstanceConfig: vi.fn(),
@@ -21,13 +25,14 @@ vi.mock('../api/client', () => ({
     setDrivePathConfig: vi.fn(),
     getAgentMemoryScopes: vi.fn(),
     setAgentMemoryScopes: vi.fn(),
+    listHermeneutixProjects: vi.fn(),
   },
   agents: { listPending: vi.fn(), update: vi.fn(), delete: vi.fn(), cancelPending: vi.fn() },
   credentials: { list: vi.fn() },
   skills: { listForAgent: vi.fn(), list: vi.fn(), setForAgent: vi.fn() },
 }));
 
-import { permissions, agents, credentials, skills } from '../api/client';
+import { permissions, agents, credentials, skills, ApiError } from '../api/client';
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -73,6 +78,18 @@ const skillsInstance = {
   permissionLevel: 'read' as const,
 };
 
+const hermeneutixInstance = {
+  ...instanceBase,
+  id: 'i-herm',
+  serviceType: 'hermeneutix',
+  serviceName: 'Hermeneutix',
+  credentialId: 'cred-h',
+  credentialEmail: 'me@hermeneutix.test',
+  credentialStatus: 'connected' as const,
+  permissionLevel: 'read' as const,
+  config: { projectId: 'p1', projectName: 'Alpha' },
+};
+
 const agentPerms = {
   agents: [
     { id: 'a1', name: 'Agent One', status: 'active', instances: [gmailInstance, skillsInstance] },
@@ -80,8 +97,18 @@ const agentPerms = {
   availableServices: [
     { type: 'gmail', name: 'Gmail', icon: 'Mail', authRequired: true },
     { type: 'skills', name: 'Skills', icon: 'BookOpen', authRequired: false },
+    { type: 'hermeneutix', name: 'Hermeneutix', icon: 'Mic', authRequired: true },
   ],
 };
+
+const hermeneutixCred = {
+  id: 'cred-h', serviceId: 'hermeneutix', grantedServices: ['hermeneutix'], accountEmail: 'me@hermeneutix.test', type: 'api_key', status: 'active',
+};
+
+const hermeneutixProjects = [
+  { id: 'p1', name: 'Alpha' },
+  { id: 'p2', name: 'Beta' },
+];
 
 const googleCreds = [
   { id: 'cred-1', serviceId: 'google', grantedServices: ['gmail', 'calendar'], accountEmail: 'one@example.com', type: 'oauth2', status: 'active' },
@@ -107,10 +134,119 @@ describe('Permissions page', () => {
     vi.mocked(skills.list).mockResolvedValue([]);
     vi.mocked(permissions.createInstance).mockResolvedValue({} as any);
     vi.mocked(permissions.getServiceCredentials).mockResolvedValue([]);
+    vi.mocked(permissions.listHermeneutixProjects).mockResolvedValue(hermeneutixProjects);
+    vi.mocked(permissions.updateInstance).mockResolvedValue({} as any);
     vi.mocked(permissions.getInstanceConfig).mockImplementation(async (id: string) => ({
-      ...(id === 'i-skills' ? skillsInstance : gmailInstance),
+      ...(id === 'i-skills' ? skillsInstance : id === 'i-herm' ? hermeneutixInstance : gmailInstance),
       tools: [],
     }) as any);
+  });
+
+  /**
+   * Hermeneutix can be pinned to one project. "All projects" is the default
+   * and means unscoped, so it sends no config at all rather than an empty one.
+   */
+  describe('adding Hermeneutix', () => {
+    async function openProjectStep() {
+      render(<Permissions />, { wrapper: createWrapper() });
+      await expandAgent();
+      fireEvent.click(screen.getByRole('button', { name: /Add Service/ }));
+      const add = modal(/Choose a service to add/);
+      fireEvent.click(await add.findByRole('button', { name: /Hermeneutix/ }));
+      expect(await screen.findByText(/Which project should Hermeneutix use/)).toBeInTheDocument();
+    }
+
+    beforeEach(() => {
+      vi.mocked(credentials.list).mockResolvedValue([...googleCreds, hermeneutixCred] as any);
+    });
+
+    it('asks which project, listing the fetched projects after "All projects"', async () => {
+      await openProjectStep();
+
+      expect(permissions.createInstance).not.toHaveBeenCalled();
+      await waitFor(() => {
+        expect(permissions.listHermeneutixProjects).toHaveBeenCalledWith('a1', 'cred-h');
+      });
+      const radios = await screen.findAllByRole('radio');
+      expect(radios.map((r) => (r as HTMLInputElement).checked)).toEqual([true, false, false]);
+      expect(screen.getByLabelText(/All projects/)).toBeChecked();
+      expect(screen.getByLabelText(/Alpha/)).toBeInTheDocument();
+      expect(screen.getByLabelText(/Beta/)).toBeInTheDocument();
+    });
+
+    it('sends no config when "All projects" is confirmed', async () => {
+      await openProjectStep();
+      await screen.findByLabelText(/Alpha/);
+
+      fireEvent.click(screen.getByRole('button', { name: /^Add Hermeneutix/ }));
+
+      await waitFor(() => {
+        expect(permissions.createInstance).toHaveBeenCalledWith('a1', 'hermeneutix', undefined, 'cred-h', undefined);
+      });
+    });
+
+    it('pins the instance to the chosen project', async () => {
+      await openProjectStep();
+
+      fireEvent.click(await screen.findByLabelText(/Beta/));
+      fireEvent.click(screen.getByRole('button', { name: /^Add Hermeneutix/ }));
+
+      await waitFor(() => {
+        expect(permissions.createInstance).toHaveBeenCalledWith(
+          'a1', 'hermeneutix', undefined, 'cred-h', { projectId: 'p2', projectName: 'Beta' }
+        );
+      });
+    });
+
+    it('explains a stale token and points at the credentials page', async () => {
+      vi.mocked(permissions.listHermeneutixProjects).mockRejectedValue(
+        new ApiError('INVALID_TOKEN', 'Hermeneutix rejected the token')
+      );
+      await openProjectStep();
+
+      expect(await screen.findByText(/Hermeneutix rejected the token/)).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Reconnect it on the credentials page/ })).toHaveAttribute('href', '/credentials');
+    });
+  });
+
+  describe('a Hermeneutix instance', () => {
+    beforeEach(() => {
+      vi.mocked(permissions.getAgentPermissions).mockResolvedValue({
+        ...agentPerms,
+        agents: [{ ...agentPerms.agents[0], instances: [gmailInstance, hermeneutixInstance] }],
+      } as any);
+    });
+
+    it('shows the pinned project on the card', async () => {
+      render(<Permissions />, { wrapper: createWrapper() });
+      await expandAgent();
+
+      expect(screen.getByText('Project: Alpha')).toBeInTheDocument();
+    });
+
+    it('lets the owner change the project from the detail', async () => {
+      render(<Permissions />, { wrapper: createWrapper() });
+      await expandAgent();
+      fireEvent.click(screen.getByText('me@hermeneutix.test'));
+
+      const select = await screen.findByLabelText(/^Project$/);
+      await waitFor(() => expect(select).toHaveValue('p1'));
+      await waitFor(() => {
+        expect(permissions.listHermeneutixProjects).toHaveBeenCalledWith('a1', 'cred-h');
+      });
+
+      fireEvent.change(select, { target: { value: 'p2' } });
+      await waitFor(() => {
+        expect(permissions.updateInstance).toHaveBeenCalledWith('i-herm', {
+          config: { projectId: 'p2', projectName: 'Beta' },
+        });
+      });
+
+      fireEvent.change(select, { target: { value: '' } });
+      await waitFor(() => {
+        expect(permissions.updateInstance).toHaveBeenCalledWith('i-herm', { config: null });
+      });
+    });
   });
 
   /**
@@ -136,7 +272,7 @@ describe('Permissions page', () => {
       fireEvent.click(screen.getByRole('button', { name: /^Add Gmail/ }));
 
       await waitFor(() => {
-        expect(permissions.createInstance).toHaveBeenCalledWith('a1', 'gmail', undefined, 'cred-3');
+        expect(permissions.createInstance).toHaveBeenCalledWith('a1', 'gmail', undefined, 'cred-3', undefined);
       });
     });
 
@@ -150,7 +286,7 @@ describe('Permissions page', () => {
       fireEvent.click(await add.findByRole('button', { name: /Gmail/ }));
 
       await waitFor(() => {
-        expect(permissions.createInstance).toHaveBeenCalledWith('a1', 'gmail', undefined, 'cred-2');
+        expect(permissions.createInstance).toHaveBeenCalledWith('a1', 'gmail', undefined, 'cred-2', undefined);
       });
     });
 

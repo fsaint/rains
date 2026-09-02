@@ -9,6 +9,28 @@ import type { ServerContext, ToolResult } from '../common/types.js';
 
 const API_BASE = 'https://hermeneutix.btv.pw/api';
 
+/**
+ * The single project this agent's Hermeneutix instance is limited to, if any.
+ * Set by the backend as `instanceConfig: { projectId, projectName }`; absent
+ * means the agent may reach every project the token can.
+ */
+export function pinnedProject(context: ServerContext): { id: string; name?: string } | null {
+  const projectId = context.instanceConfig?.projectId;
+  if (typeof projectId !== 'string' || projectId === '') return null;
+  const projectName = context.instanceConfig?.projectName;
+  return { id: projectId, name: typeof projectName === 'string' ? projectName : undefined };
+}
+
+/**
+ * The refusal returned when a pinned agent reaches for something outside its project.
+ */
+export function outOfScope(pinned: { id: string; name?: string }, what: string): ToolResult {
+  return {
+    success: false,
+    error: `This agent is limited to Hermeneutix project "${pinned.name ?? pinned.id}" (${pinned.id}); ${what}`,
+  };
+}
+
 async function apiRequest(
   context: ServerContext,
   path: string,
@@ -35,6 +57,67 @@ async function apiRequest(
 }
 
 /**
+ * Resolve the project a project-scoped tool should act on. Pinned agents get
+ * the pinned id filled in and are refused any other; unpinned agents must say.
+ */
+function resolveProjectId(
+  args: Record<string, unknown>,
+  context: ServerContext
+): { projectId: string } | { error: ToolResult } {
+  const requested = args.project_id as string | undefined;
+  const pinned = pinnedProject(context);
+  if (pinned) {
+    if (requested && requested !== pinned.id) {
+      return { error: outOfScope(pinned, `project ${requested} is outside it`) };
+    }
+    return { projectId: pinned.id };
+  }
+  if (!requested) return { error: { success: false, error: 'project_id is required' } };
+  return { projectId: requested };
+}
+
+/**
+ * Fail-closed check of a response's `meeting.project.id` against the pinned
+ * project. `null` means the payload may be returned.
+ */
+function checkMeetingProject(
+  context: ServerContext,
+  data: Record<string, unknown>,
+  what: string
+): ToolResult | null {
+  const pinned = pinnedProject(context);
+  if (!pinned) return null;
+  const meeting = data.meeting as Record<string, unknown> | undefined;
+  const project = meeting?.project as Record<string, unknown> | undefined;
+  const projectId = project?.id;
+  if (typeof projectId !== 'string' || projectId === '') {
+    return outOfScope(pinned, `the API did not report which project ${what} belongs to`);
+  }
+  if (projectId !== pinned.id) return outOfScope(pinned, `${what} belongs to another project`);
+  return null;
+}
+
+/**
+ * Fail-closed check of a conversation response's `projects: [{id}]` list.
+ */
+function checkConversationProjects(
+  context: ServerContext,
+  data: Record<string, unknown>,
+  conversationId: string
+): ToolResult | null {
+  const pinned = pinnedProject(context);
+  if (!pinned) return null;
+  const projects = data.projects;
+  const what = `conversation ${conversationId}`;
+  if (!Array.isArray(projects) || projects.length === 0) {
+    return outOfScope(pinned, `the API did not report which project ${what} belongs to`);
+  }
+  const member = projects.some((p) => (p as Record<string, unknown> | null)?.id === pinned.id);
+  if (!member) return outOfScope(pinned, `${what} belongs to another project`);
+  return null;
+}
+
+/**
  * List active projects available to the authenticated user
  */
 export async function handleListProjects(
@@ -46,6 +129,19 @@ export async function handleListProjects(
     return { success: false, error: `API error: ${response.status} ${response.statusText}` };
   }
   const data = await response.json() as unknown[];
+
+  const pinned = pinnedProject(context);
+  if (pinned) {
+    const own = data.find((p) => (p as Record<string, unknown> | null)?.id === pinned.id);
+    if (!own) {
+      return {
+        success: false,
+        error: `Pinned project "${pinned.name ?? pinned.id}" (${pinned.id}) is no longer accessible to this Hermeneutix token`,
+      };
+    }
+    return { success: true, data: { projects: [own] } };
+  }
+
   return { success: true, data: { projects: data } };
 }
 
@@ -56,8 +152,9 @@ export async function handleListMeetings(
   args: Record<string, unknown>,
   context: ServerContext
 ): Promise<ToolResult> {
-  const projectId = args.project_id as string;
-  if (!projectId) return { success: false, error: 'project_id is required' };
+  const resolved = resolveProjectId(args, context);
+  if ('error' in resolved) return resolved.error;
+  const { projectId } = resolved;
 
   const limit = Math.min(Math.max(Math.trunc(Number(args.limit ?? 25)) || 25, 1), 100);
   const offset = Math.max(Math.trunc(Number(args.offset ?? 0)) || 0, 0);
@@ -132,6 +229,8 @@ export async function handleListMeetingInstances(
     return { success: false, error: `API error: ${response.status} ${response.statusText}` };
   }
   const data = await response.json() as Record<string, unknown>;
+  const refused = checkMeetingProject(context, data, `meeting ${meetingId}`);
+  if (refused) return refused;
   return { success: true, data };
 }
 
@@ -150,6 +249,8 @@ export async function handleGetMeetingInstance(
     return { success: false, error: `API error: ${response.status} ${response.statusText}` };
   }
   const data = await response.json() as Record<string, unknown>;
+  const refused = checkMeetingProject(context, data, `instance ${instanceId}`);
+  if (refused) return refused;
 
   // Fetch sibling instance IDs for prev/next navigation if meeting_id is available
   const meetingId = data.meeting_id as string | undefined;
@@ -206,8 +307,9 @@ export async function handleListSpeakers(
   args: Record<string, unknown>,
   context: ServerContext
 ): Promise<ToolResult> {
-  const projectId = args.project_id as string;
-  if (!projectId) return { success: false, error: 'project_id is required' };
+  const resolved = resolveProjectId(args, context);
+  if ('error' in resolved) return resolved.error;
+  const { projectId } = resolved;
 
   const response = await apiRequest(context, `/projects/${projectId}/speakers/`);
   if (!response.ok) {
@@ -248,11 +350,15 @@ export async function handleGetConversationPreview(
         return { success: false, error: `API error: ${fallback.status} ${fallback.statusText}` };
       }
       const fallbackData = await fallback.json() as Record<string, unknown>;
+      const refused = checkConversationProjects(context, fallbackData, conversationId);
+      if (refused) return refused;
       return { success: true, data: fallbackData };
     }
     return { success: false, error: `API error: ${response.status} ${response.statusText}` };
   }
   const data = await response.json() as Record<string, unknown>;
+  const refused = checkConversationProjects(context, data, conversationId);
+  if (refused) return refused;
   return { success: true, data };
 }
 
@@ -282,8 +388,9 @@ export async function handleListProjectSessions(
   args: Record<string, unknown>,
   context: ServerContext
 ): Promise<ToolResult> {
-  const projectId = args.project_id as string;
-  if (!projectId) return { success: false, error: 'project_id is required' };
+  const resolved = resolveProjectId(args, context);
+  if ('error' in resolved) return resolved.error;
+  const { projectId } = resolved;
 
   const params: Record<string, string | number | undefined> = {};
   if (args.page !== undefined) params['page'] = args.page as number;
@@ -316,6 +423,8 @@ export async function handleListInstanceSessions(
     return { success: false, error: `API error: ${response.status} ${response.statusText}` };
   }
   const data = await response.json() as Record<string, unknown>;
+  const refused = checkMeetingProject(context, data, `instance ${instanceId}`);
+  if (refused) return refused;
   return { success: true, data };
 }
 
@@ -326,8 +435,9 @@ export async function handleSearchInstances(
   args: Record<string, unknown>,
   context: ServerContext
 ): Promise<ToolResult> {
-  const projectId = args.project_id as string;
-  if (!projectId) return { success: false, error: 'project_id is required' };
+  const resolved = resolveProjectId(args, context);
+  if ('error' in resolved) return resolved.error;
+  const { projectId } = resolved;
 
   const params: Record<string, string | number | undefined> = {};
   if (args.q) params['q'] = args.q as string;

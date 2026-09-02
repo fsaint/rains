@@ -98,6 +98,12 @@ vi.mock('@reins/servers', () => {
       permissions: { read: ['web_search', 'web_search_news', 'web_search_images'], write: [], blocked: [] },
     },
     {
+      type: 'hermeneutix',
+      name: 'Hermeneutix',
+      auth: { required: true, type: 'api-key', credentialServiceIds: ['hermeneutix'] },
+      permissions: { read: ['hermeneutix_list_projects', 'hermeneutix_list_meetings'], write: [], blocked: [] },
+    },
+    {
       type: 'browser',
       name: 'Browser',
       auth: { required: false, type: 'none', credentialServiceIds: [] },
@@ -117,6 +123,7 @@ vi.mock('@reins/servers', () => {
       if (name.startsWith('calendar_')) return 'calendar';
       if (name === 'web_search' || name.startsWith('web_search_')) return 'web-search';
       if (name.startsWith('browser_')) return 'browser';
+      if (name.startsWith('hermeneutix_')) return 'hermeneutix';
       return null;
     },
   };
@@ -143,6 +150,9 @@ import {
   listOpenMcpAgents,
   listEnabledServiceTypes,
   createServiceInstance,
+  updateServiceInstance,
+  getAgentInstances,
+  parseInstanceConfig,
   ServiceCombinationError,
   UnauthenticatedEndpointsOpenError,
 } from './permissions.js';
@@ -184,6 +194,35 @@ function mockQueryChain(result: unknown, hasWhere = true) {
   };
 }
 
+/**
+ * Serve rows by table identity rather than call order. createServiceInstance
+ * makes a dozen selects (the combination guard, the instance lookup, the
+ * credential resolve, then everything getInstanceById reads back), so a
+ * queue of mockReturnValueOnce would break on any reordering.
+ */
+function mockTables(rows: Map<object, unknown[]>) {
+  vi.mocked(db.select).mockReturnValue({
+    from: vi.fn((table: object) => ({ where: vi.fn().mockResolvedValue(rows.get(table) ?? []) })),
+  } as never);
+  const values = vi.fn().mockResolvedValue(undefined);
+  vi.mocked(db.insert).mockReturnValue({ values } as never);
+  const set = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+  vi.mocked(db.update).mockReturnValue({ set } as never);
+  // Pair each insert(table) with the row handed to the values() that follows it.
+  const inserted = (table: object) =>
+    vi.mocked(db.insert).mock.calls
+      .map((call, i) => [call[0], values.mock.calls[i]?.[0]] as const)
+      .filter(([t]) => t === table)
+      .map(([, row]) => row);
+  // Every payload handed to update(table).set(...), in order.
+  const updated = (table: object) =>
+    vi.mocked(db.update).mock.calls
+      .map((call, i) => [call[0], set.mock.calls[i]?.[0]] as const)
+      .filter(([t]) => t === table)
+      .map(([, row]) => row);
+  return { inserted, updated };
+}
+
 describe('Permission Service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -215,8 +254,8 @@ describe('Permission Service', () => {
       const result = await getPermissionMatrix();
 
       expect(result.agents).toHaveLength(2);
-      expect(result.services).toHaveLength(5);
-      expect(result.cells).toHaveLength(10); // 2 agents * 5 services
+      expect(result.services).toHaveLength(6);
+      expect(result.cells).toHaveLength(12); // 2 agents * 6 services
     });
 
     it('should count blocked and approval-required tools', async () => {
@@ -950,29 +989,6 @@ describe('Permission Service', () => {
     const cred2 = { id: 'cred-2', serviceId: 'gmail', userId: 'user-1', accountEmail: 'two@example.com', expiresAt: null };
     const inst1 = { id: 'inst-1', agentId: 'agent-1', serviceType: 'gmail', credentialId: 'cred-1', enabled: true, isDefault: true, label: null };
 
-    /**
-     * Serve rows by table identity rather than call order. createServiceInstance
-     * makes a dozen selects (the combination guard, the instance lookup, the
-     * credential resolve, then everything getInstanceById reads back), so a
-     * queue of mockReturnValueOnce would break on any reordering.
-     */
-    function mockTables(rows: Map<object, unknown[]>) {
-      vi.mocked(db.select).mockReturnValue({
-        from: vi.fn((table: object) => ({ where: vi.fn().mockResolvedValue(rows.get(table) ?? []) })),
-      } as never);
-      const values = vi.fn().mockResolvedValue(undefined);
-      vi.mocked(db.insert).mockReturnValue({ values } as never);
-      vi.mocked(db.update).mockReturnValue({
-        set: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) }),
-      } as never);
-      // Pair each insert(table) with the row handed to the values() that follows it.
-      const inserted = (table: object) =>
-        vi.mocked(db.insert).mock.calls
-          .map((call, i) => [call[0], values.mock.calls[i]?.[0]] as const)
-          .filter(([t]) => t === table)
-          .map(([, row]) => row);
-      return { inserted };
-    }
 
     it('makes the first instance of a service the default', async () => {
       const { inserted } = mockTables(new Map<object, unknown[]>([
@@ -1042,6 +1058,99 @@ describe('Permission Service', () => {
       expect(inserted(agentServiceCredentials)).toEqual([
         expect.objectContaining({ credentialId: 'cred-1', isDefault: true }),
       ]);
+    });
+  });
+  /**
+   * Per-instance settings. Hermeneutix stores which project an instance is
+   * scoped to; the column is generic so other services can carry their own.
+   * It is opaque JSON on the row and a parsed object everywhere else.
+   */
+  describe('instance config', () => {
+    const agentRow = { id: 'agent-1', userId: 'user-1' };
+    const cred = { id: 'cred-h', serviceId: 'hermeneutix', userId: 'user-1', accountEmail: 'hermeneutix', expiresAt: null };
+    const projectConfig = { projectId: '11111111-1111-4111-8111-111111111111', projectName: 'Roadmap' };
+
+    describe('parseInstanceConfig', () => {
+      it('parses a JSON object', () => {
+        expect(parseInstanceConfig(JSON.stringify(projectConfig))).toEqual(projectConfig);
+      });
+
+      it('returns null for null, undefined and empty', () => {
+        expect(parseInstanceConfig(null)).toBeNull();
+        expect(parseInstanceConfig(undefined)).toBeNull();
+        expect(parseInstanceConfig('')).toBeNull();
+      });
+
+      it('returns null for invalid JSON and for non-object JSON', () => {
+        expect(parseInstanceConfig('{not json')).toBeNull();
+        expect(parseInstanceConfig('"a string"')).toBeNull();
+        expect(parseInstanceConfig('[1,2]')).toBeNull();
+        expect(parseInstanceConfig('null')).toBeNull();
+      });
+    });
+
+    it('createServiceInstance persists config as JSON on the new row', async () => {
+      const { inserted } = mockTables(new Map<object, unknown[]>([
+        [agents, [agentRow]], [credentials, [cred]], [agentServiceInstances, []],
+      ]));
+
+      const { created } = await createServiceInstance('agent-1', 'hermeneutix', 'Roadmap', 'cred-h', projectConfig);
+
+      expect(created).toBe(true);
+      expect(inserted(agentServiceInstances)).toEqual([
+        expect.objectContaining({ config: JSON.stringify(projectConfig) }),
+      ]);
+    });
+
+    it('createServiceInstance writes a null config when none is given', async () => {
+      const { inserted } = mockTables(new Map<object, unknown[]>([
+        [agents, [agentRow]], [credentials, [cred]], [agentServiceInstances, []],
+      ]));
+
+      await createServiceInstance('agent-1', 'hermeneutix');
+
+      expect(inserted(agentServiceInstances)).toEqual([expect.objectContaining({ config: null })]);
+    });
+
+    it('updateServiceInstance stores a config object as JSON', async () => {
+      const inst = { id: 'inst-h', agentId: 'agent-1', serviceType: 'hermeneutix', credentialId: 'cred-h', enabled: true, isDefault: true, label: null, config: null };
+      const { updated } = mockTables(new Map<object, unknown[]>([
+        [agents, [agentRow]], [credentials, [cred]], [agentServiceInstances, [inst]],
+      ]));
+
+      await updateServiceInstance('inst-h', { config: projectConfig });
+
+      expect(updated(agentServiceInstances)).toEqual([
+        expect.objectContaining({ config: JSON.stringify(projectConfig) }),
+      ]);
+    });
+
+    it('updateServiceInstance clears the config when given null and leaves it alone when omitted', async () => {
+      const inst = { id: 'inst-h', agentId: 'agent-1', serviceType: 'hermeneutix', credentialId: 'cred-h', enabled: true, isDefault: true, label: null, config: JSON.stringify(projectConfig) };
+      const { updated } = mockTables(new Map<object, unknown[]>([
+        [agents, [agentRow]], [credentials, [cred]], [agentServiceInstances, [inst]],
+      ]));
+
+      await updateServiceInstance('inst-h', { config: null });
+      await updateServiceInstance('inst-h', { label: 'Renamed' });
+
+      const [cleared, renamed] = updated(agentServiceInstances) as Array<Record<string, unknown>>;
+      expect(cleared).toEqual(expect.objectContaining({ config: null }));
+      expect(renamed).toEqual(expect.objectContaining({ label: 'Renamed' }));
+      expect(renamed).not.toHaveProperty('config');
+    });
+
+    it('getAgentInstances returns the parsed config, and null where there is none', async () => {
+      const withConfig = { id: 'inst-h', agentId: 'agent-1', serviceType: 'hermeneutix', credentialId: 'cred-h', enabled: true, isDefault: true, label: 'Roadmap', config: JSON.stringify(projectConfig) };
+      const without = { id: 'inst-g', agentId: 'agent-1', serviceType: 'gmail', credentialId: null, enabled: true, isDefault: true, label: null, config: null };
+      mockTables(new Map<object, unknown[]>([
+        [agents, [agentRow]], [credentials, [cred]], [agentServiceInstances, [withConfig, without]],
+      ]));
+
+      const instances = await getAgentInstances('agent-1');
+
+      expect(instances.find((i) => i.id === 'inst-h')?.config).toEqual(projectConfig);
+      expect(instances.find((i) => i.id === 'inst-g')?.config).toBeNull();
     });
   });
 });

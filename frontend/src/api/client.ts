@@ -572,6 +572,22 @@ export interface ServiceInstance {
   toolCount: number;
   blockedCount: number;
   approvalRequiredCount: number;
+  /** Per-service settings; shape depends on serviceType (see HermeneutixInstanceConfig). */
+  config: Record<string, unknown> | null;
+}
+
+/**
+ * A Hermeneutix instance pinned to one project. Absent config means all projects.
+ * A type alias, not an interface, so it satisfies the Record<string, unknown> config slot.
+ */
+export type HermeneutixInstanceConfig = {
+  projectId: string;
+  projectName?: string;
+};
+
+export interface HermeneutixProject {
+  id: string;
+  name: string;
 }
 
 export interface InstanceConfig extends ServiceInstance {
@@ -688,16 +704,26 @@ export const permissions = {
   getAvailableServices: () =>
     request<Array<{ type: string; name: string; icon: string }>>('/permissions/available-services'),
 
-  createInstance: (agentId: string, serviceType: string, label?: string, credentialId?: string) =>
+  createInstance: (
+    agentId: string,
+    serviceType: string,
+    label?: string,
+    credentialId?: string,
+    config?: Record<string, unknown>
+  ) =>
     request<ServiceInstance>(`/permissions/${agentId}/instances`, {
       method: 'POST',
-      body: JSON.stringify({ serviceType, label, credentialId }),
+      body: JSON.stringify({ serviceType, label, credentialId, config }),
     }),
 
   getInstanceConfig: (instanceId: string) =>
     request<InstanceConfig>(`/permissions/instances/${instanceId}`),
 
-  updateInstance: (instanceId: string, data: { label?: string; credentialId?: string; enabled?: boolean }) =>
+  // `config: null` clears the per-service settings; omitting it leaves them alone.
+  updateInstance: (
+    instanceId: string,
+    data: { label?: string; credentialId?: string; enabled?: boolean; config?: Record<string, unknown> | null }
+  ) =>
     request<ServiceInstance>(`/permissions/instances/${instanceId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -746,6 +772,13 @@ export const permissions = {
       method: 'PUT',
       body: JSON.stringify(grants),
     }),
+
+  // The projects a Hermeneutix account can see, for pinning an instance to one.
+  // Fails with code INVALID_TOKEN when the stored token no longer works.
+  listHermeneutixProjects: (agentId: string, credentialId?: string) => {
+    const qs = credentialId ? `?credentialId=${encodeURIComponent(credentialId)}` : '';
+    return request<HermeneutixProject[]>(`/permissions/${agentId}/hermeneutix/projects${qs}`);
+  },
 };
 
 export interface McpClientToken {

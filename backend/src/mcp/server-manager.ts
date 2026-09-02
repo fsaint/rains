@@ -45,6 +45,12 @@ export interface ToolContext {
   drivePathRules?: Array<{ folderId: string; label?: string; permission: 'read' | 'write' | 'blocked' }>;
   /** Gateway token for services that call the Reins backend API (e.g. memory) */
   gatewayToken?: string;
+  /**
+   * Settings of the service instance this call resolved to, when the agent
+   * has one (agent_service_instances.config). Hermeneutix reads the project
+   * it is scoped to from here. Absent on the legacy credential path.
+   */
+  instanceConfig?: Record<string, unknown>;
 }
 
 /**
