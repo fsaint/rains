@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Plus, Trash2, Key, RefreshCw, CheckCircle, AlertCircle, Clock, X, Mail, HardDrive, Calendar, Github, SquareKanban, BookOpen, Headphones, TrendingUp } from 'lucide-react';
+import { Plus, Trash2, Key, KeyRound, RefreshCw, CheckCircle, AlertCircle, Clock, X, Mail, HardDrive, Calendar, Github, SquareKanban, BookOpen, Headphones, TrendingUp } from 'lucide-react';
 import { credentials, oauth, permissions, type Credential } from '../api/client';
 
 interface CredentialHealth {
@@ -18,6 +18,13 @@ const GoogleIcon = ({ className = 'w-5 h-5' }: { className?: string }) => (
     <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
   </svg>
 );
+
+/**
+ * Credentials that are a pasted token rather than an OAuth grant. They cannot
+ * be "reconnected" by a provider round-trip; the only way to rotate them is
+ * to paste a new one, so each row carries an Update token action.
+ */
+const API_KEY_SERVICES = ['github', 'linear', 'notion', 'hermeneutix', 'zendesk', 'pipedrive'];
 
 const GOOGLE_SERVICES = [
   { type: 'gmail', name: 'Gmail', description: 'Read, search, and draft emails', icon: Mail },
@@ -371,6 +378,7 @@ export default function Credentials() {
   };
 
   const handleUpdateToken = (cred: Credential) => {
+    if (!API_KEY_SERVICES.includes(cred.serviceId)) return;
     setUpdatingCredentialId(cred.id);
     if (cred.serviceId === 'github') {
       setCreateType('github_pat');
@@ -389,6 +397,17 @@ export default function Credentials() {
       setCreateType('hermeneutix_key');
       setHermeneutixToken('');
       setHermeneutixError('');
+    } else if (cred.serviceId === 'zendesk') {
+      setCreateType('zendesk_key');
+      setZendeskToken('');
+      setZendeskEmail('');
+      setZendeskSubdomain('');
+      setZendeskError('');
+    } else if (cred.serviceId === 'pipedrive') {
+      setCreateType('pipedrive_key');
+      setPipedriveToken('');
+      setPipedriveCompanydomain('');
+      setPipedriveError('');
     }
     setShowCreateModal(true);
   };
@@ -565,14 +584,6 @@ export default function Credentials() {
                           Reconnect
                         </button>
                       )}
-                      {healthStatus[cred.id] && !healthStatus[cred.id].valid && (cred.serviceId === 'github' || cred.serviceId === 'linear' || cred.serviceId === 'notion' || cred.serviceId === 'hermeneutix') && (
-                        <button
-                          onClick={() => handleUpdateToken(cred)}
-                          className="ml-1 px-2 py-0.5 text-xs font-medium text-trust-blue bg-trust-blue/10 rounded hover:bg-trust-blue/20 transition-colors"
-                        >
-                          Update token
-                        </button>
-                      )}
                     </div>
                   </td>
                   <td className="hidden sm:table-cell px-6 py-4 text-sm text-gray-500">
@@ -587,6 +598,15 @@ export default function Credentials() {
                       >
                         <RefreshCw className="w-4 h-4" />
                       </button>
+                      {API_KEY_SERVICES.includes(cred.serviceId) && (
+                        <button
+                          onClick={() => handleUpdateToken(cred)}
+                          className="p-1 text-gray-400 hover:text-trust-blue"
+                          title="Update token"
+                        >
+                          <KeyRound className="w-4 h-4" />
+                        </button>
+                      )}
                       <button
                         onClick={() => deleteMutation.mutate(cred.id)}
                         className="p-1 text-gray-400 hover:text-alert-red"
