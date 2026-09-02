@@ -571,36 +571,90 @@ export async function linkCredential(
 }
 
 /**
- * Auto-link a credential to all agents that have the service enabled but no credential linked.
- * Updates both the legacy agent_service_access table and any instance-based entries.
+ * Auto-link a credential to the owner's agents that have the service enabled
+ * but no usable credential. Updates both the legacy agent_service_access table
+ * and any instance-based entries.
+ *
+ * "No usable credential" means either no credential id at all, or an id whose
+ * credentials row is gone. The Credentials page "Update" flow deletes and
+ * recreates a credential, and until detachCredential existed the instance kept
+ * the dead id; a null-only check skipped exactly the instances that needed
+ * the new one.
+ *
+ * Scoped to the credential's owner on purpose. Instances of this service are
+ * read across every account, and an unscoped fill would attach one user's
+ * inbox, drive, or meeting archive to another user's agent — a cross-tenant
+ * leak. A credential with no user_id (legacy rows) keeps the old unscoped
+ * behaviour, since there is no owner to scope to.
  */
 export async function autoLinkCredential(serviceType: string, credentialId: string): Promise<void> {
-  // Legacy table
   const rows = await db
     .select()
     .from(agentServiceAccess)
     .where(and(eq(agentServiceAccess.serviceType, serviceType), eq(agentServiceAccess.enabled, true)));
 
-  for (const row of rows) {
-    if (!row.credentialId) {
-      await linkCredential(row.agentId, serviceType, credentialId);
-    }
-  }
-
-  // Instance-based: link credential to instances that have none
   const instances = await db
     .select()
     .from(agentServiceInstances)
     .where(and(eq(agentServiceInstances.serviceType, serviceType), eq(agentServiceInstances.enabled, true)));
 
+  // One credentials read: the credential being linked (for its owner) plus
+  // every id the rows reference (to tell a live link from a dangling one).
+  const referenced = new Set<string>([credentialId]);
+  for (const r of [...rows, ...instances]) if (r.credentialId) referenced.add(r.credentialId);
+  const liveCredentials = await db
+    .select()
+    .from(credentials)
+    .where(inArray(credentials.id, [...referenced]));
+  const live = new Set(liveCredentials.map((c) => c.id));
+  const ownerId = liveCredentials.find((c) => c.id === credentialId)?.userId ?? null;
+
+  let ownerAgentIds: Set<string> | null = null;
+  if (ownerId) {
+    const ownerAgents = await db.select().from(agents).where(eq(agents.userId, ownerId));
+    ownerAgentIds = new Set(ownerAgents.filter((a) => a.userId === ownerId).map((a) => a.id));
+  }
+  const belongsToOwner = (agentId: string) => ownerAgentIds === null || ownerAgentIds.has(agentId);
+  const unusable = (id: string | null) => !id || !live.has(id);
+
+  for (const row of rows) {
+    if (belongsToOwner(row.agentId) && unusable(row.credentialId)) {
+      await linkCredential(row.agentId, serviceType, credentialId);
+    }
+  }
+
   for (const inst of instances) {
-    if (!inst.credentialId) {
+    if (belongsToOwner(inst.agentId) && unusable(inst.credentialId)) {
       await db
         .update(agentServiceInstances)
         .set({ credentialId, updatedAt: new Date().toISOString() })
         .where(eq(agentServiceInstances.id, inst.id));
     }
   }
+}
+
+/**
+ * Remove every reference to a credential that is being deleted.
+ *
+ * The credentials table has no foreign keys pointing back at it, so a vault
+ * delete on its own leaves instances, the legacy access rows and the junction
+ * table holding the dead id. Such an instance shows as 'missing', hands the
+ * dead id to the dashboard, and gives tool calls no token. Call this right
+ * after a successful vault delete.
+ */
+export async function detachCredential(credentialId: string): Promise<void> {
+  const now = new Date().toISOString();
+  await db
+    .update(agentServiceInstances)
+    .set({ credentialId: null, updatedAt: now })
+    .where(eq(agentServiceInstances.credentialId, credentialId));
+  await db
+    .delete(agentServiceCredentials)
+    .where(eq(agentServiceCredentials.credentialId, credentialId));
+  await db
+    .update(agentServiceAccess)
+    .set({ credentialId: null, updatedAt: now })
+    .where(eq(agentServiceAccess.credentialId, credentialId));
 }
 
 /**

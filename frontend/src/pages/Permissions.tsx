@@ -1492,34 +1492,36 @@ function InstanceConfigModal({ instanceId, authRequired, onClose, onUpdate }: In
 const HERMENEUTIX_SERVICE_TYPE = 'hermeneutix';
 
 /** Load the projects a Hermeneutix account can see; the same query backs both pickers. */
-function useHermeneutixProjects(agentId: string, credentialId?: string | null) {
+function useHermeneutixProjects(agentId: string, credentialId?: string | null, opts: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ['permissions', agentId, 'hermeneutix-projects', credentialId ?? null],
     queryFn: () => permissions.listHermeneutixProjects(agentId, credentialId ?? undefined),
+    enabled: opts.enabled ?? true,
   });
 }
 
 /**
- * Why the project list could not be loaded. A stale token is the one cause
- * the user can fix themselves, so it gets a way there rather than just a message.
+ * Why the project list is unavailable, and the one fix the user can apply.
+ *
+ * Every cause seen so far — a stale token, a credential the server no longer
+ * finds, an account already marked expired — is repaired the same way, by
+ * reconnecting the account. So every message carries the link, not only the
+ * token one; a bare "Credential not found" left users with nothing to do.
  */
-function HermeneutixProjectsError({ error }: { error: unknown }) {
-  const message = error instanceof Error ? error.message : 'Could not load projects';
-  const staleToken = error instanceof ApiError && error.code === 'INVALID_TOKEN';
+function HermeneutixProjectsUnavailable({ message }: { message: string }) {
   return (
     <p className="text-sm text-red-600">
-      {message}
-      {staleToken && (
-        <>
-          {' '}
-          <Link to="/credentials" className="underline hover:text-red-700">
-            Reconnect it on the credentials page
-          </Link>
-          .
-        </>
-      )}
+      {message}{' '}
+      <Link to="/credentials" className="underline hover:text-red-700">
+        Reconnect on the Credentials page
+      </Link>
+      .
     </p>
   );
+}
+
+function loadErrorMessage(error: unknown): string {
+  return error instanceof Error && error.message ? error.message : 'Could not load projects';
 }
 
 interface HermeneutixProjectPickScreenProps {
@@ -1585,17 +1587,22 @@ function HermeneutixProjectPickScreen({
           </div>
         </div>
 
-        <div className="space-y-2 mb-4 max-h-80 overflow-y-auto">
-          {option(null, 'All projects', 'Every project this account can see')}
-          {isLoading && <div className="text-xs text-gray-500 px-3 py-2">Loading projects…</div>}
-          {loadError ? <div className="px-3 py-2"><HermeneutixProjectsError error={loadError} /></div> : null}
-          {projects?.map((p) => option(p.id, p.name))}
-        </div>
+        {loadError ? (
+          <div className="mb-4 px-3 py-2">
+            <HermeneutixProjectsUnavailable message={loadErrorMessage(loadError)} />
+          </div>
+        ) : (
+          <div className="space-y-2 mb-4 max-h-80 overflow-y-auto">
+            {option(null, 'All projects', 'Every project this account can see')}
+            {isLoading && <div className="text-xs text-gray-500 px-3 py-2">Loading projects…</div>}
+            {projects?.map((p) => option(p.id, p.name))}
+          </div>
+        )}
 
         <div className="flex gap-2">
           <button
             onClick={confirm}
-            disabled={pending}
+            disabled={pending || !!loadError}
             className="flex-1 bg-trust-blue text-white px-4 py-2.5 rounded-lg text-sm font-semibold hover:bg-trust-blue/90 disabled:opacity-50"
           >
             {pending ? 'Adding…' : 'Add Hermeneutix'}
@@ -1617,9 +1624,22 @@ function HermeneutixProjectPickScreen({
  * Change which project an existing Hermeneutix instance is pinned to.
  * Saves on change; "All projects" clears the config rather than storing an empty one.
  */
-function HermeneutixProjectEditor({ instance }: { instance: { id: string; agentId: string; credentialId: string | null; config: Record<string, unknown> | null } }) {
+function HermeneutixProjectEditor({ instance }: {
+  instance: {
+    id: string;
+    agentId: string;
+    credentialId: string | null;
+    credentialStatus: 'connected' | 'missing' | 'expired' | 'not_linked';
+    config: Record<string, unknown> | null;
+  };
+}) {
   const queryClient = useQueryClient();
-  const { data: projects, isLoading, error } = useHermeneutixProjects(instance.agentId, instance.credentialId);
+  // An account already known to be broken cannot list anything: say so
+  // straight away instead of fetching a failure to report.
+  const accountBroken = instance.credentialStatus === 'missing' || instance.credentialStatus === 'expired';
+  const { data: projects, isLoading, error } = useHermeneutixProjects(
+    instance.agentId, instance.credentialId, { enabled: !accountBroken }
+  );
 
   const updateMutation = useMutation({
     mutationFn: (config: HermeneutixInstanceConfig | null) =>
@@ -1642,41 +1662,56 @@ function HermeneutixProjectEditor({ instance }: { instance: { id: string; agentI
     if (project) updateMutation.mutate({ projectId: project.id, projectName: project.name });
   };
 
+  const unavailable = accountBroken
+    ? `This account is ${instance.credentialStatus}, so its projects cannot be listed.`
+    : error
+      ? loadErrorMessage(error)
+      : null;
+
   return (
     <div className="p-4 bg-gray-50 rounded-lg">
       <div className="flex items-center gap-3 mb-3">
         <Search className="w-5 h-5 text-gray-400" />
         <div>
-          <label htmlFor={selectId} className="font-medium text-reins-navy">Project</label>
+          {unavailable ? (
+            <div className="font-medium text-reins-navy">Project</div>
+          ) : (
+            <label htmlFor={selectId} className="font-medium text-reins-navy">Project</label>
+          )}
           <div className="text-sm text-gray-500">
-            Limit this agent to one project, or let it see every project this account can.
+            Which project should this agent see? Limit it to one, or let it see every project this account can.
           </div>
         </div>
       </div>
 
-      <select
-        id={selectId}
-        value={current}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={isLoading || updateMutation.isPending}
-        className="w-full text-sm px-3 py-2 rounded-lg border border-gray-200 bg-white text-reins-navy focus:border-trust-blue focus:ring-trust-blue disabled:opacity-50"
-      >
-        <option value="">All projects</option>
-        {/* Keep the pinned project selectable while the list is still loading. */}
-        {!projects && current && (
-          <option value={current}>
-            {typeof instance.config?.projectName === 'string' ? instance.config.projectName : current}
-          </option>
-        )}
-        {projects?.map((p) => (
-          <option key={p.id} value={p.id}>{p.name}</option>
-        ))}
-      </select>
+      {unavailable ? (
+        <HermeneutixProjectsUnavailable message={unavailable} />
+      ) : (
+        <>
+          <select
+            id={selectId}
+            value={current}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={isLoading || updateMutation.isPending}
+            className="w-full text-sm px-3 py-2 rounded-lg border border-gray-200 bg-white text-reins-navy focus:border-trust-blue focus:ring-trust-blue disabled:opacity-50"
+          >
+            <option value="">All projects</option>
+            {/* Keep the pinned project selectable while the list is still loading. */}
+            {!projects && current && (
+              <option value={current}>
+                {typeof instance.config?.projectName === 'string' ? instance.config.projectName : current}
+              </option>
+            )}
+            {projects?.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
 
-      {isLoading && <p className="text-xs text-gray-500 mt-2">Loading projects…</p>}
-      {error ? <div className="mt-2"><HermeneutixProjectsError error={error} /></div> : null}
-      {updateMutation.isError && (
-        <p className="text-sm text-red-600 mt-2">{(updateMutation.error as Error).message}</p>
+          {isLoading && <p className="text-xs text-gray-500 mt-2">Loading projects…</p>}
+          {updateMutation.isError && (
+            <p className="text-sm text-red-600 mt-2">{(updateMutation.error as Error).message}</p>
+          )}
+        </>
       )}
     </div>
   );

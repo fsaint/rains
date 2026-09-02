@@ -818,8 +818,17 @@ async function executeTool(
       // project would otherwise search every project the token can see.
       context.instanceConfig = parseInstanceConfig(targetInstance.config) ?? undefined;
 
-      // Auto-heal: if instance has no credential, try to find a matching one now.
-      if (!targetInstance.credentialId) {
+      // Auto-heal: if the instance has no usable credential, find a matching
+      // one now. Unusable covers two cases: no credential id, and an id whose
+      // credentials row is gone — the Credentials page "Update" flow deletes
+      // and recreates, and an instance left holding the old id must heal to
+      // the new one the same way an unlinked instance does.
+      let credentialIsUsable = false;
+      if (targetInstance.credentialId) {
+        const [row] = await db.select().from(credentials).where(eq(credentials.id, targetInstance.credentialId));
+        credentialIsUsable = !!row;
+      }
+      if (!credentialIsUsable) {
         try {
           const { serviceDefinitions } = await import('@reins/servers');
           const def = serviceDefinitions.find((d) => d.type === serviceType);

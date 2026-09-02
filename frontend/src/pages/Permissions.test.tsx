@@ -205,7 +205,18 @@ describe('Permissions page', () => {
       await openProjectStep();
 
       expect(await screen.findByText(/Hermeneutix rejected the token/)).toBeInTheDocument();
-      expect(screen.getByRole('link', { name: /Reconnect it on the credentials page/ })).toHaveAttribute('href', '/credentials');
+      expect(screen.getByRole('link', { name: /Reconnect on the Credentials page/ })).toHaveAttribute('href', '/credentials');
+    });
+
+    it('shows any load error with the reconnect link and hides the project list', async () => {
+      vi.mocked(permissions.listHermeneutixProjects).mockRejectedValue(
+        new ApiError('NOT_FOUND', 'Credential not found')
+      );
+      await openProjectStep();
+
+      expect(await screen.findByText(/Credential not found/)).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Reconnect on the Credentials page/ })).toHaveAttribute('href', '/credentials');
+      expect(screen.queryAllByRole('radio')).toHaveLength(0);
     });
   });
 
@@ -246,6 +257,36 @@ describe('Permissions page', () => {
       await waitFor(() => {
         expect(permissions.updateInstance).toHaveBeenCalledWith('i-herm', { config: null });
       });
+    });
+
+    it('shows any load error with the reconnect link instead of the select', async () => {
+      vi.mocked(permissions.listHermeneutixProjects).mockRejectedValue(
+        new ApiError('NOT_FOUND', 'Credential not found')
+      );
+      render(<Permissions />, { wrapper: createWrapper() });
+      await expandAgent();
+      fireEvent.click(screen.getByText('me@hermeneutix.test'));
+
+      expect(await screen.findByText(/Credential not found/)).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Reconnect on the Credentials page/ })).toHaveAttribute('href', '/credentials');
+      expect(screen.queryByLabelText(/^Project$/)).not.toBeInTheDocument();
+    });
+
+    it('says the account needs reconnecting without fetching when the credential is expired', async () => {
+      vi.mocked(permissions.getInstanceConfig).mockResolvedValue({
+        ...hermeneutixInstance,
+        credentialStatus: 'expired',
+        tools: [],
+      } as any);
+      render(<Permissions />, { wrapper: createWrapper() });
+      await expandAgent();
+      fireEvent.click(screen.getByText('me@hermeneutix.test'));
+
+      expect(await screen.findByText(/Which project should this agent see/)).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Reconnect on the Credentials page/ })).toHaveAttribute('href', '/credentials');
+      expect(screen.getByText(/account is expired/i)).toBeInTheDocument();
+      expect(screen.queryByLabelText(/^Project$/)).not.toBeInTheDocument();
+      expect(permissions.listHermeneutixProjects).not.toHaveBeenCalled();
     });
   });
 

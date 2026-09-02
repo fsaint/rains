@@ -20,6 +20,7 @@ import {
   setServiceAccess,
   linkCredential,
   autoLinkCredential,
+  detachCredential,
   unlinkCredential,
   setToolPermission,
   resetToolPermission,
@@ -1231,9 +1232,24 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         sql: `SELECT id, service_id, user_id FROM credentials WHERE id = ?`,
         args: [credentialId],
       });
-      const cred = credResult.rows[0];
+      let cred = credResult.rows[0];
       if (!cred) {
-        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Credential not found' } });
+        // A dangling id: the credential was deleted (the Credentials page
+        // "Update" flow deletes and recreates) but the instance still names
+        // it. When the owner has exactly one hermeneutix credential there is
+        // nothing to choose, so read through it. No write here — the instance
+        // is repaired by detachCredential/autoLinkCredential, not by a GET.
+        const owned = await client.execute({
+          sql: `SELECT id, service_id, user_id FROM credentials WHERE user_id = ? AND service_id = 'hermeneutix'`,
+          args: [ownerId],
+        });
+        if (owned.rows.length !== 1) {
+          return reply.code(404).send({
+            error: { code: 'NOT_FOUND', message: 'Hermeneutix account is no longer connected — reconnect it on the Credentials page' },
+          });
+        }
+        cred = owned.rows[0];
+        credentialId = cred.id as string;
       }
       if (cred.service_id !== 'hermeneutix' || cred.user_id !== ownerId) {
         return reply.code(403).send({
@@ -1983,6 +1999,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (!deleted) {
       return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Credential not found' } });
     }
+
+    // Instances, legacy access rows and the junction table all hold the id by
+    // value; without this they keep pointing at a row that no longer exists.
+    await detachCredential(id);
 
     return reply.code(204).send();
   });

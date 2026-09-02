@@ -130,7 +130,7 @@ vi.mock('@reins/servers', () => {
 });
 
 import { db, client } from '../db/index.js';
-import { agents, credentials, agentServiceInstances, agentServiceCredentials } from '../db/schema.js';
+import { agents, credentials, agentServiceInstances, agentServiceCredentials, agentServiceAccess } from '../db/schema.js';
 import {
   getPermissionMatrix,
   getAgentServiceConfig,
@@ -150,6 +150,8 @@ import {
   listOpenMcpAgents,
   listEnabledServiceTypes,
   createServiceInstance,
+  autoLinkCredential,
+  detachCredential,
   updateServiceInstance,
   getAgentInstances,
   parseInstanceConfig,
@@ -208,6 +210,7 @@ function mockTables(rows: Map<object, unknown[]>) {
   vi.mocked(db.insert).mockReturnValue({ values } as never);
   const set = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
   vi.mocked(db.update).mockReturnValue({ set } as never);
+  vi.mocked(db.delete).mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) } as never);
   // Pair each insert(table) with the row handed to the values() that follows it.
   const inserted = (table: object) =>
     vi.mocked(db.insert).mock.calls
@@ -220,7 +223,9 @@ function mockTables(rows: Map<object, unknown[]>) {
       .map((call, i) => [call[0], set.mock.calls[i]?.[0]] as const)
       .filter(([t]) => t === table)
       .map(([, row]) => row);
-  return { inserted, updated };
+  // Tables handed to delete(table), in order.
+  const deleted = () => vi.mocked(db.delete).mock.calls.map((call) => call[0]);
+  return { inserted, updated, deleted };
 }
 
 describe('Permission Service', () => {
@@ -1151,6 +1156,125 @@ describe('Permission Service', () => {
 
       expect(instances.find((i) => i.id === 'inst-h')?.config).toEqual(projectConfig);
       expect(instances.find((i) => i.id === 'inst-g')?.config).toBeNull();
+    });
+  });
+  /**
+   * Deleting a credential must not leave rows pointing at its id. The
+   * Credentials page "Update" flow is delete-then-recreate, and an instance
+   * still holding the dead id reads as 'missing', sends the dead id to the
+   * project picker, and gives tool calls no token.
+   */
+  describe('detachCredential', () => {
+    it('nulls instance and legacy access links and drops junction rows for the credential', async () => {
+      const { updated, deleted } = mockTables(new Map<object, unknown[]>());
+
+      await detachCredential('cred-old');
+
+      expect(updated(agentServiceInstances)).toEqual([expect.objectContaining({ credentialId: null })]);
+      expect(updated(agentServiceAccess)).toEqual([expect.objectContaining({ credentialId: null })]);
+      expect(deleted()).toEqual([agentServiceCredentials]);
+    });
+  });
+
+  /**
+   * autoLinkCredential fills the instances of one service that have no usable
+   * credential. Two things count as unusable: no credential at all, and a
+   * credential id whose row is gone. And it may only touch agents that belong
+   * to the credential's owner.
+   */
+  describe('autoLinkCredential', () => {
+    const agent1 = { id: 'agent-1', userId: 'user-1' };
+    const agent2 = { id: 'agent-2', userId: 'user-2' };
+    const credNew = { id: 'cred-new', serviceId: 'hermeneutix', userId: 'user-1', accountEmail: 'hermeneutix', expiresAt: null };
+    const credLive = { id: 'cred-live', serviceId: 'hermeneutix', userId: 'user-1', accountEmail: 'hermeneutix', expiresAt: null };
+    const inst = (id: string, agentId: string, credentialId: string | null) =>
+      ({ id, agentId, serviceType: 'hermeneutix', credentialId, enabled: true, isDefault: true, label: null, config: null });
+
+    it('relinks an instance whose credential row no longer exists', async () => {
+      const { updated } = mockTables(new Map<object, unknown[]>([
+        [agents, [agent1]], [credentials, [credNew]],
+        [agentServiceInstances, [inst('inst-1', 'agent-1', 'cred-old')]],
+      ]));
+
+      await autoLinkCredential('hermeneutix', 'cred-new');
+
+      expect(updated(agentServiceInstances)).toEqual([expect.objectContaining({ credentialId: 'cred-new' })]);
+    });
+
+    it('fills an instance that has no credential', async () => {
+      const { updated } = mockTables(new Map<object, unknown[]>([
+        [agents, [agent1]], [credentials, [credNew]],
+        [agentServiceInstances, [inst('inst-1', 'agent-1', null)]],
+      ]));
+
+      await autoLinkCredential('hermeneutix', 'cred-new');
+
+      expect(updated(agentServiceInstances)).toEqual([expect.objectContaining({ credentialId: 'cred-new' })]);
+    });
+
+    it('leaves an instance holding a live credential alone', async () => {
+      const { updated } = mockTables(new Map<object, unknown[]>([
+        [agents, [agent1]], [credentials, [credNew, credLive]],
+        [agentServiceInstances, [inst('inst-1', 'agent-1', 'cred-live')]],
+      ]));
+
+      await autoLinkCredential('hermeneutix', 'cred-new');
+
+      expect(updated(agentServiceInstances)).toEqual([]);
+    });
+
+    it("never links another user's instances, unlinked or dangling", async () => {
+      const { updated } = mockTables(new Map<object, unknown[]>([
+        [agents, [agent1, agent2]], [credentials, [credNew]],
+        [agentServiceInstances, [inst('inst-2', 'agent-2', null), inst('inst-3', 'agent-2', 'cred-old')]],
+      ]));
+
+      await autoLinkCredential('hermeneutix', 'cred-new');
+
+      expect(updated(agentServiceInstances)).toEqual([]);
+    });
+
+    it("links only the owner's instance when several users have unlinked ones", async () => {
+      const { updated } = mockTables(new Map<object, unknown[]>([
+        [agents, [agent1, agent2]], [credentials, [credNew]],
+        [agentServiceInstances, [inst('inst-1', 'agent-1', null), inst('inst-2', 'agent-2', null)]],
+      ]));
+
+      await autoLinkCredential('hermeneutix', 'cred-new');
+
+      expect(updated(agentServiceInstances)).toHaveLength(1);
+    });
+
+    it('keeps the unscoped behaviour for a credential with no owner', async () => {
+      const { updated } = mockTables(new Map<object, unknown[]>([
+        [agents, [agent1, agent2]], [credentials, [{ ...credNew, userId: null }]],
+        [agentServiceInstances, [inst('inst-1', 'agent-1', null), inst('inst-2', 'agent-2', null)]],
+      ]));
+
+      await autoLinkCredential('hermeneutix', 'cred-new');
+
+      expect(updated(agentServiceInstances)).toHaveLength(2);
+    });
+
+    it('applies the same rules to legacy access rows', async () => {
+      const access = (id: string, agentId: string, credentialId: string | null) =>
+        ({ id, agentId, serviceType: 'hermeneutix', credentialId, enabled: true });
+      const { updated } = mockTables(new Map<object, unknown[]>([
+        [agents, [agent1, agent2]], [credentials, [credNew, credLive]],
+        [agentServiceAccess, [
+          access('acc-1', 'agent-1', 'cred-old'),   // dangling, owner's → relink
+          access('acc-2', 'agent-1', 'cred-live'),  // live → untouched
+          access('acc-3', 'agent-2', null),         // unlinked, other user → untouched
+          access('acc-4', 'agent-1', null),         // unlinked, owner's → relink
+        ]],
+      ]));
+
+      await autoLinkCredential('hermeneutix', 'cred-new');
+
+      expect(updated(agentServiceAccess)).toEqual([
+        expect.objectContaining({ credentialId: 'cred-new' }),
+        expect.objectContaining({ credentialId: 'cred-new' }),
+      ]);
     });
   });
 });

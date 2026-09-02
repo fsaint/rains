@@ -17,6 +17,7 @@ const {
   mockSetPermissionLevel, mockGetPermissionLevel, mockSetToolPermission,
   mockResetToolPermission, mockEnableDefaults, mockDisconnectAgent,
   mockUpdateInstance, mockGetInstanceConfig, mockGetValidAccessToken,
+  mockDetachCredential, mockVaultDelete,
 } = vi.hoisted(() => ({
   mockExecute: vi.fn(),
   mockGetSession: vi.fn(),
@@ -35,6 +36,8 @@ const {
   mockUpdateInstance: vi.fn(),
   mockGetInstanceConfig: vi.fn(),
   mockGetValidAccessToken: vi.fn(),
+  mockDetachCredential: vi.fn(),
+  mockVaultDelete: vi.fn(),
 }));
 
 vi.mock('../db/index.js', () => ({
@@ -81,6 +84,7 @@ vi.mock('../services/permissions.js', () => {
     // Imported by routes.ts but unused by these paths.
     getPermissionMatrix: vi.fn(), getAgentServiceConfig: vi.fn(), setServiceAccess: vi.fn(),
     linkCredential: vi.fn(), autoLinkCredential: vi.fn(), unlinkCredential: vi.fn(),
+    detachCredential: mockDetachCredential,
     setServiceToolPermissions: vi.fn(),
     getCredentialsForService: vi.fn(), addServiceCredential: vi.fn(), removeServiceCredential: vi.fn(),
     setDefaultCredential: vi.fn(), getLinkedCredentials: vi.fn(), getAgentPermissions: vi.fn(),
@@ -137,7 +141,9 @@ vi.mock('../config/index.js', () => ({
   },
 }));
 vi.mock('../policy/engine.js', () => ({ policyEngine: {} }));
-vi.mock('../credentials/vault.js', () => ({ credentialVault: { getValidAccessToken: mockGetValidAccessToken } }));
+vi.mock('../credentials/vault.js', () => ({
+  credentialVault: { getValidAccessToken: mockGetValidAccessToken, delete: mockVaultDelete },
+}));
 vi.mock('../mcp/server-manager.js', () => ({ serverManager: {} }));
 vi.mock('../notifications/apns.js', () => ({ apnsService: {} }));
 vi.mock('../notifications/telegram.js', () => ({ telegramNotifier: {} }));
@@ -183,10 +189,20 @@ function wireDb(opts: {
   agentExists?: boolean;
   credential?: { id: string; service_id: string; user_id: string } | null;
   defaultCredentialId?: string | null;
+  /** The owner's hermeneutix credentials, for the dangling-id fallback. */
+  ownerCredentials?: Array<{ id: string; service_id: string; user_id: string }>;
 } = {}) {
-  const { agentExists = true, credential = { id: 'cred-h', service_id: 'hermeneutix', user_id: OWNER }, defaultCredentialId = null } = opts;
+  const {
+    agentExists = true,
+    credential = { id: 'cred-h', service_id: 'hermeneutix', user_id: OWNER },
+    defaultCredentialId = null,
+    ownerCredentials = [],
+  } = opts;
   mockExecute.mockImplementation(async (q: any) => {
     const sql: string = typeof q === 'string' ? q : q.sql;
+    if (sql.includes('FROM credentials WHERE user_id = ?') && sql.includes("service_id = 'hermeneutix'")) {
+      return rows(ownerCredentials);
+    }
     if (sql.includes('FROM agents WHERE id = ? AND user_id = ?')) {
       return agentExists ? rows([{ id: AGENT, user_id: OWNER }]) : rows([]);
     }
@@ -417,12 +433,68 @@ describe('GET /api/permissions/:agentId/hermeneutix/projects', () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it('404s a credential that does not exist', async () => {
-    wireDb({ credential: null });
+  /**
+   * The Credentials page "Update" flow deletes and recreates the credential,
+   * and an instance can still point at the deleted id. When the owner has
+   * exactly one hermeneutix credential there is nothing to choose, so use it.
+   */
+  describe('when the credential id has no row', () => {
+    const RECONNECT = 'Hermeneutix account is no longer connected — reconnect it on the Credentials page';
 
-    const res = await get();
+    it("falls back to the owner's only hermeneutix credential without writing anything", async () => {
+      wireDb({ credential: null, ownerCredentials: [{ id: 'cred-new', service_id: 'hermeneutix', user_id: OWNER }] });
+      mockFetch.mockResolvedValue(jsonResponse(200, { projects: [{ id: PROJECT_ID, name: 'Roadmap' }] }));
 
-    expect(res.statusCode).toBe(404);
+      const res = await get('?credentialId=cred-gone');
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data).toEqual([{ id: PROJECT_ID, name: 'Roadmap' }]);
+      expect(mockGetValidAccessToken).toHaveBeenCalledWith('cred-new');
+      const writes = mockExecute.mock.calls
+        .map(([q]) => String(typeof q === 'string' ? q : q.sql))
+        .filter((sql) => /^\s*(UPDATE|INSERT|DELETE)/i.test(sql));
+      expect(writes).toEqual([]);
+    });
+
+    it('404s with a reconnect message when the owner has no hermeneutix credential', async () => {
+      wireDb({ credential: null, ownerCredentials: [] });
+
+      const res = await get('?credentialId=cred-gone');
+
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error).toEqual({ code: 'NOT_FOUND', message: RECONNECT });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('404s with the reconnect message when the owner has several, rather than guessing', async () => {
+      wireDb({
+        credential: null,
+        ownerCredentials: [
+          { id: 'cred-a', service_id: 'hermeneutix', user_id: OWNER },
+          { id: 'cred-b', service_id: 'hermeneutix', user_id: OWNER },
+        ],
+      });
+
+      const res = await get('?credentialId=cred-gone');
+
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error.message).toBe(RECONNECT);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('applies the fallback to the id taken from the default instance too', async () => {
+      wireDb({
+        credential: null,
+        defaultCredentialId: 'cred-gone',
+        ownerCredentials: [{ id: 'cred-new', service_id: 'hermeneutix', user_id: OWNER }],
+      });
+      mockFetch.mockResolvedValue(jsonResponse(200, { projects: [] }));
+
+      const res = await get('');
+
+      expect(res.statusCode).toBe(200);
+      expect(mockGetValidAccessToken).toHaveBeenCalledWith('cred-new');
+    });
   });
 
   it('401s INVALID_TOKEN when upstream rejects the token', async () => {
@@ -460,5 +532,29 @@ describe('GET /api/permissions/:agentId/hermeneutix/projects', () => {
 
     expect(res.statusCode).toBe(502);
     expect(res.json().error.code).toBe('SERVER_ERROR');
+  });
+});
+
+describe('DELETE /api/credentials/:id', () => {
+  it('detaches every link to the credential after the vault delete', async () => {
+    mockVaultDelete.mockResolvedValue(true);
+    mockDetachCredential.mockResolvedValue(undefined);
+
+    const res = await app.inject({ method: 'DELETE', url: '/api/credentials/cred-h' });
+
+    expect(res.statusCode).toBe(204);
+    expect(mockVaultDelete).toHaveBeenCalledWith('cred-h');
+    expect(mockDetachCredential).toHaveBeenCalledWith('cred-h');
+    // The vault delete decides whether there is anything to detach.
+    expect(mockVaultDelete.mock.invocationCallOrder[0]).toBeLessThan(mockDetachCredential.mock.invocationCallOrder[0]);
+  });
+
+  it('404s and detaches nothing when the credential does not exist', async () => {
+    mockVaultDelete.mockResolvedValue(false);
+
+    const res = await app.inject({ method: 'DELETE', url: '/api/credentials/nope' });
+
+    expect(res.statusCode).toBe(404);
+    expect(mockDetachCredential).not.toHaveBeenCalled();
   });
 });

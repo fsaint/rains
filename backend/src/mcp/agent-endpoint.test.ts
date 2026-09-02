@@ -35,8 +35,9 @@ vi.mock('../services/email.js', () => ({
 }));
 
 // Shared `where` mock so individual tests can override with mockReturnValueOnce
-const { dbWhereMock } = vi.hoisted(() => ({
+const { dbWhereMock, dbUpdateMock } = vi.hoisted(() => ({
   dbWhereMock: vi.fn().mockResolvedValue([{ id: 'agent-1', name: 'Test Agent', status: 'active' }]),
+  dbUpdateMock: vi.fn(),
 }));
 
 vi.mock('../db/index.js', () => ({
@@ -44,6 +45,13 @@ vi.mock('../db/index.js', () => ({
     select: vi.fn(() => ({
       from: () => ({
         where: dbWhereMock,
+      }),
+    })),
+    update: vi.fn((table: unknown) => ({
+      set: (values: unknown) => ({
+        where: async () => {
+          dbUpdateMock(table, values);
+        },
       }),
     })),
   },
@@ -97,7 +105,7 @@ vi.mock('@reins/servers', () => ({
   serviceDefinitions: [
     { type: 'gmail', name: 'Gmail' },
     { type: 'drive', name: 'Google Drive' },
-    { type: 'calendar', name: 'Google Calendar' },
+    { type: 'calendar', name: 'Google Calendar', auth: { required: true, credentialServiceIds: ['calendar'] } },
     { type: 'web-search', name: 'Web Search' },
     { type: 'browser', name: 'Browser' },
   ],
@@ -1402,6 +1410,7 @@ describe('multi-account policy', () => {
     const cA = { ...instA, serviceType: 'calendar', config: JSON.stringify(projectConfig) };
     dbWhereMock.mockResolvedValueOnce(agentRow);
     dbWhereMock.mockResolvedValueOnce([cA]);
+    dbWhereMock.mockResolvedValueOnce([{ id: 'cred-a' }]); // credential row exists
     // credentialCoversService: no granted_services restriction
     dbWhereMock.mockResolvedValueOnce([{ grantedServices: null }]);
     const { serverManager } = await import('./server-manager.js');
@@ -1424,6 +1433,7 @@ describe('multi-account policy', () => {
     const cA = { ...instA, serviceType: 'calendar', config: null };
     dbWhereMock.mockResolvedValueOnce(agentRow);
     dbWhereMock.mockResolvedValueOnce([cA]);
+    dbWhereMock.mockResolvedValueOnce([{ id: 'cred-a' }]); // credential row exists
     dbWhereMock.mockResolvedValueOnce([{ grantedServices: null }]);
     const { serverManager } = await import('./server-manager.js');
     const server = serverManager.getServer('calendar')!;
@@ -1435,6 +1445,57 @@ describe('multi-account policy', () => {
 
     const [, , context] = vi.mocked(server.callTool).mock.calls[0];
     expect(context.instanceConfig).toBeUndefined();
+  });
+
+  /**
+   * A credential can be deleted out from under an instance (the Credentials
+   * page "Update" flow deletes and recreates). The instance then points at an
+   * id with no row — as unusable as no credential at all, and healed the
+   * same way: to the owner's matching credential.
+   */
+  it('heals an instance whose credential row is gone to the owner\'s matching credential', async () => {
+    const dangling = { ...instA, serviceType: 'calendar', credentialId: 'cred-gone' };
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([dangling]);
+    dbWhereMock.mockResolvedValueOnce([]); // cred-gone has no credentials row
+    // heal: agent row, then the owner's credentials for the service
+    dbWhereMock.mockResolvedValueOnce([{ id: 'agent-1', userId: 'user-1' }]);
+    dbWhereMock.mockResolvedValueOnce([{ id: 'cred-fresh', serviceId: 'calendar', userId: 'user-1' }]);
+    // credentialCoversService: no granted_services restriction
+    dbWhereMock.mockResolvedValueOnce([{ grantedServices: null }]);
+    const { credentialVault } = await import('../credentials/vault.js');
+    const { serverManager } = await import('./server-manager.js');
+    const server = serverManager.getServer('calendar')!;
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'calendar_list_events', arguments: {} },
+    });
+
+    expect(response.error).toBeUndefined();
+    expect(dbUpdateMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ credentialId: 'cred-fresh' }));
+    expect(credentialVault.getValidAccessToken).toHaveBeenCalledWith('cred-fresh');
+    expect(server.callTool).toHaveBeenCalledWith(
+      'calendar_list_events',
+      {},
+      expect.objectContaining({ accessToken: 'test-access-token' })
+    );
+  });
+
+  it('does not touch an instance whose credential is live', async () => {
+    const cA = { ...instA, serviceType: 'calendar' };
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([cA]);
+    dbWhereMock.mockResolvedValueOnce([{ id: 'cred-a' }]); // credential row exists
+    dbWhereMock.mockResolvedValueOnce([{ grantedServices: null }]);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'calendar_list_events', arguments: {} },
+    });
+
+    expect(response.error).toBeUndefined();
+    expect(dbUpdateMock).not.toHaveBeenCalled();
   });
 
   it('runs the tool on the instance the account names', async () => {
@@ -1450,6 +1511,7 @@ describe('multi-account policy', () => {
     // executeTool re-resolves the account
     dbWhereMock.mockResolvedValueOnce([{ accountEmail: 'a@example.com' }]);
     dbWhereMock.mockResolvedValueOnce([{ accountEmail: 'b@example.com' }]);
+    dbWhereMock.mockResolvedValueOnce([{ id: 'cred-b' }]); // credential row exists
     // credentialCoversService: no granted_services restriction
     dbWhereMock.mockResolvedValueOnce([{ grantedServices: null }]);
 
