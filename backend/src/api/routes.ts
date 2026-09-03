@@ -8926,8 +8926,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const now = new Date().toISOString();
 
     // Order matters, and there is no transaction helper to hide it. The
-    // composite FKs memory_branches(entry_id, scope_id) and
-    // (parent_entry_id, scope_id) → memory_entries(id, scope_id) reject both
+    // composite FKs memory_branches(entry_id, scope_id), (parent_entry_id,
+    // scope_id), memory_links(source_id, scope_id) and (target_id, scope_id)
+    // → memory_entries(id, scope_id) reject both
     // "move the entry, then its branch" and the reverse, and the children's
     // branch rows reference (this entry, old scope) as their parent. So: the
     // entry leaves its subtree behind — the children close the gap up to its
@@ -8947,6 +8948,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       sql: `DELETE FROM memory_branches WHERE entry_id = ? AND scope_id = ?`,
       args: [id, oldScopeId],
     });
+    // Its links pointed at entries in the old scope and cannot survive the
+    // move — and memory_links(source_id, scope_id) / (target_id, scope_id) are
+    // composite FKs as well, so they must be gone before the entry moves.
+    await client.execute({ sql: `DELETE FROM memory_links WHERE source_id = ? OR target_id = ?`, args: [id, id] });
     await client.execute({
       sql: `UPDATE memory_entries SET scope_id = ?, updated_at = ? WHERE id = ?`,
       args: [targetScopeId, now, id],
@@ -8956,8 +8961,6 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
             VALUES (?, ?, ?, ?, ?, false)`,
       args: [nanoid(), id, null, targetScopeId, 0],
     });
-    // Its links pointed at entries in the old scope and cannot survive the move.
-    await client.execute({ sql: `DELETE FROM memory_links WHERE source_id = ? OR target_id = ?`, args: [id, id] });
 
     const moved = await client.execute({
       sql: `SELECT content FROM memory_entries WHERE id = ?`,

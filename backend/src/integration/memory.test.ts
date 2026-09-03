@@ -1887,7 +1887,11 @@ describe('Memory API — end-to-end', () => {
         expect(moveEntry!.i).toBeLessThan(insertBranch!.i);
         // The old in-place branch update is exactly what the FK rejects.
         expect(find('UPDATE memory_branches SET scope_id')).toBeUndefined();
-        expect(find('DELETE FROM memory_links')).toBeDefined();
+        // memory_links(source_id, scope_id) and (target_id, scope_id) are composite
+        // FKs too: the links must be gone before the entry changes scope.
+        const dropLinks = find('DELETE FROM memory_links');
+        expect(dropLinks).toBeDefined();
+        expect(dropLinks!.i).toBeLessThan(moveEntry!.i);
       });
 
       it('moves an entry that has no branch row, leaving its children at the root of the old scope', async () => {
