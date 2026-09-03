@@ -1696,5 +1696,238 @@ describe('Memory API — end-to-end', () => {
         expect(res.json().code).toBe('CANNOT_DELETE_DEFAULT');
       });
     });
+
+    // ── Agents with grants ──────────────────────────────────────────────────
+    //
+    // The fixture above pins grant_count 0 (an unrestricted agent). These are
+    // the restricted cases the production audit found gaps in.
+
+    const AGENT_ID = 'agent-mem-1';
+    const agentHeaders = { 'x-reins-agent-secret': 'agent-gateway-token' };
+    const WORK_ID = 'scope-work-id';
+    const workRow = { ...scopeRow, id: WORK_ID, slug: 'work', name: 'Work', is_default: false, is_system: false };
+    const EMPTY_RESULT = { rows: [], columns: [], rowsAffected: 0, lastInsertRowid: 0n };
+    const result = (r: Record<string, unknown>[]) => ({ rows: r, columns: [], rowsAffected: r.length, lastInsertRowid: 0n });
+
+    /**
+     * Serve one agent (gateway token → AGENT_ID owned by USER_ID), the given
+     * scope rows (with `granted`/`grant_count` set per test), the grant rows the
+     * scope-delete route reads, and an entry count.
+     */
+    function agentFixture(opts: {
+      scopes: Array<Record<string, unknown>>;
+      grants?: Array<Record<string, unknown>>;
+      entryCount?: number;
+    }) {
+      const base = makeDbRouter(passwordHash);
+      mockExecute.mockImplementation(async (input: any) => {
+        const sql: string = typeof input === 'string' ? input : input.sql;
+        const args: unknown[] = typeof input === 'string' ? [] : (input.args ?? []);
+        if (sql.includes('FROM deployed_agents da')) {
+          return result([{ agent_id: AGENT_ID, user_id: USER_ID, runtime: 'openclaw', mcp_server_name: 'helm', is_manual: false }]);
+        }
+        if (sql.includes('FROM agents WHERE id = ? AND user_id = ?')) return result([{ '?column?': 1 }]);
+        if (sql.includes('FROM memory_scopes WHERE root_entry_id = ?')) return EMPTY_RESULT;
+        // The near-duplicate check also reads memory_scopes; nothing is similar here.
+        if (sql.includes('similarity(')) return EMPTY_RESULT;
+        if (sql.includes('FROM memory_scopes WHERE id = ? AND user_id = ?')) {
+          const hit = opts.scopes.find((sc) => sc.id === args[0]);
+          return result(hit ? [hit] : []);
+        }
+        if (sql.includes('FROM memory_scopes')) return result(opts.scopes);
+        if (sql.includes('FROM agent_memory_scopes g')) return result(opts.grants ?? []);
+        if (sql.includes('COUNT(*) AS count FROM memory_entries')) return result([{ count: opts.entryCount ?? 0 }]);
+        return base(input);
+      });
+    }
+
+    const callsMatching = (pattern: string) =>
+      mockExecute.mock.calls
+        .map((c: any, i: number) => ({ i, q: c[0] }))
+        .filter(({ q }) => typeof q?.sql === 'string' && q.sql.includes(pattern));
+
+    describe('GET /api/permissions/:agentId/memory/scopes', () => {
+      it('lists a granted scope with its archived_at even though it is archived, and hides ungranted archived ones', async () => {
+        agentFixture({
+          scopes: [
+            { ...scopeRow, granted: false, grant_count: 1 },
+            { ...workRow, archived_at: NOW, granted: true, grant_count: 1 },
+            { ...workRow, id: 'scope-old-id', slug: 'old', name: 'Old', archived_at: NOW, granted: false, grant_count: 1 },
+          ],
+        });
+
+        const res = await app.inject({
+          method: 'GET', url: `/api/permissions/${AGENT_ID}/memory/scopes`, headers: { cookie: sessionCookie },
+        });
+
+        expect(res.statusCode).toBe(200);
+        const data = res.json().data;
+        expect(data.mode).toBe('restricted');
+        expect(data.grantedScopeIds).toEqual([WORK_ID]);
+        const byId = Object.fromEntries(data.availableScopes.map((s: any) => [s.id, s]));
+        expect(byId[SCOPE_ID].archived_at).toBeNull();
+        expect(byId[WORK_ID].archived_at).toBe(NOW);
+        expect(byId['scope-old-id']).toBeUndefined();
+      });
+    });
+
+    describe('DELETE /api/memory/scopes/:id with grants', () => {
+      const grant = (over: Record<string, unknown> = {}) =>
+        ({ agent_id: AGENT_ID, name: 'Work Agent', is_default: true, grant_count: 1, ...over });
+
+      it("refuses, naming the agents, when the scope is some agent's only grant", async () => {
+        agentFixture({ scopes: [scopeRow, workRow], grants: [grant()] });
+
+        const res = await app.inject({
+          method: 'DELETE', url: `/api/memory/scopes/${WORK_ID}`, headers: { cookie: sessionCookie },
+        });
+
+        expect(res.statusCode).toBe(409);
+        expect(res.json().code).toBe('SCOPE_IN_USE');
+        expect(res.json().agents).toEqual([{ id: AGENT_ID, name: 'Work Agent' }]);
+        expect(callsMatching('DELETE FROM memory_scopes')).toEqual([]);
+      });
+
+      it('deletes a scope that is one of several grants, dropping just that grant', async () => {
+        agentFixture({ scopes: [scopeRow, workRow], grants: [grant({ grant_count: 2 })] });
+
+        const res = await app.inject({
+          method: 'DELETE', url: `/api/memory/scopes/${WORK_ID}`, headers: { cookie: sessionCookie },
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(res.json().data.deleted).toBe(true);
+        expect(callsMatching('DELETE FROM memory_scopes')).toHaveLength(1);
+      });
+
+      it('re-points grants at reassign_to, carrying the default, before deleting', async () => {
+        agentFixture({ scopes: [scopeRow, workRow], grants: [grant()] });
+
+        const res = await app.inject({
+          method: 'DELETE', url: `/api/memory/scopes/${WORK_ID}?reassign_to=${SCOPE_ID}`,
+          headers: { cookie: sessionCookie },
+        });
+
+        expect(res.statusCode).toBe(200);
+        const [dropped] = callsMatching('DELETE FROM agent_memory_scopes WHERE scope_id = ?');
+        const [inserted] = callsMatching('INSERT INTO agent_memory_scopes');
+        expect(dropped.q.args).toEqual([WORK_ID]);
+        expect(inserted.q.sql).toContain('ON CONFLICT (agent_id, scope_id) DO NOTHING');
+        expect(inserted.q.args.slice(1)).toEqual([AGENT_ID, SCOPE_ID, true]);
+        // The old default row must be gone before the new default is written,
+        // or the one-default-per-agent index rejects the insert.
+        expect(dropped.i).toBeLessThan(inserted.i);
+        expect(callsMatching('DELETE FROM memory_scopes')).toHaveLength(1);
+      });
+    });
+
+    describe('POST /api/memory/scopes by an agent', () => {
+      it('grants a restricted agent the scope it just created, without changing its default', async () => {
+        agentFixture({ scopes: [{ ...scopeRow, granted: true, grant_count: 1 }] });
+
+        const res = await app.inject({
+          method: 'POST', url: '/api/memory/scopes', headers: agentHeaders, payload: { name: 'Finance' },
+        });
+
+        expect(res.statusCode).toBe(201);
+        const [inserted] = callsMatching('INSERT INTO agent_memory_scopes');
+        expect(inserted).toBeDefined();
+        expect(inserted.q.args.slice(1)).toEqual([AGENT_ID, res.json().data.id, false]);
+        expect(callsMatching('UPDATE agent_memory_scopes')).toEqual([]);
+      });
+
+      it('writes no grant row for an unrestricted agent', async () => {
+        agentFixture({ scopes: [{ ...scopeRow, granted: false, grant_count: 0 }] });
+
+        const res = await app.inject({
+          method: 'POST', url: '/api/memory/scopes', headers: agentHeaders, payload: { name: 'Finance' },
+        });
+
+        expect(res.statusCode).toBe(201);
+        expect(callsMatching('INSERT INTO agent_memory_scopes')).toEqual([]);
+      });
+    });
+
+    describe('PUT /api/memory/entries/:id/scope', () => {
+      /**
+       * The composite FKs memory_branches(entry_id, scope_id) and
+       * (parent_entry_id, scope_id) → memory_entries(id, scope_id) mean the
+       * entry's scope and its branch row cannot be updated one after the other
+       * in either order, and the children's branch rows reference (entry, old
+       * scope) too. The mock cannot enforce that, so this pins the one order
+       * Postgres accepts: close the gap under the entry, drop its branch, move
+       * the entry, re-enter the new scope at the root.
+       */
+      const statements = () =>
+        mockExecute.mock.calls
+          .map((c: any, i: number) => ({ i, sql: (typeof c[0] === 'string' ? c[0] : c[0]?.sql ?? '') as string, args: (c[0]?.args ?? []) as unknown[] }));
+      const find = (pattern: string) => statements().find((st) => st.sql.includes(pattern));
+
+      it('re-parents children, drops the branch, moves the entry, then re-enters the new scope at its root', async () => {
+        twoScopes();
+
+        const res = await app.inject({
+          method: 'PUT', url: `/api/memory/entries/${ENTRY_ID}/scope`,
+          headers: { cookie: sessionCookie }, payload: { scope: 'work' },
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(res.json().data).toEqual({ moved: true, scope: 'scope-work-id' });
+
+        const reparent = find('UPDATE memory_branches SET parent_entry_id = ? WHERE parent_entry_id = ? AND scope_id = ?');
+        const dropBranch = find('DELETE FROM memory_branches WHERE entry_id = ? AND scope_id = ?');
+        const moveEntry = find('UPDATE memory_entries SET scope_id = ?');
+        const insertBranch = find('INSERT INTO memory_branches');
+        expect(reparent?.args).toEqual([ROOT_ID, ENTRY_ID, SCOPE_ID]); // the fixture's parent is the root
+        expect(dropBranch?.args).toEqual([ENTRY_ID, SCOPE_ID]);
+        expect(moveEntry?.args).toContain('scope-work-id');
+        expect(insertBranch?.args.slice(1)).toEqual([ENTRY_ID, null, 'scope-work-id', 0]);
+        expect(reparent!.i).toBeLessThan(dropBranch!.i);
+        expect(dropBranch!.i).toBeLessThan(moveEntry!.i);
+        expect(moveEntry!.i).toBeLessThan(insertBranch!.i);
+        // The old in-place branch update is exactly what the FK rejects.
+        expect(find('UPDATE memory_branches SET scope_id')).toBeUndefined();
+        expect(find('DELETE FROM memory_links')).toBeDefined();
+      });
+
+      it('moves an entry that has no branch row, leaving its children at the root of the old scope', async () => {
+        twoScopes();
+        const withScopes = mockExecute.getMockImplementation()!;
+        mockExecute.mockImplementation(async (input: any) => {
+          const sql = typeof input === 'string' ? input : input.sql;
+          if (sql.includes('FROM memory_branches WHERE entry_id = ?')) return EMPTY_RESULT;
+          return withScopes(input);
+        });
+
+        const res = await app.inject({
+          method: 'PUT', url: `/api/memory/entries/${ENTRY_ID}/scope`,
+          headers: { cookie: sessionCookie }, payload: { scope: 'work' },
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(find('UPDATE memory_branches SET parent_entry_id = ? WHERE parent_entry_id = ? AND scope_id = ?')?.args)
+          .toEqual([null, ENTRY_ID, SCOPE_ID]);
+        expect(find('INSERT INTO memory_branches')?.args.slice(1)).toEqual([ENTRY_ID, null, 'scope-work-id', 0]);
+      });
+    });
+
+    describe('GET /api/memory/root for a restricted agent', () => {
+      it("reports the grant's default scope, not the owner's", async () => {
+        // The owner's default is `default`; the agent is granted only `work`,
+        // with no default flag on the grant. Its write target is `work`.
+        agentFixture({
+          scopes: [
+            { ...scopeRow, granted: false, grant_count: 1 },
+            { ...workRow, granted: true, grant_count: 1 },
+          ],
+        });
+
+        const res = await app.inject({ method: 'GET', url: '/api/memory/root', headers: agentHeaders });
+
+        expect(res.statusCode).toBe(200);
+        expect(res.json().data.default_scope).toBe('work');
+        expect(res.json().data.scope).toBe('work');
+      });
+    });
   });
 });

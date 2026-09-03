@@ -1834,3 +1834,35 @@ both `executeTool` and `callTool`. Then write a test on `agent-endpoint.test.ts`
 the handler received it — that is the only test that exercises the whole chain.
 `instanceConfig` (per-instance settings such as the Hermeneutix pinned project) is the
 reference example of a field wired through all of them.
+
+---
+
+## Memory entries land in a scope the agent was not granted
+
+### Symptom
+
+An agent restricted to one memory scope appears to write into the owner's `default` scope.
+The grants endpoint shows the restriction correctly, and `pickScope` tests pass.
+
+### Root Cause
+
+The writes were not made by that agent. A client such as Claude Code or claude.ai can hold
+several Helm connectors at once (one per agent), and the model picks whichever server's
+`memory_create` it likes. In the case that prompted this entry, Hermeneutix calls ran as the
+restricted agent while every `memory_*` call ran as an unrestricted agent whose write target
+is `default`. Entries carry no agent id, so the vault cannot tell you this — the audit log can.
+
+### Fix
+
+Check the audit log first, filtered to the window:
+
+```
+GET /api/audit?limit=500
+```
+
+Audit timestamps are `YYYY-MM-DD HH:MM:SS` in UTC, with a space; filtering on the ISO `T`
+form matches nothing. Compare `agentName` on the `memory_create` rows with the agent you
+expected. Move the entries with `PUT /api/memory/entries/:id/scope` (owner session only), then
+re-save each moved entry's content once so `updateLinkIndex` re-resolves the wikilinks among
+them in the new scope; moving one entry re-indexes only that entry, while its siblings are
+still in the old scope.

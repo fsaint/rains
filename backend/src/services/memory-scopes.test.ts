@@ -144,6 +144,40 @@ describe('getAgentScopeGrants', () => {
     expect(sqlAt(0)).toContain('s.user_id = ?');
     expect(argsAt(0)).toContain(USER);
   });
+
+  /**
+   * Archiving hides a scope from pickers; it does not revoke a grant. If it
+   * did, a restricted agent whose only grant was archived would come back with
+   * no scopes, and resolveMemoryContext would silently hand it the owner's
+   * default — the one place its writes were never meant to land.
+   */
+  it('keeps a granted scope even when it is archived', async () => {
+    queue(rows([
+      { ...scopeRow(), granted: false, grant_count: 1 },
+      { ...scopeRow({ id: 'scope-work', slug: 'work', name: 'Work', is_default: true, archived_at: '2026-09-01T00:00:00.000Z' }), granted: true, grant_count: 1 },
+    ]));
+
+    const grants = await getAgentScopeGrants(AGENT, USER);
+
+    expect(grants.mode).toBe('restricted');
+    expect(grants.scopes.map((s) => s.slug)).toEqual(['work']);
+    expect(grants.scopes[0].archivedAt).toBe('2026-09-01T00:00:00.000Z');
+    expect(grants.defaultScopeId).toBe('scope-work');
+    // Archived rows are dropped only when nothing grants them.
+    expect(sqlAt(0)).toContain('(g.agent_id IS NOT NULL OR s.archived_at IS NULL)');
+  });
+
+  it('still hides archived scopes from an unrestricted agent', async () => {
+    queue(rows([
+      { ...scopeRow(), granted: false, grant_count: 0 },
+      { ...scopeRow({ id: 'scope-old', slug: 'old', name: 'Old', is_default: false, archived_at: '2026-09-01T00:00:00.000Z' }), granted: false, grant_count: 0 },
+    ]));
+
+    const grants = await getAgentScopeGrants(AGENT, USER);
+
+    expect(grants.mode).toBe('all');
+    expect(grants.scopes.map((s) => s.slug)).toEqual(['default']);
+  });
 });
 
 describe('setAgentScopeGrants', () => {
@@ -247,6 +281,22 @@ describe('resolveMemoryContext', () => {
     expect(ctx!.scopeIds).toContain('scope-default');
     // …and writes still land there, not somewhere new.
     expect(ctx!.defaultScopeId).toBe('scope-default');
+  });
+
+  it("keeps an archived granted scope as a restricted agent's write target", async () => {
+    queue(rows([
+      { ...scopeRow(), granted: false, grant_count: 1 },
+      { ...scopeRow({ id: 'scope-work', slug: 'work', name: 'Work', is_default: true, archived_at: '2026-09-01T00:00:00.000Z' }), granted: true, grant_count: 1 },
+    ]));
+
+    const ctx = await resolveMemoryContext(null, async () => ({ agentId: AGENT, userId: USER }));
+
+    expect(ctx!.defaultScopeId).toBe('scope-work');
+    const picked = pickScope(ctx!, undefined, 'write');
+    expect(isRejection(picked)).toBe(false);
+    expect((picked as { scopeIds: string[] }).scopeIds).toEqual(['scope-work']);
+    // Never the owner's default: that is the silent misfile this guards against.
+    expect(ctx!.scopeIds).not.toContain('scope-default');
   });
 });
 

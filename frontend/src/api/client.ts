@@ -813,7 +813,8 @@ export interface AgentMemoryScopeGrants {
   mode: 'all' | 'restricted';
   defaultScopeId: string;
   grantedScopeIds: string[];
-  availableScopes: Array<{ id: string; slug: string; name: string; is_default: boolean }>;
+  // A granted scope can be archived and stays reachable to the agent; archived_at says so (snake_case, like its sibling is_default).
+  availableScopes: Array<{ id: string; slug: string; name: string; is_default: boolean; archived_at?: string | null }>;
 }
 
 // ============================================================================

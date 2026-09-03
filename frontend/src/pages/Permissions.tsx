@@ -1810,6 +1810,9 @@ function MemoryScopeEditor({ agentId }: { agentId: string }) {
                   className="accent-trust-blue disabled:opacity-50"
                 />
                 <span className="text-sm text-white truncate">{s.name}</span>
+                {s.archived_at && (
+                  <span className="text-[10px] text-gray-500 italic">(archived)</span>
+                )}
                 <span className="text-[10px] text-gray-500">{s.slug}</span>
               </label>
               {on && (

@@ -115,6 +115,14 @@ Default-closed was considered and rejected: it would need a grant row written at
 
 The `is_default` row is the agent's write target. Managed at `GET|PUT /api/permissions/:agentId/memory/scopes`, or in the dashboard under Permissions → memory → Memory scopes.
 
+Three rules keep a restricted agent inside its partition when scopes change underneath it:
+
+- **A granted scope stays reachable after it is archived.** Archiving hides a scope from the dashboard; it does not re-home the agents pinned to it. Without this, an agent whose only grant was archived would silently fall through to the owner's `default` scope, which is a widening. The editor marks such grants "(archived)".
+- **Deleting a scope re-points its grants** to the `reassign_to` scope, or is refused with **409 `SCOPE_IN_USE`** (naming the agents) when any agent's only grant is that scope. Otherwise the FK cascade would drop the grant rows and turn a restricted agent into an unrestricted one.
+- **An agent that creates a scope is granted it** (as a non-default grant) if it is restricted. Unrestricted agents reach every scope already.
+
+If entries land in a scope you did not expect, check `GET /api/audit` for which *agent* made the `memory_*` calls before suspecting resolution: a client with two Helm connectors can route memory calls through the unrestricted one while the other agent does the reading.
+
 ### What agents cannot do
 
 - **Move an entry between scopes.** Owner-only, via `PUT /api/memory/entries/:id/scope`.

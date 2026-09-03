@@ -220,6 +220,50 @@ describe('Permissions page', () => {
     });
   });
 
+  describe('a Memory instance', () => {
+    const memoryInstance = {
+      ...instanceBase,
+      id: 'i-memory',
+      serviceType: 'memory',
+      serviceName: 'Memory',
+      credentialStatus: 'not_linked' as const,
+      permissionLevel: 'full' as const,
+      config: null,
+    };
+
+    beforeEach(() => {
+      vi.mocked(permissions.getAgentPermissions).mockResolvedValue({
+        ...agentPerms,
+        agents: [{ ...agentPerms.agents[0], instances: [gmailInstance, memoryInstance] }],
+        availableServices: [
+          ...agentPerms.availableServices,
+          { type: 'memory', name: 'Memory', icon: 'Brain', authRequired: false },
+        ],
+      } as any);
+      vi.mocked(permissions.getInstanceConfig).mockResolvedValue({ ...memoryInstance, tools: [] } as any);
+      vi.mocked(permissions.getAgentMemoryScopes).mockResolvedValue({
+        mode: 'restricted',
+        defaultScopeId: 'sc-live',
+        grantedScopeIds: ['sc-live', 'sc-old'],
+        availableScopes: [
+          { id: 'sc-live', slug: 'live', name: 'Live scope', is_default: true, archived_at: null },
+          { id: 'sc-old', slug: 'old', name: 'Old scope', is_default: false, archived_at: '2026-08-01T00:00:00Z' },
+        ],
+      });
+    });
+
+    it('marks a granted scope that has been archived, and only that one', async () => {
+      render(<Permissions />, { wrapper: createWrapper() });
+      await expandAgent();
+      fireEvent.click(screen.getByText('Memory'));
+
+      const old = (await screen.findByText('Old scope')).closest('label') as HTMLElement;
+      const live = screen.getByText('Live scope').closest('label') as HTMLElement;
+      expect(within(old).getByText('(archived)')).toBeInTheDocument();
+      expect(within(live).queryByText('(archived)')).not.toBeInTheDocument();
+    });
+  });
+
   describe('a Hermeneutix instance', () => {
     beforeEach(() => {
       vi.mocked(permissions.getAgentPermissions).mockResolvedValue({

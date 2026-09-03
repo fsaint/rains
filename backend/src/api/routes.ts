@@ -7766,12 +7766,15 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       if (row) roots.push({ ...row, scope: scope.slug, scope_name: scope.name });
     }
 
-    const primary = roots.find((r) => r.scope === memCtx.scopes.find((s) => s.isDefault)?.slug) ?? roots[0];
+    // The caller's write target, which for an agent is its grant's default —
+    // not whichever scope the owner flagged. Both must agree with pickScope.
+    const defaultScope = memCtx.scopes.find((s) => s.id === memCtx.defaultScopeId);
+    const primary = roots.find((r) => r.scope === defaultScope?.slug) ?? roots[0];
 
     return reply.send({
       data: {
         ...primary,
-        default_scope: memCtx.scopes.find((s) => s.isDefault)?.slug ?? null,
+        default_scope: defaultScope?.slug ?? null,
         scopes: roots,
       },
     });
@@ -8671,6 +8674,21 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     // A scope without a root has no tree to hang anything from.
     await ensureMemoryRoot(memCtx.userId, id);
 
+    // A restricted agent sees only its granted scopes, so without a grant it
+    // could create a scope it can never reach. Granted, not made default: its
+    // write target stays wherever the owner put it.
+    if (memCtx.agentId) {
+      const grants = await getAgentScopeGrants(memCtx.agentId, memCtx.userId);
+      if (grants.mode === 'restricted') {
+        await client.execute({
+          sql: `INSERT INTO agent_memory_scopes (id, agent_id, scope_id, is_default, created_at)
+                VALUES (?, ?, ?, ?, now())
+                ON CONFLICT (agent_id, scope_id) DO NOTHING`,
+          args: [nanoid(), memCtx.agentId, id, false],
+        });
+      }
+    }
+
     return reply.status(201).send({
       data: { id, slug, name, description: (body.description as string | undefined) ?? null },
     });
@@ -8787,6 +8805,33 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.send({ data: { archived: true } });
     }
 
+    // Agents granted this scope. One whose ONLY grant is this scope would be
+    // left restricted-to-nothing by the delete, and resolveMemoryContext would
+    // silently hand it the owner's default — so that case is refused unless
+    // the grants are being re-pointed.
+    const grantResult = await client.execute({
+      sql: `SELECT g.agent_id, g.is_default, a.name,
+                   (SELECT COUNT(*) FROM agent_memory_scopes WHERE agent_id = g.agent_id) AS grant_count
+            FROM agent_memory_scopes g
+            JOIN agents a ON a.id = g.agent_id
+            WHERE g.scope_id = ?`,
+      args: [request.params.id],
+    });
+    const grantRows = grantResult.rows as Record<string, unknown>[];
+
+    if (!query.reassign_to) {
+      const stranded = grantRows
+        .filter((g) => Number(g.grant_count) === 1)
+        .map((g) => ({ id: g.agent_id as string, name: g.name as string }));
+      if (stranded.length > 0) {
+        return reply.status(409).send({
+          error: `This scope is the only one granted to ${stranded.map((a) => a.name).join(', ')}. Pass reassign_to to move the grant, or change the agent's scopes first.`,
+          code: 'SCOPE_IN_USE',
+          agents: stranded,
+        });
+      }
+    }
+
     const countResult = await client.execute({
       sql: `SELECT COUNT(*) AS count FROM memory_entries WHERE scope_id = ? AND is_deleted = false`,
       args: [request.params.id],
@@ -8810,6 +8855,23 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         await client.execute({
           sql: `UPDATE ${table} SET scope_id = ? WHERE scope_id = ?`,
           args: [query.reassign_to, request.params.id],
+        });
+      }
+      // Re-point grants. Old rows go first: an agent may hold one default, and
+      // the partial unique index enforces it, so the old default row must be
+      // gone before the same flag is written on the target. An agent already
+      // granted the target keeps that row as it is (insert-or-ignore), so
+      // is_default carries over only when the target was not yet granted.
+      await client.execute({
+        sql: `DELETE FROM agent_memory_scopes WHERE scope_id = ?`,
+        args: [request.params.id],
+      });
+      for (const g of grantRows) {
+        await client.execute({
+          sql: `INSERT INTO agent_memory_scopes (id, agent_id, scope_id, is_default, created_at)
+                VALUES (?, ?, ?, ?, now())
+                ON CONFLICT (agent_id, scope_id) DO NOTHING`,
+          args: [nanoid(), g.agent_id as string, query.reassign_to, Boolean(g.is_default)],
         });
       }
     }
@@ -8860,16 +8922,39 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.status(400).send({ error: "A scope's index entry cannot be moved" });
     }
 
+    const oldScopeId = entry.rows[0].scope_id as string;
     const now = new Date().toISOString();
+
+    // Order matters, and there is no transaction helper to hide it. The
+    // composite FKs memory_branches(entry_id, scope_id) and
+    // (parent_entry_id, scope_id) → memory_entries(id, scope_id) reject both
+    // "move the entry, then its branch" and the reverse, and the children's
+    // branch rows reference (this entry, old scope) as their parent. So: the
+    // entry leaves its subtree behind — the children close the gap up to its
+    // former parent — its branch row goes, the entry moves, and it re-enters
+    // the new scope at the root, the way a freshly created top-level entry does.
+    const ownBranch = await client.execute({
+      sql: `SELECT parent_entry_id FROM memory_branches WHERE entry_id = ? AND scope_id = ? LIMIT 1`,
+      args: [id, oldScopeId],
+    });
+    const formerParentId = (ownBranch.rows[0]?.parent_entry_id as string | null | undefined) ?? null;
+
+    await client.execute({
+      sql: `UPDATE memory_branches SET parent_entry_id = ? WHERE parent_entry_id = ? AND scope_id = ?`,
+      args: [formerParentId, id, oldScopeId],
+    });
+    await client.execute({
+      sql: `DELETE FROM memory_branches WHERE entry_id = ? AND scope_id = ?`,
+      args: [id, oldScopeId],
+    });
     await client.execute({
       sql: `UPDATE memory_entries SET scope_id = ?, updated_at = ? WHERE id = ?`,
       args: [targetScopeId, now, id],
     });
-    // The entry leaves its subtree behind rather than dragging children across
-    // the partition: it re-enters the new scope at the root.
     await client.execute({
-      sql: `UPDATE memory_branches SET scope_id = ?, parent_entry_id = NULL WHERE entry_id = ?`,
-      args: [targetScopeId, id],
+      sql: `INSERT INTO memory_branches (id, entry_id, parent_entry_id, scope_id, position, is_expanded)
+            VALUES (?, ?, ?, ?, ?, false)`,
+      args: [nanoid(), id, null, targetScopeId, 0],
     });
     // Its links pointed at entries in the old scope and cannot survive the move.
     await client.execute({ sql: `DELETE FROM memory_links WHERE source_id = ? OR target_id = ?`, args: [id, id] });
@@ -8900,7 +8985,11 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       }
 
       const grants = await getAgentScopeGrants(request.params.agentId, userId);
-      const all = await listUserScopes(userId);
+      const grantedIds = new Set(grants.scopes.map((s) => s.id));
+      // Live scopes, plus any archived scope this agent is granted — a grant
+      // survives archiving, and the picker must be able to show (and clear) it.
+      const all = (await listUserScopes(userId, { includeArchived: true }))
+        .filter((s) => !s.archivedAt || grantedIds.has(s.id));
 
       return reply.send({
         data: {
@@ -8908,7 +8997,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           defaultScopeId: grants.defaultScopeId,
           grantedScopeIds: grants.scopes.map((s) => s.id),
           availableScopes: all.map((s) => ({
-            id: s.id, slug: s.slug, name: s.name, is_default: s.isDefault,
+            id: s.id, slug: s.slug, name: s.name, is_default: s.isDefault, archived_at: s.archivedAt,
           })),
         },
       });

@@ -124,6 +124,13 @@ export async function listUserScopes(
  * The join is filtered to the owner's scopes as well as the agent's grants, so
  * a grant pointing at somebody else's scope — however it got written — is inert
  * rather than an escape hatch.
+ *
+ * Archiving hides a scope; it does not revoke a grant. A granted scope stays in
+ * the agent's set even when archived, because dropping it would leave a
+ * restricted agent whose only grant is archived with no scopes at all — and
+ * resolveMemoryContext would then hand it the owner's default, the one place
+ * its writes were never meant to land. Ungranted archived scopes are dropped
+ * as before.
  */
 export async function getAgentScopeGrants(
   agentId: string,
@@ -136,7 +143,7 @@ export async function getAgentScopeGrants(
                  (SELECT COUNT(*) FROM agent_memory_scopes WHERE agent_id = ?) AS grant_count
           FROM memory_scopes s
           LEFT JOIN agent_memory_scopes g ON g.scope_id = s.id AND g.agent_id = ?
-          WHERE s.user_id = ? AND s.archived_at IS NULL
+          WHERE s.user_id = ? AND (g.agent_id IS NOT NULL OR s.archived_at IS NULL)
           ORDER BY COALESCE(g.is_default, s.is_default) DESC, s.name ASC`,
     args: [agentId, agentId, userId],
   });
@@ -145,7 +152,9 @@ export async function getAgentScopeGrants(
   const grantCount = Number(rows[0]?.grant_count ?? 0);
   const restricted = grantCount > 0;
 
-  const scopes = (restricted ? rows.filter((r) => Boolean(r.granted)) : rows).map(rowToScope);
+  // Same rule as the WHERE, restated here so it holds whatever the query returns.
+  const usable = rows.filter((r) => Boolean(r.granted) || !r.archived_at);
+  const scopes = (restricted ? usable.filter((r) => Boolean(r.granted)) : usable).map(rowToScope);
 
   return {
     mode: restricted ? 'restricted' : 'all',

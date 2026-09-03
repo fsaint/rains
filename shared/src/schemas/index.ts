@@ -151,7 +151,8 @@ export const AuditResultSchema = z.enum(['success', 'blocked', 'error', 'pending
 export const AuditFilterSchema = z.object({
   startDate: z.coerce.date().optional(),
   endDate: z.coerce.date().optional(),
-  agentId: z.string().uuid().optional(),
+  // Agent ids are nanoids, not UUIDs; a uuid() check here 500s the audit page.
+  agentId: z.string().min(1).optional(),
   eventType: AuditEventTypeSchema.optional(),
   tool: z.string().optional(),
   result: AuditResultSchema.optional(),
