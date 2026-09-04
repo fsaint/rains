@@ -1619,6 +1619,13 @@ through that path, which is why it went unnoticed.
 
 `setPermissionLevel` now disables the instance rows too (`backend/src/services/permissions.ts`).
 
+The mirror image bit the dashboard later: `deleteServiceInstance` removed the instance and
+left the access row enabled, so an agent whose memory and skills instances had been removed
+still failed the Helm Admin combination guard with `this agent also has: skills`, and the
+dialog's "turn those off" could only delete instances. Now the last instance of a service
+also disables its access row, and the dashboard's conflict resolver disables access
+explicitly so pre-existing leftovers clear too.
+
 When reading or writing enablement, always account for **both** tables. `listEnabledServiceTypes`
 is the helper that unions them correctly; `isServiceEnabledForAgent` is the per-service
 equivalent. Both carry comments saying to change them together.

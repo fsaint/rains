@@ -1333,18 +1333,31 @@ export async function deleteServiceInstance(instanceId: string): Promise<void> {
   // Delete the instance
   await db.delete(agentServiceInstances).where(eq(agentServiceInstances.id, instanceId));
 
-  // If it was the default, promote the next one
-  if (instance.isDefault) {
-    const [next] = await db
+  // What is left of this service on the agent. The deleted row is excluded
+  // explicitly rather than trusted to be gone, so the decision below cannot
+  // be fooled by a read that races the delete.
+  const remaining = (
+    await db
       .select()
       .from(agentServiceInstances)
-      .where(and(eq(agentServiceInstances.agentId, instance.agentId), eq(agentServiceInstances.serviceType, instance.serviceType)));
-    if (next) {
-      await db
-        .update(agentServiceInstances)
-        .set({ isDefault: true, updatedAt: new Date().toISOString() })
-        .where(eq(agentServiceInstances.id, next.id));
-    }
+      .where(and(eq(agentServiceInstances.agentId, instance.agentId), eq(agentServiceInstances.serviceType, instance.serviceType)))
+  ).filter((i) => i.id !== instanceId);
+
+  // If it was the default, promote the next one
+  if (instance.isDefault && remaining.length > 0) {
+    await db
+      .update(agentServiceInstances)
+      .set({ isDefault: true, updatedAt: new Date().toISOString() })
+      .where(eq(agentServiceInstances.id, remaining[0].id));
+  }
+
+  // The legacy agent_service_access row is the other record of "this service
+  // is on", and createServiceInstance enabled it. listEnabledServiceTypes
+  // unions both tables, so if it stayed enabled the service would keep
+  // counting — for the combination guard and the dashboard — with nothing
+  // left to remove.
+  if (remaining.length === 0) {
+    await setServiceAccess(instance.agentId, instance.serviceType, false);
   }
 
   // Remove credential from legacy junction if present

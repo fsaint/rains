@@ -150,6 +150,7 @@ import {
   listOpenMcpAgents,
   listEnabledServiceTypes,
   createServiceInstance,
+  deleteServiceInstance,
   autoLinkCredential,
   detachCredential,
   updateServiceInstance,
@@ -1275,6 +1276,41 @@ describe('Permission Service', () => {
         expect.objectContaining({ credentialId: 'cred-new' }),
         expect.objectContaining({ credentialId: 'cred-new' }),
       ]);
+    });
+  });
+  /**
+   * Instances and the legacy agent_service_access row are two records of one
+   * fact, and listEnabledServiceTypes unions them. createServiceInstance turns
+   * the access row on; deleting the last instance must turn it off, or the
+   * service keeps counting as enabled (combination guard, dashboard) with no
+   * instance left to remove.
+   */
+  describe('deleteServiceInstance and the legacy access row', () => {
+    const accessCalls = () =>
+      vi.mocked(client.execute).mock.calls
+        .map((c) => c[0] as { sql: string; args: unknown[] })
+        .filter((q) => typeof q?.sql === 'string' && q.sql.includes('INSERT INTO agent_service_access'));
+
+    it('disables the access row when the last instance of a service is deleted', async () => {
+      const skills = { id: 'inst-skills', agentId: 'agent-1', serviceType: 'skills', credentialId: null, enabled: true, isDefault: true, label: null, config: null };
+      mockTables(new Map<object, unknown[]>([[agentServiceInstances, [skills]]]));
+
+      await deleteServiceInstance('inst-skills');
+
+      expect(accessCalls()).toHaveLength(1);
+      expect(accessCalls()[0].args.slice(1, 4)).toEqual(['agent-1', 'skills', false]);
+    });
+
+    it('leaves the access row alone while another instance of the service remains', async () => {
+      const inst1 = { id: 'inst-1', agentId: 'agent-1', serviceType: 'gmail', credentialId: null, enabled: true, isDefault: true, label: null, config: null };
+      const inst2 = { id: 'inst-2', agentId: 'agent-1', serviceType: 'gmail', credentialId: null, enabled: true, isDefault: false, label: null, config: null };
+      const { updated } = mockTables(new Map<object, unknown[]>([[agentServiceInstances, [inst1, inst2]]]));
+
+      await deleteServiceInstance('inst-1');
+
+      expect(accessCalls()).toEqual([]);
+      // The sibling is promoted to default, as before.
+      expect(updated(agentServiceInstances)).toEqual([expect.objectContaining({ isDefault: true })]);
     });
   });
 });

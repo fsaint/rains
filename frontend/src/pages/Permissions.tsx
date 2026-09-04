@@ -677,6 +677,10 @@ function AddServiceModal({
       for (const serviceType of c.conflicting) {
         const instance = agentInstances.find((i) => i.serviceType === serviceType);
         if (instance) await permissions.deleteInstance(instance.id);
+        // The guard also counts the legacy per-service access row, which can
+        // stay enabled with no instance left. Turn it off too, or the retry
+        // meets the same refusal and this button can never clear it.
+        await permissions.setServiceAccess(agentId, serviceType, false);
       }
       return permissions.createInstance(agentId, c.serviceType, undefined, c.credentialId);
     },

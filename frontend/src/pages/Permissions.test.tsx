@@ -18,6 +18,7 @@ vi.mock('../api/client', () => ({
     getServiceCredentials: vi.fn(),
     createInstance: vi.fn(),
     deleteInstance: vi.fn(),
+    setServiceAccess: vi.fn(),
     setInstanceLevel: vi.fn(),
     updateInstance: vi.fn(),
     setInstanceToolPermission: vi.fn(),
@@ -217,6 +218,61 @@ describe('Permissions page', () => {
       expect(await screen.findByText(/Credential not found/)).toBeInTheDocument();
       expect(screen.getByRole('link', { name: /Reconnect on the Credentials page/ })).toHaveAttribute('href', '/credentials');
       expect(screen.queryAllByRole('radio')).toHaveLength(0);
+    });
+  });
+
+  /**
+   * The server's combination guard counts the legacy per-service access row
+   * as well as instances. An agent can have that row enabled with no instance
+   * left, so resolving a conflict must turn the row off too, or the retry hits
+   * the same refusal and the button can never clear it.
+   */
+  describe('resolving a service-combination conflict', () => {
+    const adminService = { type: 'helm-admin', name: 'Helm Admin', icon: 'Shield', authRequired: false };
+
+    function callOrder(fn: unknown) {
+      return vi.mocked(fn as (...a: unknown[]) => unknown).mock.invocationCallOrder;
+    }
+
+    async function addAdminAndResolve(instances: unknown[]) {
+      vi.mocked(permissions.getAgentPermissions).mockResolvedValue({
+        ...agentPerms,
+        agents: [{ ...agentPerms.agents[0], instances }],
+        availableServices: [...agentPerms.availableServices, adminService],
+      } as any);
+      vi.mocked(permissions.createInstance)
+        .mockRejectedValueOnce(
+          new ApiError('SERVICE_COMBINATION_NOT_ALLOWED', 'Helm Admin cannot share an agent', { conflicting: ['skills'] })
+        )
+        .mockResolvedValue({} as any);
+      vi.mocked(permissions.deleteInstance).mockResolvedValue(undefined);
+      vi.mocked(permissions.setServiceAccess).mockResolvedValue({} as any);
+
+      render(<Permissions />, { wrapper: createWrapper() });
+      await expandAgent();
+      fireEvent.click(screen.getByRole('button', { name: /Add Service/ }));
+      const add = modal(/Choose a service to add/);
+      fireEvent.click(await add.findByRole('button', { name: /Helm Admin/ }));
+
+      fireEvent.click(await screen.findByRole('button', { name: /Turn those off and add Helm Admin/ }));
+      await waitFor(() => expect(permissions.createInstance).toHaveBeenCalledTimes(2));
+    }
+
+    it('turns off legacy access for a conflicting service that has no instance', async () => {
+      await addAdminAndResolve([gmailInstance]);
+
+      expect(permissions.deleteInstance).not.toHaveBeenCalled();
+      expect(permissions.setServiceAccess).toHaveBeenCalledWith('a1', 'skills', false);
+      expect(callOrder(permissions.setServiceAccess)[0]).toBeLessThan(callOrder(permissions.createInstance)[1]);
+    });
+
+    it('deletes the instance, then turns off legacy access, then retries', async () => {
+      await addAdminAndResolve([gmailInstance, skillsInstance]);
+
+      expect(permissions.deleteInstance).toHaveBeenCalledWith('i-skills');
+      expect(permissions.setServiceAccess).toHaveBeenCalledWith('a1', 'skills', false);
+      expect(callOrder(permissions.deleteInstance)[0]).toBeLessThan(callOrder(permissions.setServiceAccess)[0]);
+      expect(callOrder(permissions.setServiceAccess)[0]).toBeLessThan(callOrder(permissions.createInstance)[1]);
     });
   });
 
