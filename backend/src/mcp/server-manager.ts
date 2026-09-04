@@ -39,9 +39,9 @@ export interface ToolContext {
     data: CredentialData;
   };
   linkedAccounts?: Array<{ email: string; name?: string; isDefault: boolean }>;
-  /** Default Drive permission level (injected for drive tools) */
+  /** Default Drive permission level (injected for drive and gmail tools) */
   driveDefaultLevel?: 'read' | 'write' | 'blocked';
-  /** Per-folder Drive path rules (injected for drive tools) */
+  /** Per-folder Drive path rules (injected for drive and gmail tools) */
   drivePathRules?: Array<{ folderId: string; label?: string; permission: 'read' | 'write' | 'blocked' }>;
   /** Gateway token for services that call the Reins backend API (e.g. memory) */
   gatewayToken?: string;
@@ -294,8 +294,10 @@ export class ServerManager extends EventEmitter<ServerManagerEvents> {
       (context as unknown as Record<string, unknown>)['companydomain'] = pipedriveData.companydomain ?? '';
     }
 
-    // Inject Drive path rules for drive tools
-    if (serverType === 'drive') {
+    // Inject Drive path rules for drive tools — and gmail, whose attachment
+    // resolver uses them to stop a Drive read being laundered through a Gmail
+    // tool. Mirrors the injection in agent-endpoint.ts; keep the two in step.
+    if (serverType === 'drive' || serverType === 'gmail') {
       const driveConfig = await getDrivePathConfig(agentId);
       context.driveDefaultLevel = driveConfig.defaultLevel;
       context.drivePathRules = driveConfig.rules;

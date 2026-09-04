@@ -1873,3 +1873,31 @@ expected. Move the entries with `PUT /api/memory/entries/:id/scope` (owner sessi
 re-save each moved entry's content once so `updateLinkIndex` re-resolves the wikilinks among
 them in the new scope; moving one entry re-indexes only that entry, while its siblings are
 still in the old scope.
+
+---
+
+## Drive path rules matched one folder exactly, and most tools never asked
+
+### Symptom
+
+Before 2026-09-04, an agent with `defaultLevel: blocked` and a `read` rule on one folder could
+still read, search, move, share, and delete files anywhere its Google grant reached, and
+files in the granted folder's subfolders were refused. Audit logs from before that date show
+Drive calls succeeding that today's rules would refuse.
+
+### Root Cause
+
+`resolvePermission` compared a single folder id for equality and returned the default when
+no folder was given. Only `drive_list_files` and `drive_create_file` passed one; the other
+seven tools called the check with no folder and always got the default. Nothing filtered
+list or search results, `update_file` passed `addParents`/`removeParents` straight through,
+and the config route validated only `defaultLevel`. Malformed stored JSON fell back to
+`write`.
+
+### Fix
+
+Rules now cover a folder's whole subtree via an ancestry walk (`resolveFilePermission` in
+`servers/src/drive/path-rules.ts`), every tool resolves the **file's** permission, search is
+post-filtered, moves check both ends, the config route validates and normalises rules, and
+malformed JSON fails closed to `blocked`. The no-config default stays `write`. The end-to-end
+proof lives in `backend/src/mcp/scoped-services.e2e.test.ts`.

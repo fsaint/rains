@@ -42,6 +42,7 @@ import {
 } from 'lucide-react';
 import { DeploymentPanel } from '../components/DeploymentPanel';
 import AgentSkillToggles from '../components/AgentSkillToggles';
+import { parseDriveFolderId } from '../utils/drive';
 
 /**
  * Kept in step with ADMIN_SERVICE_TYPE in backend/src/services/permissions.ts,
@@ -1860,6 +1861,8 @@ function DrivePathEditor({ agentId }: DrivePathEditorProps) {
   const [newFolderId, setNewFolderId] = useState('');
   const [newLabel, setNewLabel] = useState('');
   const [newPermission, setNewPermission] = useState<'read' | 'write' | 'blocked'>('write');
+  // Why the last Add was refused; cleared as soon as the folder field changes.
+  const [addError, setAddError] = useState<string | null>(null);
 
   const { data: config, isLoading } = useQuery({
     queryKey: ['permissions', agentId, 'drive-path-config'],
@@ -1878,16 +1881,30 @@ function DrivePathEditor({ agentId }: DrivePathEditorProps) {
   };
 
   const addRule = () => {
-    if (!newFolderId.trim()) return;
-    const rules = [...(config?.rules ?? []), { folderId: newFolderId.trim(), label: newLabel.trim() || undefined, permission: newPermission }];
+    // A pasted URL is stored as its id: overrides are matched by id, and a
+    // verbatim URL would sit in the list and never match anything.
+    const folderId = parseDriveFolderId(newFolderId);
+    if (!folderId) {
+      setAddError('That does not look like a Drive folder id or URL.');
+      return;
+    }
+    // Resolution takes the first rule for a folder, so a second one would be
+    // dead weight the user cannot see doing nothing.
+    if ((config?.rules ?? []).some((r) => r.folderId === folderId)) {
+      setAddError('That folder already has an override. Remove it first to change it.');
+      return;
+    }
+    const rules = [...(config?.rules ?? []), { folderId, label: newLabel.trim() || undefined, permission: newPermission }];
     updateMutation.mutate({ defaultLevel: config?.defaultLevel ?? 'write', rules });
+    setAddError(null);
     setNewFolderId('');
     setNewLabel('');
     setNewPermission('write');
   };
 
-  const removeRule = (folderId: string) => {
-    const rules = (config?.rules ?? []).filter((r) => r.folderId !== folderId);
+  /** By position, not id: a config saved before duplicates were refused may still hold two rows for one folder. */
+  const removeRule = (index: number) => {
+    const rules = (config?.rules ?? []).filter((_, i) => i !== index);
     updateMutation.mutate({ defaultLevel: config?.defaultLevel ?? 'write', rules });
   };
 
@@ -1929,6 +1946,12 @@ function DrivePathEditor({ agentId }: DrivePathEditorProps) {
               </button>
             ))}
           </div>
+          <p className="text-xs text-gray-500 mt-2">
+            Folders not listed: {defaultLevel}
+            {defaultLevel === 'blocked' && ' — the agent can only reach folders you add below.'}
+            {defaultLevel === 'read' && ' — the agent can read anything but only change folders you allow below.'}
+            {defaultLevel === 'write' && ' — the agent can read and change anything unless a folder below says otherwise.'}
+          </p>
         </div>
 
         {/* Folder Rules */}
@@ -1936,8 +1959,8 @@ function DrivePathEditor({ agentId }: DrivePathEditorProps) {
           <div>
             <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Folder overrides</div>
             <div className="space-y-2">
-              {rules.map((rule: DrivePathRule) => (
-                <div key={rule.folderId} className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
+              {rules.map((rule: DrivePathRule, index: number) => (
+                <div key={`${rule.folderId}:${index}`} className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-reins-navy truncate">
                       {rule.label || rule.folderId}
@@ -1950,8 +1973,9 @@ function DrivePathEditor({ agentId }: DrivePathEditorProps) {
                     {rule.permission}
                   </span>
                   <button
-                    onClick={() => removeRule(rule.folderId)}
+                    onClick={() => removeRule(index)}
                     disabled={updateMutation.isPending}
+                    aria-label={`Remove override for ${rule.label || rule.folderId}`}
                     className="text-gray-300 hover:text-alert-red transition-colors"
                   >
                     <X className="w-4 h-4" />
@@ -1968,11 +1992,15 @@ function DrivePathEditor({ agentId }: DrivePathEditorProps) {
           <div className="space-y-2">
             <input
               type="text"
-              placeholder="Folder ID (from Drive URL)"
+              placeholder="Folder ID or Drive URL"
               value={newFolderId}
-              onChange={(e) => setNewFolderId(e.target.value)}
+              onChange={(e) => {
+                setNewFolderId(e.target.value);
+                setAddError(null);
+              }}
               className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-trust-blue/30 focus:border-trust-blue"
             />
+            {addError && <p className="text-xs text-red-600">{addError}</p>}
             <div className="flex gap-2">
               <input
                 type="text"

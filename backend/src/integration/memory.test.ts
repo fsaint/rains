@@ -12,7 +12,7 @@
 
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
 import bcrypt from 'bcryptjs';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, InjectOptions } from 'fastify';
 
 // ── Module mocks (hoisted before imports) ────────────────────────────────────
 
@@ -1931,6 +1931,391 @@ describe('Memory API — end-to-end', () => {
         expect(res.statusCode).toBe(200);
         expect(res.json().data.default_scope).toBe('work');
         expect(res.json().data.scope).toBe('work');
+      });
+    });
+
+    // ── Restricted agent: granted only `work` ───────────────────────────────
+    //
+    // The owner has `default` and `work`; the agent is granted `work` alone.
+    // Unlike the fixtures above, this one serves rows from small tables keyed
+    // on the ids the route binds — so a query that forgets to bind the scope
+    // returns default-scope rows, and the assertion catches it.
+
+    describe('restricted agent: granted only work', () => {
+      const WORK_ROOT_ID = 'work-root-id';
+      const WORK_ENTRY_ID = 'work-entry-id';
+      const WORK_PEER_ID = 'work-peer-id';
+
+      const restrictedScopes = [
+        { ...scopeRow, granted: false, grant_count: 1 },
+        { ...workRow, root_entry_id: WORK_ROOT_ID, granted: true, grant_count: 1, is_default: true },
+      ];
+      const scopeLabel = (scopeId: string) =>
+        scopeId === WORK_ID ? { scope: 'work', scope_name: 'Work' } : { scope: 'default', scope_name: 'Default' };
+
+      type Row = { id: string; scope_id: string; type: string; title: string; content: string };
+      const table: Row[] = [
+        { id: ROOT_ID, scope_id: SCOPE_ID, type: 'index', title: 'Memory Index', content: '# Memory Index\n' },
+        { id: ENTRY_ID, scope_id: SCOPE_ID, type: 'person', title: 'Alice Smith', content: 'Works at Acme Corp.' },
+        { id: WORK_ROOT_ID, scope_id: WORK_ID, type: 'index', title: 'Work Index', content: '# Work Index\n' },
+        { id: WORK_ENTRY_ID, scope_id: WORK_ID, type: 'note', title: 'Roadmap', content: 'See [[Alice Smith]] and [[Bob Jones]].' },
+        { id: WORK_PEER_ID, scope_id: WORK_ID, type: 'person', title: 'Bob Jones', content: '' },
+      ];
+      const full = (r: Row) => ({
+        ...r, user_id: USER_ID, created_at: NOW, updated_at: NOW, version: 1, ...scopeLabel(r.scope_id),
+      });
+      const parents: Record<string, string | null> = {
+        [ROOT_ID]: null, [ENTRY_ID]: ROOT_ID, [WORK_ROOT_ID]: null, [WORK_ENTRY_ID]: WORK_ROOT_ID, [WORK_PEER_ID]: WORK_ROOT_ID,
+      };
+      // One relation reaching into default, one staying inside work, one label.
+      const attributes = [
+        { id: 'attr-rel-out', entry_id: WORK_ENTRY_ID, type: 'relation', name: 'knows', value: ENTRY_ID, position: 0 },
+        { id: 'attr-rel-in', entry_id: WORK_ENTRY_ID, type: 'relation', name: 'peer', value: WORK_PEER_ID, position: 1 },
+        { id: 'attr-label', entry_id: WORK_ENTRY_ID, type: 'label', name: 'tag', value: 'planning', position: 2 },
+      ];
+      // A link row from before the composite FK: default → work.
+      const links = [{ source_id: ENTRY_ID, target_id: WORK_ENTRY_ID, context: 'legacy' }];
+
+      const isScopeId = (a: unknown) => a === SCOPE_ID || a === WORK_ID;
+      /** Rows whose scope is bound in args; every scope if none is bound. */
+      const inBoundScopes = (rows: Row[], args: unknown[]) =>
+        args.some(isScopeId) ? rows.filter((r) => args.includes(r.scope_id)) : rows;
+      /** The row named by args[0], provided its scope is bound too (or no scope is). */
+      const byIdScoped = (args: unknown[]) =>
+        inBoundScopes(table.filter((r) => r.id === args[0]), args.slice(1));
+
+      function restrictedFixture() {
+        mockExecute.mockImplementation(async (input: any) => {
+          const sql: string = typeof input === 'string' ? input : input.sql;
+          const args: unknown[] = typeof input === 'string' ? [] : (input.args ?? []);
+
+          if (sql.includes('FROM deployed_agents da')) {
+            return result([{ agent_id: AGENT_ID, user_id: USER_ID, runtime: 'openclaw', mcp_server_name: 'helm', is_manual: false }]);
+          }
+          if (sql.includes('FROM agents WHERE id = ? AND user_id = ?')) return result([{ '?column?': 1 }]);
+
+          // Scopes
+          if (sql.includes('FROM memory_scopes WHERE root_entry_id = ?')) {
+            const rest = args.slice(1);
+            return result(restrictedScopes.filter((s) =>
+              s.root_entry_id === args[0] && (rest.length === 0 || rest.includes(s.id))));
+          }
+          if (sql.includes('SELECT root_entry_id, name, is_system FROM memory_scopes WHERE id = ?')) {
+            return result(restrictedScopes.filter((s) => s.id === args[0]));
+          }
+          if (sql.includes('FROM memory_scopes WHERE id = ? AND user_id = ?')) {
+            return result(restrictedScopes.filter((s) => s.id === args[0]));
+          }
+          if (sql.includes('similarity(')) return EMPTY_RESULT;
+          if (sql.includes('FROM memory_scopes')) return result(restrictedScopes);
+          if (sql.includes('FROM agent_memory_scopes g')) return EMPTY_RESULT;
+
+          // Aggregates
+          if (sql.includes('COUNT(*) AS count FROM memory_entries')) {
+            return result(inBoundScopes(table, args).map((r) => ({ scope_id: r.scope_id, count: 1 })));
+          }
+          if (sql.includes('FROM memory_tags mt')) {
+            return result(args.includes(WORK_ID) ? [{ tag: 'planning', count: 1 }] : []);
+          }
+          if (sql.includes('FROM memory_tags WHERE entry_id = ?')) return EMPTY_RESULT;
+
+          // Attributes and links
+          if (sql.includes("ma.type = 'relation'")) return EMPTY_RESULT;
+          if (sql.includes('FROM memory_attributes a') || sql.includes('FROM memory_attributes ma')) return EMPTY_RESULT;
+          if (sql.includes('FROM memory_attributes') && sql.includes('entry_id = ?')) {
+            return result(attributes.filter((a) => a.entry_id === args[0]));
+          }
+          if (sql.includes('FROM memory_links ml') && sql.includes('JOIN memory_entries s')) return EMPTY_RESULT;
+          if (sql.includes('FROM memory_links ml') && sql.includes('target_id = ?')) {
+            const sources = links.filter((l) => l.target_id === args[0])
+              .map((l) => ({ src: table.find((r) => r.id === l.source_id)!, context: l.context }));
+            return result(sources
+              .filter(({ src }) => args.length === 1 || args.slice(1).includes(src.scope_id))
+              .map(({ src, context }) => ({ id: src.id, title: src.title, type: src.type, context })));
+          }
+
+          // Branches
+          if (sql.includes('FROM memory_branches WHERE entry_id = ?')) {
+            const id = args[0] as string;
+            return id in parents ? result([{ parent_entry_id: parents[id] }]) : EMPTY_RESULT;
+          }
+          if (sql.includes('MAX(position)')) return result([{ next_pos: 0 }]);
+
+          // Whole-scope reads
+          if (sql.includes('NULLS FIRST')) {
+            return result(inBoundScopes(table, args).map((r) => ({
+              id: r.id, type: r.type, title: r.title, parent_entry_id: parents[r.id], position: 0, is_expanded: false, ...scopeLabel(r.scope_id),
+            })));
+          }
+          if (sql.includes('SELECT e.id, e.type, e.title, s.slug AS scope') || sql.includes('COUNT(ml.source_id) AS backlink_count')) {
+            return result(inBoundScopes(table, args).map((r) => ({ ...full(r), parent_id: parents[r.id], backlink_count: 0 })));
+          }
+
+          // Single-entry reads
+          if (sql.includes('FROM memory_entries e') && sql.includes('JOIN memory_scopes s') && sql.includes('e.id = ?')) {
+            return result(byIdScoped(args).map(full));
+          }
+          if (sql.includes('e.scope_id IN')) {
+            let rows = inBoundScopes(table, args).filter((r) => r.type !== 'index');
+            const extra = args.find((a) => typeof a === 'string' && !isScopeId(a)) as string | undefined;
+            if (sql.includes('LOWER(e.title)')) rows = rows.filter((r) => r.title.toLowerCase() === extra?.toLowerCase());
+            if (sql.includes('b.parent_entry_id = ?')) rows = rows.filter((r) => parents[r.id] === extra);
+            return result(rows.map(full));
+          }
+          if (sql.startsWith('SELECT id, title FROM memory_entries') && sql.includes('title IN')) {
+            return result(table.filter((r) => r.scope_id === args[0] && args.slice(1).includes(r.title)));
+          }
+          if (sql.startsWith('SELECT id FROM memory_entries') && sql.includes('id IN')) {
+            return result(table.filter((r) => args.includes(r.id) && args.includes(r.scope_id)).map((r) => ({ id: r.id })));
+          }
+          if (sql.includes('FROM memory_entries') && sql.includes('title = ?')) {
+            // resolveOrCreate exact match / updateLinkIndex / transclusion: scope-bound title lookup
+            return result(table.filter((r) => r.scope_id === args[0] && args.includes(r.title)).map(full));
+          }
+          if (sql.includes('FROM memory_entries') && sql.includes('WHERE id = ?')) {
+            return result(byIdScoped(args).map(full));
+          }
+
+          // Writes: report a hit only when the bound id and scope agree.
+          if (sql.startsWith('UPDATE memory_entries SET')) {
+            const hit = table.some((r) => args.includes(r.id) && (!args.some(isScopeId) || args.includes(r.scope_id)));
+            return { rows: [], columns: [], rowsAffected: hit ? 1 : 0, lastInsertRowid: 0n };
+          }
+          return EMPTY_RESULT;
+        });
+      }
+
+      const agent = (method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, payload?: Record<string, unknown>) => {
+        const opts: InjectOptions = { method, url, headers: agentHeaders };
+        if (payload !== undefined) opts.payload = payload;
+        return app.inject(opts);
+      };
+      const argsOfAll = (pattern: string) => callsMatching(pattern).map(({ q }) => q.args as unknown[]);
+      const onlyWorkBound = (pattern: string) => {
+        const all = argsOfAll(pattern);
+        expect(all.length).toBeGreaterThan(0);
+        for (const a of all) {
+          expect(a).toContain(WORK_ID);
+          expect(a).not.toContain(SCOPE_ID);
+        }
+      };
+
+      describe('reads', () => {
+        it('lists only work entries, binding only the work scope', async () => {
+          restrictedFixture();
+          const res = await agent('GET', '/api/memory/entries');
+          expect(res.statusCode).toBe(200);
+          expect(res.json().data.map((r: any) => r.scope)).toEqual(['work', 'work']);
+          onlyWorkBound('e.scope_id IN');
+        });
+
+        it('searches only work entries', async () => {
+          restrictedFixture();
+          const res = await agent('GET', '/api/memory/entries?q=alice');
+          expect(res.statusCode).toBe(200);
+          expect(res.json().data.every((r: any) => r.scope === 'work')).toBe(true);
+          onlyWorkBound('plainto_tsquery');
+        });
+
+        it('cannot find a default-scope entry by exact title', async () => {
+          restrictedFixture();
+          const res = await agent('GET', '/api/memory/entries?title=Alice%20Smith');
+          expect(res.statusCode).toBe(200);
+          expect(res.json().data).toEqual([]);
+          onlyWorkBound('LOWER(e.title)');
+        });
+
+        it('lists no children of a default-scope parent', async () => {
+          restrictedFixture();
+          const res = await agent('GET', `/api/memory/entries?parent_id=${ROOT_ID}`);
+          expect(res.statusCode).toBe(200);
+          expect(res.json().data).toEqual([]);
+          onlyWorkBound('b.parent_entry_id = ?');
+        });
+
+        it('returns 404 for a default-scope entry by id', async () => {
+          restrictedFixture();
+          const res = await agent('GET', `/api/memory/entries/${ENTRY_ID}`);
+          expect(res.statusCode).toBe(404);
+        });
+
+        it('binds only the work scope for tags, tree, graph and dream', async () => {
+          restrictedFixture();
+          for (const [url, pattern] of [
+            ['/api/memory/tags', 'FROM memory_tags mt'],
+            ['/api/memory/tree', 'NULLS FIRST'],
+            ['/api/memory/graph', 's.slug AS scope'],
+            ['/api/memory/dream', 'backlink_count'],
+          ] as const) {
+            mockExecute.mockClear();
+            const res = await agent('GET', url);
+            expect(res.statusCode, url).toBe(200);
+            onlyWorkBound(pattern);
+          }
+        });
+
+        it('lists only the work scope', async () => {
+          restrictedFixture();
+          const res = await agent('GET', '/api/memory/scopes');
+          expect(res.statusCode).toBe(200);
+          expect(res.json().data.map((s: any) => s.slug)).toEqual(['work']);
+        });
+
+        it('returns one root, ensuring only the work root', async () => {
+          restrictedFixture();
+          const res = await agent('GET', '/api/memory/root');
+          expect(res.statusCode).toBe(200);
+          expect(res.json().data.id).toBe(WORK_ROOT_ID);
+          expect(res.json().data.scopes).toHaveLength(1);
+          expect(argsOfAll('SELECT root_entry_id, name, is_system FROM memory_scopes WHERE id = ?')).toEqual([[WORK_ID]]);
+        });
+
+        it('refuses ?scope=default with the grantable slugs', async () => {
+          restrictedFixture();
+          const res = await agent('GET', '/api/memory/entries?scope=default');
+          expect(res.statusCode).toBe(403);
+          expect(res.json().code).toBe('SCOPE_NOT_GRANTED');
+          expect(res.json().available_scopes).toEqual(['work']);
+        });
+
+        it('leaves a wikilink that resolves only in default unresolved', async () => {
+          restrictedFixture();
+          const res = await agent('GET', `/api/memory/entries/${WORK_ENTRY_ID}`);
+          expect(res.statusCode).toBe(200);
+          expect(res.json().data.resolvedLinks).toEqual({ 'Bob Jones': WORK_PEER_ID });
+        });
+
+        it('excludes a legacy cross-scope link row from backlinks', async () => {
+          restrictedFixture();
+          const res = await agent('GET', `/api/memory/entries/${WORK_ENTRY_ID}`);
+          expect(res.statusCode).toBe(200);
+          expect(res.json().data.backlinks).toEqual([]);
+        });
+
+        it('drops a relation attribute whose target is outside the grant', async () => {
+          // memory_attributes.value is polymorphic text; nothing in the database
+          // stops a relation from pointing at an id the caller cannot reach, and
+          // returning it hands over that id.
+          restrictedFixture();
+          const res = await agent('GET', `/api/memory/entries/${WORK_ENTRY_ID}`);
+          expect(res.statusCode).toBe(200);
+          const attrs = res.json().data.attributes.map((a: any) => a.id);
+          expect(attrs).toEqual(['attr-rel-in', 'attr-label']);
+        });
+      });
+
+      describe('writes', () => {
+        it('creates in work when no scope is named', async () => {
+          restrictedFixture();
+          const res = await agent('POST', '/api/memory/entries', { title: 'Unscoped Note' });
+          expect(res.statusCode).toBe(201);
+          expect(res.json().data.scope).toBe('work');
+          expect(argsOfAll('INSERT INTO memory_entries')[0]).toContain(WORK_ID);
+        });
+
+        it('returns 404 for a parent in default', async () => {
+          restrictedFixture();
+          const res = await agent('POST', '/api/memory/entries', { title: 'Child', parent_id: ENTRY_ID });
+          expect(res.statusCode).toBe(404);
+          expect(callsMatching('INSERT INTO memory_entries')).toEqual([]);
+        });
+
+        it('refuses scope default on create', async () => {
+          restrictedFixture();
+          const res = await agent('POST', '/api/memory/entries', { title: 'Sneaky', scope: 'default' });
+          expect(res.statusCode).toBe(403);
+          expect(res.json().code).toBe('SCOPE_NOT_GRANTED');
+        });
+
+        it('returns 404 updating a default entry, issuing no UPDATE', async () => {
+          restrictedFixture();
+          const res = await agent('PUT', `/api/memory/entries/${ENTRY_ID}`, { content: 'overwritten' });
+          expect(res.statusCode).toBe(404);
+          expect(callsMatching('UPDATE memory_entries SET')).toEqual([]);
+        });
+
+        it('binds the work scope on the UPDATE of a work entry', async () => {
+          restrictedFixture();
+          const res = await agent('PUT', `/api/memory/entries/${WORK_ENTRY_ID}`, { content: 'new' });
+          expect(res.statusCode).toBe(200);
+          onlyWorkBound('UPDATE memory_entries SET');
+        });
+
+        it('returns 404 for a relation whose target is in default, not 409', async () => {
+          // 409 CROSS_SCOPE_RELATION confirms the id exists; from inside the
+          // grant it must not.
+          restrictedFixture();
+          const res = await agent('POST', `/api/memory/entries/${WORK_ENTRY_ID}/attributes`,
+            { type: 'relation', name: 'knows', value: ENTRY_ID });
+          expect(res.statusCode).toBe(404);
+          expect(callsMatching('INSERT INTO memory_attributes')).toEqual([]);
+        });
+
+        it('returns 404 re-parenting under a default entry, not a scope error', async () => {
+          restrictedFixture();
+          const res = await agent('PUT', `/api/memory/entries/${WORK_ENTRY_ID}/parent`, { parent_id: ENTRY_ID });
+          expect(res.statusCode).toBe(404);
+          expect(res.json().error).not.toMatch(/scope/i);
+          expect(callsMatching('UPDATE memory_branches')).toEqual([]);
+        });
+
+        it('still re-parents inside work', async () => {
+          restrictedFixture();
+          const res = await agent('PUT', `/api/memory/entries/${WORK_PEER_ID}/parent`, { parent_id: WORK_ENTRY_ID });
+          expect(res.statusCode).toBe(200);
+        });
+
+        it('returns 404 deleting a default entry', async () => {
+          restrictedFixture();
+          const res = await agent('DELETE', `/api/memory/entries/${ENTRY_ID}`);
+          expect(res.statusCode).toBe(404);
+        });
+
+        it("returns 404 deleting default's root, not CANNOT_DELETE_ROOT", async () => {
+          restrictedFixture();
+          const res = await agent('DELETE', `/api/memory/entries/${ROOT_ID}`);
+          expect(res.statusCode).toBe(404);
+        });
+
+        it("still refuses to delete work's own root", async () => {
+          restrictedFixture();
+          const res = await agent('DELETE', `/api/memory/entries/${WORK_ROOT_ID}`);
+          expect(res.statusCode).toBe(400);
+          expect(res.json().code).toBe('CANNOT_DELETE_ROOT');
+        });
+
+        it('deletes a work entry', async () => {
+          restrictedFixture();
+          const res = await agent('DELETE', `/api/memory/entries/${WORK_ENTRY_ID}`);
+          expect(res.statusCode).toBe(200);
+          expect(res.json()).toEqual({ ok: true });
+        });
+      });
+
+      describe('owner-only routes', () => {
+        it('refuses scope rename, scope delete, and entry move with 403', async () => {
+          restrictedFixture();
+          const rename = await agent('PUT', `/api/memory/scopes/${WORK_ID}`, { name: 'Renamed' });
+          const del = await agent('DELETE', `/api/memory/scopes/${WORK_ID}`);
+          const move = await agent('PUT', `/api/memory/entries/${WORK_ENTRY_ID}/scope`, { scope: 'work' });
+          expect(rename.statusCode).toBe(403);
+          expect(del.statusCode).toBe(403);
+          expect(move.statusCode).toBe(403);
+          expect(callsMatching('UPDATE memory_scopes')).toEqual([]);
+          expect(callsMatching('DELETE FROM memory_scopes')).toEqual([]);
+          expect(callsMatching('UPDATE memory_entries SET scope_id')).toEqual([]);
+        });
+
+        it('refuses to read or write its own grants with 403, not 500', async () => {
+          restrictedFixture();
+          const read = await agent('GET', `/api/permissions/${AGENT_ID}/memory/scopes`);
+          const write = await agent('PUT', `/api/permissions/${AGENT_ID}/memory/scopes`, { mode: 'all' });
+          expect(read.statusCode).toBe(403);
+          expect(read.json().error.code).toBe('FORBIDDEN');
+          expect(write.statusCode).toBe(403);
+          expect(write.json().error.code).toBe('FORBIDDEN');
+          expect(callsMatching('DELETE FROM agent_memory_scopes')).toEqual([]);
+        });
       });
     });
   });

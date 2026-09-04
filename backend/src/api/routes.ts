@@ -131,6 +131,7 @@ import {
   checkDeployGate,
 } from '../services/billing.js';
 import { listModelConfigs, upsertModelConfig, deleteModelConfig } from '../services/model-router.js';
+import { validateDrivePathRules, isDrivePermissionLevel, DrivePathRuleValidationError } from '../services/drive-path-rules.js';
 import { nanoid } from 'nanoid';
 import jwt from 'jsonwebtoken';
 import {
@@ -1103,15 +1104,27 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
    * PUT /api/permissions/:agentId/drive/path-config
    * Saves the Drive default level + path rules for an agent.
    */
-  app.put<{ Params: { agentId: string }; Body: DrivePathConfig }>(
+  app.put<{ Params: { agentId: string }; Body: Partial<DrivePathConfig> }>(
     '/api/permissions/:agentId/drive/path-config',
     async (request, reply) => {
       const { agentId } = request.params;
-      const { defaultLevel, rules } = request.body;
-      if (!defaultLevel || !['read', 'write', 'blocked'].includes(defaultLevel)) {
+      const { defaultLevel, rules } = request.body ?? {};
+      if (!isDrivePermissionLevel(defaultLevel)) {
         return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'defaultLevel must be read, write, or blocked' } });
       }
-      await setDrivePathConfig(agentId, { defaultLevel, rules: rules ?? [] });
+      // Rules are shape-checked and folder ids normalised here: the service
+      // layer stores opaque JSON, and a rule the drive handlers cannot match
+      // (a pasted URL, a typo'd level) would look like a rule that does nothing.
+      let normalisedRules: DrivePathConfig['rules'];
+      try {
+        normalisedRules = validateDrivePathRules(rules);
+      } catch (err) {
+        if (err instanceof DrivePathRuleValidationError) {
+          return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: err.message } });
+        }
+        throw err;
+      }
+      await setDrivePathConfig(agentId, { defaultLevel, rules: normalisedRules });
       const data = await getDrivePathConfig(agentId);
       return { data };
     }
@@ -8032,6 +8045,23 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       args: [id],
     });
 
+    // A relation's value is an entry id in polymorphic text no FK can guard.
+    // One pointing outside the caller's scopes — a legacy row, or one written
+    // before a grant narrowed — would hand over an id the caller cannot reach.
+    let attributes = attrsResult.rows;
+    const relationTargets = [...new Set(
+      attributes.filter((a) => a.type === 'relation').map((a) => a.value as string)
+    )];
+    if (relationTargets.length > 0) {
+      const targetIn = relationTargets.map(() => '?').join(', ');
+      const reachable = await client.execute({
+        sql: `SELECT id FROM memory_entries WHERE id IN (${targetIn}) AND scope_id IN (${scopeIn})`,
+        args: [...relationTargets, ...memCtx.scopeIds],
+      });
+      const reachableIds = new Set(reachable.rows.map((r) => r.id as string));
+      attributes = attributes.filter((a) => a.type !== 'relation' || reachableIds.has(a.value as string));
+    }
+
     // Backlinks stay inside the entry's own scope. memory_links cannot hold a
     // cross-scope row, but filtering here too means a legacy row from before the
     // constraint cannot leak a title across the partition.
@@ -8119,7 +8149,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     return reply.send({
       data: {
         ...entry,
-        attributes: attrsResult.rows,
+        attributes,
         backlinks: backlinksResult.rows,
         parentId: branchResult.rows[0]?.parent_entry_id ?? null,
         resolvedLinks,
@@ -8333,9 +8363,11 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const scopeIn = memCtx.scopeIds.map(() => '?').join(', ');
 
     // A scope's root index anchors its tree; deleting it would orphan the scope.
+    // Filtered to the caller's scopes: the root of a scope it cannot reach must
+    // fall through to the 404 below rather than confirm itself with a 400.
     const isRoot = await client.execute({
-      sql: `SELECT id FROM memory_scopes WHERE root_entry_id = ? LIMIT 1`,
-      args: [id],
+      sql: `SELECT id FROM memory_scopes WHERE root_entry_id = ? AND id IN (${scopeIn}) LIMIT 1`,
+      args: [id, ...memCtx.scopeIds],
     });
     if (isRoot.rows.length > 0) {
       return reply.status(400).send({
@@ -8344,11 +8376,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       });
     }
 
-    await client.execute({
+    const deleted = await client.execute({
       sql: `UPDATE memory_entries SET is_deleted = true, updated_at = ?
-            WHERE id = ? AND scope_id IN (${scopeIn})`,
+            WHERE id = ? AND scope_id IN (${scopeIn}) AND is_deleted = false`,
       args: [new Date().toISOString(), id, ...memCtx.scopeIds],
     });
+    if (deleted.rowsAffected === 0) return reply.status(404).send({ error: 'Not found' });
     return reply.send({ ok: true });
   });
 
@@ -8472,9 +8505,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     // behind it: `value` is polymorphic — a label's value is arbitrary text —
     // so no foreign key can be declared on it.
     if (type === 'relation') {
+      // Scope-filtered: a target outside the caller's grants is a 404, because
+      // a 409 here would confirm that the id exists. 409 is reserved for a
+      // target the caller can reach that sits in a different scope than the source.
       const target = await client.execute({
-        sql: `SELECT scope_id FROM memory_entries WHERE id = ? AND is_deleted = false LIMIT 1`,
-        args: [value],
+        sql: `SELECT scope_id FROM memory_entries WHERE id = ? AND scope_id IN (${scopeIn}) AND is_deleted = false LIMIT 1`,
+        args: [value, ...memCtx.scopeIds],
       });
       if (target.rows.length === 0) {
         return reply.status(404).send({ error: 'Relation target not found' });
@@ -8551,7 +8587,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     const result = await setEntryParent(id, memCtx.scopeIds, newParentId);
     if ('error' in result) {
-      const status = result.error === 'Entry not found' ? 404 : 400;
+      const status = result.error === 'Entry not found' || result.error === 'Parent not found' ? 404 : 400;
       return reply.status(status).send({ error: result.error });
     }
     return reply.send({ data: result });
@@ -8915,8 +8951,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
 
     const isRoot = await client.execute({
-      sql: `SELECT id FROM memory_scopes WHERE root_entry_id = ? LIMIT 1`,
-      args: [id],
+      sql: `SELECT id FROM memory_scopes WHERE root_entry_id = ? AND id IN (${scopeIn}) LIMIT 1`,
+      args: [id, ...memCtx.scopeIds],
     });
     if (isRoot.rows.length > 0) {
       return reply.status(400).send({ error: "A scope's index entry cannot be moved" });
@@ -8979,9 +9015,17 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // question of the memory service being enabled on it.
   // -------------------------------------------------------------------------
 
+  const scopeGrantsOwnerOnly = {
+    error: { code: 'FORBIDDEN', message: 'Memory scope grants can only be managed by the account owner' },
+  };
+
   app.get<{ Params: { agentId: string } }>(
     '/api/permissions/:agentId/memory/scopes',
     async (request, reply) => {
+      // The auth guard lets gateway tokens through for handlers to validate.
+      // Grants are the owner's to set; an agent reading or rewriting its own
+      // is refused here, before getUserId dereferences a session it lacks.
+      if (!getSession(request)) return reply.code(403).send(scopeGrantsOwnerOnly);
       const userId = getUserId(request);
       if (!(await userOwnsAgent(userId, request.params.agentId))) {
         return reply.code(404).send(agentNotFound);
@@ -9010,6 +9054,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.put<{ Params: { agentId: string } }>(
     '/api/permissions/:agentId/memory/scopes',
     async (request, reply) => {
+      // The auth guard lets gateway tokens through for handlers to validate.
+      // Grants are the owner's to set; an agent reading or rewriting its own
+      // is refused here, before getUserId dereferences a session it lacks.
+      if (!getSession(request)) return reply.code(403).send(scopeGrantsOwnerOnly);
       const userId = getUserId(request);
       if (!(await userOwnsAgent(userId, request.params.agentId))) {
         return reply.code(404).send(agentNotFound);

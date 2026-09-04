@@ -1772,11 +1772,30 @@ export async function getDrivePathConfig(agentId: string): Promise<DrivePathConf
     return { defaultLevel: 'write', rules: [] };
   }
 
+  // A stored config that cannot be decoded fails CLOSED. The no-row default is
+  // 'write' because that is what an agent with no Drive config has always had;
+  // a row that exists but is corrupt is a different situation, and falling
+  // through to 'write' there would silently grant full Drive access on a
+  // column the owner did configure.
+  let parsed: unknown;
   try {
-    return JSON.parse(raw) as DrivePathConfig;
+    parsed = JSON.parse(raw);
   } catch {
-    return { defaultLevel: 'write', rules: [] };
+    parsed = undefined;
   }
+  if (!isDrivePathConfig(parsed)) {
+    console.warn(`[permissions] Malformed Drive path config for agent ${agentId}; failing closed to blocked`);
+    return { defaultLevel: 'blocked', rules: [] };
+  }
+  return parsed;
+}
+
+const DRIVE_LEVELS: ReadonlySet<string> = new Set(['read', 'write', 'blocked']);
+
+function isDrivePathConfig(value: unknown): value is DrivePathConfig {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.defaultLevel === 'string' && DRIVE_LEVELS.has(v.defaultLevel) && Array.isArray(v.rules);
 }
 
 /**

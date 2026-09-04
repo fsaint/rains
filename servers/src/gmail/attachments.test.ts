@@ -452,6 +452,51 @@ describe('resolveAttachments — drive', () => {
     expect(resolved.filename).toBe('plan.pdf');
   });
 
+  // Rules cover descendants: the walk goes up through `parents` until a rule
+  // folder is met, so nesting a file deeper does not slip past a rule.
+  function makeTreeDrive(tree: Record<string, string[]>) {
+    const filesGet = vi.fn(async (params: Record<string, unknown>) => {
+      if (params.alt === 'media') return { data: new Uint8Array(Buffer.from('drive')).buffer };
+      const id = params.fileId as string;
+      return { data: { id, name: `${id}.pdf`, mimeType: 'application/pdf', parents: tree[id] ?? [] } };
+    });
+    return { client: { files: { get: filesGet, export: vi.fn() } } as never, filesGet };
+  }
+
+  it('denies a file two levels under a blocked folder', async () => {
+    const { client: drive } = makeTreeDrive({ F1: ['sub'], sub: ['SECRET_FOLDER'], SECRET_FOLDER: ['root'] });
+
+    await expect(
+      resolveAttachments(parseAttachments([{ source: 'drive', fileId: 'F1' }]), {
+        gmail,
+        drive: () => drive,
+        driveDefaultLevel: 'read',
+        drivePathRules: [{ folderId: 'SECRET_FOLDER', permission: 'blocked' }],
+      })
+    ).rejects.toThrow(/permission denied/i);
+  });
+
+  it('allows a file two levels under a read-granted folder', async () => {
+    const { client: drive, filesGet } = makeTreeDrive({ F1: ['sub'], sub: ['SHARED'], SHARED: ['root'] });
+
+    const [resolved] = await resolveAttachments(
+      parseAttachments([{ source: 'drive', fileId: 'F1' }]),
+      {
+        gmail,
+        drive: () => drive,
+        driveDefaultLevel: 'blocked',
+        drivePathRules: [{ folderId: 'SHARED', permission: 'read' }],
+      }
+    );
+    expect(resolved.filename).toBe('F1.pdf');
+    // The file's own metadata call already carried its parents.
+    const metadataIds = filesGet.mock.calls
+      .map((c) => c[0] as Record<string, unknown>)
+      .filter((c) => c.alt !== 'media')
+      .map((c) => c.fileId);
+    expect(metadataIds.filter((id) => id === 'F1')).toHaveLength(1);
+  });
+
   it('explains how to fix a missing Drive scope', async () => {
     const { client: drive } = makeDrive({
       getFails: new Error('Request had insufficient authentication scopes.'),

@@ -7,7 +7,12 @@
 
 import type { drive_v3, gmail_v1 } from 'googleapis';
 import type { DrivePathRule } from '../common/types.js';
-import { canRead, resolvePermission, type PermissionLevel } from '../drive/path-rules.js';
+import {
+  canRead,
+  createParentResolver,
+  resolveFilePermission,
+  type PermissionLevel,
+} from '../drive/path-rules.js';
 import {
   DEFAULT_MIME_TYPE,
   MAX_BASE64_ATTACHMENT_BYTES,
@@ -479,13 +484,17 @@ async function resolveDriveAttachment(
   // Enforce the agent's Drive folder rules here as well as in the Drive server.
   // Without this, attaching by fileId would launder a Drive read through a
   // Gmail tool, bypassing both the folder rules and the Drive service toggle.
-  const levels = parents.length > 0
-    ? parents.map((parent) =>
-        resolvePermission(parent, ctx.drivePathRules, ctx.driveDefaultLevel ?? 'write')
-      )
-    : [resolvePermission(undefined, ctx.drivePathRules, ctx.driveDefaultLevel ?? 'write')];
+  // Same ancestry walk as the Drive handlers: a rule covers its descendants.
+  const getParents = createParentResolver(drive);
+  getParents.prime(fileId, parents);
+  const level = await resolveFilePermission(
+    fileId,
+    ctx.drivePathRules,
+    ctx.driveDefaultLevel ?? 'write',
+    getParents
+  );
 
-  if (levels.includes('blocked') || !levels.some(canRead)) {
+  if (!canRead(level)) {
     throw new AttachmentError(
       `Attachment ${index + 1}: permission denied — this agent is not allowed to read "${name}" from Google Drive.`
     );

@@ -1401,6 +1401,70 @@ describe('multi-account policy', () => {
   });
 
   /**
+   * The Drive path config must reach the handler for drive tools (obviously)
+   * and for gmail tools: the gmail attachment resolver uses it to stop a Drive
+   * read being laundered through gmail_get_attachment. A non-default config is
+   * used so a fallback to { write, [] } cannot pass by accident.
+   */
+  const DRIVE_CONFIG = {
+    defaultLevel: 'blocked' as const,
+    rules: [{ folderId: 'folder-reports', label: 'Reports', permission: 'read' as const }],
+  };
+
+  it('hands drive tools the Drive path config', async () => {
+    const { getDrivePathConfig, getEffectiveInstancePermissions } = await import('../services/permissions.js');
+    vi.mocked(getDrivePathConfig).mockResolvedValueOnce(DRIVE_CONFIG);
+    vi.mocked(getEffectiveInstancePermissions).mockResolvedValue({
+      enabled: true,
+      tools: { drive_list_files: 'allow' },
+    } as never);
+    const driveInst = { ...instA, serviceType: 'drive' };
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([driveInst]);
+    dbWhereMock.mockResolvedValueOnce([{ id: 'cred-a' }]); // credential row exists
+    dbWhereMock.mockResolvedValueOnce([{ grantedServices: null }]); // scope guard passes open
+    const { serverManager } = await import('./server-manager.js');
+    const server = serverManager.getServer('drive')!;
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'drive_list_files', arguments: {} },
+    });
+
+    expect(response.error).toBeUndefined();
+    expect(getDrivePathConfig).toHaveBeenCalledWith('agent-1');
+    expect(server.callTool).toHaveBeenCalledWith(
+      'drive_list_files',
+      {},
+      expect.objectContaining({ driveDefaultLevel: 'blocked', drivePathRules: DRIVE_CONFIG.rules })
+    );
+  });
+
+  it('hands gmail tools the Drive path config too', async () => {
+    const { getDrivePathConfig } = await import('../services/permissions.js');
+    vi.mocked(getDrivePathConfig).mockResolvedValueOnce(DRIVE_CONFIG);
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([instA]);
+    dbWhereMock.mockResolvedValueOnce([{ id: 'cred-a' }]); // credential row exists
+    dbWhereMock.mockResolvedValueOnce([{ grantedServices: null }]); // scope guard passes open
+    const { serverManager } = await import('./server-manager.js');
+    const server = serverManager.getServer('gmail')!;
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'gmail_list_messages', arguments: {} },
+    });
+
+    expect(response.error).toBeUndefined();
+    expect(getDrivePathConfig).toHaveBeenCalledWith('agent-1');
+    expect(server.callTool).toHaveBeenCalledWith(
+      'gmail_list_messages',
+      {},
+      expect.objectContaining({ driveDefaultLevel: 'blocked', drivePathRules: DRIVE_CONFIG.rules })
+    );
+  });
+
+  /**
    * Per-instance settings reach the handler as context.instanceConfig. For
    * hermeneutix that is the project the instance is scoped to; a handler that
    * does not receive it would silently search every project the token can see.

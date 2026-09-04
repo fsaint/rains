@@ -321,11 +321,14 @@ export async function setEntryParent(
   // 2. Self-parent check
   if (newParentId === entryId) return { error: 'Cannot set an entry as its own parent' };
 
-  // 3. Same-scope check
+  // 3. Same-scope check. The parent lookup is filtered to the caller's scopes
+  //    for the same reason as step 1: a parent it cannot reach reads as not
+  //    found, and only a reachable parent in another scope earns the scope error.
   if (newParentId !== null) {
     const parentRow = await client.execute({
-      sql: `SELECT scope_id FROM memory_entries WHERE id = ? AND is_deleted = false LIMIT 1`,
-      args: [newParentId],
+      sql: `SELECT scope_id FROM memory_entries
+            WHERE id = ? AND scope_id IN (${placeholders}) AND is_deleted = false LIMIT 1`,
+      args: [newParentId, ...scopeIds],
     });
     if (parentRow.rows.length === 0) return { error: 'Parent not found' };
     if ((parentRow.rows[0].scope_id as string) !== entryScopeId) {

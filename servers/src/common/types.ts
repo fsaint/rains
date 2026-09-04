@@ -21,14 +21,21 @@ export interface ServerConfig {
 
 /**
  * A path-based permission rule for Google Drive.
- * Matches a specific folder by its Drive folder ID and grants a permission level.
+ *
+ * Names a folder by its Drive folder ID and grants a permission level to that
+ * folder and everything beneath it. A file's effective level is found by
+ * walking its `parents` upward to the nearest rule folder; with no rule on
+ * the way to the root, `ServerContext.driveDefaultLevel` applies. A file with
+ * several parents is blocked if any chain is blocked, otherwise gets the
+ * highest granted level. A shared drive's id names its root folder, so a rule
+ * on it scopes the whole drive. See servers/src/drive/path-rules.ts.
  */
 export interface DrivePathRule {
-  /** Google Drive folder ID (e.g. "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs") */
+  /** Google Drive folder ID (e.g. "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs"), or a shared drive ID */
   folderId: string;
   /** Human-readable label (e.g. "/my_agent_folder") */
   label?: string;
-  /** Permission level for this folder and its contents */
+  /** Permission level for this folder and all of its descendants */
   permission: 'read' | 'write' | 'blocked';
 }
 
@@ -46,9 +53,12 @@ export interface ServerContext {
   requestId: string;
   /** Linked accounts for multi-account support */
   linkedAccounts?: Array<{ email: string; name?: string; isDefault: boolean }>;
-  /** Default Drive permission level (for Drive service only) */
+  /**
+   * Default Drive permission level (for Drive service only): what applies to
+   * any file with no DrivePathRule on its ancestry. Absent means 'write'.
+   */
   driveDefaultLevel?: 'read' | 'write' | 'blocked';
-  /** Per-folder Drive path rules (for Drive service only) */
+  /** Per-folder Drive path rules (for Drive service only); each covers its folder's descendants */
   drivePathRules?: DrivePathRule[];
   /** Gateway token for services that call back into the Reins API (e.g. memory) */
   gatewayToken?: string;

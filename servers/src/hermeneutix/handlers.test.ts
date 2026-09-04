@@ -18,6 +18,7 @@ import {
   handleGetMeetingInstance,
   handleListInstanceSessions,
   handleGetConversationPreview,
+  handleSearchProfiles,
   pinnedProject,
   outOfScope,
 } from './handlers.js';
@@ -27,6 +28,8 @@ import {
   listSpeakersTool,
   searchInstancesTool,
   listProjectSessionsTool,
+  listMeetingInstancesTool,
+  getMeetingInstanceTool,
 } from './tools.js';
 
 const context: ServerContext = {
@@ -483,5 +486,109 @@ describe('response-verified tools (pinned)', () => {
     const result = await handleListMeetingInstances({ meeting_id: 'm1' }, context);
 
     expect(result).toEqual({ success: true, data: body });
+  });
+});
+
+describe('search_profiles is unaffected by pinning', () => {
+  it('sends the same request and passes the payload through', async () => {
+    const rows = [{ id: 'u1', name: 'Ada' }, { id: 'u2', name: 'Grace' }];
+    fetchMock.mockResolvedValue(response(rows));
+
+    const pinnedResult = await handleSearchProfiles({ query: 'a' }, pinnedContext);
+    const plainResult = await handleSearchProfiles({ query: 'a' }, context);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]).toEqual(fetchMock.mock.calls[1]);
+    expect(fetchMock.mock.calls[0][0] as string).toContain('/profiles/search/?q=a');
+    expect(pinnedResult).toEqual({ success: true, data: { profiles: rows } });
+    expect(pinnedResult).toEqual(plainResult);
+  });
+});
+
+describe('malformed instanceConfig is treated as unpinned', () => {
+  const malformed: Array<[string, ServerContext]> = [
+    ['no projectId', { ...context, instanceConfig: { projectName: 'Acme Weekly' } }],
+    ['empty projectId', { ...context, instanceConfig: { projectId: '', projectName: 'Acme Weekly' } }],
+    ['numeric projectId', { ...context, instanceConfig: { projectId: 42 } }],
+    ['object projectId', { ...context, instanceConfig: { projectId: { id: PINNED_ID } } }],
+  ];
+  const projectTools: Array<[string, (a: Record<string, unknown>, c: ServerContext) => Promise<{ success: boolean; error?: string }>]> = [
+    ['list_meetings', handleListMeetings],
+    ['list_speakers', handleListSpeakers],
+    ['search_instances', handleSearchInstances],
+    ['list_sessions', handleListProjectSessions],
+  ];
+
+  for (const [label, ctx] of malformed) {
+    for (const [name, call] of projectTools) {
+      it(`${label}: ${name} still requires project_id`, async () => {
+        const result = await call({}, ctx);
+        expect(result).toEqual({ success: false, error: 'project_id is required' });
+        expect(fetchMock).not.toHaveBeenCalled();
+      });
+    }
+
+    it(`${label}: list_projects does not filter`, async () => {
+      const rows = [{ id: OTHER_ID, name: 'Other' }, { id: PINNED_ID, name: 'Acme Weekly' }];
+      fetchMock.mockResolvedValueOnce(response(rows));
+
+      const result = await handleListProjects({}, ctx);
+
+      expect(result).toEqual({ success: true, data: { projects: rows } });
+    });
+
+    it(`${label}: list_sessions dispatcher still demands an id`, async () => {
+      const result = await listProjectSessionsTool.handler({}, ctx);
+      expect(result).toEqual({ success: false, error: 'Either project_id or instance_id is required' });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  }
+});
+
+describe('argument-pinned tools pass responses through untouched', () => {
+  it('list_speakers returns the payload verbatim for the pinned project', async () => {
+    const rows = [{ id: 's1', name: 'Ada', project: { id: OTHER_ID } }];
+    fetchMock.mockResolvedValueOnce(response(rows));
+
+    const result = await handleListSpeakers({ project_id: PINNED_ID }, pinnedContext);
+
+    expect(result).toEqual({ success: true, data: { speakers: rows } });
+  });
+
+  it('search_instances returns the payload verbatim for the pinned project', async () => {
+    const body = { results: [{ id: 'i1', meeting: { project: { id: OTHER_ID } } }], count: 1 };
+    fetchMock.mockResolvedValueOnce(response(body));
+
+    const result = await handleSearchInstances({ q: 'roadmap' }, pinnedContext);
+
+    expect(fetchMock.mock.calls[0][0] as string).toContain(`/v1/projects/${PINNED_ID}/instances/search/?q=roadmap`);
+    expect(result).toEqual({ success: true, data: body });
+  });
+});
+
+describe('tool.handler wiring refuses through outOfScope', () => {
+  const SECRET = 'payload-that-must-not-leak';
+
+  it('listMeetingInstancesTool.handler', async () => {
+    fetchMock.mockResolvedValueOnce(
+      response({ meeting: { id: 'm1', project: { id: OTHER_ID } }, instances: [{ id: SECRET }] })
+    );
+
+    const result = await listMeetingInstancesTool.handler({ meeting_id: 'm1' }, pinnedContext);
+
+    expect(result).toEqual(outOfScope({ id: PINNED_ID, name: 'Acme Weekly' }, 'meeting m1 belongs to another project'));
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+  });
+
+  it('getMeetingInstanceTool.handler', async () => {
+    fetchMock.mockResolvedValueOnce(
+      response({ id: 'i1', meeting_id: 'm1', meeting: { id: 'm1', project: { id: OTHER_ID } }, sessions: [SECRET] })
+    );
+
+    const result = await getMeetingInstanceTool.handler({ instance_id: 'i1' }, pinnedContext);
+
+    expect(result).toEqual(outOfScope({ id: PINNED_ID, name: 'Acme Weekly' }, 'instance i1 belongs to another project'));
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

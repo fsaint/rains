@@ -5,7 +5,14 @@
 import { Readable } from 'node:stream';
 import { google, type drive_v3 } from 'googleapis';
 import type { ServerContext, ToolResult } from '../common/types.js';
-import { resolvePermission, canRead, canWrite, type PermissionLevel } from './path-rules.js';
+import {
+  canRead,
+  canWrite,
+  createParentResolver,
+  resolveFilePermission,
+  type ParentResolver,
+  type PermissionLevel,
+} from './path-rules.js';
 import { parseAndResolveAttachments, AttachmentError } from '../gmail/attachments.js';
 import type { ResolvedAttachment } from '../gmail/mime.js';
 
@@ -73,13 +80,44 @@ async function resolveFileSource(
   }
 }
 
-/**
- * Resolve the effective Drive permission for this context, using path rules if available.
- */
-function drivePermission(context: ServerContext, folderId?: string): PermissionLevel {
-  const defaultLevel: PermissionLevel = context.driveDefaultLevel ?? 'write';
-  return resolvePermission(folderId, context.drivePathRules, defaultLevel);
+/** The agent's default Drive level. No configuration at all means full access. */
+function defaultLevel(context: ServerContext): PermissionLevel {
+  return context.driveDefaultLevel ?? 'write';
 }
+
+/**
+ * Resolve the effective Drive permission for one file or folder by walking
+ * its ancestry against the agent's folder rules. `undefined` (no target, e.g.
+ * a root listing or a create without parentId) resolves to the default level.
+ */
+function filePermission(
+  context: ServerContext,
+  fileId: string | undefined,
+  getParents: ParentResolver
+): Promise<PermissionLevel> {
+  return resolveFilePermission(fileId, context.drivePathRules, defaultLevel(context), getParents);
+}
+
+/** Rule folders the agent may read (read or write). */
+function grantedFolders(context: ServerContext) {
+  return (context.drivePathRules ?? []).filter((r) => canRead(r.permission));
+}
+
+/** Rule folders the agent may write, rendered for an error message. */
+function describeWritableFolders(context: ServerContext): string {
+  const writable = (context.drivePathRules ?? []).filter((r) => canWrite(r.permission));
+  if (writable.length === 0) return 'No folder is writable for this agent.';
+  const names = writable.map((r) => (r.label ? `${r.label} (${r.folderId})` : r.folderId));
+  return `Writable folders: ${names.join(', ')}.`;
+}
+
+/** Escape a value for use inside single quotes in a Drive `q` expression. */
+function escapeQueryValue(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+const DENIED_READ = 'Permission denied: read access not granted for this file';
+const DENIED_WRITE = 'Permission denied: write access not granted for this file';
 
 /**
  * List files handler
@@ -89,11 +127,38 @@ export async function handleListFiles(
   context: ServerContext
 ): Promise<ToolResult> {
   const folderId = args.folderId as string | undefined;
-  if (!canRead(drivePermission(context, folderId))) {
-    return { success: false, error: 'Permission denied: read access not granted for this folder' };
-  }
-
   const drive = getDriveClient(context);
+  const getParents = createParentResolver(drive);
+
+  if (!canRead(await filePermission(context, folderId, getParents))) {
+    if (folderId) {
+      return { success: false, error: 'Permission denied: read access not granted for this folder' };
+    }
+    // The root is closed but some folders are granted: show those instead of
+    // nothing, so the agent learns where it is allowed to look.
+    const granted = grantedFolders(context);
+    if (granted.length === 0) {
+      return { success: false, error: 'Permission denied: read access not granted' };
+    }
+    const folders = await Promise.all(
+      granted.map(async (rule) => {
+        const response = await drive.files.get({
+          fileId: rule.folderId,
+          fields: DEFAULT_FIELDS,
+          supportsAllDrives: true,
+        });
+        return response.data;
+      })
+    );
+    return {
+      success: true,
+      data: {
+        files: folders,
+        note:
+          'Root listing is not permitted for this agent. These are the folders it has been granted; list one of them by folderId.',
+      },
+    };
+  }
 
   const pageSize = Math.min((args.pageSize as number) ?? 20, 100);
   const pageToken = args.pageToken as string | undefined;
@@ -102,7 +167,7 @@ export async function handleListFiles(
 
   let query = 'trashed = false';
   if (folderId) {
-    query += ` and '${folderId}' in parents`;
+    query += ` and '${escapeQueryValue(folderId)}' in parents`;
   }
 
   const fileFields = fields?.join(', ') ?? DEFAULT_FIELDS;
@@ -133,18 +198,17 @@ export async function handleGetFile(
   args: Record<string, unknown>,
   context: ServerContext
 ): Promise<ToolResult> {
-  if (!canRead(drivePermission(context))) {
-    return { success: false, error: 'Permission denied: read access not granted' };
-  }
-
   const drive = getDriveClient(context);
 
   const fileId = args.fileId as string;
   const fields = args.fields as string[] | undefined;
 
-  const fileFields =
-    fields?.join(', ') ??
-    'id, name, mimeType, size, modifiedTime, createdTime, parents, webViewLink, owners, permissions, description';
+  // parents is always fetched: the folder rules are resolved from it. It is
+  // stripped again below when the caller did not ask for it.
+  const requested =
+    fields ?? ['id', 'name', 'mimeType', 'size', 'modifiedTime', 'createdTime', 'parents', 'webViewLink', 'owners', 'permissions', 'description'];
+  const wantsParents = requested.includes('parents');
+  const fileFields = (wantsParents ? requested : [...requested, 'parents']).join(', ');
 
   const response = await drive.files.get({
     fileId,
@@ -152,9 +216,17 @@ export async function handleGetFile(
     supportsAllDrives: true,
   });
 
+  const getParents = createParentResolver(drive);
+  getParents.prime(fileId, response.data.parents ?? []);
+  if (!canRead(await filePermission(context, fileId, getParents))) {
+    return { success: false, error: DENIED_READ };
+  }
+
+  const result: drive_v3.Schema$File = { ...response.data };
+  if (!wantsParents) delete result.parents;
   return {
     success: true,
-    data: response.data,
+    data: result,
   };
 }
 
@@ -165,22 +237,25 @@ export async function handleReadFile(
   args: Record<string, unknown>,
   context: ServerContext
 ): Promise<ToolResult> {
-  if (!canRead(drivePermission(context))) {
-    return { success: false, error: 'Permission denied: read access not granted' };
-  }
-
   const drive = getDriveClient(context);
 
   const fileId = args.fileId as string;
   const requestedMimeType = args.mimeType as string | undefined;
   const maxSize = (args.maxSize as number) ?? MAX_CONTENT_SIZE;
 
-  // First get file metadata
+  // First get file metadata — parents included so the folder rules can be
+  // resolved before any content is downloaded.
   const metadata = await drive.files.get({
     fileId,
-    fields: 'id, name, mimeType, size',
+    fields: 'id, name, mimeType, size, webViewLink, parents',
     supportsAllDrives: true,
   });
+
+  const getParents = createParentResolver(drive);
+  getParents.prime(fileId, metadata.data.parents ?? []);
+  if (!canRead(await filePermission(context, fileId, getParents))) {
+    return { success: false, error: DENIED_READ };
+  }
 
   const fileMimeType = metadata.data.mimeType ?? 'application/octet-stream';
   const fileName = metadata.data.name ?? 'unknown';
@@ -285,10 +360,6 @@ export async function handleSearch(
   args: Record<string, unknown>,
   context: ServerContext
 ): Promise<ToolResult> {
-  if (!canRead(drivePermission(context))) {
-    return { success: false, error: 'Permission denied: read access not granted' };
-  }
-
   const drive = getDriveClient(context);
 
   const query = args.query as string;
@@ -298,6 +369,8 @@ export async function handleSearch(
   // Combine with trashed filter
   const fullQuery = `(${query}) and trashed = false`;
 
+  // DEFAULT_FIELDS carries parents: every hit is resolved against the folder
+  // rules from its own ancestry, and hits the agent may not read are dropped.
   const response = await drive.files.list({
     q: fullQuery,
     pageSize,
@@ -306,11 +379,22 @@ export async function handleSearch(
     includeItemsFromAllDrives: includeSharedDrives,
   });
 
+  const hits = response.data.files ?? [];
+  const getParents = createParentResolver(drive);
+  for (const hit of hits) {
+    if (hit.id) getParents.prime(hit.id, hit.parents ?? []);
+  }
+  const readable = await Promise.all(
+    hits.map(async (hit) => canRead(await filePermission(context, hit.id ?? undefined, getParents)))
+  );
+  const files = hits.filter((_, i) => readable[i]);
+
   return {
     success: true,
     data: {
       query,
-      files: response.data.files ?? [],
+      files,
+      filtered_count: hits.length - files.length,
       nextPageToken: response.data.nextPageToken,
     },
   };
@@ -324,11 +408,14 @@ export async function handleCreateFile(
   context: ServerContext
 ): Promise<ToolResult> {
   const parentId = args.parentId as string | undefined;
-  if (!canWrite(drivePermission(context, parentId))) {
-    return { success: false, error: 'Permission denied: write access not granted for this folder' };
-  }
-
   const drive = getDriveClient(context);
+
+  if (!canWrite(await filePermission(context, parentId, createParentResolver(drive)))) {
+    return {
+      success: false,
+      error: `Permission denied: write access not granted for this folder. ${describeWritableFolders(context)}`,
+    };
+  }
 
   const name = args.name as string | undefined;
   const mimeType = args.mimeType as string | undefined;
@@ -422,10 +509,6 @@ export async function handleUpdateFile(
   args: Record<string, unknown>,
   context: ServerContext
 ): Promise<ToolResult> {
-  if (!canWrite(drivePermission(context))) {
-    return { success: false, error: 'Permission denied: write access not granted' };
-  }
-
   const drive = getDriveClient(context);
 
   const fileId = args.fileId as string;
@@ -433,6 +516,21 @@ export async function handleUpdateFile(
   const content = args.content as string | undefined;
   const addParents = args.addParents as string[] | undefined;
   const removeParents = args.removeParents as string[] | undefined;
+
+  // Write is needed on the file itself and on every folder it is moved into
+  // or out of — otherwise a move is a way to lift a file out of its rules.
+  const getParents = createParentResolver(drive);
+  if (!canWrite(await filePermission(context, fileId, getParents))) {
+    return { success: false, error: DENIED_WRITE };
+  }
+  for (const folderId of [...(addParents ?? []), ...(removeParents ?? [])]) {
+    if (!canWrite(await filePermission(context, folderId, getParents))) {
+      return {
+        success: false,
+        error: `Permission denied: write access not granted for folder ${folderId}. ${describeWritableFolders(context)}`,
+      };
+    }
+  }
 
   const fileMetadata: drive_v3.Schema$File = {};
   if (name) fileMetadata.name = name;
@@ -519,13 +617,13 @@ export async function handleShareFile(
   args: Record<string, unknown>,
   context: ServerContext
 ): Promise<ToolResult> {
-  if (!canWrite(drivePermission(context))) {
-    return { success: false, error: 'Permission denied: write access not granted' };
-  }
-
   const drive = getDriveClient(context);
 
   const fileId = args.fileId as string;
+  if (!canWrite(await filePermission(context, fileId, createParentResolver(drive)))) {
+    return { success: false, error: DENIED_WRITE };
+  }
+
   const email = args.email as string | undefined;
   const role = args.role as 'reader' | 'commenter' | 'writer' | 'owner';
   const type = args.type as 'user' | 'group' | 'domain' | 'anyone';
@@ -565,13 +663,13 @@ export async function handleDeleteFile(
   args: Record<string, unknown>,
   context: ServerContext
 ): Promise<ToolResult> {
-  if (!canWrite(drivePermission(context))) {
-    return { success: false, error: 'Permission denied: write access not granted' };
-  }
-
   const drive = getDriveClient(context);
 
   const fileId = args.fileId as string;
+  if (!canWrite(await filePermission(context, fileId, createParentResolver(drive)))) {
+    return { success: false, error: DENIED_WRITE };
+  }
+
   const permanent = args.permanent as boolean | undefined;
 
   if (permanent) {
@@ -624,10 +722,17 @@ export async function handleListSharedDrives(
     fields: 'nextPageToken, drives(id, name, colorRgb, createdTime)',
   });
 
+  // A shared drive's root folder id is the drive id, so a rule on it scopes
+  // the whole drive. With a closed default, only drives with a grant show.
+  const all = response.data.drives ?? [];
+  const drives = canRead(defaultLevel(context))
+    ? all
+    : all.filter((d) => grantedFolders(context).some((r) => r.folderId === d.id));
+
   return {
     success: true,
     data: {
-      drives: response.data.drives ?? [],
+      drives,
       nextPageToken: response.data.nextPageToken,
     },
   };

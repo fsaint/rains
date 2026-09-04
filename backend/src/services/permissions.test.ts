@@ -156,6 +156,8 @@ import {
   updateServiceInstance,
   getAgentInstances,
   parseInstanceConfig,
+  getDrivePathConfig,
+  setDrivePathConfig,
   ServiceCombinationError,
   UnauthenticatedEndpointsOpenError,
 } from './permissions.js';
@@ -1285,6 +1287,50 @@ describe('Permission Service', () => {
    * service keeps counting as enabled (combination guard, dashboard) with no
    * instance left to remove.
    */
+  describe('Drive path config', () => {
+    const accessRows = (rows: unknown[]) =>
+      mockTables(new Map<object, unknown[]>([[agentServiceAccess, rows]]));
+
+    it('round-trips a config through the drive access row', async () => {
+      const config = {
+        defaultLevel: 'read' as const,
+        rules: [{ folderId: 'folder-1', label: 'Reports', permission: 'write' as const }],
+      };
+      const { inserted } = accessRows([]);
+
+      await setDrivePathConfig('agent-1', config);
+
+      const [row] = inserted(agentServiceAccess) as Array<{ pathRules: string }>;
+      expect(row).toEqual(expect.objectContaining({ agentId: 'agent-1', serviceType: 'drive' }));
+
+      accessRows([{ pathRules: row.pathRules }]);
+      await expect(getDrivePathConfig('agent-1')).resolves.toEqual(config);
+    });
+
+    it('defaults to write with no rules when the agent has no drive row', async () => {
+      accessRows([]);
+      await expect(getDrivePathConfig('agent-1')).resolves.toEqual({ defaultLevel: 'write', rules: [] });
+    });
+
+    /**
+     * A row that cannot be decoded must not fall through to the permissive
+     * default: that would silently grant full Drive write on a corrupt column.
+     */
+    it.each([
+      ['unparseable JSON', '{not json'],
+      ['a non-object', '"write"'],
+      ['an unknown defaultLevel', JSON.stringify({ defaultLevel: 'admin', rules: [] })],
+      ['rules that are not an array', JSON.stringify({ defaultLevel: 'write', rules: {} })],
+    ])('fails closed to blocked on %s and warns', async (_label, raw) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      accessRows([{ pathRules: raw }]);
+
+      await expect(getDrivePathConfig('agent-1')).resolves.toEqual({ defaultLevel: 'blocked', rules: [] });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('agent-1'));
+      warn.mockRestore();
+    });
+  });
+
   describe('deleteServiceInstance and the legacy access row', () => {
     const accessCalls = () =>
       vi.mocked(client.execute).mock.calls

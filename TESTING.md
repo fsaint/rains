@@ -104,6 +104,8 @@ npm test --workspace=servers
 | `permissions.test.ts` | User and agent permission checks |
 | `registration.test.ts` | Agent self-registration flow |
 | `integration/user-journey.test.ts` | Full HTTP stack with mocked DB and providers |
+| `integration/memory.test.ts` | Memory API end to end, including a restricted agent (gateway token + scope grants) exercising every route |
+| `mcp/scoped-services.e2e.test.ts` | **Context scopes, for real:** `tools/call` → `executeTool` → real `@reins/servers` handlers for Hermeneutix (pinned project), Drive (folder rules), and memory (scope grants). Every refusal asserts no upstream call was made |
 
 #### Frontend (`frontend/src/**/*.test.ts`)
 
@@ -113,6 +115,8 @@ npm test --workspace=servers
 | `LogViewer.test.tsx` | Log display component |
 | `Approvals.test.tsx` | Approval queue UI |
 | `Login.test.tsx` | Login form |
+| `Permissions.test.tsx` | Add-service flow, Hermeneutix project picker, memory scope editor, Drive path editor |
+| `Credentials.test.tsx` | Update-token action on API-key credentials |
 
 #### Servers (`servers/src/**/*.test.ts`)
 
@@ -121,6 +125,8 @@ npm test --workspace=servers
 | `gmail/handlers.test.ts` | Gmail MCP tool handlers |
 | `calendar/handlers.test.ts` | Calendar MCP tool handlers |
 | `drive/handlers.test.ts` | Drive MCP tool handlers |
+| `drive/path-rules.test.ts` | Folder rule resolution: subtree inheritance, nearest rule, multi-parent veto, depth cap |
+| `hermeneutix/handlers.test.ts` | Hermeneutix handlers, including project pinning and response-verified refusals |
 | `browser/handlers.test.ts` | Browser automation handlers |
 | `web-search/handlers.test.ts` | Web search handlers |
 

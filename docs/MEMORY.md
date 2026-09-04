@@ -104,6 +104,7 @@ Combined with "no grant rows means every scope", this is what makes the feature 
 | Write with `parent_id` | The parent's scope — inherited, so "create this under that entry" needs no reasoning about scopes |
 | Write, `scope` **and** `parent_id` disagree | **409 `SCOPE_CONFLICT`** — never a silent choice |
 | Any scope not granted | **403 `SCOPE_NOT_GRANTED`**, carrying `available_scopes` |
+| Any entry id outside the caller's scopes | **404**, uniformly — as a read target, parent, relation target, delete target, or scope root. Never a 409 or 400 that would confirm the id exists; those are reserved for ids the caller can reach |
 
 That 403 returns the list of usable slugs on purpose: a model that receives it can correct itself on the next call instead of failing the task.
 
@@ -113,7 +114,7 @@ That 403 returns the list of usable slugs on purpose: a model that receives it c
 
 Default-closed was considered and rejected: it would need a grant row written at all three agent-creation paths, and `bfce9eb` already demonstrated that such a hook gets dropped unnoticed — it silently removed `enableDefaultServices` from two of the three.
 
-The `is_default` row is the agent's write target. Managed at `GET|PUT /api/permissions/:agentId/memory/scopes`, or in the dashboard under Permissions → memory → Memory scopes.
+The `is_default` row is the agent's write target. Managed at `GET|PUT /api/permissions/:agentId/memory/scopes`, or in the dashboard under Permissions → memory → Memory scopes. Both routes are session-only: a gateway token gets **403 `FORBIDDEN`**, so an agent can neither read nor widen its own grants.
 
 Three rules keep a restricted agent inside its partition when scopes change underneath it:
 

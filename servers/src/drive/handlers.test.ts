@@ -144,11 +144,23 @@ describe('Drive Handlers', () => {
 
       await handleGetFile({ fileId: 'file1', fields: ['id', 'name'] }, mockContext);
 
+      // parents is always fetched so the folder rules can be resolved; it is
+      // stripped from the response when the caller did not ask for it.
       expect(mockDriveClient.files.get).toHaveBeenCalledWith(
         expect.objectContaining({
-          fields: 'id, name',
+          fields: 'id, name, parents',
         })
       );
+    });
+
+    it('strips parents from the response when not requested', async () => {
+      vi.mocked(mockDriveClient.files.get).mockResolvedValueOnce({
+        data: { id: 'file1', name: 'n', parents: ['root'] },
+      } as never);
+
+      const result = await handleGetFile({ fileId: 'file1', fields: ['id', 'name'] }, mockContext);
+
+      expect(data(result)).toEqual({ id: 'file1', name: 'n' });
     });
   });
 
@@ -670,5 +682,283 @@ describe('Drive Handlers — file sources (real uploads)', () => {
 
     expect(result.success).toBe(false);
     expect(mockDriveClient.files.update).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Folder scoping: a rule on a folder covers everything beneath it.
+ *
+ *   root
+ *   ├── proj      (rule)        ── sub ── file
+ *   ├── sibling   (no rule)     ── other
+ *   └── secret    (blocked)     ── vault
+ */
+describe('folder scoping', () => {
+  const TREE: Record<string, { name: string; mimeType?: string; parents: string[] }> = {
+    root: { name: 'My Drive', parents: [] },
+    proj: { name: 'proj', mimeType: 'application/vnd.google-apps.folder', parents: ['root'] },
+    sub: { name: 'sub', mimeType: 'application/vnd.google-apps.folder', parents: ['proj'] },
+    file: { name: 'file.txt', mimeType: 'text/plain', parents: ['sub'] },
+    sibling: { name: 'sibling', mimeType: 'application/vnd.google-apps.folder', parents: ['root'] },
+    other: { name: 'other.txt', mimeType: 'text/plain', parents: ['sibling'] },
+    secret: { name: 'secret', mimeType: 'application/vnd.google-apps.folder', parents: ['root'] },
+    vault: { name: 'vault.txt', mimeType: 'text/plain', parents: ['secret'] },
+  };
+
+  const rules = (proj: 'read' | 'write'): ServerContext => ({
+    requestId: 'r',
+    accessToken: 'tok',
+    driveDefaultLevel: 'blocked',
+    drivePathRules: [
+      { folderId: 'proj', permission: proj, label: '/proj' },
+      { folderId: 'secret', permission: 'blocked', label: '/secret' },
+    ],
+  });
+
+  let mockDriveClient: ReturnType<typeof google.drive>;
+
+  const getCalls = () =>
+    vi.mocked(mockDriveClient.files.get).mock.calls.map((c) => c[0] as unknown as Record<string, unknown>);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDriveClient = google.drive({ version: 'v3' });
+    vi.mocked(mockDriveClient.files.get).mockImplementation((async (params: Record<string, unknown>) => {
+      if (params.alt === 'media') return { data: 'SECRET CONTENT' };
+      const node = TREE[params.fileId as string];
+      if (!node) throw Object.assign(new Error('File not found'), { code: 404 });
+      return { data: { id: params.fileId, size: '10', ...node } };
+    }) as never);
+  });
+
+  describe('read / get', () => {
+    it('reads a file two levels under a granted folder', async () => {
+      const result = await handleReadFile({ fileId: 'file' }, rules('read'));
+      expect(result.success).toBe(true);
+      expect(data(result).content).toBe('SECRET CONTENT');
+    });
+
+    it('a sibling file is refused and never fetched with alt: media', async () => {
+      const result = await handleReadFile({ fileId: 'other' }, rules('read'));
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Permission denied');
+      expect(getCalls().some((c) => c.alt === 'media')).toBe(false);
+      expect(mockDriveClient.files.export).not.toHaveBeenCalled();
+    });
+
+    it('get_file on a sibling is refused and returns no metadata', async () => {
+      const result = await handleGetFile({ fileId: 'other' }, rules('read'));
+      expect(result.success).toBe(false);
+      expect(result.data).toBeUndefined();
+    });
+
+    it('get_file under the granted folder succeeds', async () => {
+      const result = await handleGetFile({ fileId: 'file' }, rules('read'));
+      expect(result.success).toBe(true);
+      expect(data(result).name).toBe('file.txt');
+    });
+  });
+
+  describe('list', () => {
+    it('lists a descendant folder of a granted folder and passes children through', async () => {
+      vi.mocked(mockDriveClient.files.list).mockResolvedValueOnce({
+        data: { files: [{ id: 'file', name: 'file.txt' }] },
+      } as never);
+      const result = await handleListFiles({ folderId: 'sub' }, rules('read'));
+      expect(result.success).toBe(true);
+      expect(data(result).files).toHaveLength(1);
+    });
+
+    it('refuses to list a sibling folder without calling the API', async () => {
+      const result = await handleListFiles({ folderId: 'sibling' }, rules('read'));
+      expect(result.success).toBe(false);
+      expect(mockDriveClient.files.list).not.toHaveBeenCalled();
+    });
+
+    it('escapes single quotes in folderId inside the query', async () => {
+      vi.mocked(mockDriveClient.files.list).mockResolvedValueOnce({ data: { files: [] } } as never);
+      await handleListFiles({ folderId: "abc'def" }, { requestId: 'r', accessToken: 'tok' });
+      expect(mockDriveClient.files.list).toHaveBeenCalledWith(
+        expect.objectContaining({ q: expect.stringContaining("'abc\\'def' in parents") })
+      );
+    });
+
+    it('root listing under a blocked default returns the granted folders themselves', async () => {
+      const result = await handleListFiles({}, rules('read'));
+      expect(result.success).toBe(true);
+      expect(mockDriveClient.files.list).not.toHaveBeenCalled();
+      expect(data(result).files.map((f: { id: string }) => f.id)).toEqual(['proj']);
+      expect(data(result).note).toMatch(/granted/i);
+    });
+
+    it('root listing under a readable default is unchanged', async () => {
+      vi.mocked(mockDriveClient.files.list).mockResolvedValueOnce({
+        data: { files: [{ id: 'proj' }, { id: 'sibling' }] },
+      } as never);
+      const result = await handleListFiles({}, { ...rules('read'), driveDefaultLevel: 'read' });
+      expect(result.success).toBe(true);
+      expect(data(result).files).toHaveLength(2);
+    });
+  });
+
+  describe('search', () => {
+    it('keeps the descendant and drops the sibling, reporting filtered_count', async () => {
+      vi.mocked(mockDriveClient.files.list).mockResolvedValueOnce({
+        data: {
+          files: [
+            { id: 'file', name: 'file.txt', parents: ['sub'] },
+            { id: 'other', name: 'other.txt', parents: ['sibling'] },
+            { id: 'vault', name: 'vault.txt', parents: ['secret'] },
+          ],
+        },
+      } as never);
+      const result = await handleSearch({ query: "name contains 'txt'" }, rules('read'));
+      expect(result.success).toBe(true);
+      expect(data(result).files.map((f: { id: string }) => f.id)).toEqual(['file']);
+      expect(data(result).filtered_count).toBe(2);
+      // The listing already carried parents; the search must not re-fetch them.
+      expect(getCalls().map((c) => c.fileId)).not.toContain('file');
+      expect(mockDriveClient.files.list).toHaveBeenCalledWith(
+        expect.objectContaining({ fields: expect.stringContaining('parents') })
+      );
+    });
+  });
+
+  describe('create', () => {
+    it('creates under a descendant of a writable folder', async () => {
+      vi.mocked(mockDriveClient.files.create).mockResolvedValueOnce({ data: { id: 'new' } } as never);
+      const result = await handleCreateFile({ name: 'x.txt', parentId: 'sub' }, rules('write'));
+      expect(result.success).toBe(true);
+    });
+
+    it('refuses a read-only descendant', async () => {
+      const result = await handleCreateFile({ name: 'x.txt', parentId: 'sub' }, rules('read'));
+      expect(result.success).toBe(false);
+      expect(mockDriveClient.files.create).not.toHaveBeenCalled();
+    });
+
+    it('create in root under default blocked names the writable folders', async () => {
+      const result = await handleCreateFile({ name: 'x.txt' }, rules('write'));
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Permission denied');
+      expect(result.error).toContain('/proj');
+      expect(result.error).toContain('proj');
+      expect(mockDriveClient.files.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('update / move', () => {
+    it('updates a file two levels under a writable folder', async () => {
+      vi.mocked(mockDriveClient.files.update).mockResolvedValueOnce({ data: { id: 'file' } } as never);
+      const result = await handleUpdateFile({ fileId: 'file', name: 'renamed' }, rules('write'));
+      expect(result.success).toBe(true);
+    });
+
+    it('refuses to update a file under a read-only folder', async () => {
+      const result = await handleUpdateFile({ fileId: 'file', name: 'renamed' }, rules('read'));
+      expect(result.success).toBe(false);
+      expect(mockDriveClient.files.update).not.toHaveBeenCalled();
+    });
+
+    it('move into blocked is refused before update', async () => {
+      const result = await handleUpdateFile(
+        { fileId: 'file', addParents: ['secret'], removeParents: ['sub'] },
+        rules('write')
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Permission denied');
+      expect(mockDriveClient.files.update).not.toHaveBeenCalled();
+    });
+
+    it('move out of the granted folder into an unruled one is refused', async () => {
+      const result = await handleUpdateFile(
+        { fileId: 'file', addParents: ['sibling'], removeParents: ['sub'] },
+        rules('write')
+      );
+      expect(result.success).toBe(false);
+      expect(mockDriveClient.files.update).not.toHaveBeenCalled();
+    });
+
+    it('removing a parent the agent cannot write is refused', async () => {
+      const result = await handleUpdateFile(
+        { fileId: 'file', removeParents: ['sibling'] },
+        rules('write')
+      );
+      expect(result.success).toBe(false);
+      expect(mockDriveClient.files.update).not.toHaveBeenCalled();
+    });
+
+    it('move within the writable subtree succeeds', async () => {
+      vi.mocked(mockDriveClient.files.update).mockResolvedValueOnce({ data: { id: 'file' } } as never);
+      const result = await handleUpdateFile(
+        { fileId: 'file', addParents: ['proj'], removeParents: ['sub'] },
+        rules('write')
+      );
+      expect(result.success).toBe(true);
+    });
+  });
+
+  describe('share / delete', () => {
+    it('share is refused under a read-only folder', async () => {
+      const result = await handleShareFile(
+        { fileId: 'file', role: 'reader', type: 'anyone' },
+        rules('read')
+      );
+      expect(result.success).toBe(false);
+      expect(mockDriveClient.permissions.create).not.toHaveBeenCalled();
+    });
+
+    it('share succeeds under a writable folder', async () => {
+      vi.mocked(mockDriveClient.permissions.create).mockResolvedValueOnce({ data: { id: 'p' } } as never);
+      const result = await handleShareFile(
+        { fileId: 'file', role: 'reader', type: 'anyone' },
+        rules('write')
+      );
+      expect(result.success).toBe(true);
+    });
+
+    it('delete is refused for a sibling file', async () => {
+      const result = await handleDeleteFile({ fileId: 'other', permanent: true }, rules('write'));
+      expect(result.success).toBe(false);
+      expect(mockDriveClient.files.delete).not.toHaveBeenCalled();
+      expect(mockDriveClient.files.update).not.toHaveBeenCalled();
+    });
+
+    it('delete succeeds under a writable folder', async () => {
+      vi.mocked(mockDriveClient.files.update).mockResolvedValueOnce({} as never);
+      const result = await handleDeleteFile({ fileId: 'file' }, rules('write'));
+      expect(result.success).toBe(true);
+    });
+  });
+
+  describe('shared drives', () => {
+    it('are filtered to those with a read/write rule when the default is blocked', async () => {
+      vi.mocked(mockDriveClient.drives.list).mockResolvedValueOnce({
+        data: { drives: [{ id: 'proj', name: 'Proj Drive' }, { id: 'td2', name: 'Other Drive' }] },
+      } as never);
+      const result = await handleListSharedDrives({}, rules('read'));
+      expect(result.success).toBe(true);
+      expect(data(result).drives.map((d: { id: string }) => d.id)).toEqual(['proj']);
+    });
+
+    it('are all returned when the default is readable', async () => {
+      vi.mocked(mockDriveClient.drives.list).mockResolvedValueOnce({
+        data: { drives: [{ id: 'proj' }, { id: 'td2' }] },
+      } as never);
+      const result = await handleListSharedDrives({}, { ...rules('read'), driveDefaultLevel: 'read' });
+      expect(data(result).drives).toHaveLength(2);
+    });
+  });
+
+  describe('file source (source: drive)', () => {
+    it('create_file with a Drive source two levels under a blocked folder is refused', async () => {
+      const result = await handleCreateFile(
+        { name: 'copy.txt', parentId: 'sub', file: { source: 'drive', fileId: 'vault' } },
+        rules('write')
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/permission denied/i);
+      expect(mockDriveClient.files.create).not.toHaveBeenCalled();
+    });
   });
 });

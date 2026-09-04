@@ -541,6 +541,12 @@ describe('setEntryParent', () => {
     const result = await setEntryParent('entry-1', SCOPES, 'ghost');
 
     expect(result).toMatchObject({ error: 'Parent not found' });
+    // The lookup is scope-filtered, so a parent outside the caller's grants
+    // takes this branch — not the "different scope" one, which would confirm
+    // the id exists.
+    const parentLookup = vi.mocked(client.execute).mock.calls[1][0] as { sql: string; args: unknown[] };
+    expect(parentLookup.sql).toContain('scope_id IN');
+    expect(parentLookup.args).toEqual(['ghost', ...SCOPES]);
   });
 
   it('returns error when setting parent to self', async () => {

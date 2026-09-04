@@ -276,6 +276,93 @@ describe('Permissions page', () => {
     });
   });
 
+  /**
+   * Folder overrides are matched by id, so what is stored must be the bare id
+   * even when a whole Drive URL was pasted; and a second rule for the same
+   * folder would never be reached, so it is refused rather than stored dead.
+   */
+  describe('a Drive instance', () => {
+    const driveInstance = {
+      ...instanceBase,
+      id: 'i-drive',
+      serviceType: 'drive',
+      serviceName: 'Google Drive',
+      credentialId: 'cred-1',
+      credentialEmail: 'drive@example.com',
+      credentialStatus: 'connected' as const,
+      permissionLevel: 'full' as const,
+      config: null,
+    };
+    const docsRule = { folderId: 'FOLDER_DOCS', label: 'Docs', permission: 'read' as const };
+
+    beforeEach(() => {
+      vi.mocked(permissions.getAgentPermissions).mockResolvedValue({
+        ...agentPerms,
+        agents: [{ ...agentPerms.agents[0], instances: [driveInstance] }],
+        availableServices: [
+          ...agentPerms.availableServices,
+          { type: 'drive', name: 'Google Drive', icon: 'HardDrive', authRequired: true },
+        ],
+      } as any);
+      vi.mocked(permissions.getInstanceConfig).mockResolvedValue({ ...driveInstance, tools: [] } as any);
+      vi.mocked(permissions.getDrivePathConfig).mockResolvedValue({ defaultLevel: 'write', rules: [docsRule] });
+      vi.mocked(permissions.setDrivePathConfig).mockResolvedValue({ defaultLevel: 'write', rules: [docsRule] });
+    });
+
+    async function openEditor() {
+      render(<Permissions />, { wrapper: createWrapper() });
+      await expandAgent();
+      fireEvent.click(screen.getByText('drive@example.com'));
+      return screen.findByPlaceholderText(/Folder ID or Drive URL/);
+    }
+
+    it('stores the bare folder id when a Drive URL is pasted', async () => {
+      const input = await openEditor();
+      fireEvent.change(input, { target: { value: 'https://drive.google.com/drive/u/0/folders/FOLDER_NEW?usp=sharing' } });
+      fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
+
+      await waitFor(() => {
+        expect(permissions.setDrivePathConfig).toHaveBeenCalledWith('a1', {
+          defaultLevel: 'write',
+          rules: [docsRule, { folderId: 'FOLDER_NEW', label: undefined, permission: 'write' }],
+        });
+      });
+    });
+
+    it('refuses a folder that already has an override, without saving', async () => {
+      const input = await openEditor();
+      fireEvent.change(input, { target: { value: 'https://drive.google.com/drive/folders/FOLDER_DOCS' } });
+      fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
+
+      expect(await screen.findByText(/already has an override/i)).toBeInTheDocument();
+      expect(permissions.setDrivePathConfig).not.toHaveBeenCalled();
+    });
+
+    it('removes a single override and sends the whole config back', async () => {
+      await openEditor();
+      fireEvent.click(screen.getByRole('button', { name: /Remove override for Docs/ }));
+
+      await waitFor(() => {
+        expect(permissions.setDrivePathConfig).toHaveBeenCalledWith('a1', { defaultLevel: 'write', rules: [] });
+      });
+    });
+
+    it('explains what the default level means and follows a change to it', async () => {
+      vi.mocked(permissions.getDrivePathConfig)
+        .mockResolvedValueOnce({ defaultLevel: 'write', rules: [docsRule] })
+        .mockResolvedValue({ defaultLevel: 'blocked', rules: [docsRule] });
+      await openEditor();
+      expect(screen.getByText(/Folders not listed: write/)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /^blocked$/i }));
+
+      await waitFor(() => {
+        expect(permissions.setDrivePathConfig).toHaveBeenCalledWith('a1', { defaultLevel: 'blocked', rules: [docsRule] });
+      });
+      expect(await screen.findByText(/Folders not listed: blocked/)).toBeInTheDocument();
+    });
+  });
+
   describe('a Memory instance', () => {
     const memoryInstance = {
       ...instanceBase,
