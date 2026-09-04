@@ -40,6 +40,7 @@ import {
 
 import { checkSpendCap } from '../services/spend.js';
 import { checkUsageGate } from '../services/billing.js';
+import { getAgentLimits, renderAgentLimits, describeToolLimit, type AgentLimits } from '../services/agent-limits.js';
 import {
   parseRequiredServices,
   buildSetupNotice,
@@ -152,6 +153,20 @@ interface ToolExecutionResult {
 
 let _registryLoaded = false;
 let _serviceTypes: string[] = [];
+/**
+ * The owner-set limits to announce, or null. Never throws: announcing limits
+ * is a courtesy to the model, and a failure here must not take initialize or
+ * tools/list down with it — the limits are still enforced on every call.
+ */
+async function loadLimits(agentId: string): Promise<AgentLimits | null> {
+  try {
+    return await getAgentLimits(agentId);
+  } catch (err) {
+    console.warn(`[agent-endpoint] could not load limits for ${agentId}:`, err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
 let _getServiceType: (toolName: string) => string | null = () => null;
 
 async function ensureRegistry() {
@@ -366,6 +381,10 @@ export async function handleMCPRequest(
     case 'initialize': {
       // Echo back the client's protocol version if provided, otherwise default
       const clientVersion = request.params?.protocolVersion as string | undefined;
+      // A restricted agent hears its limits here first, as the MCP
+      // `instructions` field, so a refusal later is expected rather than
+      // something to retry around. Unrestricted agents get no field at all.
+      const limits = await loadLimits(agentId);
       return {
         jsonrpc: '2.0',
         id: request.id,
@@ -378,6 +397,7 @@ export async function handleMCPRequest(
             name: MCP_SERVER_NAME,
             version: '1.0.0',
           },
+          ...(limits ? { instructions: renderAgentLimits(limits) } : {}),
         },
       };
     }
@@ -499,6 +519,17 @@ async function handleListTools(
     }
   }
 
+  // Say on each limited service's tools what the owner allows, on both the
+  // instance and legacy paths, so the description the model reads matches
+  // what a call will actually do.
+  const limits = await loadLimits(agentId);
+  if (limits) {
+    for (const tool of tools) {
+      const suffix = describeToolLimit(tool.name, limits);
+      if (suffix) tool.description = `${tool.description}${suffix}`;
+    }
+  }
+
   // Always inject the built-in get_result polling tool
   tools.push({
     name: BUILTIN_TOOLS.getResult,
@@ -530,7 +561,8 @@ async function handleListTools(
   tools.push({
     name: BUILTIN_TOOLS.whoami,
     description:
-      'Return the identity of the agent making this call: its Helm agent id and name. ' +
+      'Return the identity of the agent making this call: its Helm agent id and name, plus the limits its ' +
+      'owner has set (memory scopes, Hermeneutix project, Drive folders) as `limits`, or null when unrestricted. ' +
       'Use the id wherever a tool or skill asks for an agent id (memory scopes, helm-admin, skill assignment).',
     inputSchema: {
       type: 'object' as const,
@@ -1083,10 +1115,11 @@ async function handleCallTool(
   // already authenticated by the time we are here, so no policy check applies.
   if (toolName === BUILTIN_TOOLS.whoami) {
     const [self] = await db.select().from(agents).where(eq(agents.id, agentId));
+    const limits = await loadLimits(agentId);
     return {
       jsonrpc: '2.0', id: requestId,
       result: {
-        content: [{ type: 'text', text: JSON.stringify({ agentId, name: self?.name ?? null }) }],
+        content: [{ type: 'text', text: JSON.stringify({ agentId, name: self?.name ?? null, limits }) }],
       },
     };
   }

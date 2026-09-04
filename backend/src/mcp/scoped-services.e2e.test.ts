@@ -268,7 +268,9 @@ const EMPTY = rows([]);
  */
 const scopeRows = [
   { id: SCOPE_DEFAULT, user_id: USER, slug: 'default', name: 'Default', description: null, root_entry_id: ROOT_DEFAULT, is_default: true, is_system: true, archived_at: null, granted: false, grant_count: 1 },
-  { id: SCOPE_WORK, user_id: USER, slug: 'work', name: 'Work', description: null, root_entry_id: ROOT_WORK, is_default: false, is_system: false, archived_at: null, granted: true, grant_count: 1 },
+  // is_default is what the grants query coalesces from the grant row: the
+  // platform always flags one granted scope as the agent's default.
+  { id: SCOPE_WORK, user_id: USER, slug: 'work', name: 'Work', description: null, root_entry_id: ROOT_WORK, is_default: true, is_system: false, archived_at: null, granted: true, grant_count: 1 },
 ];
 
 const rootRow = (id: string, scopeId: string) => ({
@@ -363,6 +365,14 @@ const upstreamJson = (body: unknown, status = 200): Response =>
 async function callTool(name: string, args: Record<string, unknown> = {}): Promise<MCPResponse> {
   return handleMCPRequest(AGENT, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } });
 }
+
+const initialize = () => handleMCPRequest(AGENT, { jsonrpc: '2.0', id: 1, method: 'initialize' });
+const listTools = async () => {
+  const r = await handleMCPRequest(AGENT, { jsonrpc: '2.0', id: 1, method: 'tools/list' });
+  const tools = (r.result as { tools: Array<{ name: string; description: string }> }).tools;
+  return Object.fromEntries(tools.map((t) => [t.name, t.description]));
+};
+const instructionsOf = (r: MCPResponse) => (r.result as { instructions?: string }).instructions;
 
 const textOf = (r: MCPResponse) => (r.result as { content: Array<{ text: string }> } | undefined)?.content[0]?.text ?? '';
 const isToolError = (r: MCPResponse) => Boolean((r.result as { isError?: boolean } | undefined)?.isError);
@@ -461,6 +471,30 @@ describe('Hermeneutix instance pinned to one project', () => {
   });
 });
 
+describe('the pinned Hermeneutix agent is told about its pin', () => {
+  beforeEach(() => {
+    tables.set('credentials', [credRow]);
+    tables.set('agent_service_instances', [
+      instance({ config: JSON.stringify({ projectId: PINNED, projectName: 'Acme' }) }),
+    ]);
+    installFetch(() => upstreamJson([]));
+  });
+
+  it('initialize instructions name the project and its id', async () => {
+    const text = instructionsOf(await initialize());
+
+    expect(text).toContain('Acme');
+    expect(text).toContain(PINNED);
+    expect(text).toContain('project_id is filled in');
+  });
+
+  it('the tool description mentions the pin', async () => {
+    const descriptions = await listTools();
+
+    expect(descriptions.hermeneutix_list_meetings).toContain('Limited to project "Acme"');
+  });
+});
+
 describe('Hermeneutix instance with no project pin', () => {
   it('still requires project_id, as before pins existed', async () => {
     tables.set('credentials', [credRow]);
@@ -517,6 +551,15 @@ describe('memory tools for an agent granted only the work scope', () => {
     expect(isToolError(res)).toBe(false);
     const data = JSON.parse(textOf(res)) as { scopes: Array<{ slug: string }> };
     expect(data.scopes.map((s) => s.slug)).toEqual(['work']);
+  });
+
+  it('initialize and the memory_create description both name the reachable scope', async () => {
+    const text = instructionsOf(await initialize());
+    expect(text).toContain('work');
+    expect(text).toContain('Others are refused');
+
+    const descriptions = await listTools();
+    expect(descriptions.memory_create).toContain('Scopes you can reach: work (default)');
   });
 
   it('memory_get on an entry in the default scope is not found', async () => {
@@ -629,6 +672,31 @@ describe('Drive tools scoped to one folder', () => {
     expect(data.files.map((f) => f.id)).toEqual(['proj']);
     expect(data.note).toMatch(/granted/i);
     expect(mockDrive.files.list).not.toHaveBeenCalled();
+  });
+
+  it('initialize instructions describe the folder rules', async () => {
+    const text = instructionsOf(await initialize());
+
+    expect(text).toContain('proj');
+    expect(text).toContain('blocked');
+  });
+
+  it('whoami carries all three limit shapes for an agent restricted on all three', async () => {
+    tables.set('agent_service_instances', [
+      instance({ id: 'inst-drive', serviceType: 'drive', credentialId: 'cred-google', config: null }),
+      instance({ id: 'inst-herm', serviceType: 'hermeneutix', credentialId: CRED, config: JSON.stringify({ projectId: PINNED, projectName: 'Acme' }) }),
+      instance({ id: 'inst-mem', serviceType: 'memory', credentialId: null, config: null }),
+    ]);
+
+    const res = await callTool('whoami', {});
+
+    const body = JSON.parse(textOf(res)) as { agentId: string; limits: Record<string, unknown> };
+    expect(body.agentId).toBe(AGENT);
+    expect(body.limits).toEqual({
+      memory: { scopes: [{ slug: 'work', name: 'Work', isDefault: true }] },
+      hermeneutix: [{ projectId: PINNED, projectName: 'Acme' }],
+      drive: { defaultLevel: 'blocked', rules: [{ folderId: 'proj', label: '/proj', permission: 'read' }] },
+    });
   });
 
   it('gmail_create_draft cannot launder a refused Drive file through an attachment', async () => {

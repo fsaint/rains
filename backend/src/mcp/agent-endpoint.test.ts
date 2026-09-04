@@ -101,6 +101,13 @@ vi.mock('../services/permissions.js', () => ({
   }),
 }));
 
+// Only the builder is stubbed; the renderer and the description suffixes are
+// the real ones, so these tests pin the text an agent actually sees.
+vi.mock('../services/agent-limits.js', async () => {
+  const actual = await vi.importActual<typeof import('../services/agent-limits.js')>('../services/agent-limits.js');
+  return { ...actual, getAgentLimits: vi.fn().mockResolvedValue(null) };
+});
+
 vi.mock('@reins/servers', () => ({
   serviceDefinitions: [
     { type: 'gmail', name: 'Gmail' },
@@ -1252,7 +1259,130 @@ describe('whoami tool', () => {
 
     expect(response.error).toBeUndefined();
     const text = (response.result as { content: Array<{ text: string }> }).content[0].text;
-    expect(JSON.parse(text)).toEqual({ agentId: 'agent-1', name: 'Test Agent' });
+    expect(JSON.parse(text)).toEqual({ agentId: 'agent-1', name: 'Test Agent', limits: null });
+  });
+});
+
+describe('owner-set limits surfaced by the MCP', () => {
+  const PROJECT = '11111111-1111-4111-8111-111111111111';
+  const limits = {
+    memory: { scopes: [{ slug: 'lva', name: 'LVA', isDefault: true }] },
+    hermeneutix: [{ projectId: PROJECT, projectName: 'LVA' }],
+    drive: { defaultLevel: 'blocked' as const, rules: [{ folderId: 'folder-1', label: '/proj', permission: 'read' as const }] },
+  };
+  const agentRow = [{ id: 'agent-1', name: 'Test Agent', status: 'active' }];
+  const inst = (id: string, serviceType: string) =>
+    ({ id, agentId: 'agent-1', serviceType, enabled: true, isDefault: true, credentialId: null, config: null });
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    dbWhereMock.mockReset();
+    dbWhereMock.mockResolvedValue(agentRow);
+    vi.mocked(client.execute).mockReset();
+    vi.mocked(client.execute).mockResolvedValue({ rows: [] } as never);
+    const { getAgentLimits } = await import('../services/agent-limits.js');
+    vi.mocked(getAgentLimits).mockReset();
+    vi.mocked(getAgentLimits).mockResolvedValue(null);
+    const { serverManager } = await import('./server-manager.js');
+    vi.mocked(serverManager.getServer).mockReset();
+    vi.mocked(serverManager.getServer).mockReturnValue({
+      serverType: 'mixed',
+      name: 'Mixed',
+      getToolDefinitions: () => [
+        { name: 'memory_create', description: 'Create a memory entry.', inputSchema: { type: 'object', properties: {} } },
+        { name: 'hermeneutix_list_meetings', description: 'List meetings.', inputSchema: { type: 'object', properties: {} } },
+        { name: 'drive_read_file', description: 'Read a Drive file.', inputSchema: { type: 'object', properties: {} } },
+        { name: 'calendar_list_events', description: 'List events.', inputSchema: { type: 'object', properties: {} } },
+      ],
+      callTool: vi.fn().mockResolvedValue({ success: true, data: [] }),
+    } as never);
+    const { getEffectiveInstancePermissions } = await import('../services/permissions.js');
+    vi.mocked(getEffectiveInstancePermissions).mockResolvedValue({
+      enabled: true,
+      tools: { memory_create: 'allow', hermeneutix_list_meetings: 'allow', drive_read_file: 'allow', calendar_list_events: 'allow' },
+    } as never);
+  });
+
+  const listTools = async () => {
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([inst('i-mem', 'memory')]);
+    const response = await handleMCPRequest('agent-1', { jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    const tools = (response.result as { tools: Array<{ name: string; description: string }> }).tools;
+    return Object.fromEntries(tools.map((t) => [t.name, t.description]));
+  };
+
+  it('initialize carries the rendered limits as instructions', async () => {
+    const { getAgentLimits } = await import('../services/agent-limits.js');
+    vi.mocked(getAgentLimits).mockResolvedValue(limits);
+
+    const response = await handleMCPRequest('agent-1', { jsonrpc: '2.0', id: 1, method: 'initialize' });
+
+    const result = response.result as { instructions?: string; serverInfo: { name: string } };
+    expect(result.serverInfo.name).toBe('helm');
+    expect(result.instructions).toContain("Limits set by this agent's owner");
+    expect(result.instructions).toContain('lva (default)');
+    expect(result.instructions).toContain(`"LVA" (${PROJECT})`);
+    expect(result.instructions).toContain('/proj (folder-1): read');
+  });
+
+  it('initialize has no instructions key when nothing is restricted', async () => {
+    const response = await handleMCPRequest('agent-1', { jsonrpc: '2.0', id: 1, method: 'initialize' });
+
+    expect(response.error).toBeUndefined();
+    expect(response.result).not.toHaveProperty('instructions');
+  });
+
+  it('initialize still succeeds, without instructions, when the limits lookup throws', async () => {
+    const { getAgentLimits } = await import('../services/agent-limits.js');
+    vi.mocked(getAgentLimits).mockRejectedValue(new Error('db down'));
+
+    const response = await handleMCPRequest('agent-1', { jsonrpc: '2.0', id: 1, method: 'initialize' });
+
+    expect(response.error).toBeUndefined();
+    expect(response.result).not.toHaveProperty('instructions');
+  });
+
+  it('tools/list suffixes the descriptions of limited services and leaves the rest alone', async () => {
+    const { getAgentLimits } = await import('../services/agent-limits.js');
+    vi.mocked(getAgentLimits).mockResolvedValue(limits);
+
+    const descriptions = await listTools();
+
+    expect(descriptions.memory_create).toBe('Create a memory entry. Scopes you can reach: lva (default).');
+    expect(descriptions.hermeneutix_list_meetings).toBe('List meetings. Limited to project "LVA"; project_id is filled in.');
+    expect(descriptions.drive_read_file).toBe('Read a Drive file. Limited to Drive folder(s) /proj (read); files elsewhere are refused.');
+    expect(descriptions.calendar_list_events).toBe('List events.');
+  });
+
+  it('tools/list leaves every description untouched when nothing is restricted', async () => {
+    const descriptions = await listTools();
+
+    expect(descriptions.memory_create).toBe('Create a memory entry.');
+    expect(descriptions.hermeneutix_list_meetings).toBe('List meetings.');
+    expect(descriptions.drive_read_file).toBe('Read a Drive file.');
+  });
+
+  it('whoami returns the limits object and its description says so', async () => {
+    const { getAgentLimits } = await import('../services/agent-limits.js');
+    vi.mocked(getAgentLimits).mockResolvedValue(limits);
+
+    const descriptions = await listTools();
+    expect(descriptions.whoami).toMatch(/limits/i);
+    expect(descriptions.whoami).toMatch(/memory scopes/i);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'whoami', arguments: {} },
+    });
+    const text = (response.result as { content: Array<{ text: string }> }).content[0].text;
+    expect(JSON.parse(text)).toEqual({ agentId: 'agent-1', name: 'Test Agent', limits });
+  });
+
+  it('whoami reports limits: null when nothing is restricted', async () => {
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'whoami', arguments: {} },
+    });
+    const text = (response.result as { content: Array<{ text: string }> }).content[0].text;
+    expect(JSON.parse(text)).toEqual({ agentId: 'agent-1', name: 'Test Agent', limits: null });
   });
 });
 
