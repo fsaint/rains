@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { usePostHog } from '@posthog/react';
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import {
-  Shield,
   Users,
   Key,
   CheckCircle,
@@ -36,6 +35,7 @@ import MemoryEntry from './pages/MemoryEntry';
 import OAuthComplete from './pages/OAuthComplete';
 import Pricing from './pages/Pricing';
 import Billing from './pages/Billing';
+import HelmMark from './components/HelmMark';
 import { auth } from './api/client';
 import type { User as UserType } from './api/client';
 
@@ -181,10 +181,10 @@ function App() {
         {/* Logo + mobile close button */}
         <div className="p-6 border-b border-white/10 flex items-start justify-between">
           <Link to="/" className="flex items-center gap-3">
-            <Shield className="w-8 h-8 text-trust-blue" />
+            <HelmMark className="w-8 h-8" />
             <div>
-              <span className="text-xl font-semibold">AgentHelm</span>
-              <p className="text-xs text-gray-400 mt-0.5">The trust layer for AI agents</p>
+              <span className="text-xl font-semibold">Helm</span>
+              <p className="text-xs text-gray-400 mt-0.5">Tools. Memory. Skills. Any harness.</p>
             </div>
           </Link>
           <button
@@ -241,8 +241,8 @@ function App() {
           >
             <Menu className="w-6 h-6" />
           </button>
-          <Shield className="w-6 h-6 text-trust-blue" />
-          <span className="font-semibold text-lg">AgentHelm</span>
+          <HelmMark className="w-6 h-6" />
+          <span className="font-semibold text-lg">Helm</span>
         </header>
 
         <main className="flex-1 overflow-auto">

@@ -1069,7 +1069,7 @@ export default function AgentNew() {
                     rows={4}
                     placeholder={`[{"name": "server-name", "url": "https://...", "transport": "http"}]`}
                   />
-                  <p className="text-xs text-gray-400 mt-1">AgentHelm proxy is added automatically</p>
+                  <p className="text-xs text-gray-400 mt-1">Helm proxy is added automatically</p>
                 </div>
               </div>
             )}
@@ -1114,12 +1114,12 @@ export default function AgentNew() {
         <section className="bg-white rounded-xl border border-gray-100 p-6 space-y-3">
           <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Ready to Connect</h2>
           <p className="text-sm text-gray-600">
-            Clicking <strong>Create Agent</strong> will provision an AgentHelm agent and give you an MCP endpoint URL.
+            Clicking <strong>Create Agent</strong> will provision a Helm agent and give you an MCP endpoint URL.
             Paste that URL into any MCP-compatible AI agent — no hosted runtime required.
           </p>
           <ul className="text-sm text-gray-500 space-y-1 list-disc list-inside">
             <li>Works with Claude Desktop, Claude Code, OpenAI, and any MCP client</li>
-            <li>AgentHelm enforces policies and manages OAuth credentials</li>
+            <li>Helm enforces policies and manages OAuth credentials</li>
             <li>Add credentials and permissions after creation</li>
           </ul>
         </section>

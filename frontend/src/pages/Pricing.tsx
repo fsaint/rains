@@ -29,7 +29,7 @@ const PLANS = [
     badge: 'Most popular',
     features: [
       'Everything in BYOK',
-      'MiniMax API key managed by AgentHelm',
+      'MiniMax API key managed by Helm',
       'No token usage limits (fair-use)',
       'Priority support',
       'Early access to new integrations',

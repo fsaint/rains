@@ -18,8 +18,8 @@ describe('Login', () => {
 
   it('renders the branding', () => {
     renderLogin();
-    expect(screen.getByText('AgentHelm')).toBeInTheDocument();
-    expect(screen.getByText('The trust layer for AI agents')).toBeInTheDocument();
+    expect(screen.getByText('Helm')).toBeInTheDocument();
+    expect(screen.getByText('Tools. Memory. Skills. Any harness.')).toBeInTheDocument();
   });
 
   it('renders the Google sign-in button', () => {

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Shield, AlertCircle } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
+import HelmMark from '../components/HelmMark';
 
 interface LoginProps {
   onSuccess: (user: never) => void;
@@ -91,8 +92,8 @@ export default function Login(_props: LoginProps) {
 
       <div className="relative w-full max-w-sm mx-4">
         <div className="flex items-center justify-center gap-3 mb-10">
-          <Shield className="w-8 h-8 text-trust-blue" />
-          <span className="text-2xl font-semibold text-white tracking-tight">AgentHelm</span>
+          <HelmMark className="w-8 h-8" />
+          <span className="text-2xl font-semibold text-white tracking-tight">Helm</span>
         </div>
 
         <div className="bg-white/[0.04] backdrop-blur-sm border border-white/[0.06] rounded-2xl p-8">
@@ -178,7 +179,7 @@ export default function Login(_props: LoginProps) {
         </div>
 
         <p className="text-center text-xs text-gray-600 mt-6">
-          The trust layer for AI agents
+          Tools. Memory. Skills. Any harness.
         </p>
       </div>
     </div>

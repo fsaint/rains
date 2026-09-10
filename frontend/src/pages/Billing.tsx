@@ -46,7 +46,7 @@ export default function Billing() {
   return (
     <div className="p-8 max-w-2xl mx-auto">
       <h1 className="text-2xl font-bold text-gray-900 mb-2">Billing</h1>
-      <p className="text-gray-500 mb-8 text-sm">Manage your AgentHelm subscription.</p>
+      <p className="text-gray-500 mb-8 text-sm">Manage your Helm subscription.</p>
 
       {justSubscribed && (
         <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg flex items-center gap-3">
