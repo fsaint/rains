@@ -10,7 +10,6 @@ import {
   LogOut,
   UserCog,
   User,
-  Database,
   Bell,
   Menu,
   X,
@@ -27,7 +26,6 @@ import Login from './pages/Login';
 import AdminUsers from './pages/AdminUsers';
 import AgentNew from './pages/AgentNew';
 import AgentDetail from './pages/AgentDetail';
-import Backups from './pages/Backups';
 import Notifications from './pages/Notifications';
 import Memory from './pages/Memory';
 import Skills from './pages/Skills';
@@ -45,7 +43,6 @@ const navItems = [
   { path: '/credentials', label: 'Credentials', icon: Key },
   { path: '/approvals', label: 'Approvals', icon: CheckCircle },
   { path: '/audit', label: 'Audit Log', icon: Activity },
-  { path: '/backups', label: 'Backups', icon: Database },
   { path: '/notifications', label: 'Notifications', icon: Bell },
   { path: '/memory', label: 'Memory', icon: Brain },
   { path: '/skills', label: 'Skills', icon: BookOpen },
@@ -254,7 +251,6 @@ function App() {
             <Route path="/credentials" element={<Credentials />} />
             <Route path="/approvals" element={<Approvals />} />
             <Route path="/audit" element={<AuditLog />} />
-            <Route path="/backups" element={<Backups />} />
             <Route path="/notifications" element={<Notifications />} />
             <Route path="/memory" element={<Memory />} />
             <Route path="/memory/:id" element={<MemoryEntry />} />

@@ -4,8 +4,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import Permissions from './Permissions';
 
-vi.mock('../components/DeploymentPanel', () => ({ DeploymentPanel: () => null }));
-
 vi.mock('../api/client', () => ({
   ApiError: class ApiError extends Error {
     constructor(public code: string, message: string, public details?: Record<string, unknown>) {

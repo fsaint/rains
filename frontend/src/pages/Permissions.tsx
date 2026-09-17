@@ -31,16 +31,13 @@ import {
   Plus,
   Trash2,
   Tag,
-  Rocket,
   Power,
   PowerOff,
   Loader2,
   Radio,
-  Send,
   ShieldAlert,
   ShieldCheck,
 } from 'lucide-react';
-import { DeploymentPanel } from '../components/DeploymentPanel';
 import AgentSkillToggles from '../components/AgentSkillToggles';
 import { parseDriveFolderId } from '../utils/drive';
 
@@ -120,7 +117,6 @@ export default function Permissions() {
     agentName: string;
     instances: Array<{ id: string; serviceType: string; credentialId: string | null }>;
   } | null>(null);
-  const [deployAgentId, setDeployAgentId] = useState<string | null>(null);
 
   const { data: agentPerms, isLoading } = useQuery({
     queryKey: ['permissions', 'agents'],
@@ -386,20 +382,6 @@ export default function Permissions() {
                   </div>
                 </button>
                 <div className="flex items-center gap-1 shrink-0">
-                  {/* Telegram bot link */}
-                  {agent.telegramBotUsername && (
-                    <a
-                      href={`https://t.me/${agent.telegramBotUsername}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={(e) => e.stopPropagation()}
-                      className="hidden sm:flex items-center gap-1.5 mr-2 text-xs text-trust-blue hover:text-blue-600 transition-colors"
-                      title="Open in Telegram"
-                    >
-                      <Send className="w-3.5 h-3.5" />
-                      <span>@{agent.telegramBotUsername}</span>
-                    </a>
-                  )}
                   {/* Service type icons summary */}
                   <div className="hidden sm:flex items-center gap-1.5 mr-3">
                     {[...new Set(agent.instances.map((i) => i.serviceType))].map((st) => (
@@ -408,15 +390,6 @@ export default function Permissions() {
                       </div>
                     ))}
                   </div>
-                  {/* Deploy */}
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setDeployAgentId(agent.id); }}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-600 bg-emerald-50 hover:bg-emerald-100 border border-emerald-100 rounded-lg transition-all"
-                    title="Deploy to Fly.io or Docker"
-                  >
-                    <Rocket className="w-3.5 h-3.5" />
-                    Deploy
-                  </button>
                   {/* Activate / Suspend */}
                   {agent.status === 'active' ? (
                     <button
@@ -583,17 +556,6 @@ export default function Permissions() {
             queryClient.invalidateQueries({ queryKey: ['permissions'] });
             setAddServiceAgent(null);
           }}
-        />
-      )}
-
-      {/* Deploy Modal */}
-      {deployAgentId && (
-        <DeploymentPanel
-          agentId={deployAgentId}
-          agentName={
-            agentPerms?.agents.find((a) => a.id === deployAgentId)?.name || 'Agent'
-          }
-          onClose={() => setDeployAgentId(null)}
         />
       )}
     </div>
@@ -941,7 +903,7 @@ function AddServiceModal({
                   ))}
                 </ul>
                 <p className="text-xs text-gray-500 mt-2">
-                  Open each one's Deploy panel and turn off unauthenticated access.
+                  Open each one's detail page and turn off unauthenticated access.
                 </p>
               </div>
               <button

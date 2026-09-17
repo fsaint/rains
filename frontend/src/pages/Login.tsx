@@ -8,7 +8,7 @@ interface LoginProps {
 }
 
 const ERROR_MESSAGES: Record<string, string> = {
-  not_authorized: 'Your account hasn\'t been set up yet. Complete onboarding in Telegram first.',
+  not_authorized: 'This Google account is not set up on Helm. Ask your administrator for an invite.',
   invalid_state: 'Sign-in session expired. Please try again.',
   token_failed: 'Google authentication failed. Please try again.',
   userinfo_failed: 'Could not retrieve your Google account info. Please try again.',

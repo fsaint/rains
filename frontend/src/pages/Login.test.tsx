@@ -41,7 +41,7 @@ describe('Login', () => {
 
   it('shows error for not_authorized login error', () => {
     renderLogin('?login_error=not_authorized');
-    expect(screen.getByText(/hasn't been set up yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/not set up on Helm/i)).toBeInTheDocument();
   });
 
   it('shows error for invalid_state login error', () => {

@@ -47,98 +47,14 @@ async function request<T>(
   return data.data ?? data;
 }
 
-// Telegram group type (matches backend TelegramGroup)
-export interface TopicPrompt {
-  threadId: number;
-  prompt: string;
-}
-
-export interface TelegramGroup {
-  chatId: string;
-  name?: string;
-  requireMention?: boolean;
-  allowFrom?: string[];
-  topicPrompts?: TopicPrompt[];
-}
-
-// Deployment types
-export interface DeployConfig {
-  telegramToken: string;
-  telegramUserId?: string;
-  soulMd?: string;
-  modelProvider?: string;
-  modelName?: string;
-  region?: string;
-  modelCredentials?: string;
-  openaiApiKey?: string;
-  runtime?: 'openclaw' | 'hermes';
-}
-
-export interface DeploymentInfo {
-  id?: string;
-  deploymentId?: string;
-  agentId: string;
-  flyAppName?: string;
-  flyMachineId?: string;
-  status: string;
-  managementUrl?: string;
-  modelProvider?: string;
-  modelName?: string;
-  region?: string;
-  appName?: string;
-  machineId?: string;
-  isManual?: boolean;
-  openaiApiKey?: string | null;
-  telegramGroups?: TelegramGroup[];
-  createdAt?: string;
-  updatedAt?: string;
-  runtime?: string;
-}
-
-// Create & Deploy types
-export interface CreateAndDeployData {
-  name: string;
-  description?: string;
-  telegramToken?: string;
-  telegramUserId?: string;
-  initialPrompt?: string;
-  modelProvider?: 'anthropic' | 'openai-codex' | 'openai' | 'minimax';
-  modelName?: string;
-  soulMd?: string;
-  region?: string;
-  openaiApiKey?: string;
-  modelCredentials?: string;
-  mcpServers?: string;
-  runtime?: 'openclaw' | 'hermes';
-}
-
 export interface AgentDetail {
   id: string;
   name: string;
   description: string | null;
   status: string;
   createdAt: string;
-  deployment: {
-    id: string;
-    status: string;
-    flyAppName: string | null;
-    flyMachineId: string | null;
-    managementUrl: string | null;
-    gatewayToken: string;
-    telegramToken: string | null;
-    telegramBotUsername: string | null;
-    telegramUserId: string | null;
-    openaiApiKey: string | null;
-    telegramGroups: TelegramGroup[];
-    soulMd: string | null;
-    modelProvider: string | null;
-    modelName: string | null;
-    region: string | null;
-    mcpConfigJson: string | null;
-    runtime?: string | null;
-    isManual?: boolean;
-    createdAt: string;
-  } | null;
+  mcpUrl: string;
+  allowUnauthenticated: boolean;
 }
 
 // Agent types
@@ -173,7 +89,7 @@ export const agents = {
   list: () => request<unknown[]>('/agents'),
   get: (id: string) => request<unknown>(`/agents/${id}`),
   create: (data: { name: string; description?: string }) =>
-    request<unknown>('/agents', { method: 'POST', body: JSON.stringify(data) }),
+    request<{ id: string; name: string; status: string }>('/agents', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: string, data: { name?: string; description?: string; status?: string }) =>
     request<unknown>(`/agents/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   delete: (id: string) => request<void>(`/agents/${id}`, { method: 'DELETE' }),
@@ -195,64 +111,8 @@ export const agents = {
   listPending: () => request<PendingRegistration[]>('/agents/pending'),
   cancelPending: (id: string) => request<void>(`/agents/pending/${id}`, { method: 'DELETE' }),
 
-  // Deployment lifecycle
-  deploy: (id: string, data: DeployConfig) =>
-    request<DeploymentInfo>(`/agents/${id}/deploy`, { method: 'POST', body: JSON.stringify(data) }),
-  getDeployment: (id: string) =>
-    request<DeploymentInfo>(`/agents/${id}/deployment`),
-  startDeployment: (id: string) =>
-    request<{ status: string }>(`/agents/${id}/start`, { method: 'POST' }),
-  stopDeployment: (id: string) =>
-    request<{ status: string }>(`/agents/${id}/stop`, { method: 'POST' }),
-  restartDeployment: (id: string) =>
-    request<{ status: string }>(`/agents/${id}/restart`, { method: 'POST' }),
-  redeployAgent: (id: string, data?: Partial<DeployConfig>) =>
-    request<{ status: string; managementUrl: string }>(`/agents/${id}/redeploy`, { method: 'POST', body: JSON.stringify(data ?? {}) }),
-  destroyDeployment: (id: string) =>
-    request<void>(`/agents/${id}/deploy`, { method: 'DELETE' }),
-  createAndDeploy: (data: CreateAndDeployData) =>
-    request<{ id: string; name: string; status: string; deployment: object }>('/agents/create-and-deploy', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
-  createManual: (data: { name: string; description?: string; soulMd?: string }) =>
-    request<{ id: string; name: string; status: string; deployment: object }>('/agents/create-manual', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
   getDetail: (id: string) =>
     request<AgentDetail>(`/agents/${id}/detail`),
-  getLogs: (id: string, nextToken?: string) =>
-    request<{ logs: Array<{ timestamp: string; message: string; level: string; instance: string; region: string }>; nextToken?: string }>(
-      `/agents/${id}/logs${nextToken ? `?next_token=${nextToken}` : ''}`
-    ),
-  updateSoul: (id: string, soulMd: string) =>
-    request<{ soulMd: string; redeployed: boolean }>(`/agents/${id}/soul`, {
-      method: 'PUT',
-      body: JSON.stringify({ soulMd }),
-    }),
-  getManagementUrl: (id: string) =>
-    request<{ url: string }>(`/agents/${id}/management-url`),
-  logsStreamUrl: (id: string) => `${API_BASE}/agents/${id}/logs/stream`,
-  updateSettings: (id: string, data: { telegramGroups?: TelegramGroup[]; openaiApiKey?: string | null }) =>
-    request<{ changed: boolean; restarted: boolean }>(`/agents/${id}/settings`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    }),
-};
-
-// OpenAI Auth
-export const openaiAuth = {
-  startDeviceFlow: () =>
-    request<{ deviceAuthId: string; userCode: string; verificationUrl: string; interval: number }>('/auth/openai-device', {
-      method: 'POST',
-      body: JSON.stringify({ action: 'start' }),
-    }),
-  pollDeviceFlow: (deviceAuthId: string, userCode: string) =>
-    request<{ status: string; tokens?: string; error?: string }>('/auth/openai-device', {
-      method: 'POST',
-      body: JSON.stringify({ action: 'poll', deviceAuthId, userCode }),
-    }),
 };
 
 // Credential types
@@ -388,36 +248,6 @@ export interface AuthResponse {
   user?: User;
 }
 
-// Backups
-export interface BackupMetadata {
-  id: string;
-  filename: string;
-  createdAt: string;
-  sizeBytes: number;
-  agentCount: number;
-}
-
-export interface RestoreResult {
-  ok: boolean;
-  safetyBackupId: string;
-  restored: {
-    credentials: number;
-    policies: number;
-    agents: number;
-    deployedAgents: number;
-    agentServiceInstances: number;
-    agentToolPermissions: number;
-    agentServiceCredentials: number;
-  };
-}
-
-export const backups = {
-  list: () => request<{ backups: BackupMetadata[] }>('/backups'),
-  create: () => request<{ backup: BackupMetadata }>('/backups', { method: 'POST' }),
-  restore: (id: string) => request<RestoreResult>(`/backups/${id}/restore`, { method: 'POST' }),
-  downloadUrl: (id: string) => `/api/backups/${id}`,
-};
-
 // Auth
 export const auth = {
   login: (email: string, password: string) =>
@@ -480,7 +310,7 @@ export const health = {
 
 // Public config (no auth required)
 export const config = {
-  getPublic: () => request<{ sharedBotEnabled: boolean }>('/config/public'),
+  getPublic: () => request<Record<string, never>>('/config/public'),
 };
 
 // Initial prompt templates
@@ -600,7 +430,6 @@ export interface AgentPermissionsResponse {
     name: string;
     status: string;
     instances: ServiceInstance[];
-    telegramBotUsername?: string | null;
   }>;
   availableServices: Array<{ type: string; name: string; icon: string; authRequired: boolean }>;
 }
@@ -1067,27 +896,6 @@ export const skills = {
 
   unassign: (agentId: string, skillId: string) =>
     request<{ removed: boolean }>(`/agents/${agentId}/skills/${skillId}`, { method: 'DELETE' }),
-};
-
-// Model Router types
-export interface ModelConfig {
-  id: string;
-  agentId: string;
-  provider: string;
-  modelName: string;
-  role: 'strong' | 'weak';
-  apiKeyMasked: string;
-  createdAt: string;
-}
-
-// Model Router API
-export const models = {
-  list: (agentId: string) =>
-    request<ModelConfig[]>(`/agents/${agentId}/models`),
-  upsert: (agentId: string, data: { provider: string; modelName: string; role: string; apiKey: string }) =>
-    request<ModelConfig[]>(`/agents/${agentId}/models`, { method: 'PUT', body: JSON.stringify(data) }),
-  delete: (agentId: string, configId: string) =>
-    request<{ ok: boolean }>(`/agents/${agentId}/models/${configId}`, { method: 'DELETE' }),
 };
 
 export const billing = {
