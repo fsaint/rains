@@ -514,15 +514,15 @@ export class TelegramNotifier {
    * approval message itself (so replying directly, without tapping the button,
    * also works).
    *
-   * Returns false when the reply is not about an approval, so the caller can
-   * fall through to the onboarding handler.
+   * If the reply is not about an approval, this method returns silently without
+   * taking any action.
    */
   private async handleCorrectionReply(
     msg: NonNullable<TelegramUpdate['message']>
-  ): Promise<boolean> {
+  ): Promise<void> {
     const repliedTo = msg.reply_to_message?.message_id;
     const feedback = msg.text?.trim();
-    if (!repliedTo || !feedback) return false;
+    if (!repliedTo || !feedback) return;
 
     const chatId = String(msg.chat.id);
 
@@ -538,13 +538,13 @@ export class TelegramNotifier {
     });
 
     const row = result.rows[0];
-    if (!row) return false;
+    if (!row) return;
 
     // Only the linked owner may steer the agent.
     const ownerChatId = row.owner_chat_id as string | null;
     if (!ownerChatId || ownerChatId !== String(msg.from?.id ?? '')) {
       await this.sendMessage(chatId, 'You are not authorized to resolve this request.', {});
-      return true;
+      return;
     }
 
     const { approvalQueue } = await import('../approvals/queue.js');
@@ -561,8 +561,6 @@ export class TelegramNotifier {
     } else {
       await this.sendMessage(chatId, '✏️ Sent back to your agent. It will revise and ask again.', {});
     }
-
-    return true;
   }
 
   /**
