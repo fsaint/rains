@@ -43,37 +43,11 @@ jobs:
       - name: Typecheck
         run: npm run typecheck --workspaces --if-present
 
-  # ── Build stub OpenClaw Docker image ────────────────────────────────────────
-  build-stub-image:
-    name: Build Stub OpenClaw Image
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build stub image
-        run: docker build -t reins-stub-openclaw:latest docker/stub-openclaw
-
-      - name: Smoke-test stub image
-        run: |
-          docker run -d --name stub-test -p 18789:18789 reins-stub-openclaw:latest
-          # Wait for container to be healthy (up to 15 s)
-          for i in $(seq 1 15); do
-            if curl -sf http://localhost:18789/healthz | grep -q '"ok"'; then
-              echo "✓ Stub gateway healthy after ${i}s"
-              break
-            fi
-            sleep 1
-          done
-          curl -sf http://localhost:18789/healthz
-          curl -sf http://localhost:18789/api/v1/stats
-          docker rm -f stub-test
-
   # ── E2E tests ────────────────────────────────────────────────────────────────
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
-    needs: [unit-tests, build-stub-image]
+    needs: [unit-tests]
 
     services:
       postgres:
@@ -96,17 +70,10 @@ jobs:
       ADMIN_PASSWORD: e2etestpassword123
       REINS_ADMIN_EMAIL: admin@reins.local
       REINS_ADMIN_PASSWORD: e2etestpassword123
-      REINS_PROVIDER: local
-      OPENCLAW_IMAGE: reins-stub-openclaw:latest
-      # These tests create and deploy agents, which sits behind the paid plan
-      # gate. BYPASS_BILLING is the hatch the backend already ships for exactly
-      # this; it is scoped to this job, so the billing rules themselves stay
-      # covered by the unit tests in the other job.
+      # Creating agents sits behind the paid plan gate; BYPASS_BILLING is the hatch the backend ships for tests.
       BYPASS_BILLING: 'true'
       REINS_PUBLIC_URL: http://localhost:5001
       VITE_API_URL: http://localhost:5001
-      # Set in GitHub repo secrets → Settings → Secrets → Actions
-      TEST_TELEGRAM_BOT_TOKEN: ${{ secrets.TEST_TELEGRAM_BOT_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4
@@ -125,9 +92,6 @@ jobs:
       # unnoticed while it was being skipped.
       - name: Build workspace packages
         run: npm run build --workspace=shared --workspace=servers --if-present
-
-      - name: Build stub Docker image
-        run: docker build -t reins-stub-openclaw:latest docker/stub-openclaw
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium

@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: Deploy agenthelm-core + agenthelm-onboarding
+    name: Deploy agenthelm-core
     runs-on: ubuntu-latest
     environment: production
 
@@ -22,11 +22,5 @@ jobs:
 
       - name: Deploy agenthelm-core (backend + frontend)
         run: flyctl deploy --app agenthelm-core --dockerfile Dockerfile --remote-only
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-
-      - name: Deploy agenthelm-onboarding (Telegram onboarding bot)
-        run: flyctl deploy --app agenthelm-onboarding --remote-only
-        working-directory: onboarding
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

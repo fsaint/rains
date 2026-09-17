@@ -8,14 +8,12 @@
     "shared",
     "backend",
     "frontend",
-    "servers",
-    "onboarding"
+    "servers"
   ],
   "scripts": {
     "dev": "npm run dev --workspaces --if-present",
     "dev:backend": "npm run dev --workspace=backend",
     "dev:frontend": "npm run dev --workspace=frontend",
-    "dev:onboarding": "npm run dev --workspace=onboarding",
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "test:coverage": "npm run test:coverage --workspaces --if-present",
@@ -23,8 +21,6 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:debug": "playwright test --debug",
-    "stub:build": "docker build -t reins-stub-openclaw:latest docker/stub-openclaw",
-    "stub:run": "docker run -p 18789:18789 --name reins-stub reins-stub-openclaw:latest",
     "lint": "eslint . --ext .ts,.tsx",
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
     "typecheck": "npm run typecheck --workspaces --if-present",

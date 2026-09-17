@@ -271,39 +271,8 @@ export class TelegramNotifier {
     } else if (update.callback_query) {
       await this.handleCallbackQuery(update.callback_query);
     } else if (update.message) {
-      // A reply may carry correction feedback for a pending approval. When it
-      // does not, fall through so the onboarding chat-id capture still works.
-      const handled = await this.handleCorrectionReply(update.message);
-      if (!handled) {
-        await this.handleOnboardingMessage(update.message);
-      }
-    }
-  }
-
-  private async handleOnboardingMessage(
-    msg: NonNullable<TelegramUpdate['message']>
-  ): Promise<void> {
-    const telegramUserId = msg.from?.id;
-    if (!telegramUserId) return;
-
-    const chatId = String(msg.chat.id);
-
-    // Check if this user is an onboarding applicant waiting for notify_chat_id
-    try {
-      const result = await client.execute({
-        sql: `SELECT state, notify_chat_id FROM applicants WHERE telegram_user_id = ?`,
-        args: [telegramUserId],
-      });
-      const row = result.rows[0];
-      if (!row || row.state !== 'notify_bot' || row.notify_chat_id) return;
-
-      await client.execute({
-        sql: `UPDATE applicants SET notify_chat_id = ?, updated_at = NOW() WHERE telegram_user_id = ?`,
-        args: [chatId, telegramUserId],
-      });
-      await this.sendMessage(chatId, `Great. This is where your agent will ask for permissions when it needs a grown-up to review. Go back to the onboarding bot to continue.`, {});
-    } catch (err) {
-      console.error('[telegram] handleOnboardingMessage error:', err);
+      // A reply may carry correction feedback for a pending approval.
+      await this.handleCorrectionReply(update.message);
     }
   }
 
