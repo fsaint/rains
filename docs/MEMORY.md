@@ -145,17 +145,19 @@ Browser → GET /api/memory/entries
 
 ### 2. Agent via MCP (gateway token auth)
 
-When a deployed agent calls a memory tool, the request travels:
+An agent is just an MCP endpoint — `/mcp/<agentId>` — that any MCP client (Claude, Claude
+Code, Cowork, or any other client the user points at it) connects to directly. When that
+client calls a memory tool, the request travels:
 
 ```
-Agent (OpenClaw on Fly)
+MCP client (Claude, Claude Code, Cowork, ...)
   │  MCP JSON-RPC over HTTP
   ▼
 POST /mcp/:agentId
   │  x-reins-agent-secret: <gatewayToken>  (bypasses session auth)
   ▼
 handleMCPRequest → executeTool
-  │  looks up gateway_token from deployed_agents WHERE agent_id = ?
+  │  looks up gateway_token from agents WHERE id = ?
   │  injects into ToolContext.gatewayToken
   ▼
 Memory native server (createServerWrapper → handler)
@@ -164,7 +166,7 @@ Memory native server (createServerWrapper → handler)
   ▼
 resolveMemoryContext()
   │  reads x-reins-agent-secret header
-  │  looks up deployed_agents.gateway_token → gets agent_id AND user_id
+  │  looks up agents.gateway_token → gets agent_id AND user_id
   │  joins agent_memory_scopes → the scopes this agent may reach
   ▼
 PostgreSQL — same tables, the granted scopes of that user's vault
@@ -179,7 +181,7 @@ Both paths write to the same tables. There is no sync — they share a database.
 Located in `backend/src/services/memory-scopes.ts`, wrapped by `resolveMemoryScopeContext()` in `routes.ts`. Dual-mode resolution:
 
 1. **Session present** → `request.session.userId`, with every non-archived scope that user owns
-2. **`x-reins-agent-secret` header present** → look up `deployed_agents` by `gateway_token` → `agent_id` and `user_id` → join `agent_memory_scopes` for the granted set
+2. **`x-reins-agent-secret` header present** → look up `agents` by `gateway_token` → `agent_id` and `user_id` → join `agent_memory_scopes` for the granted set
 
 It returns `{ userId, agentId, scopes, scopeIds, defaultScopeId, isSession }`. The predecessor, `resolveMemoryUserId`, resolved an agent's token to its owner and then **discarded the agent identity** — which is why every agent a user owned shared one vault. Scope grants are keyed on exactly that identity, so keeping it is the whole change.
 
