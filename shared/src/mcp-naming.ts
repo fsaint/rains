@@ -1,28 +1,15 @@
 /**
- * MCP naming — single source of truth for the server name, the namespace
- * separator, and the built-in tool names.
+ * MCP naming — single source of truth for the server name and the built-in
+ * tool names.
  *
- * The server name is not cosmetic: MCP clients namespace every tool as
- * `<server><separator><tool>`, so this value is what the model actually types
- * when it calls a tool. Changing it changes the agent-facing API.
+ * Every agent is an external MCP client (claude.ai, Claude Desktop, Claude
+ * Code, Cowork, or any other MCP client). Those clients namespace tools with
+ * a prefix of their own that the backend cannot know, so the bare tool name
+ * is the only spelling that is still correct after the client adds it.
  */
 
-/** Name of the Reins-provided MCP server, as injected into MCP_CONFIG. */
+/** Name of the Helm MCP server, as reported in the initialize handshake. */
 export const MCP_SERVER_NAME = 'helm';
-
-/** Separator MCP clients place between server name and tool name. */
-export const TOOL_NAMESPACE_SEPARATOR = '__';
-
-/**
- * Agent runtimes that consume the MCP server.
- *
- * 'external' is a manual agent — claude.ai / Claude Desktop / Claude Code
- * connect through their own MCP client, which adds a prefix of its own that
- * the backend cannot know (e.g. `mcp__claude_ai_<ConnectorName>__`). The bare
- * tool name is the only spelling that is still correct after that client
- * namespaces it.
- */
-export type AgentRuntime = 'openclaw' | 'hermes' | 'external';
 
 /**
  * Built-in tools served directly by the agent endpoint rather than by a
@@ -30,20 +17,15 @@ export type AgentRuntime = 'openclaw' | 'hermes' | 'external';
  */
 export const BUILTIN_TOOLS = {
   getResult: 'get_result',
-  markOnboarded: 'mark_onboarded',
   whoami: 'whoami',
 } as const;
 
 /**
  * Tool names accepted on `tools/call` but no longer advertised on `tools/list`.
- *
- * Kept indefinitely: agent machines bake the old server name into MCP_CONFIG at
- * deploy time, and user-authored skills may name the old tools in prose we
- * cannot rewrite.
+ * Kept because user-authored skills may name the old tool in prose.
  */
 const LEGACY_TOOL_ALIASES: Record<string, string> = {
   reins_get_result: BUILTIN_TOOLS.getResult,
-  reins__mark_onboarded: BUILTIN_TOOLS.markOnboarded,
 };
 
 /**
@@ -55,103 +37,35 @@ export function canonicalToolName(toolName: string): string {
 }
 
 /**
- * The name the model actually sees and must type, for a given runtime.
- *
- * The two runtimes namespace differently, verified against their source:
- *
- * - OpenClaw  `<server>__<tool>`        → `helm__gmail_search`
- * - Hermes    `mcp__<server>__<tool>`   → `mcp__helm__gmail_search`
- *   (hermes-agent `tools/mcp_tool.py` → `mcp_prefixed_tool_name`, which uses the
- *   `mcp__` convention shared with Claude Code and Codex)
- * - External  `<tool>`                  → `gmail_search`
- *   (a manual agent's own client adds its prefix; anything we prepend here
- *   would be wrong for every one of them)
- *
- * Use this for any tool name embedded in text the model reads — instructions,
- * skill bodies, approval prompts. Using the bare server-side name there is a
- * real bug: the model cannot call a tool by a name that is not in its list.
- *
- * Note: Hermes sanitizes each component with `[^A-Za-z0-9_] -> _`, so keeping
- * `MCP_SERVER_NAME` free of hyphens is what keeps the two runtimes' server
- * components identical.
+ * The name the model actually sees and must type. Bare: the client adds its
+ * own prefix. Use this for any tool name embedded in text the model reads —
+ * instructions, skill bodies, approval prompts.
  */
-export function modelVisibleToolName(
-  toolName: string,
-  runtime: AgentRuntime = 'openclaw',
-  serverName: string = MCP_SERVER_NAME
-): string {
-  if (runtime === 'external') return toolName;
-  const namespaced = `${serverName}${TOOL_NAMESPACE_SEPARATOR}${toolName}`;
-  return runtime === 'hermes' ? `mcp${TOOL_NAMESPACE_SEPARATOR}${namespaced}` : namespaced;
+export function modelVisibleToolName(toolName: string): string {
+  return toolName;
 }
-
-/**
- * Runtime of a deployed_agents row.
- *
- * A manual row (is_manual) has no hosted runtime at all — the DB default
- * 'openclaw' on its runtime column is meaningless — so it is 'external'
- * regardless of that column. Rows predating the runtime column are null,
- * which means openclaw. Lives here so the two readers (agent-endpoint and
- * resolveAgentFromGatewayToken in routes) cannot drift.
- */
-export function deploymentRuntime(
-  row: { runtime?: unknown; is_manual?: unknown } | undefined
-): AgentRuntime {
-  if (row?.is_manual === 1 || row?.is_manual === true) return 'external';
-  return row?.runtime === 'hermes' ? 'hermes' : 'openclaw';
-}
-
-/**
- * Server name to assume for a deployment row that predates the column.
- *
- * The prefix a running agent sees comes from the MCP_CONFIG baked into its
- * machine at deploy time, NOT from MCP_SERVER_NAME here — so between a backend
- * deploy and that agent's redeploy the two disagree. Rendering the current
- * constant into text an old agent reads names a tool it does not have.
- */
-export const LEGACY_MCP_SERVER_NAME = 'reins';
 
 /**
  * `{{tool:NAME}}` — the token skill authors write instead of hardcoding a
- * prefix.
- *
- * Skills are stored once but served to both runtimes, which namespace
- * differently, so a literal `helm__gmail_search` in a skill body is wrong on
- * Hermes and `gmail_search` is wrong on both. Authors write
- * `{{tool:gmail_search}}` and this resolves it per-agent at serve time — which
- * also means the stored content survives the next rename untouched.
+ * tool name. Resolved at serve time so stored content survives renames.
  */
 const TOOL_TOKEN_PATTERN = /\{\{tool:([A-Za-z0-9_]+)\}\}/g;
 
 /**
  * Replace every `{{tool:NAME}}` in `text` with the name the model sees.
- *
  * Malformed tokens (`{{tool:}}`, `{{ tool:x }}`) do not match and are left
- * verbatim, so an authoring mistake shows up in the text rather than silently
- * rendering as nothing.
+ * verbatim, so an authoring mistake shows up in the text.
  */
-export function resolveToolTokens(
-  text: string,
-  runtime: AgentRuntime = 'openclaw',
-  serverName: string = MCP_SERVER_NAME
-): string {
+export function resolveToolTokens(text: string): string {
   if (!text) return text;
   return text.replace(TOOL_TOKEN_PATTERN, (_match, toolName: string) =>
-    modelVisibleToolName(canonicalToolName(toolName), runtime, serverName)
+    modelVisibleToolName(canonicalToolName(toolName))
   );
 }
 
 /**
- * `{{skill:SLUG}}` — how one skill points at another.
- *
- * Skills are served one body at a time, so a reference has to tell the model
- * both which skill and how to open it. Slugs are kebab-case (see `slugify` in
- * the skills routes); anything else is an authoring mistake and is left
- * verbatim rather than rendered into an instruction that cannot work.
- *
- * A reference is a pointer, not a grant: rendering one does not make the target
- * reachable. An agent can only open skills it was actually assigned, so a
- * reference to something unassigned comes back as "not assigned to you".
+ * `{{skill:SLUG}}` — how one skill points at another. Slugs are kebab-case;
+ * anything else is left verbatim. A reference is a pointer, not a grant.
  */
 const SKILL_TOKEN_PATTERN = /\{\{skill:([a-z0-9-]+)\}\}/g;
 
@@ -160,15 +74,11 @@ const SKILL_FETCH_TOOL = 'skills_get';
 
 /**
  * Replace every `{{skill:SLUG}}` with an instruction naming both the skill and
- * the tool that opens it, addressed the way this particular agent sees it.
+ * the tool that opens it.
  */
-export function resolveSkillTokens(
-  text: string,
-  runtime: AgentRuntime = 'openclaw',
-  serverName: string = MCP_SERVER_NAME
-): string {
+export function resolveSkillTokens(text: string): string {
   if (!text) return text;
-  const fetchTool = modelVisibleToolName(SKILL_FETCH_TOOL, runtime, serverName);
+  const fetchTool = modelVisibleToolName(SKILL_FETCH_TOOL);
   return text.replace(
     SKILL_TOKEN_PATTERN,
     (_match, slug: string) => `the \`${slug}\` skill (open it with ${fetchTool})`

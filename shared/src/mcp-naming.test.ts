@@ -1,158 +1,75 @@
 import { describe, it, expect } from 'vitest';
 import {
-  MCP_SERVER_NAME,
-  LEGACY_MCP_SERVER_NAME,
   BUILTIN_TOOLS,
+  MCP_SERVER_NAME,
   canonicalToolName,
   modelVisibleToolName,
-  resolveToolTokens,
   resolveSkillTokens,
-  deploymentRuntime,
+  resolveToolTokens,
 } from './mcp-naming.js';
 
 describe('canonicalToolName', () => {
-  it('maps pre-rename built-in names to their canonical form', () => {
+  it('maps the pre-rename get_result name to its canonical form', () => {
     expect(canonicalToolName('reins_get_result')).toBe(BUILTIN_TOOLS.getResult);
-    expect(canonicalToolName('reins__mark_onboarded')).toBe(BUILTIN_TOOLS.markOnboarded);
   });
 
   it('passes service tool names through untouched', () => {
     expect(canonicalToolName('gmail_search')).toBe('gmail_search');
-    expect(canonicalToolName('unknown_tool')).toBe('unknown_tool');
+  });
+
+  it('no longer knows mark_onboarded', () => {
+    expect(canonicalToolName('reins__mark_onboarded')).toBe('reins__mark_onboarded');
+    expect('markOnboarded' in BUILTIN_TOOLS).toBe(false);
   });
 });
 
 describe('modelVisibleToolName', () => {
-  it('namespaces with the server name for OpenClaw', () => {
-    expect(modelVisibleToolName('gmail_search', 'openclaw')).toBe('helm__gmail_search');
+  it('renders the bare tool name — the client adds its own prefix', () => {
+    expect(modelVisibleToolName('gmail_search')).toBe('gmail_search');
   });
 
-  it('adds the mcp__ prefix for Hermes', () => {
-    // hermes-agent tools/mcp_tool.py -> mcp_prefixed_tool_name
-    expect(modelVisibleToolName('gmail_search', 'hermes')).toBe('mcp__helm__gmail_search');
+  it('keeps the server name free of hyphens for clients that sanitize it', () => {
+    expect(MCP_SERVER_NAME).not.toContain('-');
+  });
+});
+
+describe('resolveToolTokens', () => {
+  it('resolves every occurrence bare', () => {
+    expect(resolveToolTokens('run {{tool:gmail_search}} then {{tool:drive_search}}'))
+      .toBe('run gmail_search then drive_search');
   });
 
-  it('defaults to the OpenClaw form', () => {
-    expect(modelVisibleToolName('get_result')).toBe('helm__get_result');
+  it('resolves legacy tool names inside tokens to the canonical name', () => {
+    expect(resolveToolTokens('{{tool:reins_get_result}}')).toBe(BUILTIN_TOOLS.getResult);
   });
 
-  it('honours the name an agent was actually deployed with', () => {
-    // An agent deployed before the rename still namespaces with the old server
-    // name, because its MCP_CONFIG is baked into the machine. Rendering the
-    // current constant into text it reads would name a tool it does not have.
-    expect(modelVisibleToolName('get_result', 'openclaw', LEGACY_MCP_SERVER_NAME))
-      .toBe('reins__get_result');
-    expect(modelVisibleToolName('get_result', 'hermes', LEGACY_MCP_SERVER_NAME))
-      .toBe('mcp__reins__get_result');
+  it('leaves malformed tokens verbatim so authoring mistakes stay visible', () => {
+    expect(resolveToolTokens('{{tool:}} and {{ tool:x }}')).toBe('{{tool:}} and {{ tool:x }}');
   });
 
-  it('keeps the server component identical across runtimes', () => {
-    // Hermes sanitizes [^A-Za-z0-9_] to _, so a hyphenated server name would
-    // diverge between runtimes. This guards that choice.
-    expect(MCP_SERVER_NAME).toMatch(/^[A-Za-z0-9_]+$/);
+  it('leaves text without tokens untouched', () => {
+    expect(resolveToolTokens('plain')).toBe('plain');
+    expect(resolveToolTokens('')).toBe('');
   });
 });
 
 describe('resolveSkillTokens', () => {
-  it('renders an actionable instruction naming the fetch tool per runtime', () => {
-    expect(resolveSkillTokens('See {{skill:deep-research}} first.', 'openclaw'))
-      .toBe('See the `deep-research` skill (open it with helm__skills_get) first.');
-    expect(resolveSkillTokens('See {{skill:deep-research}} first.', 'hermes'))
-      .toBe('See the `deep-research` skill (open it with mcp__helm__skills_get) first.');
-  });
-
-  it('honours the server name the agent was deployed with', () => {
-    expect(resolveSkillTokens('{{skill:a-b}}', 'openclaw', LEGACY_MCP_SERVER_NAME))
-      .toContain('reins__skills_get');
+  it('renders an actionable instruction naming the bare fetch tool', () => {
+    expect(resolveSkillTokens('see {{skill:deep-research}}'))
+      .toBe('see the `deep-research` skill (open it with skills_get)');
   });
 
   it('resolves every occurrence', () => {
-    const out = resolveSkillTokens('{{skill:a}} and {{skill:b}}', 'openclaw');
-    expect(out).toContain('`a`');
-    expect(out).toContain('`b`');
+    const out = resolveSkillTokens('{{skill:a}} {{skill:b}}');
+    expect(out).toContain('`a` skill');
+    expect(out).toContain('`b` skill');
   });
 
-  it('leaves malformed tokens verbatim so authoring mistakes stay visible', () => {
-    // Slugs are kebab-case (slugify in routes.ts), so underscores and capitals
-    // are authoring errors, not alternate spellings.
-    expect(resolveSkillTokens('{{skill:}}', 'openclaw')).toBe('{{skill:}}');
-    expect(resolveSkillTokens('{{ skill:x }}', 'openclaw')).toBe('{{ skill:x }}');
-    expect(resolveSkillTokens('{{skill:Has_Underscore}}', 'openclaw')).toBe('{{skill:Has_Underscore}}');
+  it('leaves malformed tokens verbatim', () => {
+    expect(resolveSkillTokens('{{skill:Not Kebab}}')).toBe('{{skill:Not Kebab}}');
   });
 
   it('leaves tool tokens alone', () => {
-    expect(resolveSkillTokens('{{tool:gmail_search}}', 'openclaw')).toBe('{{tool:gmail_search}}');
-  });
-
-  it('leaves text without tokens untouched', () => {
-    expect(resolveSkillTokens('No tokens here.', 'hermes')).toBe('No tokens here.');
-    expect(resolveSkillTokens('', 'hermes')).toBe('');
-  });
-});
-
-
-describe('resolveToolTokens', () => {
-  it('resolves a token per runtime', () => {
-    expect(resolveToolTokens('Call {{tool:gmail_search}} now.', 'openclaw'))
-      .toBe('Call helm__gmail_search now.');
-    expect(resolveToolTokens('Call {{tool:gmail_search}} now.', 'hermes'))
-      .toBe('Call mcp__helm__gmail_search now.');
-  });
-
-  it('resolves every occurrence', () => {
-    expect(resolveToolTokens('{{tool:a}} then {{tool:b}} then {{tool:a}}', 'openclaw'))
-      .toBe('helm__a then helm__b then helm__a');
-  });
-
-  it('resolves legacy tool names inside tokens to the canonical name', () => {
-    expect(resolveToolTokens('{{tool:reins_get_result}}', 'openclaw')).toBe('helm__get_result');
-  });
-
-  it('leaves malformed tokens verbatim so authoring mistakes stay visible', () => {
-    expect(resolveToolTokens('{{tool:}}', 'openclaw')).toBe('{{tool:}}');
-    expect(resolveToolTokens('{{ tool:x }}', 'openclaw')).toBe('{{ tool:x }}');
-    expect(resolveToolTokens('{{tool:has-hyphen}}', 'openclaw')).toBe('{{tool:has-hyphen}}');
-  });
-
-  it('renders tokens with the deployment\'s own server name', () => {
-    expect(resolveToolTokens('Call {{tool:get_result}}.', 'openclaw', LEGACY_MCP_SERVER_NAME))
-      .toBe('Call reins__get_result.');
-  });
-
-  it('leaves text without tokens untouched', () => {
-    expect(resolveToolTokens('No tokens here.', 'hermes')).toBe('No tokens here.');
-    expect(resolveToolTokens('', 'hermes')).toBe('');
-  });
-});
-
-describe('external runtime (manual / Claude-connected agents)', () => {
-  it('renders the bare tool name — the client adds its own prefix', () => {
-    expect(modelVisibleToolName('gmail_search', 'external')).toBe('gmail_search');
-    // Whatever server name the row carries is irrelevant: it is not the
-    // prefix the client will use, so none is rendered.
-    expect(modelVisibleToolName('gmail_search', 'external', 'reins')).toBe('gmail_search');
-  });
-
-  it('resolves tool tokens bare', () => {
-    expect(resolveToolTokens('Call {{tool:gmail_search}}.', 'external', 'reins')).toBe('Call gmail_search.');
-  });
-
-  it('resolves skill references with the bare fetch tool', () => {
-    const out = resolveSkillTokens('{{skill:deep-research}}', 'external', 'reins');
-    expect(out).toContain('open it with skills_get)');
-    expect(out).not.toContain('__skills_get');
-  });
-});
-
-describe('deploymentRuntime', () => {
-  it('maps rows to runtimes, with manual winning over everything', () => {
-    expect(deploymentRuntime(undefined)).toBe('openclaw');
-    expect(deploymentRuntime({ runtime: null })).toBe('openclaw');
-    expect(deploymentRuntime({ runtime: 'hermes' })).toBe('hermes');
-    expect(deploymentRuntime({ is_manual: 1 })).toBe('external');
-    // A manual row's runtime column is the DB default, not a fact.
-    expect(deploymentRuntime({ is_manual: true, runtime: 'hermes' })).toBe('external');
-    expect(deploymentRuntime({ is_manual: 0, runtime: 'openclaw' })).toBe('openclaw');
-    expect(deploymentRuntime({ is_manual: false })).toBe('openclaw');
+    expect(resolveSkillTokens('{{tool:gmail_search}}')).toBe('{{tool:gmail_search}}');
   });
 });
