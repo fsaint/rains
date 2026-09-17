@@ -20,49 +20,6 @@ reins/
 └── scripts/           # Build, test, deployment scripts
 ```
 
-## ⛔ Production Deployment — Explicit Confirmation Required
-
-**NEVER deploy to production without explicit confirmation from the user.**
-
-Production means any of the following:
-
-- `fly deploy` targeting **agenthelm-core**
-- `fly secrets set` on `agenthelm-core`
-
-**Before running any of the above**, stop and ask:
-
-> "This will deploy to production (`<app name>`). Confirm?"
-
-Wait for an explicit "yes", "go ahead", or equivalent. A general "build the images" or "run the script" is **not** confirmation to deploy to production — treat it as confirmation only for local build steps.
-
-If you are unsure whether a command touches production, assume it does and ask.
-
----
-
-## ⛔ Production Testing — Explicit Confirmation Required
-
-**NEVER run live tests against production without explicit confirmation from the user.**
-
-The following are forbidden without an explicit "yes, run against prod":
-
-- Calling `setWebhook` on the prod bot token (`REINS_TELEGRAM_BOT_TOKEN`) — this breaks the webhook for all active users
-- Pointing Playwright or any E2E test at `app.helm.mom`
-
-**Development testing rules (always enforced, no confirmation needed):**
-
-- Telegram tests use the dev bot only: `@reins_dev_bot`
-- Unit (Vitest) and E2E (Playwright) tests run against `localhost` only
-
-**CI/CD (`.github/workflows/deploy.yml`):**
-
-- Deploys `agenthelm-core` automatically on every push to `main`
-- Uses `FLY_API_TOKEN` from GitHub Actions secrets (scoped to `core-191` org only — not `personal`)
-- Never run `fly deploy` manually for this app — let CI handle it
-
-See `TESTING.md` → **Environment Rules** for the full matrix.
-
----
-
 ## Development Workflow
 
 ### Planning First
@@ -85,11 +42,11 @@ Use the task system for all work:
 
 ## Agent Teams
 
-This project uses Claude Code's experimental agent teams feature for parallel development with specialized agents.
+This project uses Codex's experimental agent teams feature for parallel development with specialized agents.
 
 ### Enabling Agent Teams
 
-Agent teams are enabled via `.claude/settings.local.json`:
+Agent teams are enabled via `.Codex/settings.local.json`:
 
 ```json
 {
@@ -379,71 +336,6 @@ approval_required:
   - create_draft
 ```
 
----
-
-## ⛔ Privileged Services — Invariants That Are Easy to Break
-
-Two of the eighteen native services differ in kind from the rest. Gmail lets an agent read
-mail; these change what agents *are allowed to do*. The rules below are enforced in code, and
-each exists because without it the capability is unsafe to delegate at all.
-
-| Service | What it can do |
-|---|---|
-| `skill-authoring` | Write the instructions other agents follow, and assign them — and, for an admin owner, the Helm platform skills every account loads |
-| `helm-admin` | Create and destroy agents; grant, revoke, and tune what each can reach |
-
-**1. `helm-admin` may not coexist with anything except `memory`.** Enforced in both directions
-by `assertServiceCombinationAllowed` (`backend/src/services/permissions.ts`), called from
-`createServiceInstance` *and* `setServiceAccess`. An agent holding it plus Gmail is not an
-agent with two services — it is an agent with every service, two steps away. Memory is the one
-exception because a scope belongs to a single agent and holds no outside credential.
-
-**2. Enabling `helm-admin` requires every agent on the account to be closed to unauthenticated
-MCP.** An agent id *is* a credential while `allow_unauthenticated` is true — and
-`allow_unauthenticated` lives on `agents` and defaults to false. Without this the
-first rule is decorative: an admin agent grants a peer access, then drives the peer by id.
-Re-opening an endpoint is latched shut while an admin agent exists, or the precondition is a
-one-time formality.
-
-**3. Neither service may be granted by an agent.** `helm-admin` cannot grant or revoke itself
-(that would mint peers, and revoking is how the latch comes off), and neither belongs in
-`enableDefaultServices()` — which turns memory and skills on for every new agent — or every new
-agent becomes privileged.
-
-**4. Every write on both requires approval.** Do not set `defaultWritePermission: 'allow'` on
-either definition; it defaults to `require_approval` and must stay there. Approvals for
-`helm-admin` resolve the target id to the agent's *name*
-(`backend/src/notifications/approval-format.ts`), because approving the destruction of an agent
-you cannot identify is not consent.
-
-**5. `skill-authoring` does not confer platform authorship.** Writing a system skill
-(`user_id IS NULL`) needs two independent things that enabling the service does not give:
-an explicit `scope: "system"` argument, and the calling agent's *owner* holding
-`users.role = 'admin'` and an active account. The role is checked by `isAdminUser` in
-`backend/src/api/routes.ts`, deliberately **not** `requireAdmin()` — that one reads a session
-a gateway token does not have, and it also accepts `REINS_ADMIN_API_KEY`, a human operator
-credential an agent must never be able to launder into platform-wide authorship. Keep the
-scope an explicit argument rather than inferring it from the target row: an inferred
-escalation reaches the owner's phone looking like an ordinary skill edit.
-
-Related: `skills.source` (`'template' | 'admin'`) is what stops `seedSystemSkills()` reverting
-an admin's edit on the next deploy. Only a *content* change flips it, so toggling `enabled`
-does not silently detach a stock skill from upstream fixes. Never add the column as
-`NOT NULL DEFAULT 'admin'` in one statement — that stamps every template row admin-edited and
-freezes the whole fleet against template updates, silently.
-
-One structural caveat: approval is decided from the permission level *before* the handler runs,
-so a call the route will refuse still raises an approval and fails after it is granted. Safe,
-but do not claim a route-level check happens "before the approval is raised". This applies to
-`scope: "system"` from a non-admin owner as much as to a blocked `helm-admin` call — the owner
-is prompted, approves, and the route then returns `ADMIN_REQUIRED`.
-
-Approvals for `skill_authoring_*` render through `formatSkillApprovalMessage`
-(`backend/src/notifications/approval-format.ts`), which leads with a **PLATFORM-WIDE** banner on
-a system-scoped write. Do not let these fall back to the generic formatter: it truncates the
-argument JSON at 200 characters, and a real skill body pushes `scope` off the end — the owner
-would approve a platform-wide change without seeing that it was one.
-
 ## Phase 1 Priorities
 
 1. **P0 - MCP proxy core** - Transparent proxy with tool filtering
@@ -501,7 +393,7 @@ VITE_API_URL=http://localhost:3000
 
 Two Telegram entities are wired: the approvals bot and the admin's account.
 
-### Approvals Bot — `@AgentHelmApprovalsBot` (prod) / `@reins_dev_bot` (dev)
+### Approvals Bot — `@AgentHelmApprovalsBot`
 
 - All agent tool approval requests arrive here as Telegram messages with **Approve / Deny** inline buttons
 - Token secret: `REINS_TELEGRAM_BOT_TOKEN` on `agenthelm-core`
@@ -576,11 +468,7 @@ The backend reads `config/${NODE_ENV}.yaml` at startup via `backend/src/config/i
 | `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` | Outlook OAuth app |
 | `MICROSOFT_REDIRECT_URI` | `https://app.helm.mom/api/oauth/microsoft/callback` |
 | `REINS_TELEGRAM_BOT_TOKEN` | `@AgentHelmApprovalsBot` token (approval notifications) |
-| `ANTHROPIC_API_KEY` | Claude API for any backend LLM calls |
-| `STRIPE_SECRET_KEY` | Stripe API secret key (`sk_test_...` in dev, `sk_live_...` in prod) |
-| `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret from the Stripe dashboard (`whsec_...`) |
-| `STRIPE_BYOK_PRICE_ID` | Stripe Price ID for the $19/mo BYOK plan (`price_...`) |
-| `STRIPE_MANAGED_PRICE_ID` | Stripe Price ID for the $119/mo Managed MiniMax plan (`price_...`) |
+| `ANTHROPIC_API_KEY` | Codex API for any backend LLM calls |
 
 ### Deploying
 
@@ -619,7 +507,7 @@ fly secrets set --app agenthelm-core KEY=value
 | [`README.md`](README.md) | Project overview and quick-start |
 | [`CONTEXT.md`](CONTEXT.md) | Business and product domain context — the *what* and *why* of AgentHelm/Reins |
 | [`LANGUAGE.md`](LANGUAGE.md) | Canonical terminology; use these exact terms in code, docs, and prompts |
-| [`CLAUDE.md`](CLAUDE.md) | This file — development guide, agent roles, deployment config, doc index |
+| [`AGENTS.md`](AGENTS.md) | This file — development guide, agent roles, deployment config, doc index |
 
 ### Architecture
 
@@ -638,16 +526,10 @@ fly secrets set --app agenthelm-core KEY=value
 
 | File | Description |
 |------|-------------|
-| [`docs/MULTI_AGENT_SETUP.md`](docs/MULTI_AGENT_SETUP.md) | User guide: one agent per context (home/work/project) connected to Claude, Claude Code, or Cowork — scope grants, out-of-agent credentials, approval posture, per-client MCP config |
 | [`docs/BETA_RELEASE_PLAN.md`](docs/BETA_RELEASE_PLAN.md) | Beta launch plan targeting May 5 2026 — cohort size, cost gates, milestones |
-| [`docs/ops/LOCAL_DEV_SETUP.md`](docs/ops/LOCAL_DEV_SETUP.md) | Local development setup: .env variables, Google OAuth redirect URIs, dev bots |
 | [`docs/ops/PROD_SETUP.md`](docs/ops/PROD_SETUP.md) | Production setup checklist: Google OAuth, Fly secrets, DNS, deployment steps |
-| [`docs/ops/COMMON_ERRORS.md`](docs/ops/COMMON_ERRORS.md) | Known traps and their fixes, across agent runtime (bot not responding, MiniMax startup, webhook relay) **and the platform codebase** (env-file handling, migration ordering, two-table service enablement, adding a native MCP server, skill token rendering). Read before debugging anything odd |
-| [`docs/ops/ADDING_SKILLS_VIA_MCP.md`](docs/ops/ADDING_SKILLS_VIA_MCP.md) | Authoring, reading, updating, deleting, and assigning skills through the skill-authoring MCP, including admin-only Helm platform skills |
 | [`docs/ops/DNS.md`](docs/ops/DNS.md) | DNS configuration: Vercel records, Fly app hostnames, common mistakes, fix runbook |
-| [`TESTING.md`](TESTING.md) | All test tiers: unit (Vitest), E2E (Playwright) |
 | [`docs/TESTING_GUIDE.md`](docs/TESTING_GUIDE.md) | Guide for validating the first operational version of Reins end-to-end |
-| [`docs/MEMORY.md`](docs/MEMORY.md) | Memory system: scopes and per-agent scope grants, architecture, DB schema, MCP tools, REST API, auth, dream process, local dev setup |
 
 ### API Reference
 
@@ -655,14 +537,12 @@ fly secrets set --app agenthelm-core KEY=value
 |------|-------------|
 | [`docs/api/HERMENEUTIX_MCP_SERVER.md`](docs/api/HERMENEUTIX_MCP_SERVER.md) | MCP server spec for Hermeneutix meeting transcription platform |
 | [`docs/api/MOBILE_AUTHORIZATION_API.md`](docs/api/MOBILE_AUTHORIZATION_API.md) | API endpoints for mobile apps to authorize agent requests |
-| [`servers/ADDING_TOOLS.md`](servers/ADDING_TOOLS.md) | Six-step checklist for adding tools to any MCP server — covers handler, definition, permissions, policy template, and OAuth scopes |
 
 ### Specs
 
 | File | Description |
 |------|-------------|
 | [`docs/specs/agent-self-registration.md`](docs/specs/agent-self-registration.md) | Flow for agents to self-register and users to claim them |
-| [`docs/superpowers/specs/2026-09-16-mcp-only-enrollment-trials-design.md`](docs/superpowers/specs/2026-09-16-mcp-only-enrollment-trials-design.md) | Design: remove the deployed-agent runtime; add admin enrollment, Google self-enrollment, and trials |
 
 ### Branding
 
