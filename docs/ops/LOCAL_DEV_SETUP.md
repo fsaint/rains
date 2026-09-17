@@ -3,7 +3,6 @@
 ## Prerequisites
 
 - Node.js 20+
-- A Cloudflare or ngrok tunnel (for Telegram webhooks)
 - Access to Google Cloud Console (to register redirect URIs)
 
 ---
@@ -43,15 +42,6 @@ MICROSOFT_CLIENT_ID=<client-id>
 MICROSOFT_CLIENT_SECRET=<client-secret>
 MICROSOFT_REDIRECT_URI=http://localhost:5001/api/oauth/microsoft/callback
 
-# ── Telegram — Dev Onboarding Bot ─────────────────────────────────────────────
-# Bot: @AgentHelmDevOnboarding_bot (dev-only, created 2026-05-06)
-ONBOARDING_BOT_TOKEN=8743877270:AAEljlqRVloCbs_ztR9VqOvTczD7nLncuCc
-
-# ── Fly.io (agent provisioning) ───────────────────────────────────────────────
-FLY_API_TOKEN=<dev org token>
-FLY_ORG=reins-dev
-OPENCLAW_APP=agentx-openclaw
-
 # ── Anthropic ─────────────────────────────────────────────────────────────────
 ANTHROPIC_API_KEY=<key>
 ```
@@ -83,45 +73,7 @@ https://app.helm.mom/api/oauth/google/callback <- Gmail credential flow (prod)
 
 ---
 
-## 3. Telegram Webhook Tunnel
-
-A permanent Cloudflare tunnel routes `reins-dev.btv.pw → localhost:5001`.
-Start it before running the backend:
-
-```bash
-cloudflared tunnel run development-tunnel > /tmp/cf-dev-tunnel.log 2>&1 &
-```
-
-Verify it's up:
-```bash
-tail -3 /tmp/cf-dev-tunnel.log
-# Should show: Registered tunnel connection connIndex=...
-```
-
-The tunnel config lives at `~/.cloudflared/config.yml` — no changes needed.
-
----
-
-## 4. Telegram Webhook
-
-The dev onboarding bot webhook is permanently set to `https://reins-dev.btv.pw/telegram`.
-No action needed on each restart — the URL is stable.
-
-If you ever need to re-register it (e.g. after recreating the bot):
-
-```bash
-TOKEN=8743877270:AAEljlqRVloCbs_ztR9VqOvTczD7nLncuCc
-curl "https://api.telegram.org/bot${TOKEN}/setWebhook?url=https://reins-dev.btv.pw/telegram"
-```
-
-Verify:
-```bash
-curl -s "https://api.telegram.org/bot${TOKEN}/getWebhookInfo" | python3 -m json.tool
-```
-
----
-
-## 5. Starting the Dev Servers
+## 3. Starting the Dev Servers
 
 ```bash
 # Backend (port 5001)
@@ -139,19 +91,18 @@ npm run dev
 
 ---
 
-## 6. Dev Bot Reference
+## 4. Dev Bot Reference
 
 | Bot | Username | Purpose | Token env var |
 |-----|----------|---------|---------------|
-| `@AgentHelmDevOnboarding_bot` | Dev onboarding entry point | `ONBOARDING_BOT_TOKEN` |
 | `@reins_dev_bot` | Dev approvals / notify bot | `REINS_TELEGRAM_BOT_TOKEN` |
 
-Production bots (`@SpecialAgentHelmBot`, `@AgentHelmApprovalsBot`) are configured
-via Fly secrets and are never touched locally.
+The production bot (`@AgentHelmApprovalsBot`) is configured via a Fly secret and is
+never touched locally.
 
 ---
 
-## 7. Vite Port Note
+## 5. Vite Port Note
 
 Vite auto-increments the port if the default (5173) is in use. After starting the
 frontend, check the terminal output for the actual port and make sure
@@ -159,7 +110,7 @@ frontend, check the terminal output for the actual port and make sure
 
 ---
 
-## 8. Stripe (billing)
+## 6. Stripe (billing)
 
 1. Create a Stripe account at https://dashboard.stripe.com (use test mode)
 2. Create two Products with monthly recurring Prices:

@@ -274,13 +274,7 @@ surfaces in production.
 
 ## Dream Process
 
-A nightly scheduler (`backend/src/services/dream.ts`) runs at 2am UTC. For each running OpenClaw agent, it opens an isolated chat session (`POST {management_url}/chat?session=dream`) and sends a prompt instructing the agent to review memory, consolidate notes, update the index, and set parent relationships. This keeps the vault organized without requiring explicit user instruction.
-
-The scheduler starts with the backend:
-```ts
-// backend/src/index.ts
-startDreamScheduler();
-```
+The `memory_dream` MCP tool returns a compact manifest for reviewing and consolidating the vault. There is no scheduled push — the user's client runs a dream session by asking the agent to.
 
 ---
 

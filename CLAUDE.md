@@ -11,7 +11,7 @@ reins/
 ├── frontend/          # React/TypeScript dashboard
 ├── backend/           # Node.js/TypeScript MCP proxy & API
 ├── shared/            # Shared types, schemas, utilities
-├── templates/         # Service provisioning templates & policies
+├── templates/         # Platform skill templates (templates/skills) and the skill version manifest
 ├── docs/
 │   ├── architecture/  # System architecture, component designs
 │   ├── adr/           # Architecture Decision Records
@@ -20,34 +20,14 @@ reins/
 └── scripts/           # Build, test, deployment scripts
 ```
 
-## Three-Tier Fly Permission Model
-
-Fly.io access is split across four lanes — each token is scoped to exactly what it needs. Never upgrade a token's scope without updating the table below.
-
-| Lane | Token location | Org access | Can destroy production? |
-|------|---------------|------------|------------------------|
-| **Local dev** | `.env` `FLY_API_TOKEN` | `reins-dev` only | No |
-| **CI/CD** | GitHub Actions `FLY_API_TOKEN` | `core-191` (deploy only) | No |
-| **Production runtime** | `agenthelm-core` Fly secret `FLY_API_TOKEN` | `personal` | Yes — only via dashboard |
-| **Admin tools** | `admin/.env.admin` `FLY_ADMIN_TOKEN` | `personal` + `core-191` read-only | **No — by design** |
-
-**Local `.env` must have `FLY_ORG=reins-dev`.** The backend refuses to start if `FLY_ORG=personal` is set outside production (`NODE_ENV !== production`). Run `scripts/check-local-env.sh` as a pre-flight check.
-
-For production ops/recovery, use the admin tools path: `python3 admin/list_agents.py`, `admin/recover_agent.py`, etc. See `admin/README.md` and `docs/ops/ADMIN_TOOLS.md`.
-
----
-
 ## ⛔ Production Deployment — Explicit Confirmation Required
 
 **NEVER deploy to production without explicit confirmation from the user.**
 
 Production means any of the following:
 
-- `fly deploy` targeting **agenthelm-core**, **agenthelm-onboarding**, **reins-openclaw**, or **reins-hermes**
-- `scripts/build-agent-image.sh` (it runs `fly deploy` internally and updates the live image registry)
-- `fly secrets set` on any production app
-- Any command that pushes a new image tag to `registry.fly.io/reins-openclaw` or `registry.fly.io/reins-hermes`
-- Updating `OPENCLAW_IMAGE` or `HERMES_IMAGE` secrets on `agenthelm-core`
+- `fly deploy` targeting **agenthelm-core**
+- `fly secrets set` on `agenthelm-core`
 
 **Before running any of the above**, stop and ask:
 
@@ -65,24 +45,19 @@ If you are unsure whether a command touches production, assume it does and ask.
 
 The following are forbidden without an explicit "yes, run against prod":
 
-- Running `/integration-test prod` or any live test that provisions agents on the `personal` org
-- Calling `setWebhook` on prod bot tokens (`REINS_TELEGRAM_BOT_TOKEN`, `ONBOARDING_BOT_TOKEN`) — this breaks the webhook for all active users
-- Creating or destroying machines in the `personal` org as part of a test
+- Calling `setWebhook` on the prod bot token (`REINS_TELEGRAM_BOT_TOKEN`) — this breaks the webhook for all active users
 - Pointing Playwright or any E2E test at `app.helm.mom`
 
 **Development testing rules (always enforced, no confirmation needed):**
 
-- `FLY_ORG` must be `reins-dev` for all local test runs — never `personal`
-- The local `.env` only contains a `reins-dev`-scoped `FLY_API_TOKEN` — the `personal`-org token lives only as a Fly secret on `agenthelm-core`
-- Telegram tests use dev bots only: `@AgentHelmDevOnboarding_bot`, `@reins_dev_bot`
+- Telegram tests use the dev bot only: `@reins_dev_bot`
 - Unit (Vitest) and E2E (Playwright) tests run against `localhost` only
-- Clean up all test machines from `reins-dev` after every run
 
 **CI/CD (`.github/workflows/deploy.yml`):**
 
-- Deploys `agenthelm-core` and `agenthelm-onboarding` automatically on every push to `main`
+- Deploys `agenthelm-core` automatically on every push to `main`
 - Uses `FLY_API_TOKEN` from GitHub Actions secrets (scoped to `core-191` org only — not `personal`)
-- Never run `fly deploy` manually for these apps — let CI handle it
+- Never run `fly deploy` manually for this app — let CI handle it
 
 See `TESTING.md` → **Environment Rules** for the full matrix.
 
@@ -424,8 +399,8 @@ agent with two services — it is an agent with every service, two steps away. M
 exception because a scope belongs to a single agent and holds no outside credential.
 
 **2. Enabling `helm-admin` requires every agent on the account to be closed to unauthenticated
-MCP.** An agent id *is* a credential while `allow_unauthenticated` is true — and an agent with
-no live deployment row counts as open, because `authenticateMcp` serves it. Without this the
+MCP.** An agent id *is* a credential while `allow_unauthenticated` is true — and
+`allow_unauthenticated` lives on `agents` and defaults to false. Without this the
 first rule is decorative: an admin agent grants a peer access, then drives the peer by id.
 Re-opening an endpoint is latched shut while an admin agent exists, or the precondition is a
 one-time formality.
@@ -477,22 +452,6 @@ would approve a platform-wide change without seeing that it was one.
 4. **P0 - Credential storage** - Encrypted token vault
 5. **P1 - Basic dashboard** - Connection status, activity log
 
-## Development Philosophy
-
-### Fly.io for All Environments
-
-The backend always provisions agents on Fly.io — there is no local Docker provider.
-Development uses a dedicated Fly.io org (e.g. `reins-dev`) to isolate from production:
-
-```bash
-# .env for development
-FLY_ORG=reins-dev
-FLY_API_TOKEN=<dev token>
-```
-
-This eliminates environment drift between dev and prod. The backend itself still runs
-natively on Node.js (`npm run dev`) — only the provisioned agents run on Fly.
-
 ## Commands Reference
 
 ```bash
@@ -536,254 +495,22 @@ VITE_API_URL=http://localhost:3000
 
 | Skill | Trigger | Description |
 |-------|---------|-------------|
-| `/integration-test` | "run integration tests", "test all combinations", "verify bots work" | Full 6-combination runtime×provider e2e test via Playwright UI + Telethon |
-| `/redeploy-agent` | "redeploy", "update the container", "upgrade the image" | Safely roll a Fly agent to latest image with backup/restore |
 | `/new-mcp-server` | "add a server", "create an MCP server", "scaffold a server" | Scaffold a new native MCP server in the servers package |
-| `/onboarding-flow-test` | "test the onboarding flow", "run the onboarding test", "test signup" | E2E test of Telegram onboarding bot via Playwright MCP on Telegram Web |
-| `/image-test` | "test the image", "test browser", "image test", "verify the browser stack" | Build image variants, deploy ephemeral Fly machines, test browser via Telegram, tear down |
-| `/agent-core-docs` | "add agent instruction", "update agent docs", "add to agent base docs", "add core instruction" | Add or edit core instructions in OpenClaw/Hermes base documents (AGENTS.md, SOUL.md, TOOLS.md, knowledge.md) |
-
-## Admin Tools (Python)
-
-Python scripts for read-mostly production management. See `admin/README.md` and `docs/ops/ADMIN_TOOLS.md`.
-
-```bash
-python3 admin/list_agents.py          # all agents + deployment state
-python3 admin/list_users.py           # all platform users
-python3 admin/exec_machine.py <app> <id> -- <cmd>   # no WireGuard needed
-python3 admin/recover_agent.py <agent_id>            # recreate destroyed Fly machine
-```
-
-Credentials live in `admin/.env.admin` (gitignored). The `FLY_ADMIN_TOKEN` is read-only scoped — **it cannot destroy apps or machines in production**.
 
 ## Telegram Accounts
 
-Five Telegram entities must be wired for a full deployment. Four are bots you own; one is a group.
+Two Telegram entities are wired: the approvals bot and the admin's account.
 
-### 1. Onboarding Bot — `@SpecialAgentHelmBot` (prod) / `@AgentHelmDevOnboarding_bot` (dev)
+### Approvals Bot — `@AgentHelmApprovalsBot` (prod) / `@reins_dev_bot` (dev)
 
-The entry point for new users. Users send `/start` to this bot to begin the onboarding flow.
-
-- **Token secret:** `ONBOARDING_BOT_TOKEN` on `agenthelm-onboarding`
-- **Creates via:** BotFather → `/newbot`
-- **Admin commands** (only accepted from `ADMIN_TELEGRAM_ID`):
-  - `/approve_<userId>` — moves applicant to `gmail_oauth` state, sends them the Gmail OAuth link
-  - `/reject_<userId>` — rejects the applicant
-  - `/reset_<userId>` — wipes the applicant record (clean slate for re-testing)
-- **Webhook:** Telegram sends updates to `https://app.helm.mom/telegram` (relayed from `agenthelm-onboarding`)
-
-### 2. Approvals Bot — `@AgentHelmApprovalsBot` (prod) / `@reins_dev_bot` (dev)
-
-Dual-purpose bot — used during onboarding AND by deployed agents.
-
-**During onboarding (step: notify_bot):**
-- Users message this bot once to confirm they want agent notifications
-- The bot captures the chat ID and stores it as `applicants.notify_chat_id` → eventually becomes `users.telegram_chat_id`
-- Bot username configured via `NOTIFY_BOT_USERNAME` on `agenthelm-onboarding` (dev: `reins_dev_bot`, prod: `AgentHelmApprovalsBot`)
-
-**After deployment (ongoing):**
 - All agent tool approval requests arrive here as Telegram messages with **Approve / Deny** inline buttons
 - Token secret: `REINS_TELEGRAM_BOT_TOKEN` on `agenthelm-core`
 - Webhook: `https://app.helm.mom/api/webhooks/telegram`
-- The user must `/start` this bot at least once (during onboarding) so Telegram allows the bot to message them
+- The user must `/start` this bot at least once so Telegram allows the bot to message them
 
-### 3. Admin Notification Group — Agent Helm Verifications
+### Admin Telegram Account
 
-A private Telegram group containing the onboarding bot. New applicant notifications are sent here.
-
-- **Chat ID:** set as `ADMIN_CHAT_ID` on `agenthelm-onboarding` (if omitted, falls back to `ADMIN_TELEGRAM_ID` — direct message to admin)
-- **Purpose:** Admin receives `New applicant: @username / Use case / Gmail / /approve_ /reject_` messages here
-- **No @username** — navigate via chat ID or search. Group href in Telegram Web: `#-5259694651`
-- **Setup:** Create a group, add the onboarding bot (`@SpecialAgentHelmBot` prod / `@AgentHelmDevOnboarding_bot` dev), set the group chat ID as `ADMIN_CHAT_ID`
-
-### 4. Admin Telegram Account
-
-The human admin who approves onboarding applications.
-
-- **Telegram user ID:** set as `ADMIN_TELEGRAM_ID` on `agenthelm-onboarding`
-- The onboarding bot only processes `/approve_`, `/reject_`, `/reset_` commands from this exact user ID
-- This account also receives approval notifications from `@AgentHelmApprovalsBot` for their own deployed agent (if they have one)
-
-### 5. Agent Support Group — Agent Helm Support
-
-A public Telegram group linked at the end of onboarding.
-
-- **Invite link:** `https://t.me/+5NUos0uOs4JjYWUx` (hardcoded in `onboarding/src/persona.ts` → `HELM.done`)
-- Users see this link in the final "You're all set" message
-- No bot required — this is a human community group
-- To change the link, update `HELM.done` in `persona.ts` and redeploy `agenthelm-onboarding`
-
-### 6. User's Agent Bot (per user)
-
-Each user creates their own bot via `@BotFather` during onboarding and provides the token.
-
-- **Not owned by the platform** — created and owned by the end user
-- Token stored in `applicants.bot_token`, used to provision the OpenClaw/Hermes machine
-- The deployed agent (OpenClaw) registers a webhook with this bot token pointing to: `https://app.helm.mom/api/webhooks/agent-bot/<deploymentId>`
-
-### Telegram Wiring Checklist (new deployment)
-
-```
-[ ] Create @SpecialAgentHelmBot (prod) / @AgentHelmDevOnboarding_bot (dev) via BotFather → set ONBOARDING_BOT_TOKEN
-[ ] Create @AgentHelmApprovalsBot (prod) / @reins_dev_bot (dev) via BotFather → set REINS_TELEGRAM_BOT_TOKEN (core)
-                                                                              → set NOTIFY_BOT_USERNAME (onboarding)
-[ ] Create Agent Helm Verifications group → add onboarding bot
-                                          → set ADMIN_CHAT_ID to group chat ID
-[ ] Set ADMIN_TELEGRAM_ID to admin's Telegram user ID
-[ ] Create Agent Helm Support group → get invite link
-                                    → update HELM.done in persona.ts
-[ ] Deploy agenthelm-onboarding → confirm bot webhook set
-[ ] Deploy agenthelm-core → confirm @AgentHelmApprovalsBot webhook set
-[ ] Send /start to @AgentHelmApprovalsBot as admin (allows bot to message you)
-```
-
----
-
-## Agent Runtimes
-
-Reins supports two agent engines. Each has its own Docker image, Fly registry app, and entrypoint.
-
-| | OpenClaw | Hermes |
-|---|---|---|
-| Engine | OpenClaw (Node.js) | hermes-agent (Python) |
-| Dockerfile | `docker/Dockerfile` (build via `scripts/build-agent-image.sh openclaw`) | `docker/hermes/Dockerfile` (build via `scripts/build-agent-image.sh hermes`) |
-| Fly registry app | `reins-openclaw` | `reins-hermes` |
-| fly.toml | `docker/fly.toml` | `docker/hermes/fly.toml` |
-| Image env var | `OPENCLAW_IMAGE` | `HERMES_IMAGE` |
-| Web console | Yes (`/chat?session=main`) | No (health-check only on `:8000`) |
-| Persona injection | `SOUL_MD` env var | `HERMES_PERSONA` env var |
-| MCP config | `MCP_CONFIG` JSON env var | `MCP_CONFIG` JSON env var |
-| Gateway token | `OPENCLAW_GATEWAY_TOKEN` | `HERMES_GATEWAY_TOKEN` |
-| Entrypoint | Node.js OpenClaw gateway | `hermes gateway run --accept-hooks` |
-| Browser/code exec | Built-in | Not included |
-| `managementUrl` | Populated (console link shown) | `null` (no console link) |
-
-### Building Agent Images
-
-Use the wrapper script from the **repo root** — it copies `shared/BOOTSTRAP.md` into the build context before deploying:
-
-```bash
-# OpenClaw
-scripts/build-agent-image.sh openclaw
-
-# Hermes
-scripts/build-agent-image.sh hermes
-```
-
-> **Why the wrapper?** `shared/BOOTSTRAP.md` is the canonical source for the agent first-run ritual. Each runtime's Dockerfile build context cannot reach `../shared/` directly, so the wrapper copies the file into place before invoking `fly deploy`.
->
-> **Critical:** Do **not** run `fly deploy` directly from `docker/` or `docker/hermes/` — the build context will be missing `BOOTSTRAP.md` and the deploy will fail.
->
-> The generated copies (`docker/workspace/BOOTSTRAP.md`, `docker/hermes/BOOTSTRAP.md`) are `.gitignore`d — the canonical source is `shared/BOOTSTRAP.md`.
-
-### How Runtime Flows Through the System
-
-```
-Frontend (runtime selector)
-  → POST /api/create-and-deploy { runtime: "openclaw" | "hermes" }
-    → providers/index.ts: provision()
-      → runtime === "hermes" → buildHermesMachineConfig()
-      → runtime === "openclaw" → buildMachineConfig()
-    → getManagementUrl(deploymentId, runtime)
-      → hermes → null (no console link shown in dashboard)
-      → openclaw → https://<machine>.fly.dev/chat?session=main
-```
-
-### Updating Image After a Rebuild
-
-After rebuilding either image, update the env var on `agenthelm-core`:
-
-```bash
-fly secrets set --app agenthelm-core \
-  OPENCLAW_IMAGE="registry.fly.io/reins-openclaw:<new-tag>"
-
-fly secrets set --app agenthelm-core \
-  HERMES_IMAGE="registry.fly.io/reins-hermes:<new-tag>"
-```
-
-Also update your local `.env` for dev.
-
----
-
-## Model Router
-
-Each deployed agent optionally runs a two-sidecar model routing stack inside its container. When a user configures custom model providers for their agent, Reins injects the necessary env vars at deploy time and the Dockerfile entrypoints start the sidecars before the main agent process.
-
-### Architecture
-
-```
-Agent → RouteLLM (localhost:4001) → LiteLLM (localhost:4000) → Provider
-```
-
-- **LiteLLM** (port 4000) — unified proxy that normalizes requests across providers (Anthropic, OpenAI, MiniMax, Google, etc.)
-- **RouteLLM** (port 4001) — OpenAI-compatible gateway that classifies each request and routes it to either the `strong` or `weak` model using the MF classifier
-
-### How It Works
-
-The router is a **per-agent sidecar** — it runs inside the agent's Fly machine, not on `agenthelm-core`. It only starts when `LITELLM_CONFIG_B64` is set. Both sidecars are launched in the Dockerfile entrypoints before the main agent process (OpenClaw or Hermes) starts.
-
-When no model configs are configured for an agent, `LITELLM_CONFIG_B64` is not set, the sidecars do not start, and the agent uses its default model provider and API key as before.
-
-### Sidecar Startup Order
-
-1. LiteLLM starts on port 4000 — entrypoint polls `/health` for up to 30 seconds
-2. RouteLLM starts on port 4001 — entrypoint polls `/health` for up to 30 seconds
-3. Main agent process starts (OpenClaw or Hermes)
-
-If either sidecar fails its health check within 30 seconds, the container exits.
-
-### DB Table: `agent_model_configs`
-
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | UUID | Primary key |
-| `agent_id` | UUID | FK → agents |
-| `provider` | string | `anthropic`, `openai`, `minimax`, `google` |
-| `model_name` | string | Model identifier (e.g. `claude-opus-4-5`, `gpt-4o`) |
-| `role` | string | `strong` or `weak` |
-| `api_key_encrypted` | string | AES-256-GCM encrypted API key |
-| `created_at` | timestamp | |
-| `updated_at` | timestamp | |
-
-Unique constraint: `(agent_id, role)` — each agent has at most one strong and one weak model.
-
-**Single-model aliasing:** if only one model is configured for an agent, it is aliased as both `strong` and `weak` in the LiteLLM config so RouteLLM always has a valid target for both slots.
-
-### Env Vars Injected at Deploy Time
-
-Reins sets these on the agent's Fly machine when model configs exist:
-
-| Env Var | Value | Purpose |
-|---------|-------|---------|
-| `LITELLM_CONFIG_B64` | base64-encoded JSON `{ "model_list": [...] }` | LiteLLM model list for this agent |
-| `ROUTELLM_THRESHOLD` | `0.11785` (default) | MF classifier threshold for strong/weak routing |
-| `MODEL_PROVIDER` | `openai` | RouteLLM exposes an OpenAI-compatible API |
-| `MODEL_NAME` | `router-mf-0.11785` | RouteLLM model alias |
-| `OPENAI_BASE_URL` | `http://127.0.0.1:4001/v1` | Points the agent at the RouteLLM sidecar |
-| `OPENAI_API_KEY` | `reins-router` | Internal placeholder (not sent to any provider) |
-
-### Supported Providers
-
-| Provider | LiteLLM model prefix | Notes |
-|----------|---------------------|-------|
-| `anthropic` | `anthropic/<model_name>` | |
-| `openai` | `openai/<model_name>` | |
-| `minimax` | `openai/<model_name>` | Also sets `api_base: https://api.minimax.io/v1` |
-| `google` | `gemini/<model_name>` | |
-
-### API Endpoints
-
-All endpoints require `requireAdmin()`.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/agents/:id/models` | List model configs for an agent |
-| `PUT` | `/api/agents/:id/models` | Create or replace model configs for an agent |
-| `DELETE` | `/api/agents/:id/models/:configId` | Remove a specific model config |
-
-### Service File
-
-`backend/src/services/model-router.ts` — handles building the LiteLLM config JSON, base64-encoding it, and assembling the env var set to inject at provision/redeploy time.
+- This account receives approval notifications from `@AgentHelmApprovalsBot` for their own deployed agent (if they have one)
 
 ---
 
@@ -799,23 +526,20 @@ NODE_ENV=production → loads config/production.yaml
               env var (Fly secret) overrides YAML value
 ```
 
-The backend reads `config/${NODE_ENV}.yaml` at startup via `backend/src/config/index.ts`, then overlays any matching env var. Same pattern in `onboarding/src/config.ts`.
+The backend reads `config/${NODE_ENV}.yaml` at startup via `backend/src/config/index.ts`, then overlays any matching env var.
 
 ### Config Files (non-secrets)
 
 | File | Used when | Purpose |
 |------|-----------|---------|
-| `config/development.yaml` | `NODE_ENV=development` (local dev) | Local URLs, dev Fly org, dev bot names |
-| `config/production.yaml` | `NODE_ENV=production` (Fly deploy) | Production URLs, `personal` Fly org, prod bot names |
+| `config/development.yaml` | `NODE_ENV=development` (local dev) | Local URLs, dev bot names |
+| `config/production.yaml` | `NODE_ENV=production` (Fly deploy) | Production URLs, prod bot names |
 
 **Key differences between environments:**
 
 | Setting | Development | Production |
 |---------|------------|------------|
 | `urls.dashboard_url` | `https://reins-dev.btv.pw` | `https://app.helm.mom` |
-| `fly.org` | `reins-dev` | `personal` |
-| `fly.openclaw_app` | `agentx-openclaw` | `reins-openclaw` |
-| `onboarding.notify_bot_username` | `reins_dev_bot` | `AgentHelmApprovalsBot` |
 | `oauth.google_redirect_uri` | `http://localhost:5001/...` | `https://app.helm.mom/...` |
 
 ### Fly Apps
@@ -823,11 +547,6 @@ The backend reads `config/${NODE_ENV}.yaml` at startup via `backend/src/config/i
 | App | Config | Org | Purpose |
 |-----|--------|-----|---------|
 | `agenthelm-core` | `fly.toml` (root) | `core-191` | Backend + frontend SPA |
-| `agenthelm-onboarding` | `onboarding/fly.toml` | `core-191` | Telegram onboarding bot |
-| `reins-openclaw` | `docker/fly.toml` | `personal` | OpenClaw agent image registry (Node.js, browser/code exec) |
-| `reins-hermes` | `docker/hermes/fly.toml` | `personal` | Hermes agent image registry (Python, lightweight) |
-
-Agent machines are provisioned dynamically in the `personal` org by `agenthelm-core`.
 
 ### `fly.toml` — agenthelm-core (root)
 
@@ -841,16 +560,6 @@ Agent machines are provisioned dynamically in the `personal` org by `agenthelm-c
 ```
 
 `max_machines_running = 1` is load-bearing — removing it allows Fly to auto-scale and will break the approval/email flow.
-
-### `onboarding/fly.toml` — agenthelm-onboarding
-
-```toml
-[http_service]
-  auto_stop_machines = true   # may scale to zero between webhook calls
-  min_machines_running = 1
-```
-
-No `max_machines_running` constraint needed — onboarding is stateless per request.
 
 ### Fly Secrets — agenthelm-core
 
@@ -867,35 +576,11 @@ No `max_machines_running` constraint needed — onboarding is stateless per requ
 | `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` | Outlook OAuth app |
 | `MICROSOFT_REDIRECT_URI` | `https://app.helm.mom/api/oauth/microsoft/callback` |
 | `REINS_TELEGRAM_BOT_TOKEN` | `@AgentHelmApprovalsBot` token (approval notifications) |
-| `ONBOARDING_API_KEY` | Shared key between onboarding bot and backend |
-| `ONBOARDING_BOT_WEBHOOK_SECRET` | Telegram webhook signature verification |
-| `ONBOARDING_BOT_WEBHOOK_URL` | URL backend forwards onboarding webhooks to |
-| `FLY_API_TOKEN` | Org-scoped token for `personal` org (agent provisioning) |
-| `FLY_ORG` | `personal` (agents org, separate from platform org) |
-| `OPENCLAW_APP` | `reins-openclaw` (image source app) |
-| `OPENCLAW_IMAGE` | Full image ref — set automatically by image-test runner |
-| `HERMES_IMAGE` | Full image ref — set automatically by image-test runner |
 | `ANTHROPIC_API_KEY` | Claude API for any backend LLM calls |
 | `STRIPE_SECRET_KEY` | Stripe API secret key (`sk_test_...` in dev, `sk_live_...` in prod) |
 | `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret from the Stripe dashboard (`whsec_...`) |
 | `STRIPE_BYOK_PRICE_ID` | Stripe Price ID for the $19/mo BYOK plan (`price_...`) |
 | `STRIPE_MANAGED_PRICE_ID` | Stripe Price ID for the $119/mo Managed MiniMax plan (`price_...`) |
-
-### Fly Secrets — agenthelm-onboarding
-
-| Secret | Purpose |
-|--------|---------|
-| `DATABASE_URL` | Same PostgreSQL cluster as agenthelm-core |
-| `ONBOARDING_BOT_TOKEN` | `@SpecialAgentHelmBot` Telegram token |
-| `ONBOARDING_BOT_WEBHOOK_SECRET` | Webhook signature verification |
-| `AGENTHELM_API_KEY` | Same value as `ONBOARDING_API_KEY` on core |
-| `AGENTHELM_API_URL` | `https://app.helm.mom` |
-| `DASHBOARD_URL` | `https://app.helm.mom` |
-| `NOTIFY_BOT_USERNAME` | `AgentHelmApprovalsBot` (overrides YAML default `reins_dev_bot`) |
-| `ADMIN_TELEGRAM_ID` | Telegram user ID of the admin — only this user's `/approve_`, `/reject_`, `/reset_` commands are accepted |
-| `ADMIN_CHAT_ID` | Chat ID of the group where the onboarding bot posts new applicant alerts and accepts admin commands. Dev: `-5159855796`. If omitted, falls back to DMing `ADMIN_TELEGRAM_ID` directly. |
-| `SHARED_BOT_ENABLED` | `true` — platform provides the shared Telegram bot and LLM key; users skip `botfather` and `minimax_key` steps |
-| `NODE_ENV` | `production` |
 
 ### Deploying
 
@@ -903,23 +588,14 @@ No `max_machines_running` constraint needed — onboarding is stateless per requ
 # Backend + frontend
 fly deploy --app agenthelm-core --dockerfile Dockerfile
 
-# Onboarding bot
-fly deploy --app agenthelm-onboarding --config onboarding/fly.toml
-
 # Update a single secret without redeploying
 fly secrets set --app agenthelm-core KEY=value
-
-# Promote a new agent image (usually done by image-test runner)
-fly secrets set --app agenthelm-core \
-  OPENCLAW_IMAGE="registry.fly.io/reins-openclaw:<tag>" \
-  HERMES_IMAGE="registry.fly.io/reins-hermes:<tag>"
 ```
 
 ### Adding a New Config Parameter
 
 1. **Non-secret value** (URL, feature flag, limit): add to both `config/development.yaml` and `config/production.yaml`, then read it in `backend/src/config/index.ts` as `process.env.MY_VAR ?? yaml.section?.key`.
 2. **Secret value** (token, key, password): add only as a Fly secret via `fly secrets set`, never commit to YAML. Read it in config as `process.env.MY_SECRET` (no YAML fallback).
-3. **Onboarding-specific**: follow the same pattern in `onboarding/src/config.ts` and set the Fly secret on `agenthelm-onboarding`.
 
 ## Getting Help
 
@@ -950,7 +626,7 @@ fly secrets set --app agenthelm-core \
 | File | Description |
 |------|-------------|
 | [`docs/architecture/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md) | System architecture overview: MCP proxy gateway, components, vendor-agnostic design |
-| [`docs/architecture/MCP_TOOL_INJECTION.md`](docs/architecture/MCP_TOOL_INJECTION.md) | How remote MCP tools are connected and injected into an agent from Fly boot to model call |
+| [`docs/architecture/MCP_TOOL_INJECTION.md`](docs/architecture/MCP_TOOL_INJECTION.md) | How remote MCP tools are connected and injected into an agent from client connect to model call |
 
 ### Architecture Decision Records
 
@@ -964,17 +640,13 @@ fly secrets set --app agenthelm-core \
 |------|-------------|
 | [`docs/MULTI_AGENT_SETUP.md`](docs/MULTI_AGENT_SETUP.md) | User guide: one agent per context (home/work/project) connected to Claude, Claude Code, or Cowork — scope grants, out-of-agent credentials, approval posture, per-client MCP config |
 | [`docs/BETA_RELEASE_PLAN.md`](docs/BETA_RELEASE_PLAN.md) | Beta launch plan targeting May 5 2026 — cohort size, cost gates, milestones |
-| [`docs/ops/LOCAL_DEV_SETUP.md`](docs/ops/LOCAL_DEV_SETUP.md) | Local development setup: .env variables, Google OAuth redirect URIs, Telegram tunnel, dev bots |
+| [`docs/ops/LOCAL_DEV_SETUP.md`](docs/ops/LOCAL_DEV_SETUP.md) | Local development setup: .env variables, Google OAuth redirect URIs, dev bots |
 | [`docs/ops/PROD_SETUP.md`](docs/ops/PROD_SETUP.md) | Production setup checklist: Google OAuth, Fly secrets, DNS, deployment steps |
-| [`docs/ops/UPDATE_API_KEY.md`](docs/ops/UPDATE_API_KEY.md) | How to update a user's LLM API key in both the DB and the running Fly machine |
 | [`docs/ops/COMMON_ERRORS.md`](docs/ops/COMMON_ERRORS.md) | Known traps and their fixes, across agent runtime (bot not responding, MiniMax startup, webhook relay) **and the platform codebase** (env-file handling, migration ordering, two-table service enablement, adding a native MCP server, skill token rendering). Read before debugging anything odd |
 | [`docs/ops/ADDING_SKILLS_VIA_MCP.md`](docs/ops/ADDING_SKILLS_VIA_MCP.md) | Authoring, reading, updating, deleting, and assigning skills through the skill-authoring MCP, including admin-only Helm platform skills |
-| [`docs/ops/ADMIN_TOOLS.md`](docs/ops/ADMIN_TOOLS.md) | Python admin scripts: setup, usage, hard-guard verification, token rotation |
-| [`docs/ops/ADMIN_PROJECT_HANDOVER.md`](docs/ops/ADMIN_PROJECT_HANDOVER.md) | Full architecture handover for a standalone admin project with core+personal Fly access |
 | [`docs/ops/DNS.md`](docs/ops/DNS.md) | DNS configuration: Vercel records, Fly app hostnames, common mistakes, fix runbook |
-| [`TESTING.md`](TESTING.md) | All test tiers: unit (Vitest), E2E (Playwright), live integration (Telegram/Telethon), onboarding flow |
+| [`TESTING.md`](TESTING.md) | All test tiers: unit (Vitest), E2E (Playwright) |
 | [`docs/TESTING_GUIDE.md`](docs/TESTING_GUIDE.md) | Guide for validating the first operational version of Reins end-to-end |
-| [`docs/TELEGRAM_AGENTS.md`](docs/TELEGRAM_AGENTS.md) | Telegram bot assignments and wiring for all platform bots |
 | [`docs/MEMORY.md`](docs/MEMORY.md) | Memory system: scopes and per-agent scope grants, architecture, DB schema, MCP tools, REST API, auth, dream process, local dev setup |
 
 ### API Reference
@@ -989,21 +661,11 @@ fly secrets set --app agenthelm-core \
 
 | File | Description |
 |------|-------------|
-| [`docs/specs/ONBOARDING_BOT_SPEC.md`](docs/specs/ONBOARDING_BOT_SPEC.md) | Spec for @SpecialAgentHelmBot: states, flows, admin commands |
 | [`docs/specs/agent-self-registration.md`](docs/specs/agent-self-registration.md) | Flow for agents to self-register and users to claim them |
-| [`docs/specs/telegram-groups-topics.md`](docs/specs/telegram-groups-topics.md) | Spec for Telegram supergroup + forum topic support in OpenClaw |
+| [`docs/superpowers/specs/2026-09-16-mcp-only-enrollment-trials-design.md`](docs/superpowers/specs/2026-09-16-mcp-only-enrollment-trials-design.md) | Design: remove the deployed-agent runtime; add admin enrollment, Google self-enrollment, and trials |
 
 ### Branding
 
 | File | Description |
 |------|-------------|
 | [`docs/branding/BRAND_GUIDELINES.md`](docs/branding/BRAND_GUIDELINES.md) | Brand essence, visual identity, color palette, typography, voice |
-
-### Agent Container Context (injected into deployed agents)
-
-| File | Description |
-|------|-------------|
-| [`docker/workspace/AGENTS.md`](docker/workspace/AGENTS.md) | Operating rules injected into the agent container |
-| [`docker/workspace/SOUL.md`](docker/workspace/SOUL.md) | Agent personality and communication style |
-| [`docker/workspace/TOOLS.md`](docker/workspace/TOOLS.md) | Tool usage instructions available to deployed agents |
-| [`docker/hermes/knowledge.md`](docker/hermes/knowledge.md) | Reins platform quick reference injected into Hermes agents |

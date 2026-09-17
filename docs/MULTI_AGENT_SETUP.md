@@ -28,7 +28,7 @@ The MCP endpoint is **not authenticated**. `/mcp/*` is exempt from the API auth 
 
 **New agents require a token.** Every agent created from now on is born closed: `https://app.helm.mom/mcp/<agentId>` answers `401` until a client has authenticated (the OAuth flow your MCP client runs when you add the connector, which ends on a consent page in the dashboard). Tokens are per client and revocable one at a time from the agent's **Connected clients** panel.
 
-**Agents deployed before this keep their open URL** until you close it from that same panel. While an agent is open, anyone holding its URL can, without any further credential:
+While an agent is open, anyone holding its URL can, without any further credential:
 
 - call every tool set to `allow` immediately, against your live Gmail, Drive, and Calendar;
 - trigger approval prompts that arrive on your phone;
@@ -41,7 +41,6 @@ Their calls are attributed to the agent in the audit log, indistinguishable from
 | **Treat the URL like a password** | It is a 21-character id with ~126 bits of entropy — unguessable, but plaintext and permanent |
 | **Never commit it** | Not in `.mcp.json`, not in `claude_desktop_config.json`, not in a shared repo |
 | **Revoking is coarse** | Deactivate or delete the agent. There is no per-client token to revoke |
-| **Rotating means redeploying** | The id is baked into the agent's `MCP_CONFIG` |
 
 This is the strongest argument for one agent per context: a leaked work URL exposes work, not home. Close older agents as soon as their clients have authenticated; until then, blast radius is the only control you have.
 
@@ -51,7 +50,7 @@ This is the strongest argument for one agent per context: a leaked work URL expo
 
 In the dashboard, create one agent per context and name it for the context rather than the client — `work`, not `claude-code`. The same agent can serve several clients, and you will want the name to still make sense when it does.
 
-Each agent gets its MCP URL immediately, under **Agents → your agent → Deployment**. Copy it; every step below needs it.
+Each agent gets its MCP URL immediately, on the agent's detail page. Copy it; every step below needs it.
 
 ---
 

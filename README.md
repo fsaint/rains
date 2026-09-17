@@ -12,15 +12,13 @@ reins/
 ├── backend/           # Node.js/TypeScript MCP proxy & API
 ├── shared/            # Shared types, schemas, tool-name resolution
 ├── servers/           # Native MCP server implementations (18 services)
-├── onboarding/        # Telegram onboarding bot
-├── admin/             # Python admin tools for production ops
 ├── e2e/               # Playwright browser journeys
-├── templates/         # Service provisioning templates & starter skills
+├── templates/         # Platform skill templates and the skill version manifest
 ├── config/            # Per-environment non-secret config (development/production.yaml)
 └── docs/              # Architecture, ADRs, ops runbooks, API specs, branding
 ```
 
-`shared`, `backend`, `frontend`, `servers`, and `onboarding` are npm workspaces.
+`shared`, `backend`, `frontend`, and `servers` are npm workspaces.
 
 ## Getting Started
 
@@ -59,14 +57,11 @@ REINS_ADMIN_PASSWORD=changeme
 # Points the in-process MCP servers at your local backend. Without it they
 # default to https://app.helm.mom — i.e. local dev silently calls production.
 REINS_API_URL=http://localhost:5001
-
-FLY_ORG=development-808          # never 'personal' outside production
-FLY_API_TOKEN=<dev-scoped token>
 ```
 
-Non-secret settings live in `config/development.yaml` and `config/production.yaml`; an environment variable of the same name always wins. Run `scripts/check-local-env.sh` as a pre-flight check.
+Non-secret settings live in `config/development.yaml` and `config/production.yaml`; an environment variable of the same name always wins.
 
-See [`docs/ops/LOCAL_DEV_SETUP.md`](docs/ops/LOCAL_DEV_SETUP.md) for OAuth redirect URIs, Telegram tunnels, and dev bots.
+See [`docs/ops/LOCAL_DEV_SETUP.md`](docs/ops/LOCAL_DEV_SETUP.md) for OAuth redirect URIs and dev bots.
 
 ---
 
@@ -79,10 +74,10 @@ npm run typecheck --workspaces        # TypeScript, all workspaces
 
 | Workspace | Tests | What it covers |
 |---|---|---|
-| `backend` | 697 | Routes, permissions, MCP endpoint, approvals, credentials, billing |
-| `servers` | 373 | Handler-level tests per native MCP server |
-| `frontend` | 75 | Components, pages, API client |
-| `shared` | 19 | Tool-name resolution, schemas |
+| `backend` | 856 | Routes, permissions, MCP endpoint, approvals, credentials, billing |
+| `servers` | 542 | Handler-level tests per native MCP server |
+| `frontend` | 93 | Components, pages, API client |
+| `shared` | 17 | Tool-name resolution, schemas |
 
 Watch mode and coverage are per package:
 
@@ -115,13 +110,12 @@ Vitest, no Docker or external services. Database and network calls are mocked.
 
 | Area | Files |
 |---|---|
-| API routes | `agent-admin-routes`, `approvals-routes`, `mcp-auth-routes`, `skills-routes`, `upload-body-limit` |
-| MCP | `mcp/agent-endpoint`, `mcp/oauth/tokens`, `mcp/redact-args` |
-| Permissions & services | `services/permissions`, `services/skills`, `services/memory`, `services/memory-scopes`, `services/registration`, `services/model-router` |
-| Money & limits | `services/billing`, `services/spend` |
-| Platform | `approvals/queue`, `audit/logger`, `auth/auth`, `credentials/vault`, `policy/engine`, `notifications/telegram`, `db/compat` |
-| Providers | `providers/fly`, `providers/provider` |
-| Integration | `integration/user-journey`, `integration/user-journey-shared-bot`, `integration/memory` |
+| API routes | `agent-admin-routes`, `approvals-routes`, `mcp-auth-routes`, `mcp-server-key`, `permissions-drive-routes`, `permissions-instance-routes`, `skills-routes`, `upload-body-limit` |
+| MCP | `mcp/agent-endpoint`, `mcp/init-servers`, `mcp/oauth/routes`, `mcp/oauth/tokens`, `mcp/redact-args`, `mcp/scoped-services.e2e`, `mcp/server-manager` |
+| Permissions & services | `services/permissions`, `services/skills`, `services/memory`, `services/memory-scopes`, `services/registration`, `services/agent-limits`, `services/agent-uploads` |
+| Money & limits | `services/billing` |
+| Platform | `approvals/queue`, `audit/logger`, `auth/auth`, `credentials/vault`, `policy/engine`, `notifications/telegram`, `db/compat`, `db/migrate-deployed-agents` |
+| Integration | `integration/memory` |
 
 Route-level tests matter here more than they usually do: the privilege boundaries live in the routes, not in tool exposure. Every deployed agent has a gateway token and the API URL in its environment, so a gate enforced only in `tools/list` enforces nothing.
 
@@ -138,7 +132,7 @@ Route-level tests matter here more than they usually do: the privilege boundarie
 
 Vitest + React Testing Library in jsdom, API calls mocked.
 
-`api/client`, `pages/Login`, `pages/Approvals`, `components/LogViewer`.
+`api/client`, `pages/Login`, `pages/Approvals`, `pages/Permissions`, `pages/Credentials`, `pages/AgentNew`, `components/AgentSkillToggles`, `utils/drive`.
 
 ---
 
@@ -195,4 +189,4 @@ Key flows:
 | [`TESTING.md`](TESTING.md) | Every test tier and when to run it |
 | [`servers/ADDING_TOOLS.md`](servers/ADDING_TOOLS.md) | The six-file checklist for a new tool |
 
-**⛔ Production:** pushing to `main` deploys automatically. `CLAUDE.md` documents the Fly permission lanes and the confirmation rules for production deploys and live tests.
+**⛔ Production:** pushing to `main` deploys automatically. `CLAUDE.md` documents the confirmation rules for production deploys and live tests.

@@ -1,20 +1,5 @@
 # Production Setup Checklist
 
-## Three-Token Fly Permission Model
-
-Fly access is split across three lanes. Each token is scoped to exactly what its lane needs.
-
-| Lane | Token | Org | Holder | Powers |
-|------|-------|-----|--------|--------|
-| Local dev | `.env` `FLY_API_TOKEN` | `reins-dev` only | Developer laptop | Provision dev agents only |
-| CI/CD deploy | GitHub Actions secret `FLY_API_TOKEN` | `core-191` | GitHub Actions | Deploy `agenthelm-core` + `agenthelm-onboarding` |
-| Production runtime | `agenthelm-core` Fly secret `FLY_API_TOKEN` | `personal` | Running `agenthelm-core` | Provision/destroy agent machines |
-| Admin tools | `admin/.env.admin` `FLY_ADMIN_TOKEN` | `personal` + `core-191` read-only | Developer laptop | Inspect + restart + recover (no destroy) |
-
-**Critical:** the `personal`-org token never lives on a developer's laptop `.env`. It lives only as a Fly secret on the deployed `agenthelm-core`. If the developer needs production ops access, they use the admin tools lane (read-only Fly token + backend API key).
-
----
-
 ## Google OAuth (GCP)
 
 OAuth client: the same client ID used for dev, or a separate prod client.
@@ -48,18 +33,9 @@ GOOGLE_LOGIN_REDIRECT_URI=https://reins.btv.pw/api/auth/google/callback
 
 | Bot | Purpose | Token env var |
 |-----|---------|---------------|
-| `@SpecialAgentHelmBot` | Onboarding bot (user-facing) | `ONBOARDING_BOT_TOKEN` (onboarding service) |
 | `@ReinsVerification` | Approvals / notify bot (prod) | `REINS_TELEGRAM_BOT_TOKEN` (backend) |
 
 Dev uses `@reins_dev_bot` for the approvals bot.
-
-### Onboarding bot env vars (prod)
-```
-WEBHOOK_URL=https://<onboarding-service-url>
-NODE_ENV=production
-```
-
-In production the onboarding bot registers a Telegram webhook instead of using long polling.
 
 ---
 
@@ -73,21 +49,3 @@ In production the onboarding bot registers a Telegram webhook instead of using l
 | `GOOGLE_LOGIN_REDIRECT_URI` | `http://localhost:5001/api/auth/google/callback` | `https://reins.btv.pw/api/auth/google/callback` |
 | `REINS_TELEGRAM_BOT_TOKEN` | `@reins_dev_bot` token | `@ReinsVerification` token |
 | `NODE_ENV` | `development` | `production` |
-
----
-
-## Onboarding bot persona (prod vs dev differences)
-
-In `onboarding/src/persona.ts`, the notify bot reference changes:
-- Dev: `@reins_dev_bot`
-- Prod: `@ReinsVerification`
-
-The done message dashboard URL also needs to point to prod:
-- Dev: `https://reins-dev.btv.pw`
-- Prod: `https://reins.btv.pw`
-
-Set these in the onboarding service `.env`:
-```
-NOTIFY_BOT_USERNAME=ReinsVerification
-DASHBOARD_URL=https://reins.btv.pw
-```
