@@ -8,7 +8,6 @@
 
 import { db, client } from '../db/index.js';
 import { agents, agentServiceAccess, agentServiceCredentials, agentServiceInstances, credentials } from '../db/schema.js';
-import { updateMachineEnv } from '../providers/fly.js';
 import { eq, and, inArray } from 'drizzle-orm';
 import { serverManager, type ToolContext } from './server-manager.js';
 import {
@@ -28,17 +27,13 @@ import { getPostHog } from '../analytics/posthog.js';
 import type { DeferredJobResult } from '@reins/shared';
 import {
   MCP_SERVER_NAME,
-  LEGACY_MCP_SERVER_NAME,
   BUILTIN_TOOLS,
   canonicalToolName,
   modelVisibleToolName,
   resolveToolTokens,
   resolveSkillTokens,
-  deploymentRuntime,
-  type AgentRuntime,
 } from '@reins/shared';
 
-import { checkSpendCap } from '../services/spend.js';
 import { checkUsageGate } from '../services/billing.js';
 import { getAgentLimits, renderAgentLimits, describeToolLimit, type AgentLimits } from '../services/agent-limits.js';
 import {
@@ -46,41 +41,6 @@ import {
   buildSetupNotice,
   loadSkillVersionManifest,
 } from '../services/skills.js';
-
-/**
- * Read an agent's runtime off a deployed_agents row.
- *
- * The column predates Hermes, so legacy rows are null — which means openclaw.
- * The runtime decides how tool names are rendered back to the model, and the
- * two runtimes disagree, so guessing here produces names the model cannot call.
- */
-function runtimeOf(row: { runtime?: unknown; is_manual?: unknown } | undefined): AgentRuntime {
-  return deploymentRuntime(row);
-}
-
-/**
- * The MCP server name this agent's machine was actually deployed with.
- *
- * NOT MCP_SERVER_NAME: that constant moves the moment the backend deploys,
- * while the agent keeps the prefix baked into its MCP_CONFIG until it is
- * redeployed. Naming tools with the constant during that window points the
- * model at a tool it does not have.
- */
-function serverNameOf(row: { mcp_server_name?: unknown } | undefined): string {
-  const name = row?.mcp_server_name;
-  return typeof name === 'string' && name.length > 0 ? name : LEGACY_MCP_SERVER_NAME;
-}
-
-/** Look up how to address tools for an agent, when no deployment row is in hand. */
-async function getAgentToolNaming(
-  agentId: string
-): Promise<{ runtime: AgentRuntime; serverName: string }> {
-  const row = await client.execute({
-    sql: `SELECT runtime, mcp_server_name, is_manual FROM deployed_agents WHERE agent_id = ? AND status NOT IN ('destroyed', 'error') ORDER BY created_at DESC LIMIT 1`,
-    args: [agentId],
-  });
-  return { runtime: runtimeOf(row.rows[0]), serverName: serverNameOf(row.rows[0]) };
-}
 
 // ============================================================================
 // Types
@@ -571,36 +531,15 @@ async function handleListTools(
     },
   });
 
-  // Inject mark_onboarded if this agent has not yet completed first-run setup
-  const deploymentRow = await client.execute({
-    sql: `SELECT id, fly_app_name, fly_machine_id, has_onboarded, runtime, mcp_server_name, is_manual FROM deployed_agents WHERE agent_id = ? ORDER BY created_at DESC LIMIT 1`,
-    args: [agentId],
-  });
-  const deployment = deploymentRow.rows[0];
-  if (deployment && !deployment.has_onboarded) {
-    tools.push({
-      name: BUILTIN_TOOLS.markOnboarded,
-      description:
-        'Signal that first-run setup is complete. Call this after finishing all initial setup tasks. ' +
-        'Removes first-run instructions from future restarts.',
-      inputSchema: {
-        type: 'object' as const,
-        properties: {},
-        required: [],
-      },
-    });
-  }
-
   // Append this agent's skill catalog to the skills_list description.
   //
-  // Filesystem SKILL.md files self-advertise because the runtime scans them and
-  // puts each name + description in context. MCP-served skills get none of
-  // that, so we reproduce the same progressive disclosure here: names and
-  // one-liners always visible, bodies fetched on demand via skills_get.
+  // MCP-served skills do not self-advertise, so we reproduce progressive
+  // disclosure here: names and one-liners always visible, bodies fetched on
+  // demand via skills_get.
   const skillsTool = tools.find((t) => t.name === 'skills_list');
   if (skillsTool) {
     try {
-      const catalog = await buildSkillCatalog(agentId, runtimeOf(deployment), serverNameOf(deployment));
+      const catalog = await buildSkillCatalog(agentId);
       if (catalog) skillsTool.description = `${skillsTool.description}\n\n${catalog}`;
     } catch (error) {
       // A catalog failure must never break tools/list — the tool still works,
@@ -628,11 +567,7 @@ const SKILL_CATALOG_MAX_CHARS = 2000;
  *
  * Exported for tests.
  */
-export async function buildSkillCatalog(
-  agentId: string,
-  runtime: AgentRuntime = 'openclaw',
-  serverName: string = MCP_SERVER_NAME
-): Promise<string | null> {
+export async function buildSkillCatalog(agentId: string): Promise<string | null> {
   const result = await client.execute({
     // Must mirror listAgentSkills in routes.ts — explicit assignment only.
     sql: `SELECT s.slug, s.name, s.description, s.required_services, s.version FROM skills s
@@ -660,11 +595,7 @@ export async function buildSkillCatalog(
   for (const row of shown) {
     const requires = parseRequiredServices(row.required_services);
     const suffix = requires.length > 0 ? ` (needs: ${requires.join(', ')})` : '';
-    const description = resolveSkillTokens(
-      resolveToolTokens(String(row.description ?? ''), runtime, serverName),
-      runtime,
-      serverName
-    );
+    const description = resolveSkillTokens(resolveToolTokens(String(row.description ?? '')));
     lines.push(`- ${row.slug} — ${description}${suffix}`);
   }
 
@@ -786,12 +717,12 @@ async function executeTool(
     serviceType === 'skill-authoring' ||
     serviceType === 'helm-admin'
   ) {
-    const depRow = await client.execute({
-      sql: `SELECT gateway_token FROM deployed_agents WHERE agent_id = ? AND status NOT IN ('destroyed', 'error') ORDER BY created_at DESC LIMIT 1`,
+    const tokenRow = await client.execute({
+      sql: `SELECT gateway_token FROM agents WHERE id = ? LIMIT 1`,
       args: [agentId],
     });
-    if (depRow.rows.length > 0) {
-      context.gatewayToken = depRow.rows[0].gateway_token as string;
+    if (tokenRow.rows.length > 0 && tokenRow.rows[0].gateway_token) {
+      context.gatewayToken = tokenRow.rows[0].gateway_token as string;
     }
   }
 
@@ -1223,63 +1154,11 @@ async function handleCallTool(
     };
   }
 
-  // Built-in tool: mark_onboarded — signal first-run setup complete
-  if (toolName === BUILTIN_TOOLS.markOnboarded) {
-    const depRow = await client.execute({
-      sql: `SELECT id, fly_app_name, fly_machine_id FROM deployed_agents WHERE agent_id = ? ORDER BY created_at DESC LIMIT 1`,
-      args: [agentId],
-    });
-    const dep = depRow.rows[0];
-    if (dep) {
-      const now = new Date().toISOString();
-      await client.execute({
-        sql: `UPDATE deployed_agents SET has_onboarded = 1, initial_prompt = NULL, updated_at = ? WHERE id = ?`,
-        args: [now, dep.id as string],
-      });
-      // Remove INITIAL_PROMPT env var from the Fly machine so it doesn't reappear on restart
-      if (dep.fly_app_name && dep.fly_machine_id) {
-        try {
-          await updateMachineEnv(
-            dep.fly_app_name as string,
-            dep.fly_machine_id as string,
-            { INITIAL_PROMPT: undefined }
-          );
-        } catch (err) {
-          console.warn('[mark_onboarded] updateMachineEnv failed (non-fatal):', err instanceof Error ? err.message : err);
-        }
-      }
-      // Fire-and-forget: notify the user via the shared approvals bot that their agent
-      // finished first-run setup and is now ready to chat.
-      if (config.sharedBotToken) {
-        client.execute({
-          sql: `SELECT u.telegram_chat_id FROM users u JOIN agents a ON a.user_id = u.id WHERE a.id = ? LIMIT 1`,
-          args: [agentId],
-        }).then((r) => {
-          const chatId = r.rows[0]?.telegram_chat_id as string | null;
-          if (!chatId) return;
-          fetch(`https://api.telegram.org/bot${config.sharedBotToken}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: chatId, text: '✅ Your agent is ready! You can start chatting now.' }),
-          }).catch(() => {});
-        }).catch(() => {});
-      }
-    }
-    return {
-      jsonrpc: '2.0', id: requestId,
-      result: {
-        content: [{ type: 'text', text: 'First-run setup marked complete. These instructions will not appear again.' }],
-      },
-    };
-  }
-
-  // Subscription lapse gate (lenient: only blocks if subscription explicitly lapsed/canceled)
+  // Subscription gate. Lenient: only blocks when the owner's subscription has
+  // explicitly lapsed or been canceled (see checkUsageGate).
   {
     const agentOwner = await client.execute({
-      sql: `SELECT a.user_id FROM agents a
-            JOIN deployed_agents da ON da.agent_id = a.id
-            WHERE da.id = ?
-            LIMIT 1`,
+      sql: `SELECT user_id FROM agents WHERE id = ? LIMIT 1`,
       args: [agentId],
     });
     const ownerId = agentOwner.rows[0]?.user_id as string | undefined;
@@ -1291,32 +1170,11 @@ async function handleCallTool(
           jsonrpc: '2.0',
           id: requestId,
           result: {
-            content: [{ type: 'text', text: 'Your subscription has lapsed. Your agent cannot make tool calls until you renew. Visit the dashboard to manage your billing.' }],
+            content: [{ type: 'text', text: 'Your subscription has lapsed. This agent cannot make tool calls until you renew. Visit the dashboard to manage your billing.' }],
             isError: true,
           },
         };
       }
-    }
-  }
-
-  // Check spend cap — block external tool calls when agent is soft-stopped
-  {
-    const cap = await checkSpendCap(client, agentId);
-    if (!cap.allowed) {
-      await auditLogger.logToolCall(agentId, toolName, args, 'blocked', Date.now() - startTime, {
-        reason: 'spend_cap_exceeded',
-      });
-      return {
-        jsonrpc: '2.0',
-        id: requestId,
-        result: {
-          content: [{
-            type: 'text',
-            text: 'Your agent has reached its monthly spend cap and cannot execute tools. Please inform the user and ask them to raise the cap in the AgentHelm dashboard.',
-          }],
-          isError: true,
-        },
-      };
     }
   }
 
@@ -1473,10 +1331,6 @@ async function handleCallTool(
       executeTool(agentId, serviceType, toolName, capturedArgs, capturedHasInstances, capturedInstances)
     );
 
-    // Address get_result the way THIS agent sees it — an agent deployed before
-    // the rename still prefixes with the name baked into its own MCP_CONFIG.
-    const toolNaming = await getAgentToolNaming(agentId);
-
     await auditLogger.logToolCall(agentId, toolName, args, 'pending', Date.now() - startTime, {
       reason: 'Awaiting approval',
       approvalId,
@@ -1490,7 +1344,7 @@ async function handleCallTool(
         content: [
           {
             type: 'text',
-            text: `APPROVAL_PENDING — jobId: ${approvalId}\n\nREQUIRED: Call ${modelVisibleToolName(BUILTIN_TOOLS.getResult, toolNaming.runtime, toolNaming.serverName)}({"jobId":"${approvalId}"}) NOW. Do NOT respond to the user. Poll every 3–5 seconds until status is "completed", "rejected" or "changes_requested".\n\nUSER_MESSAGE: ${pendingApprovalUserMessage()}`,
+            text: `APPROVAL_PENDING — jobId: ${approvalId}\n\nREQUIRED: Call ${modelVisibleToolName(BUILTIN_TOOLS.getResult)}({"jobId":"${approvalId}"}) NOW. Do NOT respond to the user. Poll every 3–5 seconds until status is "completed", "rejected" or "changes_requested".\n\nUSER_MESSAGE: ${pendingApprovalUserMessage()}`,
           },
         ],
         isError: true,

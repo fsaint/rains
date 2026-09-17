@@ -226,17 +226,13 @@ vi.mock('../credentials/vault.js', () => ({
     getValidAccessToken: vi.fn().mockResolvedValue('test-access-token'),
   },
 }));
-vi.mock('../services/spend.js', () => ({
-  checkSpendCap: vi.fn().mockResolvedValue({ allowed: true }),
-  recordUsage: vi.fn().mockResolvedValue(undefined),
-}));
 vi.mock('../services/billing.js', () => ({
   getSubscription: vi.fn().mockResolvedValue(null),
   upsertSubscription: vi.fn().mockResolvedValue(undefined),
   applyGracePeriod: vi.fn().mockResolvedValue(undefined),
   clearGrace: vi.fn().mockResolvedValue(undefined),
   cancelSubscription: vi.fn().mockResolvedValue(undefined),
-  checkDeployGate: vi.fn().mockResolvedValue({ allowed: true }),
+  checkUsageGate: vi.fn().mockResolvedValue({ allowed: true }),
 }));
 
 // Trigger ensureRegistry() so _getServiceType is populated before synchronous tests run
@@ -393,7 +389,7 @@ describe('handleMCPRequest', () => {
 
       const text = result.content[0].text;
       expect(text).toContain('APPROVAL_PENDING');
-      expect(text).toContain('helm__get_result');
+      expect(text).toContain('get_result');
       expect(text).toContain('USER_MESSAGE:');
       expect(text).toContain('http://localhost:5173/approvals');
 
@@ -408,6 +404,29 @@ describe('handleMCPRequest', () => {
         jobId,
         expect.any(Function),
       );
+    });
+
+    it('blocks a tool call when the owner\'s subscription has lapsed', async () => {
+      const { client } = await import('../db/index.js');
+      const { checkUsageGate } = await import('../services/billing.js');
+      vi.mocked(client.execute).mockImplementation(async (q: unknown) => {
+        const sql = typeof q === 'string' ? q : (q as { sql: string }).sql;
+        if (sql.includes('SELECT user_id FROM agents WHERE id = ?')) {
+          return { rows: [{ user_id: 'owner-1' }] } as never;
+        }
+        return { rows: [] } as never;
+      });
+      vi.mocked(checkUsageGate).mockResolvedValueOnce({ allowed: false, reason: 'lapsed' });
+
+      const res = await handleMCPRequest('agent-1', {
+        jsonrpc: '2.0', id: 9, method: 'tools/call',
+        params: { name: 'gmail_search', arguments: { query: 'x' } },
+      });
+
+      expect(checkUsageGate).toHaveBeenCalledWith('owner-1');
+      const result = res.result as { isError?: boolean; content: Array<{ text: string }> };
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('subscription');
     });
   });
 });
@@ -453,70 +472,7 @@ describe('helm rename', () => {
     expect(content.result).toEqual({ messageId: 'msg-legacy' });
   });
 
-  it('still dispatches the legacy reins__mark_onboarded name', async () => {
-    vi.mocked(client.execute).mockResolvedValue({
-      rows: [{ id: 'dep-1', fly_app_name: 'app', fly_machine_id: 'm1', has_onboarded: false }],
-    } as any);
-
-    const response = await handleMCPRequest('agent-1', {
-      jsonrpc: '2.0', id: 1, method: 'tools/call',
-      params: { name: 'reins__mark_onboarded', arguments: {} },
-    });
-
-    expect(response.error).toBeUndefined();
-    expect(response.result).toBeDefined();
-  });
-
-  it('addresses get_result with the name the agent was deployed with', async () => {
-    // An agent deployed before the rename still has name:"reins" baked into its
-    // MCP_CONFIG, so its tool list holds reins__get_result. Rendering the
-    // current constant here would name a tool it does not have, and the
-    // approval would never resolve.
-    vi.mocked(client.execute).mockResolvedValue({
-      rows: [{ id: 'dep-1', runtime: 'openclaw', mcp_server_name: 'reins', has_onboarded: true }],
-    } as any);
-
-    const response = await handleMCPRequest('agent-1', {
-      jsonrpc: '2.0', id: 42, method: 'tools/call',
-      params: {
-        name: 'gmail_create_draft',
-        arguments: { to: 'test@example.com', subject: 'Hello', body: 'World' },
-      },
-    });
-
-    const text = (response.result as { content: Array<{ text: string }> }).content[0].text;
-    expect(text).toContain('reins__get_result');
-    expect(text).not.toContain('helm__get_result');
-  });
-
-  it('names get_result the way a Hermes agent actually sees it', async () => {
-    // Hermes namespaces as mcp__<server>__<tool>, OpenClaw as <server>__<tool>.
-    // Naming it the OpenClaw way here would tell a Hermes agent to call a tool
-    // that is not in its list, stranding every approval.
-    vi.mocked(client.execute).mockResolvedValue({
-      rows: [{ id: 'dep-1', runtime: 'hermes', mcp_server_name: 'helm', has_onboarded: true }],
-    } as any);
-
-    const response = await handleMCPRequest('agent-1', {
-      jsonrpc: '2.0', id: 42, method: 'tools/call',
-      params: {
-        name: 'gmail_create_draft',
-        arguments: { to: 'test@example.com', subject: 'Hello', body: 'World' },
-      },
-    });
-
-    const text = (response.result as { content: Array<{ text: string }> }).content[0].text;
-    expect(text).toContain('APPROVAL_PENDING');
-    expect(text).toContain('mcp__helm__get_result');
-  });
-
-  it('addresses get_result bare for a manual (Claude-connected) deployment', async () => {
-    // The client (claude.ai / Desktop / Claude Code) namespaces tools itself
-    // as mcp__<connector>__<tool>; any prefix the backend renders is wrong.
-    vi.mocked(client.execute).mockResolvedValue({
-      rows: [{ id: 'dep-1', runtime: 'openclaw', mcp_server_name: 'reins', is_manual: 1, has_onboarded: true }],
-    } as any);
-
+  it('addresses get_result bare', async () => {
     const response = await handleMCPRequest('agent-1', {
       jsonrpc: '2.0', id: 43, method: 'tools/call',
       params: {
@@ -530,19 +486,6 @@ describe('helm rename', () => {
     expect(text).toContain('get_result');
     expect(text).not.toContain('reins__get_result');
     expect(text).not.toContain('helm__get_result');
-  });
-
-  it('injects mark_onboarded under its new name when setup is incomplete', async () => {
-    vi.mocked(client.execute).mockResolvedValue({
-      rows: [{ id: 'dep-1', fly_app_name: 'app', fly_machine_id: 'm1', has_onboarded: false }],
-    } as any);
-
-    const response = await handleMCPRequest('agent-1', {
-      jsonrpc: '2.0', id: 1, method: 'tools/list',
-    });
-    const toolNames = (response.result as { tools: Array<{ name: string }> }).tools.map((t) => t.name);
-    expect(toolNames).toContain('mark_onboarded');
-    expect(toolNames).not.toContain('reins__mark_onboarded');
   });
 });
 
@@ -1074,12 +1017,12 @@ describe('buildSkillCatalog', () => {
     expect(catalog).not.toContain('notes — Take notes. (needs:');
   });
 
-  it('renders tool tokens bare for an external (manual) agent', async () => {
+  it('renders tool tokens bare', async () => {
     vi.mocked(client.execute).mockResolvedValueOnce({
       rows: [{ slug: 'helm-boot', name: 'Boot', description: 'Use {{tool:gmail_search}}.', required_services: '[]', version: null }],
     } as any);
 
-    const catalog = await buildSkillCatalog('agent-1', 'external', 'reins');
+    const catalog = await buildSkillCatalog('agent-1');
 
     expect(catalog).toContain('Use gmail_search.');
     expect(catalog).not.toContain('reins__');
@@ -1232,18 +1175,6 @@ describe('whoami tool', () => {
   });
 
   it('appears in tools/list for any agent, whatever services it has', async () => {
-    const response = await handleMCPRequest('agent-1', {
-      jsonrpc: '2.0', id: 1, method: 'tools/list',
-    });
-    const toolNames = (response.result as { tools: Array<{ name: string }> }).tools.map((t) => t.name);
-    expect(toolNames).toContain('whoami');
-  });
-
-  it('is listed for a Hermes deployment too — it does not depend on runtime', async () => {
-    vi.mocked(client.execute).mockResolvedValue({
-      rows: [{ id: 'dep-1', runtime: 'hermes', mcp_server_name: 'helm', has_onboarded: true }],
-    } as any);
-
     const response = await handleMCPRequest('agent-1', {
       jsonrpc: '2.0', id: 1, method: 'tools/list',
     });
@@ -1505,7 +1436,7 @@ describe('multi-account policy', () => {
     const { client } = await import('../db/index.js');
     vi.mocked(client.execute).mockImplementation(async (q: unknown) => {
       const sql = typeof q === 'string' ? q : (q as { sql: string }).sql;
-      if (sql.includes('SELECT gateway_token FROM deployed_agents')) {
+      if (sql.includes('SELECT gateway_token FROM agents')) {
         return { rows: [{ gateway_token: 'gw-secret' }] } as never;
       }
       return { rows: [] } as never;
