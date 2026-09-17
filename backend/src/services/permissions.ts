@@ -6,7 +6,7 @@
  */
 
 import { db, client } from '../db/index.js';
-import { agentServiceAccess, agentToolPermissions, agentServiceCredentials, agentServiceInstances, agents, credentials, deployedAgents } from '../db/schema.js';
+import { agentServiceAccess, agentToolPermissions, agentServiceCredentials, agentServiceInstances, agents, credentials } from '../db/schema.js';
 import { eq, and, inArray, isNull } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { serverManager } from '../mcp/server-manager.js';
@@ -368,26 +368,15 @@ export class UnauthenticatedEndpointsOpenError extends Error {
 /**
  * The owner's agents that still answer MCP calls without a token.
  *
- * Mirrors authenticateMcp in api/routes.ts, and the two cases have to match or
- * this reports safe while the endpoint serves: it takes the most recent live
- * deployment row, and treats **no live row at all** as open, because that is
- * what the gate does before handing off to handleMCPRequest. Reading only
- * allow_unauthenticated = true would miss every agent that has never deployed.
+ * Mirrors authenticateMcp in api/routes.ts, which now reads
+ * agents.allow_unauthenticated directly — the two have to match or this
+ * reports safe while the endpoint serves.
  */
 export async function listOpenMcpAgents(userId: string): Promise<OpenMcpAgent[]> {
   const result = await client.execute({
-    sql: `SELECT a.id, a.name
-          FROM agents a
-          LEFT JOIN LATERAL (
-            SELECT da.allow_unauthenticated
-            FROM deployed_agents da
-            WHERE da.agent_id = a.id AND da.status NOT IN ('destroyed', 'error')
-            ORDER BY da.created_at DESC
-            LIMIT 1
-          ) d ON true
-          WHERE a.user_id = ?
-            AND (d.allow_unauthenticated IS NULL OR d.allow_unauthenticated = true)
-          ORDER BY a.name`,
+    sql: `SELECT id, name FROM agents
+          WHERE user_id = ? AND allow_unauthenticated = true
+          ORDER BY name`,
     args: [userId],
   });
   return result.rows.map((row) => ({ id: row.id as string, name: row.name as string }));
@@ -1158,7 +1147,6 @@ export interface AgentPermissionsResponse {
     name: string;
     status: string;
     instances: ServiceInstance[];
-    telegramBotUsername?: string | null;
   }>;
   availableServices: Array<{ type: string; name: string; icon: string; authRequired: boolean }>;
 }
@@ -1835,19 +1823,12 @@ export async function getAgentPermissions(userId?: string): Promise<AgentPermiss
 
   const agentResults: AgentPermissionsResponse['agents'] = [];
   for (const agent of allAgents) {
-    const [instances, deployments] = await Promise.all([
-      getAgentInstances(agent.id),
-      db.select({ telegramBotUsername: deployedAgents.telegramBotUsername })
-        .from(deployedAgents)
-        .where(and(eq(deployedAgents.agentId, agent.id)))
-        .limit(1),
-    ]);
+    const instances = await getAgentInstances(agent.id);
     agentResults.push({
       id: agent.id,
       name: agent.name,
       status: agent.status,
       instances,
-      telegramBotUsername: deployments[0]?.telegramBotUsername ?? null,
     });
   }
 

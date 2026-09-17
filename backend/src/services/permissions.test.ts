@@ -456,9 +456,9 @@ describe('Permission Service', () => {
    * then drive the peer directly.
    */
   describe('open MCP endpoints', () => {
-    it('treats an agent with no live deployment row as open', async () => {
-      // The one a reimplementation gets wrong. authenticateMcp serves a request
-      // when the deployment row is missing, so "not explicitly closed" is open.
+    it('reports an agent the query returns as open', async () => {
+      // listOpenMcpAgents does the filtering in SQL now (allow_unauthenticated
+      // = true); assertNoOpenMcpEndpoints just has to surface whatever it gets back.
       vi.mocked(client.execute).mockResolvedValueOnce({
         rows: [{ id: 'agent-9', name: 'Never Deployed' }],
         rowsAffected: 1, columns: [], lastInsertRowid: 0n,
@@ -490,19 +490,22 @@ describe('Permission Service', () => {
       await expect(assertNoOpenMcpEndpoints('user-1')).resolves.toBeUndefined();
     });
 
-    it('only counts an agent closed when allow_unauthenticated is explicitly false', async () => {
-      // Guards the SQL: a NULL column, or no row from the lateral join, must
-      // both come back as open. Asserting on the query is the only way to catch
-      // a rewrite that flips this to `= true`.
+    it('reads allow_unauthenticated straight off agents, scoped to the owner', async () => {
+      // Guards the SQL: this now mirrors authenticateMcp exactly, which reads
+      // agents.allow_unauthenticated directly. Asserting on the query is the
+      // only way to catch a rewrite that flips this to `= false` or drops the
+      // owner scoping.
       vi.mocked(client.execute).mockResolvedValueOnce({
         rows: [], rowsAffected: 0, columns: [], lastInsertRowid: 0n,
       } as never);
 
       await listOpenMcpAgents('user-1');
 
-      const { sql } = vi.mocked(client.execute).mock.calls[0][0] as { sql: string };
-      expect(sql).toContain('allow_unauthenticated IS NULL');
+      const { sql, args } = vi.mocked(client.execute).mock.calls[0][0] as { sql: string; args: unknown[] };
+      expect(sql).toContain('FROM agents');
       expect(sql).toContain('allow_unauthenticated = true');
+      expect(sql).toContain('user_id = ?');
+      expect(args).toEqual(['user-1']);
     });
   });
 

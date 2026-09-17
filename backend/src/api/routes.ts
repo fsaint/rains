@@ -144,11 +144,8 @@ import {
   RequestChangesSchema,
   AuditFilterSchema,
   MCP_SERVER_NAME,
-  LEGACY_MCP_SERVER_NAME,
   resolveToolTokens,
   resolveSkillTokens,
-  deploymentRuntime,
-  type AgentRuntime,
 } from '@reins/shared';
 
 async function registerAgentBotWebhook(
@@ -289,18 +286,11 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     const agentsWithCredentials = await Promise.all(
       result.rows.map(async (agent) => {
-        const [credsResult, deployResult] = await Promise.all([
-          client.execute({
-            sql: `SELECT credential_id FROM agent_credentials WHERE agent_id = ?`,
-            args: [agent.id as string],
-          }),
-          client.execute({
-            sql: `SELECT telegram_bot_username, status FROM deployed_agents WHERE agent_id = ? AND status NOT IN ('destroyed', 'error') ORDER BY created_at DESC LIMIT 1`,
-            args: [agent.id as string],
-          }),
-        ]);
+        const credsResult = await client.execute({
+          sql: `SELECT credential_id FROM agent_credentials WHERE agent_id = ?`,
+          args: [agent.id as string],
+        });
 
-        const deployment = deployResult.rows[0];
         return {
           id: agent.id,
           name: agent.name,
@@ -310,8 +300,6 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           credentials: credsResult.rows.map((c) => c.credential_id),
           createdAt: agent.created_at,
           updatedAt: agent.updated_at,
-          telegramBotUsername: deployment?.telegram_bot_username ?? null,
-          deploymentStatus: deployment?.status ?? null,
         };
       })
     );
@@ -366,17 +354,15 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.code(404).send(agentNotFound);
     }
 
-    const deployment = await client.execute({
-      sql: `SELECT allow_unauthenticated FROM deployed_agents
-            WHERE agent_id = ? AND status NOT IN ('destroyed', 'error')
-            ORDER BY created_at DESC LIMIT 1`,
+    const agentRow = await client.execute({
+      sql: `SELECT allow_unauthenticated FROM agents WHERE id = ? LIMIT 1`,
       args: [request.params.id],
     });
 
     return {
       data: {
         tokens: await listAgentTokens(request.params.id),
-        allowUnauthenticated: deployment.rows[0]?.allow_unauthenticated !== false,
+        allowUnauthenticated: agentRow.rows[0]?.allow_unauthenticated === true,
       },
     };
   });
@@ -430,8 +416,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
 
     await client.execute({
-      sql: `UPDATE deployed_agents SET allow_unauthenticated = ?, updated_at = ?
-            WHERE agent_id = ? AND status NOT IN ('destroyed', 'error')`,
+      sql: `UPDATE agents SET allow_unauthenticated = ?, updated_at = ? WHERE id = ?`,
       args: [body.allowed, new Date().toISOString(), request.params.id],
     });
 
@@ -551,24 +536,30 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     const userId = getUserId(request);
     const id = nanoid();
+    const gatewayToken = nanoid(32);
     const now = new Date().toISOString();
 
+    // Born closed: the MCP URL alone does not reach this agent; a client has
+    // to authenticate (OAuth) first. The owner can open it from the dashboard.
     await client.execute({
-      sql: `INSERT INTO agents (id, user_id, name, description, policy_id, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`,
-      args: [id, userId, parsed.data.name, parsed.data.description ?? null, parsed.data.policyId ?? null, now, now],
-    });
-
-    const result = await client.execute({
-      sql: `SELECT * FROM agents WHERE id = ?`,
-      args: [id],
+      sql: `INSERT INTO agents (id, user_id, name, description, policy_id, status, gateway_token, allow_unauthenticated, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'active', ?, false, ?, ?)`,
+      args: [id, userId, parsed.data.name, parsed.data.description ?? null, parsed.data.policyId ?? null, gatewayToken, now, now],
     });
 
     await auditLogger.logAgentEvent(id, 'created', { name: parsed.data.name });
     getPostHog()?.capture({ distinctId: userId, event: 'agent_created', properties: { source: 'dashboard' } });
     await enableDefaultServices(id);
 
-    return reply.code(201).send({ data: result.rows[0] });
+    return reply.code(201).send({
+      data: {
+        id,
+        name: parsed.data.name,
+        description: parsed.data.description ?? null,
+        status: 'active',
+        acceptsUnauthenticatedMcp: false,
+      },
+    });
   });
 
   app.patch<{ Params: { id: string } }>('/api/agents/:id', async (request, reply) => {
@@ -634,25 +625,6 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   async function destroyAgentCompletely(id: string): Promise<void> {
     await mcpProxy.disconnectAgent(id);
 
-    // Destroy Fly.io deployment if one exists
-    const deployResult = await client.execute({
-      sql: `SELECT fly_app_name, fly_machine_id FROM deployed_agents WHERE agent_id = ? AND status NOT IN ('destroyed', 'error')`,
-      args: [id],
-    });
-    for (const dep of deployResult.rows) {
-      if (dep.fly_app_name && dep.fly_machine_id) {
-        try {
-          await provider.destroy(dep.fly_app_name as string, dep.fly_machine_id as string, id);
-        } catch (err) {
-          console.warn(`Failed to destroy deployment ${dep.fly_app_name}:`, err);
-        }
-      }
-    }
-
-    await client.execute({
-      sql: `DELETE FROM deployed_agents WHERE agent_id = ?`,
-      args: [id],
-    });
     await client.execute({
       sql: `DELETE FROM agent_tool_permissions WHERE agent_id = ?`,
       args: [id],
@@ -3448,9 +3420,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
    * Three outcomes, and the middle one is the whole migration story:
    *
    *  - A valid Bearer token for this agent → authenticated.
-   *  - No token at all → served exactly as before, *while* this deployment
-   *    still allows it. That flag defaults true and is only ever cleared by
-   *    the owner, so no existing agent changes behaviour.
+   *  - No token at all → served exactly as before, *while* this agent still
+   *    allows it. That flag defaults true and is only ever cleared by the
+   *    owner, so no existing agent changes behaviour.
    *  - A token that does not verify → 401, always, even where no token was
    *    required. Falling back to unauthenticated would hide a misconfigured
    *    client from the person who set it up.
@@ -3472,15 +3444,13 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
 
     const row = await client.execute({
-      sql: `SELECT allow_unauthenticated FROM deployed_agents
-            WHERE agent_id = ? AND status NOT IN ('destroyed', 'error')
-            ORDER BY created_at DESC LIMIT 1`,
+      sql: `SELECT allow_unauthenticated FROM agents WHERE id = ? LIMIT 1`,
       args: [agentId],
     });
-    // No deployment row: leave it to handleMCPRequest, which owns the
+    // Unknown agent: leave it to handleMCPRequest, which owns the
     // agent-not-found response shape.
     if (row.rows.length === 0) return { ok: true, principal: null };
-    if (row.rows[0].allow_unauthenticated === false) return { ok: false, reason: 'token_required' };
+    if (row.rows[0].allow_unauthenticated !== true) return { ok: false, reason: 'token_required' };
     return { ok: true, principal: null };
   }
 
@@ -3757,63 +3727,6 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
   // Agent Deployment (Fly.io / Docker provisioning)
   // ========================================================================
-
-  /**
-   * Create a manual (BYO) agent — no container provisioned.
-   * Just creates the agent + a deployed_agents record with is_manual=1 and status=running.
-   * The user copies the MCP URL and configures their own agent runtime.
-   */
-  app.post('/api/agents/create-manual', async (request, reply) => {
-    const userId = getUserId(request);
-    const body = request.body as {
-      name: string;
-      description?: string;
-      soulMd?: string;
-    };
-
-    if (!body.name?.trim()) {
-      return reply.code(400).send({ error: { code: 'INVALID_INPUT', message: 'Agent name is required' } });
-    }
-
-    const agentId = nanoid();
-    const deploymentId = nanoid();
-    const gatewayToken = nanoid(32);
-    const now = new Date().toISOString();
-
-    // Create agent record
-    await client.execute({
-      sql: `INSERT INTO agents (id, user_id, name, description, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 'active', ?, ?)`,
-      args: [agentId, userId, body.name.trim(), body.description || null, now, now],
-    });
-
-    // Create deployment record — no fly app, no machine, is_manual=1.
-    // Born closed: the MCP URL alone does not reach this agent; a client has
-    // to authenticate (OAuth) first. The owner can open it from the dashboard.
-    await client.execute({
-      sql: `INSERT INTO deployed_agents
-              (id, agent_id, status, gateway_token, soul_md, is_manual, allow_unauthenticated, mcp_server_name, created_at, updated_at)
-            VALUES (?, ?, 'running', ?, ?, 1, false, ?, ?, ?)`,
-      args: [deploymentId, agentId, gatewayToken, body.soulMd || null, MCP_SERVER_NAME, now, now],
-    });
-
-    await enableDefaultServices(agentId);
-
-    return reply.code(201).send({
-      data: {
-        id: agentId,
-        name: body.name.trim(),
-        status: 'active',
-        acceptsUnauthenticatedMcp: false,
-        deployment: {
-          id: deploymentId,
-          status: 'running',
-          isManual: true,
-          gatewayToken,
-        },
-      },
-    });
-  });
 
   /**
    * Combined create + deploy in one step.
@@ -4472,48 +4385,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
 
     const agent = agentResult.rows[0];
-    const deployResult = await client.execute({
-      sql: `SELECT * FROM deployed_agents WHERE agent_id = ? AND status NOT IN ('destroyed') ORDER BY created_at DESC LIMIT 1`,
-      args: [id],
-    });
-
-    const deployment = deployResult.rows.length > 0 ? deployResult.rows[0] : null;
-
-    // Fetch live status if deployed
-    let liveStatus = deployment?.status as string | undefined;
-    if (deployment?.fly_app_name && deployment?.fly_machine_id && liveStatus && !['destroyed', 'error'].includes(liveStatus)) {
-      try {
-        liveStatus = await provider.getStatus(
-          deployment.fly_app_name as string,
-          deployment.fly_machine_id as string
-        );
-        await client.execute({
-          sql: `UPDATE deployed_agents SET status = ?, updated_at = ? WHERE id = ?`,
-          args: [liveStatus, new Date().toISOString(), deployment.id as string],
-        });
-      } catch {
-        // Use cached status
-      }
+    if ((agent.user_id as string) !== getUserId(request)) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Agent not found' } });
     }
-
-    // Mask telegram token: show first 5 and last 3 chars
-    let maskedTelegram: string | null = null;
-    if (deployment?.telegram_token) {
-      const t = deployment.telegram_token as string;
-      maskedTelegram = t.length > 10 ? `${t.slice(0, 5)}...${t.slice(-3)}` : '***';
-    }
-
-    // Mask OpenAI API key
-    const maskedOpenaiApiKey = deployment?.openai_api_key ? '***' : null;
-
-    // Parse telegram groups
-    let telegramGroups: provider.TelegramGroup[] | null = null;
-    if (deployment?.telegram_groups_json) {
-      try {
-        telegramGroups = JSON.parse(deployment.telegram_groups_json as string);
-      } catch { /* ignore */ }
-    }
-
     return {
       data: {
         id: agent.id,
@@ -4521,27 +4395,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         description: agent.description,
         status: agent.status,
         createdAt: agent.created_at,
-        deployment: deployment ? {
-          id: deployment.id,
-          status: liveStatus || deployment.status,
-          flyAppName: deployment.fly_app_name,
-          flyMachineId: deployment.fly_machine_id,
-          managementUrl: deployment.management_url,
-          gatewayToken: deployment.gateway_token,
-          telegramToken: maskedTelegram,
-          telegramBotUsername: deployment.telegram_bot_username ?? null,
-          telegramUserId: deployment.telegram_user_id,
-          openaiApiKey: maskedOpenaiApiKey,
-          telegramGroups: telegramGroups ?? [],
-          soulMd: deployment.soul_md,
-          modelProvider: deployment.model_provider,
-          modelName: deployment.model_name,
-          region: deployment.region,
-          mcpConfigJson: deployment.mcp_config_json,
-          runtime: deployment.runtime,
-          isManual: deployment.is_manual === 1 || deployment.is_manual === true,
-          createdAt: deployment.created_at,
-        } : null,
+        mcpUrl: `${config.dashboardUrl}/mcp/${agent.id as string}`,
+        allowUnauthenticated: agent.allow_unauthenticated === true,
       },
     };
   });
@@ -5659,34 +5514,15 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // Admin — Agent Fleet View
   // ============================================================================
 
-  // Joined view of agents + deployed_agents for admin tools and scripts.
+  // View of agents for admin tools and scripts.
   // Accepts either an admin session cookie or Authorization: Bearer <REINS_ADMIN_API_KEY>.
   app.get('/api/admin/agents', async (request, reply) => {
     if (!requireAdmin(request, reply)) return;
 
     const result = await client.execute(`
-      SELECT
-        a.id,
-        a.name,
-        a.status AS agent_status,
-        da.id            AS deployment_id,
-        da.fly_app_name,
-        da.fly_machine_id,
-        da.fly_volume_id,
-        da.status        AS deployment_status,
-        da.runtime,
-        da.is_shared_bot,
-        da.region,
-        da.telegram_user_id,
-        da.model_provider,
-        da.model_name,
-        da.management_url,
-        da.created_at    AS deployed_at,
-        da.updated_at    AS deployment_updated_at
+      SELECT a.id, a.name, a.status, a.user_id, a.allow_unauthenticated, a.created_at, a.updated_at
       FROM agents a
-      LEFT JOIN deployed_agents da ON da.agent_id = a.id
-        AND da.status NOT IN ('destroyed', 'error')
-      ORDER BY a.name, da.created_at DESC
+      ORDER BY a.name
     `);
 
     return { data: result.rows };
@@ -5939,32 +5775,16 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
    */
   async function resolveAgentFromGatewayToken(
     request: any
-  ): Promise<{ agentId: string; userId: string; runtime: AgentRuntime; serverName: string } | null> {
+  ): Promise<{ agentId: string; userId: string } | null> {
     const agentSecret = request.headers['x-reins-agent-secret'] as string | undefined;
     if (!agentSecret) return null;
 
-    const depResult = await client.execute({
-      sql: `SELECT da.agent_id, da.runtime, da.mcp_server_name, da.is_manual, a.user_id
-            FROM deployed_agents da
-            JOIN agents a ON a.id = da.agent_id
-            WHERE da.gateway_token = ? AND da.status NOT IN ('destroyed', 'error')
-            LIMIT 1`,
+    const result = await client.execute({
+      sql: `SELECT id, user_id FROM agents WHERE gateway_token = ? LIMIT 1`,
       args: [agentSecret],
     });
-    if (depResult.rows.length === 0) return null;
-
-    return {
-      agentId: depResult.rows[0].agent_id as string,
-      userId: depResult.rows[0].user_id as string,
-      // Decides how tool names are rendered back to this agent. A manual row
-      // (claude.ai / Desktop / Code connect through their own client) resolves
-      // to 'external' and gets bare names — the client adds its own prefix,
-      // which the backend cannot know. Legacy null runtime means openclaw.
-      runtime: deploymentRuntime(depResult.rows[0]),
-      // The name baked into this machine's MCP_CONFIG, not MCP_SERVER_NAME —
-      // they differ for any agent not yet redeployed after a rename.
-      serverName: (depResult.rows[0].mcp_server_name as string | null) || LEGACY_MCP_SERVER_NAME,
-    };
+    if (result.rows.length === 0) return null;
+    return { agentId: result.rows[0].id as string, userId: result.rows[0].user_id as string };
   }
 
   /**
@@ -7030,11 +6850,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       data: skills.map(({ body: _body, ...rest }) => ({
         ...rest,
         ...compareSkillVersion(rest.slug, rest.version, manifest),
-        description: resolveSkillTokens(
-          resolveToolTokens(rest.description ?? '', agent.runtime, agent.serverName),
-          agent.runtime,
-          agent.serverName
-        ),
+        description: resolveSkillTokens(resolveToolTokens(rest.description ?? '')),
       })),
       ...(setupNotice ? { setupNotice } : {}),
     };
@@ -7064,12 +6880,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       args: [agent.agentId, agent.userId],
     });
 
-    const render = (text: string) =>
-      resolveSkillTokens(
-        resolveToolTokens(text ?? '', agent.runtime, agent.serverName),
-        agent.runtime,
-        agent.serverName
-      );
+    const render = (text: string) => resolveSkillTokens(resolveToolTokens(text ?? ''));
 
     return {
       data: result.rows.map((row) => ({
@@ -7143,15 +6954,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const skill = outcome.skill;
     const availability = (await resolveAvailability(agent.agentId, [skill])).get(skill.id);
 
-    // Resolve tokens here rather than in the skills MCP server: this is the one
-    // place that knows the requesting agent's runtime and deployed server name,
-    // and the two runtimes render tool names differently.
-    const render = (text: string) =>
-      resolveSkillTokens(
-        resolveToolTokens(text ?? '', agent.runtime, agent.serverName),
-        agent.runtime,
-        agent.serverName
-      );
+    const render = (text: string) => resolveSkillTokens(resolveToolTokens(text ?? ''));
 
     return {
       data: {
@@ -7260,15 +7063,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (!agent) return;
 
     const result = await client.execute({
-      sql: `SELECT a.id, a.name, a.description, a.status, a.created_at,
-                   d.status AS deployment_status, d.runtime, d.is_manual
+      sql: `SELECT a.id, a.name, a.description, a.status, a.created_at
             FROM agents a
-            LEFT JOIN LATERAL (
-              SELECT da.status, da.runtime, da.is_manual
-              FROM deployed_agents da
-              WHERE da.agent_id = a.id AND da.status NOT IN ('destroyed', 'error')
-              ORDER BY da.created_at DESC LIMIT 1
-            ) d ON true
             WHERE a.user_id = ?
             ORDER BY a.name`,
       args: [agent.userId],
@@ -7280,9 +7076,6 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         name: row.name as string,
         description: (row.description as string | null) ?? null,
         status: row.status as string,
-        runtime: (row.runtime as string | null) ?? null,
-        isManual: row.is_manual === true || row.is_manual === 1,
-        deploymentStatus: (row.deployment_status as string | null) ?? null,
         services: await listEnabledServiceTypes(row.id as string),
         // So the model can explain why a grant will be refused, instead of
         // proposing one and reporting a failure it did not anticipate.
@@ -7296,18 +7089,11 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   /**
    * Create an agent, closed from the moment it exists.
    *
-   * Uses the create-manual shape — an agents row plus a deployed_agents row —
-   * rather than POST /api/agents, which writes only the former. That matters:
-   * listOpenMcpAgents counts an agent with no live deployment row as open, and
-   * rightly so, since authenticateMcp serves those requests and credentials
-   * resolve by agent rather than by deployment. An agent created the other way
-   * could never then be granted anything, because every grant would hit the
-   * per-target open-endpoint check.
-   *
-   * allow_unauthenticated is set false explicitly, as it is on every creation
-   * path now: an agent is never born reachable by whoever learns its id. The
-   * owner can open a dashboard-created agent later; one created by an agent
-   * has no such switch offered to it.
+   * Uses the same single `agents` insert as POST /api/agents: allow_unauthenticated
+   * defaults false on that table now, so an agent is never born reachable by
+   * whoever learns its id regardless of which route created it. The owner can
+   * open a dashboard-created agent later; one created by an agent has no such
+   * switch offered to it.
    */
   app.post('/api/agent-admin/agents', async (request, reply) => {
     const agent = await resolveAdminCaller(request, reply);
@@ -7322,21 +7108,13 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
 
     const agentId = nanoid();
-    const deploymentId = nanoid();
     const gatewayToken = nanoid(32);
     const now = new Date().toISOString();
 
     await client.execute({
-      sql: `INSERT INTO agents (id, user_id, name, description, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 'active', ?, ?)`,
-      args: [agentId, agent.userId, name, typeof body.description === 'string' ? body.description : null, now, now],
-    });
-
-    await client.execute({
-      sql: `INSERT INTO deployed_agents
-              (id, agent_id, status, gateway_token, is_manual, allow_unauthenticated, mcp_server_name, created_at, updated_at)
-            VALUES (?, ?, 'running', ?, 1, false, ?, ?, ?)`,
-      args: [deploymentId, agentId, gatewayToken, MCP_SERVER_NAME, now, now],
+      sql: `INSERT INTO agents (id, user_id, name, description, policy_id, status, gateway_token, allow_unauthenticated, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'active', ?, false, ?, ?)`,
+      args: [agentId, agent.userId, name, typeof body.description === 'string' ? body.description : null, null, gatewayToken, now, now],
     });
 
     await enableDefaultServices(agentId);

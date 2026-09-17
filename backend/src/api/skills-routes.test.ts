@@ -334,7 +334,7 @@ describe('GET /api/agent-skills (agent audience)', () => {
 
   it('returns only this agent\'s skills, without bodies', async () => {
     routeDb([
-      [/FROM deployed_agents da/, rows([{ agent_id: 'agent-1', user_id: 'user-1' }])],
+      [/gateway_token = \?/, rows([{ id: 'agent-1', user_id: 'user-1' }])],
       [/JOIN agent_skills ask/, rows([skillRow()])],
     ]);
     mockResolveAvailability.mockResolvedValue(
@@ -356,7 +356,7 @@ describe('GET /api/agent-skills (agent audience)', () => {
 
   it('still lists a skill whose service was disconnected, flagged unavailable', async () => {
     routeDb([
-      [/FROM deployed_agents da/, rows([{ agent_id: 'agent-1', user_id: 'user-1' }])],
+      [/gateway_token = \?/, rows([{ id: 'agent-1', user_id: 'user-1' }])],
       [/JOIN agent_skills ask/, rows([skillRow()])],
     ]);
     mockResolveAvailability.mockResolvedValue(
@@ -378,7 +378,7 @@ describe('GET /api/agent-skills (agent audience)', () => {
 describe('GET /api/agent-skills/:slug', () => {
   it('404s for a slug not assigned to this agent', async () => {
     routeDb([
-      [/FROM deployed_agents da/, rows([{ agent_id: 'agent-1', user_id: 'user-1' }])],
+      [/gateway_token = \?/, rows([{ id: 'agent-1', user_id: 'user-1' }])],
       [/JOIN agent_skills ask/, rows([skillRow()])],
     ]);
     mockResolveAvailability.mockResolvedValue(
@@ -395,7 +395,7 @@ describe('GET /api/agent-skills/:slug', () => {
 
   it('refuses a referenced-but-unassigned skill — a reference is a pointer, not a grant', async () => {
     routeDb([
-      [/FROM deployed_agents da/, rows([{ agent_id: 'agent-1', user_id: 'user-1' }])],
+      [/gateway_token = \?/, rows([{ id: 'agent-1', user_id: 'user-1' }])],
       [/JOIN agent_skills ask/, rows([skillRow({ body: 'first see {{skill:deep-research}}' })])],
       [/WHERE enabled = true AND \(user_id IS NULL OR user_id = \?\)/, rows([
         skillRow({ body: 'first see {{skill:deep-research}}' }),
@@ -414,9 +414,9 @@ describe('GET /api/agent-skills/:slug', () => {
     expect(res.json().error).toContain('not assigned');
   });
 
-  it('renders tokens bare for a manual agent, whose client adds its own prefix', async () => {
+  it('renders tokens bare', async () => {
     routeDb([
-      [/FROM deployed_agents da/, rows([{ agent_id: 'agent-1', user_id: 'user-1', mcp_server_name: 'reins', is_manual: 1 }])],
+      [/gateway_token = \?/, rows([{ id: 'agent-1', user_id: 'user-1' }])],
       [/JOIN agent_skills ask/, rows([skillRow({ body: 'run {{tool:gmail_search}} then see {{skill:deep-research}}' })])],
     ]);
     mockResolveAvailability.mockResolvedValue(
@@ -437,7 +437,7 @@ describe('GET /api/agent-skills/:slug', () => {
 
   it('renders {{skill:...}} into an instruction naming the fetch tool', async () => {
     routeDb([
-      [/FROM deployed_agents da/, rows([{ agent_id: 'agent-1', user_id: 'user-1', mcp_server_name: 'helm' }])],
+      [/gateway_token = \?/, rows([{ id: 'agent-1', user_id: 'user-1' }])],
       [/JOIN agent_skills ask/, rows([skillRow({ body: 'first see {{skill:deep-research}}' })])],
     ]);
     mockResolveAvailability.mockResolvedValue(
@@ -452,13 +452,13 @@ describe('GET /api/agent-skills/:slug', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json().data.body;
     expect(body).toContain('`deep-research` skill');
-    expect(body).toContain('helm__skills_get');
+    expect(body).toContain('open it with skills_get)');
     expect(body).not.toContain('{{skill:');
   });
 
   it('distinguishes an existing-but-unreachable skill from a missing one', async () => {
     routeDb([
-      [/FROM deployed_agents da/, rows([{ agent_id: 'agent-1', user_id: 'user-1' }])],
+      [/gateway_token = \?/, rows([{ id: 'agent-1', user_id: 'user-1' }])],
       [/JOIN agent_skills ask/, rows([skillRow()])],
       [/WHERE enabled = true AND \(user_id IS NULL OR user_id = \?\)/, rows([
         skillRow(),
@@ -484,7 +484,7 @@ describe('GET /api/agent-skills/:slug', () => {
 
   it('returns the body for an assigned slug', async () => {
     routeDb([
-      [/FROM deployed_agents da/, rows([{ agent_id: 'agent-1', user_id: 'user-1' }])],
+      [/gateway_token = \?/, rows([{ id: 'agent-1', user_id: 'user-1' }])],
       [/JOIN agent_skills ask/, rows([skillRow()])],
     ]);
     mockResolveAvailability.mockResolvedValue(
@@ -514,8 +514,8 @@ describe('GET /api/agent-skills/:slug', () => {
 describe('scoped architect writes — platform skills', () => {
   const agentAuth = { 'x-reins-agent-secret': 'tok' };
   const deployedRow: [RegExp, unknown] = [
-    /FROM deployed_agents da/,
-    rows([{ agent_id: 'architect', user_id: 'user-1' }]),
+    /gateway_token = \?/,
+    rows([{ id: 'architect', user_id: 'user-1' }]),
   ];
   const adminOwner: [RegExp, unknown] = [
     /SELECT 1 FROM users WHERE id = \? AND role = 'admin'/,
@@ -675,8 +675,8 @@ describe('scoped architect writes — platform skills', () => {
 describe('DELETE /api/agent-skills/id/:id', () => {
   const agentAuth = { 'x-reins-agent-secret': 'tok' };
   const deployedRow: [RegExp, unknown] = [
-    /FROM deployed_agents da/,
-    rows([{ agent_id: 'architect', user_id: 'user-1' }]),
+    /gateway_token = \?/,
+    rows([{ id: 'architect', user_id: 'user-1' }]),
   ];
   const adminOwner: [RegExp, unknown] = [
     /SELECT 1 FROM users WHERE id = \? AND role = 'admin'/,
@@ -750,8 +750,8 @@ describe('DELETE /api/agent-skills/id/:id', () => {
 describe('agent-authored skill writes', () => {
   const agentAuth = { 'x-reins-agent-secret': 'tok' };
   const deployedRow: [RegExp, unknown] = [
-    /FROM deployed_agents da/,
-    rows([{ agent_id: 'architect', user_id: 'user-1' }]),
+    /gateway_token = \?/,
+    rows([{ id: 'architect', user_id: 'user-1' }]),
   ];
 
   it('creates a skill owned by the calling agent\'s owner', async () => {
@@ -903,8 +903,8 @@ describe('agent-authored skill writes', () => {
 describe('skill-authoring enablement boundary (HTTP)', () => {
   const agentAuth = { 'x-reins-agent-secret': 'tok' };
   const deployedRow: [RegExp, unknown] = [
-    /FROM deployed_agents da/,
-    rows([{ agent_id: 'ordinary-agent', user_id: 'user-1' }]),
+    /gateway_token = \?/,
+    rows([{ id: 'ordinary-agent', user_id: 'user-1' }]),
   ];
 
   beforeEach(() => {
@@ -965,8 +965,8 @@ describe('GET /api/skill-catalog (any-agent audience)', () => {
   let app: FastifyInstance;
   const agentAuth = { 'x-reins-agent-secret': 'tok' };
   const deployedRow: [RegExp, unknown] = [
-    /FROM deployed_agents da/,
-    rows([{ agent_id: 'agent-1', user_id: 'user-1', mcp_server_name: 'helm' }]),
+    /gateway_token = \?/,
+    rows([{ id: 'agent-1', user_id: 'user-1' }]),
   ];
 
   beforeEach(async () => {
@@ -1023,7 +1023,7 @@ describe('GET /api/skill-catalog (any-agent audience)', () => {
     expect((call![0] as { args: unknown[] }).args).toEqual(['agent-1', 'user-1']);
   });
 
-  it("renders tokens in descriptions for the caller's runtime", async () => {
+  it('renders tokens bare in descriptions', async () => {
     routeDb([
       deployedRow,
       [/AS assigned_to_me/, rows([
@@ -1033,15 +1033,15 @@ describe('GET /api/skill-catalog (any-agent audience)', () => {
 
     const res = await app.inject({ method: 'GET', url: '/api/skill-catalog', headers: agentAuth });
 
-    expect(res.json().data[0].description).toBe('Use helm__gmail_search');
+    expect(res.json().data[0].description).toBe('Use gmail_search');
   });
 });
 
 describe('GET /api/skill-library', () => {
   const agentAuth = { 'x-reins-agent-secret': 'tok' };
   const deployedRow: [RegExp, unknown] = [
-    /FROM deployed_agents da/,
-    rows([{ agent_id: 'architect', user_id: 'user-1' }]),
+    /gateway_token = \?/,
+    rows([{ id: 'architect', user_id: 'user-1' }]),
   ];
 
   it('rejects a request with no gateway token', async () => {
@@ -1114,8 +1114,8 @@ describe('GET /api/skill-library', () => {
 describe('GET /api/skill-library/:idOrSlug', () => {
   const agentAuth = { 'x-reins-agent-secret': 'tok' };
   const deployedRow: [RegExp, unknown] = [
-    /FROM deployed_agents da/,
-    rows([{ agent_id: 'architect', user_id: 'user-1' }]),
+    /gateway_token = \?/,
+    rows([{ id: 'architect', user_id: 'user-1' }]),
   ];
   const lookup = /FROM skills\s+WHERE \(id = \? OR slug = \?\)/;
 

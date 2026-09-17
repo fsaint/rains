@@ -97,7 +97,7 @@ vi.mock('../services/billing.js', () => ({
   applyGracePeriod: vi.fn().mockResolvedValue(undefined),
   clearGrace: vi.fn().mockResolvedValue(undefined),
   cancelSubscription: vi.fn().mockResolvedValue(undefined),
-  checkDeployGate: vi.fn().mockResolvedValue({ allowed: true }),
+  checkUsageGate: vi.fn().mockResolvedValue({ allowed: true }),
 }));
 vi.mock('../services/spend.js', () => ({
   checkSpendCap: vi.fn().mockResolvedValue({ allowed: true }),
@@ -1723,8 +1723,8 @@ describe('Memory API — end-to-end', () => {
       mockExecute.mockImplementation(async (input: any) => {
         const sql: string = typeof input === 'string' ? input : input.sql;
         const args: unknown[] = typeof input === 'string' ? [] : (input.args ?? []);
-        if (sql.includes('FROM deployed_agents da')) {
-          return result([{ agent_id: AGENT_ID, user_id: USER_ID, runtime: 'openclaw', mcp_server_name: 'helm', is_manual: false }]);
+        if (sql.includes('gateway_token = ?')) {
+          return result([{ id: AGENT_ID, user_id: USER_ID }]);
         }
         if (sql.includes('FROM agents WHERE id = ? AND user_id = ?')) return result([{ '?column?': 1 }]);
         if (sql.includes('FROM memory_scopes WHERE root_entry_id = ?')) return EMPTY_RESULT;
@@ -1989,8 +1989,8 @@ describe('Memory API — end-to-end', () => {
           const sql: string = typeof input === 'string' ? input : input.sql;
           const args: unknown[] = typeof input === 'string' ? [] : (input.args ?? []);
 
-          if (sql.includes('FROM deployed_agents da')) {
-            return result([{ agent_id: AGENT_ID, user_id: USER_ID, runtime: 'openclaw', mcp_server_name: 'helm', is_manual: false }]);
+          if (sql.includes('gateway_token = ?')) {
+            return result([{ id: AGENT_ID, user_id: USER_ID }]);
           }
           if (sql.includes('FROM agents WHERE id = ? AND user_id = ?')) return result([{ '?column?': 1 }]);
 

@@ -108,11 +108,11 @@ import { apiRoutes } from './routes.js';
 const AGENT = 'agent-1';
 const OK = { jsonrpc: '2.0', id: 1, result: { tools: [] } };
 
-/** Only the deployment lookup the auth gate makes; everything else is empty. */
-function deploymentAllows(allowed: boolean | null) {
+/** Only the agent lookup the auth gate makes; everything else is empty. */
+function agentAllows(allowed: boolean | null) {
   mockExecute.mockImplementation(async (q: any) => {
     const sql: string = typeof q === 'string' ? q : q.sql;
-    if (sql.includes('allow_unauthenticated') && sql.includes('FROM deployed_agents')) {
+    if (sql.includes('allow_unauthenticated') && sql.includes('FROM agents')) {
       return allowed === null
         ? { rows: [], rowsAffected: 0, columns: [] }
         : { rows: [{ allow_unauthenticated: allowed }], rowsAffected: 1, columns: [] };
@@ -129,7 +129,7 @@ beforeEach(async () => {
   mockRequireAdmin.mockReturnValue(true);
   mockHandleMCP.mockResolvedValue(OK);
   mockVerifyToken.mockResolvedValue(null);
-  deploymentAllows(true);
+  agentAllows(true);
 
   app = Fastify({ logger: false });
   await app.register(cookie);
@@ -164,17 +164,25 @@ describe('unauthenticated access while the owner still allows it', () => {
     expect(res.payload).toContain('event: message');
   });
 
-  it('serves a request when the agent has no deployment row at all', async () => {
-    // handleMCPRequest owns the agent-not-found shape; the gate must not
-    // pre-empt it with a 401.
-    deploymentAllows(null);
+  it('hands off to handleMCPRequest when the agent does not exist at all', async () => {
+    // handleMCPRequest owns the agent-not-found shape (a JSON-RPC error over
+    // HTTP 200); the gate must not pre-empt it with a 401.
+    agentAllows(null);
+    mockHandleMCP.mockResolvedValueOnce({
+      jsonrpc: '2.0',
+      id: 1,
+      error: { code: -32002, message: 'Agent not found', data: { agentId: AGENT } },
+    });
 
-    expect((await post()).statusCode).toBe(200);
+    const res = await post();
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().error.code).toBe(-32002);
   });
 });
 
 describe('once the owner has closed the unauthenticated endpoint', () => {
-  beforeEach(() => deploymentAllows(false));
+  beforeEach(() => agentAllows(false));
 
   it('refuses a request with no token', async () => {
     const res = await post();
@@ -218,7 +226,7 @@ describe('an invalid token is always an error', () => {
   it('401s even while unauthenticated access is still allowed', async () => {
     // Falling back to unauthenticated here would hide a misconfigured client
     // from the person who set it up — they would believe they were connected.
-    deploymentAllows(true);
+    agentAllows(true);
     mockVerifyToken.mockResolvedValue(null);
 
     const res = await post({ authorization: 'Bearer mcp_bad' });
@@ -228,7 +236,7 @@ describe('an invalid token is always an error', () => {
   });
 
   it('401s when the token belongs to a different agent', async () => {
-    deploymentAllows(true);
+    agentAllows(true);
     mockVerifyToken.mockResolvedValue({
       tokenId: 't1', agentId: 'someone-elses-agent', userId: 'u1', clientId: null, name: 'x',
     });
@@ -247,7 +255,7 @@ describe('the other verbs are gated too', () => {
   });
 
   it('GET stops echoing the agent id once the endpoint is closed', async () => {
-    deploymentAllows(false);
+    agentAllows(false);
 
     const res = await app.inject({ method: 'GET', url: `/mcp/${AGENT}` });
 
@@ -256,7 +264,7 @@ describe('the other verbs are gated too', () => {
   });
 
   it('DELETE is gated', async () => {
-    deploymentAllows(false);
+    agentAllows(false);
     expect((await app.inject({ method: 'DELETE', url: `/mcp/${AGENT}` })).statusCode).toBe(401);
   });
 });
@@ -273,15 +281,15 @@ describe('rate limiting', () => {
 });
 
 describe('new agents are born closed', () => {
-  function insertedDeployment(): { sql: string; args: unknown[] } {
+  function insertedAgent(): { sql: string; args: unknown[] } {
     const call = mockExecute.mock.calls
       .map((c) => c[0])
-      .find((q: any) => typeof q !== 'string' && /INSERT INTO deployed_agents/i.test(q.sql));
-    expect(call, 'expected a deployed_agents insert').toBeDefined();
+      .find((q: any) => typeof q !== 'string' && /INSERT INTO agents/i.test(q.sql));
+    expect(call, 'expected an agents insert').toBeDefined();
     return call as { sql: string; args: unknown[] };
   }
 
-  it('create-manual writes allow_unauthenticated = false explicitly', async () => {
+  it('POST /api/agents writes allow_unauthenticated = false explicitly', async () => {
     const authed = Fastify({ logger: false });
     await authed.register(cookie);
     authed.addHook('onRequest', async (req: any) => { req.session = { userId: 'user-1' }; });
@@ -290,12 +298,12 @@ describe('new agents are born closed', () => {
 
     const res = await authed.inject({
       method: 'POST',
-      url: '/api/agents/create-manual',
-      payload: { name: 'Closed by default' },
+      url: '/api/agents',
+      payload: { name: 'x' },
     });
     expect(res.statusCode).toBe(201);
 
-    const insert = insertedDeployment();
+    const insert = insertedAgent();
     // The column must be named and set false in the statement itself — not
     // left to the schema default, which is one ALTER away from flipping.
     expect(insert.sql).toMatch(/allow_unauthenticated/);

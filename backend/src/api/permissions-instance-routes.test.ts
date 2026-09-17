@@ -321,8 +321,6 @@ describe('PUT /api/permissions/instances/:instanceId with config', () => {
 
     expect(res.statusCode).toBe(200);
     expect(mockUpdateInstance).toHaveBeenCalledWith('inst-h', { config });
-    // A redeploy reads the agent's deployment row; none of that happened.
-    expect(mockExecute.mock.calls.some(([q]) => String(typeof q === 'string' ? q : q.sql).includes('deployed_agents'))).toBe(false);
   });
 
   it('clears the config with null', async () => {

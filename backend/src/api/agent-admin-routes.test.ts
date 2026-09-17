@@ -183,8 +183,8 @@ function wireDb(opts: { targetOwnedByCaller?: boolean } = {}) {
   const { targetOwnedByCaller = true } = opts;
   mockExecute.mockImplementation(async (q: any) => {
     const sql: string = typeof q === 'string' ? q : q.sql;
-    if (sql.includes('FROM deployed_agents da') && sql.includes('gateway_token')) {
-      return rows([{ agent_id: ADMIN_AGENT, user_id: 'user-1', runtime: 'openclaw', mcp_server_name: 'helm' }]);
+    if (sql.includes('FROM agents') && sql.includes('gateway_token = ?')) {
+      return rows([{ id: ADMIN_AGENT, user_id: 'user-1' }]);
     }
     if (sql.includes('FROM agents WHERE id = ? AND user_id = ?')) {
       return targetOwnedByCaller
@@ -391,18 +391,12 @@ describe('creating an agent', () => {
     expect(res.statusCode).toBe(201);
     expect(res.json().data).toMatchObject({ name: 'Research', acceptsUnauthenticatedMcp: false });
 
-    // Both rows, or the agent is unreachable / uncloseable. The deployment row
-    // is what carries allow_unauthenticated, so an agents-only insert would
-    // leave it open with nowhere to record that it should not be.
-    const sqls = mockExecute.mock.calls.map((c) => (c[0] as any).sql as string);
-    expect(sqls.some((s) => s.includes('INSERT INTO agents'))).toBe(true);
-
-    const depInsert = mockExecute.mock.calls.find(
-      (c) => ((c[0] as any).sql as string).includes('INSERT INTO deployed_agents')
+    const agentInsert = mockExecute.mock.calls.find(
+      (c) => ((c[0] as any).sql as string).includes('INSERT INTO agents')
     );
-    expect(depInsert).toBeTruthy();
-    expect((depInsert![0] as any).sql).toContain('allow_unauthenticated');
-    expect((depInsert![0] as any).sql).toContain('false');
+    expect(agentInsert).toBeTruthy();
+    expect((agentInsert![0] as any).sql).toContain('allow_unauthenticated');
+    expect((agentInsert![0] as any).sql).toContain('false');
   });
 
   it('is immediately configurable — the point of being born closed', async () => {
@@ -457,8 +451,8 @@ describe('destroying an agent', () => {
     // agent with it.
     mockExecute.mockImplementation(async (q: any) => {
       const sql: string = typeof q === 'string' ? q : q.sql;
-      if (sql.includes('FROM deployed_agents da') && sql.includes('gateway_token')) {
-        return rows([{ agent_id: ADMIN_AGENT, user_id: 'user-1', runtime: 'openclaw', mcp_server_name: 'helm' }]);
+      if (sql.includes('FROM agents') && sql.includes('gateway_token = ?')) {
+        return rows([{ id: ADMIN_AGENT, user_id: 'user-1' }]);
       }
       if (sql.includes('FROM agents WHERE id = ? AND user_id = ?')) {
         return rows([{ id: ADMIN_AGENT, name: 'Admin', description: null, status: 'active' }]);

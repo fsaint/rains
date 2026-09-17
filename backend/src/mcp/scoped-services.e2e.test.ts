@@ -137,7 +137,6 @@ vi.mock('../services/billing.js', () => ({
   applyGracePeriod: vi.fn().mockResolvedValue(undefined),
   clearGrace: vi.fn().mockResolvedValue(undefined),
   cancelSubscription: vi.fn().mockResolvedValue(undefined),
-  checkDeployGate: vi.fn().mockResolvedValue({ allowed: true }),
   checkUsageGate: vi.fn().mockResolvedValue({ allowed: true }),
 }));
 
@@ -292,15 +291,15 @@ async function routeSql(input: string | { sql: string; args?: unknown[] }) {
   executed.push({ sql, args });
 
   // executeTool: the gateway token a memory handler authenticates with.
-  if (sql.includes('SELECT gateway_token FROM deployed_agents')) return rows([{ gateway_token: GATEWAY_TOKEN }]);
+  if (sql.includes('SELECT gateway_token FROM agents')) return rows([{ gateway_token: GATEWAY_TOKEN }]);
   // routes: resolveAgentFromGatewayToken.
-  if (sql.includes('FROM deployed_agents da')) {
+  if (sql.includes('gateway_token = ?')) {
     return args[0] === GATEWAY_TOKEN
-      ? rows([{ agent_id: AGENT, user_id: USER, runtime: 'openclaw', mcp_server_name: 'helm', is_manual: false }])
+      ? rows([{ id: AGENT, user_id: USER }])
       : EMPTY;
   }
-  // handleCallTool's subscription gate keys on a deployment id; none here.
-  if (sql.includes('JOIN deployed_agents da')) return EMPTY;
+  // handleMCPRequest's subscription gate reads the agent's owner directly.
+  if (sql.includes('SELECT user_id FROM agents WHERE id = ?')) return rows([{ user_id: USER }]);
 
   // ── Memory routes ──
   if (sql.includes('FROM memory_scopes WHERE root_entry_id = ?')) return EMPTY;
