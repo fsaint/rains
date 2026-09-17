@@ -119,7 +119,7 @@ Because `block` also hides the tool, a blocked tool is one the model never learn
 
 ## 5. Connect each client
 
-The dashboard generates the config for you under **Agents → your agent → Deployment**.
+The dashboard generates the config for you on the agent's detail page.
 
 ### Claude Code
 

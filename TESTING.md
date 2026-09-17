@@ -77,41 +77,71 @@ npm test --workspace=servers
 
 | Test file | Covers |
 |-----------|--------|
-| `auth.test.ts` | Login, session management |
-| `credentials.test.ts` | Credential storage and retrieval |
-| `policy-engine.test.ts` | YAML policy parsing, allow/block/approval logic |
-| `providers.test.ts` | Fly machine provisioning logic |
-| `approvals.test.ts` | Approval queue CRUD |
-| `audit.test.ts` | Audit log writing |
-| `db-compat.test.ts` | SQLite schema migrations |
-| `mcp-agent-endpoint.test.ts` | MCP proxy forwarding |
-| `permissions.test.ts` | User and agent permission checks |
-| `registration.test.ts` | Agent self-registration flow |
-| `integration/user-journey.test.ts` | Full HTTP stack with mocked DB and providers |
-| `integration/memory.test.ts` | Memory API end to end, including a restricted agent (gateway token + scope grants) exercising every route |
+| `api/agent-admin-routes.test.ts` | Route-level tests for `/api/agent-admin/*`: the service enablement gate and privilege boundaries |
+| `api/approvals-routes.test.ts` | Approval decision endpoints (approve, deny, request changes) through the real Fastify plugin |
+| `api/mcp-auth-routes.test.ts` | `POST`/`GET`/`DELETE /mcp/:agentId` route-level auth, including unauthenticated access when the owner allows it |
+| `api/mcp-server-key.test.ts` | `mcpServerKey` helper |
+| `api/permissions-drive-routes.test.ts` | `PUT /api/permissions/:agentId/drive/path-config` |
+| `api/permissions-instance-routes.test.ts` | Per-instance config and the Hermeneutix project picker under `/api/permissions` |
+| `api/skills-routes.test.ts` | Skill management endpoints through the real Fastify plugin |
+| `api/upload-body-limit.test.ts` | Body-limit arrangement for the agent-upload route |
+| `approvals/queue.test.ts` | `ApprovalQueue` CRUD |
+| `audit/logger.test.ts` | Audit log writing |
+| `auth/auth.test.ts` | Login, session management |
+| `credentials/vault.test.ts` | Credential storage and retrieval |
+| `db/compat.test.ts` | PostgreSQL compatibility wrapper (schema translation layer) |
+| `db/migrate-deployed-agents.test.ts` | `migrateDeployedAgents` column-folding migration |
+| `integration/memory.test.ts` | Memory API end to end through the full Fastify stack, including a restricted agent (gateway token + scope grants) exercising every route |
+| `mcp/agent-endpoint.test.ts` | MCP agent endpoint: tool routing, `tools/list`, `tools/call` |
+| `mcp/init-servers.test.ts` | `createServerWrapper` — the tool-context field whitelist between the server manager and service handlers |
+| `mcp/oauth/routes.test.ts` | MCP OAuth authorization server HTTP routes (register / authorize / token) |
+| `mcp/oauth/tokens.test.ts` | MCP token store: issuance, verification, scoping a token to exactly one agent |
+| `mcp/redact-args.test.ts` | `redactToolArgs` — attachment redaction |
 | `mcp/scoped-services.e2e.test.ts` | **Context scopes, for real:** `tools/call` → `executeTool` → real `@reins/servers` handlers for Hermeneutix (pinned project), Drive (folder rules), and memory (scope grants). Every refusal asserts no upstream call was made |
+| `mcp/server-manager.test.ts` | `ServerManager.callTool` context injection (Drive path config reaching both Drive and Gmail handlers) |
+| `notifications/telegram.test.ts` | Rich email and calendar previews in Telegram approval messages |
+| `policy/engine.test.ts` | `PolicyEngine`: YAML policy parsing, allow/block/approval logic |
+| `services/agent-limits.test.ts` | `getAgentLimits` — owner-set limits rendered for MCP surfaces |
+| `services/agent-uploads.test.ts` | `createUpload` |
+| `services/billing.test.ts` | Billing service (subscriptions, Stripe webhooks) |
+| `services/memory-scopes.test.ts` | Memory scope resolution (`ensureDefaultScope`, grant lookups) |
+| `services/memory.test.ts` | `parseWikilinks`, `updateLinkIndex`, `ensureMemoryRoot` |
+| `services/permissions.test.ts` | User and agent permission checks |
+| `services/registration.test.ts` | Agent self-registration flow |
+| `services/skills.test.ts` | Skill availability resolver (`parseRequiredServices`) |
 
-#### Frontend (`frontend/src/**/*.test.ts`)
+#### Frontend (`frontend/src/**/*.test.{ts,tsx}`)
 
 | Test file | Covers |
 |-----------|--------|
-| `client.test.ts` | API client request helpers |
-| `LogViewer.test.tsx` | Log display component |
-| `Approvals.test.tsx` | Approval queue UI |
-| `Login.test.tsx` | Login form |
-| `Permissions.test.tsx` | Add-service flow, Hermeneutix project picker, memory scope editor, Drive path editor |
-| `Credentials.test.tsx` | Update-token action on API-key credentials |
+| `api/client.test.ts` | API client request helpers, including `ApiError` |
+| `components/AgentSkillToggles.test.tsx` | Agent skill toggle component |
+| `pages/AgentNew.test.tsx` | Create-agent form and wizard flow |
+| `pages/Approvals.test.tsx` | Approval queue UI |
+| `pages/Credentials.test.tsx` | Update-token action on API-key credentials |
+| `pages/Login.test.tsx` | Login form |
+| `pages/Permissions.test.tsx` | Add-service flow, Hermeneutix project picker, memory scope editor, Drive path editor |
+| `utils/drive.test.ts` | `parseDriveFolderId` and other Drive URL/path utilities |
 
 #### Servers (`servers/src/**/*.test.ts`)
 
 | Test file | Covers |
 |-----------|--------|
-| `gmail/handlers.test.ts` | Gmail MCP tool handlers |
+| `browser/handlers.test.ts` | Browser automation handlers |
 | `calendar/handlers.test.ts` | Calendar MCP tool handlers |
 | `drive/handlers.test.ts` | Drive MCP tool handlers |
 | `drive/path-rules.test.ts` | Folder rule resolution: subtree inheritance, nearest rule, multi-parent veto, depth cap |
+| `gmail/attachments.test.ts` | Attachment parsing, including backwards compatibility |
+| `gmail/handlers.test.ts` | Gmail MCP tool handlers |
+| `gmail/mime.test.ts` | MIME message building, attachment encoding, header sanitization |
+| `gmail/safe-fetch.test.ts` | `isBlockedAddress` — SSRF guard on outbound Gmail fetches |
 | `hermeneutix/handlers.test.ts` | Hermeneutix handlers, including project pinning and response-verified refusals |
-| `browser/handlers.test.ts` | Browser automation handlers |
+| `memory/handlers.test.ts` | Memory MCP tool handlers (mocking `global.fetch`) |
+| `pipedrive/handlers.test.ts` | Pipedrive handlers: HTTP verb per resource and custom-field passthrough |
+| `registry.test.ts` | Every tool exported by a service is classified in `def.permissions` (read/write/blocked) |
+| `skill-authoring/definition.test.ts` | Skill-authoring definition invariants — the privilege boundary the backend derives permissions from |
+| `skill-authoring/handlers.test.ts` | Skill-authoring wire contract: gateway token, method/endpoint, refusal shape |
+| `skills/handlers.test.ts` | Skills MCP tool handlers (mocking `global.fetch`) |
 | `web-search/handlers.test.ts` | Web search handlers |
 
 ---
