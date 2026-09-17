@@ -2,6 +2,13 @@
 
 Recurring operational issues, their root causes, and how to fix them.
 
+> **Note (September 2026):** the hosted agent runtime — OpenClaw, Hermes, MiniMax
+> startup, Fly machines, the Telegram onboarding bot, and the webhook relay — was
+> removed. Sections below describing that runtime are kept for history, not as
+> current operating instructions. Sections about the platform codebase itself
+> (env-file handling, migrations, service enablement, adding a native MCP server,
+> skill token rendering) still apply.
+
 ---
 
 ## Agent bot not responding on Telegram

@@ -46,13 +46,13 @@ Post-rebrand (Apr 25, 2026): all user-facing copy says AgentHelm. Internal confi
 ## User Personas
 
 ### Beta Applicant
-A qualified user in the onboarding pipeline. Has submitted the questionnaire, been approved by Felipe, and is going through the Telegram onboarding flow. Requirements: uses Telegram daily, has a specific use case, has at least one target service (Gmail, Calendar, etc.).
+A qualified user waiting for beta access. Has submitted the questionnaire and been approved by Felipe. Requirements: has an MCP client (Claude, Claude Code, or Cowork), a specific use case, and at least one target service (Gmail, Calendar, etc.) to connect.
 
 ### Agent Owner
 A fully onboarded user with an active account on agenthelm.ai. Owns one or more agents. Approves sensitive actions, edits agent SOUL, manages credentials and policies via the web dashboard.
 
-### Special Agent Helm (`@SpecialAgentHelm`)
-The onboarding Telegram bot. Runs qualification, guides users through the full setup flow. Terse, competent, dry. Not a chatbot — an agent. Owns the `applicants` table in the onboarding bot DB.
+### Beta Approval
+Felipe reviews applications and approves qualified users directly — there is no separate onboarding bot. Approved users get dashboard access to create an agent and instructions for connecting an MCP client (Claude, Claude Code, or Cowork) to it.
 
 ### AgentHelm Notify (`@AgentHelmNotify`)
 A lightweight notification bot embedded in the AgentHelm backend. Proactively alerts users: credential expiry, agent going offline, reauth required. Silent unless there's something to say.
@@ -62,14 +62,12 @@ A lightweight notification bot embedded in the AgentHelm backend. Proactively al
 ## Product Flow
 
 ### 1. Acquisition
-User finds AgentHelm (Reddit, LinkedIn, word of mouth) → fills Tally.so questionnaire → Felipe reviews → approved applicants receive invite code.
+User finds AgentHelm (Reddit, LinkedIn, word of mouth) → fills Tally.so questionnaire → Felipe reviews → approved applicants get dashboard access.
 
-### 2. Onboarding (via `@SpecialAgentHelm`)
-State machine: `qualification` → `pending_approval` → `gmail_oauth` → `notify_bot` → `provisioning` → `validating` → `password_setup` → `done`.
+### 2. Onboarding
+User creates an agent in the dashboard, connects Gmail (and any other services) via OAuth, and sets a policy. AgentHelm gives them an MCP endpoint and connection instructions for their MCP client of choice — Claude, Claude Code, or Cowork.
 
-In shared-bot mode (platform provides the bot), the `botfather` step is skipped — users go directly from `gmail_oauth` to `notify_bot`. The platform provides the LLM API key (MiniMax/Anthropic) so users are never asked for one.
-
-By the end: user has a live Telegram bot (their personal agent), a connected Gmail account, and an AgentHelm dashboard account.
+By the end: user has a dashboard account, a connected Gmail account, and an agent reachable from their MCP client.
 
 ### 3. Daily Use
 User sends a message to their agent in Telegram → agent decides what to do → calls tools through the Reins proxy gateway → policy engine allows/blocks/queues → if queued, user approves in dashboard → result returns to Telegram.
@@ -103,12 +101,7 @@ A per-topic system prompt override when the agent is in a Telegram forum group. 
 
 ## Runtimes
 
-| Runtime | Description | Cost/mo | Default? |
-|---------|-------------|---------|---------|
-| **Hermes** | Lightweight agent runtime. | ~$7–10 | ✅ Beta default |
-| **OpenClaw** | Heavier runtime, more capable. Claude + advanced tool use. | ~$15–20 | No |
-
-Beta users run Hermes + MiniMax M2.7 by default. This keeps costs manageable (~$7–10/user/mo for infrastructure).
+AgentHelm does not host agent runtimes. Agents run inside the user's own MCP client — Claude, Claude Code, or Cowork — which connects to the agent's AgentHelm MCP endpoint. AgentHelm holds the credentials, enforces per-tool permissions with approvals, and provides memory and skills to whichever client connects.
 
 ---
 
@@ -126,9 +119,7 @@ MiniMax is the default for beta because it's the cheapest per token. Users suppl
 
 ## Infrastructure
 
-Agents run on **Fly.io** (Fly machines). Each agent is a separate Fly app. Provisioning = creating and starting a Fly machine with the agent's runtime + config.
-
-Docker is also supported for self-hosted deployments, but not documented for beta users.
+AgentHelm's backend is the MCP gateway a user's agent runs through — it holds credentials, evaluates policy, and queues approvals. It does not provision or run agent compute. Agent compute runs wherever the user's MCP client runs (Claude, Claude Code, or Cowork).
 
 ---
 

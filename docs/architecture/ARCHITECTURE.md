@@ -355,33 +355,6 @@ interface HealthStatus {
 }
 ```
 
-### Spend Control
-
-Budget enforcement for metered APIs.
-
-```typescript
-interface SpendController {
-  // Budget management
-  setBudget(agentId: string, budget: Budget): Promise<void>;
-  getBudget(agentId: string): Promise<Budget>;
-
-  // Usage tracking
-  recordUsage(agentId: string, cost: Cost): Promise<void>;
-  getUsage(agentId: string, period: Period): Promise<Usage>;
-
-  // Authorization
-  authorizeSpend(agentId: string, estimatedCost: Cost): Promise<SpendDecision>;
-}
-
-interface Budget {
-  daily?: number;
-  weekly?: number;
-  monthly?: number;
-  currency: string;
-  alertThresholds: number[]; // e.g., [0.5, 0.8, 0.95]
-}
-```
-
 ### Audit Logger
 
 Immutable audit trail for compliance.
@@ -524,18 +497,6 @@ CREATE TABLE approvals (
   resolved_by TEXT,
   resolution_comment TEXT
 );
-
--- Spend tracking
-CREATE TABLE spend_records (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  agent_id TEXT NOT NULL,
-  service_id TEXT NOT NULL,
-  amount DECIMAL(10, 6) NOT NULL,
-  currency TEXT DEFAULT 'USD',
-  recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX idx_spend_agent_date ON spend_records(agent_id, recorded_at);
 ```
 
 ## API Design

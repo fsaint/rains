@@ -14,16 +14,6 @@ An AI system (Claude, GPT, custom LLM) that connects to Reins via MCP.
 - ✅ "the agent connects", "agent policy", "agent credentials"
 - ⚠️ Not "bot", "model", "AI", or "client" — those mean different things
 
-### Deployment
-A running instance of an agent on a provider (Fly.io, Docker).
-- ✅ "create a deployment", "deployment status", "deploymentId"
-- ⚠️ Not "instance", "container", "app", or "machine" — those are provider-level concepts
-
-### Provider
-The deployment infrastructure backend (Fly.io or Docker).
-- ✅ "deployment provider", "Fly provider", "Docker provider"
-- ⚠️ Not "service provider" — Provider is always infrastructure, never an external API
-
 ### Policy
 A YAML configuration file that defines what an agent is allowed to do.
 - ✅ "evaluate a policy", "assign a policy", "policy YAML"
@@ -103,6 +93,11 @@ An MCP server built into Reins itself (Gmail, Drive, Calendar, Web Search, Brows
 - ✅ "native MCP server", "built-in server"
 - ⚠️ Not "internal server", "local server", or "embedded server"
 
+### MCP Client
+The external software that connects to an Agent's MCP endpoint (Claude, Claude Code, Cowork).
+- ✅ "the MCP client connects", "authorize the MCP client"
+- ⚠️ Not "agent" — the MCP client is what a user connects with; the Agent is the Reins-side record it connects to
+
 ### Transport
 The protocol used to communicate with an MCP server: `stdio`, `http`, or `websocket`.
 - ✅ "stdio transport", "configure the transport"
@@ -116,16 +111,6 @@ An active session between Reins and an MCP server via a Transport.
 ---
 
 ## Flows & Actions
-
-### Provision
-To create and configure a new Agent + Deployment on a Provider.
-- ✅ "provision an agent", "provisioning flow"
-- ⚠️ Not "deploy" (deploy = start a provisioned deployment), "create", or "spin up"
-
-### Deploy
-To start a provisioned Deployment on a Provider.
-- ✅ "deploy the agent", "deployment status: running"
-- ⚠️ Not "provision" — provisioning sets it up, deploying runs it
 
 ### Evaluate (a policy)
 To run a tool call through the policy engine and return a Tool Decision.
@@ -151,7 +136,6 @@ Use these exact strings in code and docs:
 | Entity | Status values |
 |--------|--------------|
 | Agent | `active` \| `suspended` \| `pending` |
-| Deployment | `pending` \| `starting` \| `running` \| `stopped` \| `error` |
 | Approval Request | `pending` \| `approved` \| `rejected` \| `expired` |
 | Tool Decision | `allow` \| `block` \| `require_approval` |
 | Credential Health | `valid` \| `expired` \| `invalid` \| `unknown` |
@@ -164,7 +148,6 @@ Use these exact strings in code and docs:
 | Identifier | What it identifies |
 |------------|-------------------|
 | `agentId` | An Agent record |
-| `deploymentId` | A running Deployment |
 | `policyId` | A Policy assigned to an Agent |
 | `serviceId` | A specific Credential instance for a Service |
 | `credentialId` | A Credential record |
