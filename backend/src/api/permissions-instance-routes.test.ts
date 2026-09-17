@@ -149,15 +149,8 @@ vi.mock('../notifications/apns.js', () => ({ apnsService: {} }));
 vi.mock('../notifications/telegram.js', () => ({ telegramNotifier: {} }));
 vi.mock('../analytics/posthog.js', () => ({ getPostHog: () => null }));
 vi.mock('../services/email.js', () => ({ sendReauthEmail: vi.fn() }));
-vi.mock('../services/agent-backup.js', () => ({
-  performBackup: vi.fn(), listBackups: vi.fn(), getBackup: vi.fn(), restoreBackup: vi.fn(),
-}));
 vi.mock('../services/agent-uploads.js', () => ({
   createUpload: vi.fn(), getUpload: vi.fn(), MAX_UPLOAD_BYTES: 1024,
-}));
-vi.mock('../services/token-monitor.js', () => ({ isCodexTokenExpired: vi.fn() }));
-vi.mock('../services/agent-bot-relay.js', () => ({
-  forwardToOpenclaw: vi.fn(), handleMyChatMember: vi.fn(),
 }));
 vi.mock('../services/memory.js', () => ({
   parseWikilinkRefs: vi.fn(), updateLinkIndex: vi.fn(), updateTagIndex: vi.fn(),
@@ -167,10 +160,6 @@ vi.mock('../services/memory.js', () => ({
 vi.mock('../services/memory-scopes.js', () => ({
   resolveMemoryContext: vi.fn(), listUserScopes: vi.fn(), getAgentScopeGrants: vi.fn(),
   setAgentScopeGrants: vi.fn(), pickScope: vi.fn(), isRejection: vi.fn(),
-}));
-vi.mock('../providers/index.js', () => ({}));
-vi.mock('../services/model-router.js', () => ({
-  listModelConfigs: vi.fn(), upsertModelConfig: vi.fn(), deleteModelConfig: vi.fn(),
 }));
 vi.mock('../services/discovery.js', () => ({ discoverServiceToolsForAgent: vi.fn() }));
 

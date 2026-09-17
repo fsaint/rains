@@ -34,9 +34,7 @@ type YamlConfig = {
     microsoft_redirect_uri?: string;
     microsoft_tenant_id?: string;
   };
-  fly?: { org?: string; openclaw_app?: string; openclaw_image?: string; hermes_image?: string };
   browser?: { max_instances?: number; idle_timeout_ms?: number };
-  onboarding?: { bot_webhook_url?: string; onboarding_bot_username?: string };
 };
 
 const env = process.env.NODE_ENV ?? 'development';
@@ -94,28 +92,12 @@ const ConfigSchema = z.object({
   mailgunDomain: z.string().optional(),
   mailgunFrom: z.string().optional(),
 
-  // Fly.io agent provisioning
-  flyOrg: z.string().optional(),
-  openclawApp: z.string().default('agentx-openclaw'),
-  openclawImage: z.string().optional(),
-  hermesImage: z.string().optional(),
-
   // Admin API — optional Bearer-token for programmatic admin access
   adminApiKey: z.string().min(32).optional(),
 
   // Telegram notification bot
   reisTelegramBotToken: z.string().optional(),
   reisTelegramWebhookSecret: z.string().optional(),
-
-  // Shared Telegram bot (pilot mode — routes messages by sender user ID)
-  sharedBotToken: z.string().optional(),
-  sharedBotWebhookSecret: z.string().optional(),
-
-  // Onboarding bot
-  onboardingApiKey: z.string().optional(),
-  onboardingBotWebhookUrl: z.string().optional(),
-  onboardingBotWebhookSecret: z.string().optional(),
-  onboardingBotUsername: z.string().default('SpecialAgentHelmBot'),
 
   // PostHog analytics
   posthogApiKey: z.string().optional(),
@@ -159,38 +141,15 @@ function loadConfig(): Config {
     mailgunApiKey: process.env.MAILGUN_API_KEY,
     mailgunDomain: process.env.MAILGUN_DOMAIN,
     mailgunFrom: process.env.MAILGUN_FROM,
-    // Fly.io
-    flyOrg: process.env.FLY_ORG ?? yaml.fly?.org,
-    openclawApp: process.env.OPENCLAW_APP ?? yaml.fly?.openclaw_app,
-    openclawImage: process.env.OPENCLAW_IMAGE || yaml.fly?.openclaw_image || undefined,
-    hermesImage: process.env.HERMES_IMAGE || yaml.fly?.hermes_image || undefined,
     // Admin API key
     adminApiKey: process.env.REINS_ADMIN_API_KEY,
     // Telegram
     reisTelegramBotToken: process.env.REINS_TELEGRAM_BOT_TOKEN,
     reisTelegramWebhookSecret: process.env.REINS_TELEGRAM_WEBHOOK_SECRET,
-    // Shared bot
-    sharedBotToken: process.env.SHARED_BOT_TOKEN,
-    sharedBotWebhookSecret: process.env.SHARED_BOT_WEBHOOK_SECRET,
-    // Onboarding bot
-    onboardingApiKey: process.env.ONBOARDING_API_KEY,
-    onboardingBotWebhookUrl: process.env.ONBOARDING_BOT_WEBHOOK_URL ?? yaml.onboarding?.bot_webhook_url,
-    onboardingBotWebhookSecret: process.env.ONBOARDING_BOT_WEBHOOK_SECRET,
-    onboardingBotUsername: process.env.ONBOARDING_BOT_USERNAME ?? yaml.onboarding?.onboarding_bot_username,
     // PostHog
     posthogApiKey: process.env.POSTHOG_API_KEY,
     posthogHost: process.env.POSTHOG_HOST,
   };
-
-  // Guard: refuse to start with personal-org token outside production.
-  // This prevents dev-machine mistakes from reaching production agents.
-  const flyOrg = raw.flyOrg as string | undefined;
-  if (raw.nodeEnv !== 'production' && flyOrg === 'personal') {
-    console.error('\n⛔  FATAL: FLY_ORG=personal is not allowed in non-production environments.');
-    console.error('   Use the dev org (reins-dev) for local development.');
-    console.error('   The personal-org token lives only in production Fly secrets.\n');
-    process.exit(1);
-  }
 
   const result = ConfigSchema.safeParse(raw);
 

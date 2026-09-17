@@ -95,24 +95,6 @@ export async function upsertSubscription(data: {
 }
 
 /**
- * Check if a user can deploy a new agent (strict: requires active subscription).
- * Used by POST /api/agents/create-and-deploy (session-auth path only).
- */
-export async function checkDeployGate(userId: string): Promise<GateResult> {
-  if (process.env.BYPASS_BILLING === 'true') return { allowed: true };
-  const sub = await getSubscription(userId);
-  if (!sub) return { allowed: false, reason: 'no_subscription' };
-  if (sub.status === 'canceled') return { allowed: false, reason: 'canceled' };
-  if (sub.status === 'past_due') {
-    if (sub.graceUntil && new Date(sub.graceUntil) > new Date()) {
-      return { allowed: true };
-    }
-    return { allowed: false, reason: 'lapsed' };
-  }
-  return { allowed: true };
-}
-
-/**
  * Check if an agent's tool calls should be allowed (lenient: passes if no subscription
  * record exists — handles legacy/onboarding users until they are migrated to paid plans).
  * Used by handleCallTool.
@@ -158,51 +140,4 @@ export async function cancelSubscription(stripeSubscriptionId: string): Promise<
     sql: `UPDATE subscriptions SET status = 'canceled', updated_at = ? WHERE stripe_subscription_id = ?`,
     args: [new Date().toISOString(), stripeSubscriptionId],
   });
-}
-
-/**
- * Find all past_due subscriptions whose grace period has expired,
- * soft-stop all their deployed agents, and return the affected agent IDs.
- * Called by the hourly lapse cron.
- */
-export async function softStopLapsedAccounts(): Promise<string[]> {
-  const now = new Date().toISOString();
-  const lapsed = await client.execute({
-    sql: `SELECT user_id FROM subscriptions
-          WHERE status = 'past_due' AND grace_until IS NOT NULL AND grace_until < ?`,
-    args: [now],
-  });
-  if (lapsed.rows.length === 0) return [];
-
-  const agentIds: string[] = [];
-  for (const row of lapsed.rows) {
-    const userId = row.user_id as string;
-    const agents = await client.execute({
-      sql: `UPDATE deployed_agents
-            SET spend_soft_stopped = 1, updated_at = ?
-            WHERE agent_id IN (SELECT id FROM agents WHERE user_id = ?)
-              AND status = 'running'
-              AND spend_soft_stopped = 0
-            RETURNING agent_id`,
-      args: [now, userId],
-    });
-    for (const a of agents.rows) agentIds.push(a.agent_id as string);
-  }
-  return agentIds;
-}
-
-/** Start the hourly lapse-enforcement cron. Call once at server startup. */
-export function startLapseCron(): void {
-  const run = async () => {
-    try {
-      const stopped = await softStopLapsedAccounts();
-      if (stopped.length > 0) {
-        console.log(`[billing-cron] soft-stopped ${stopped.length} agents for lapsed subscriptions`);
-      }
-    } catch (e) {
-      console.warn('[billing-cron] error:', e instanceof Error ? e.message : e);
-    }
-  };
-  setInterval(run, 60 * 60 * 1000); // every hour
-  run(); // also run immediately on startup
 }

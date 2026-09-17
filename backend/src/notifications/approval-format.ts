@@ -110,8 +110,6 @@ export interface AdminTargetSummary {
   id: string;
   name: string;
   status?: string | null;
-  runtime?: string | null;
-  deploymentStatus?: string | null;
   /** Service types with their permission level, e.g. `gmail (full)`. */
   services?: string[];
 }
@@ -804,14 +802,11 @@ export function formatAdminApprovalMessage(
     isDestroy && target?.services?.length
       ? `<b>Has access to:</b> ${escapeHtml(target.services.join(', '))}`
       : null,
-    isDestroy && target?.runtime
-      ? `<b>Runtime:</b> ${escapeHtml(target.runtime)}${target.deploymentStatus ? `, ${escapeHtml(target.deploymentStatus)}` : ''}`
-      : null,
     isCreate
       ? `\n<i>Its endpoint will require a token, so knowing its id is not enough to use it.</i>`
       : null,
     isDestroy
-      ? `\n<i>This cannot be undone. The runtime machine and all access are removed. Notes it saved to your memory are kept.</i>`
+      ? `\n<i>This cannot be undone. All access is removed. Notes it saved to your memory are kept.</i>`
       : null,
     `\n<b>Requested by:</b> <code>${escapeHtml(approval.agentId)}</code>`,
     ``,

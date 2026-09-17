@@ -122,15 +122,6 @@ vi.mock('../approvals/queue.js', () => ({
   },
 }));
 
-vi.mock('../services/spend.js', () => ({
-  checkSpendCap: vi.fn().mockResolvedValue({ allowed: true }),
-  recordUsage: vi.fn().mockResolvedValue(undefined),
-  estimateCost: vi.fn().mockReturnValue(0),
-  currentBillingPeriod: vi.fn().mockReturnValue('2026-09'),
-  markSoftStopped: vi.fn(), markAlerted80: vi.fn(), resetSpendCap: vi.fn(),
-  notifySpend80: vi.fn(), notifySoftStop: vi.fn(),
-}));
-
 vi.mock('../services/billing.js', () => ({
   getSubscription: vi.fn().mockResolvedValue(null),
   upsertSubscription: vi.fn().mockResolvedValue(undefined),
@@ -205,23 +196,11 @@ vi.mock('googleapis', () => ({
 }));
 
 // Needed by buildApp; none of these are on the paths under test.
-vi.mock('../providers/index.js', () => ({
-  provision: vi.fn(), start: vi.fn(), stop: vi.fn(), restart: vi.fn(),
-  getStatus: vi.fn().mockResolvedValue('running'), destroy: vi.fn(), redeploy: vi.fn(),
-  getLogs: vi.fn().mockResolvedValue({ logs: [], nextToken: undefined }),
-  getManagementUrl: vi.fn().mockResolvedValue(null),
-}));
 vi.mock('../mcp/proxy.js', () => ({
   mcpProxy: { proxyRequest: vi.fn(), getUpstreamTools: vi.fn().mockResolvedValue([]) },
 }));
 vi.mock('../notifications/apns.js', () => ({ apnsService: { sendPush: vi.fn() } }));
 vi.mock('../services/email.js', () => ({ sendReauthEmail: vi.fn() }));
-vi.mock('../services/model-router.js', () => ({
-  listModelConfigs: vi.fn().mockResolvedValue([]),
-  upsertModelConfig: vi.fn().mockResolvedValue(undefined),
-  deleteModelConfig: vi.fn().mockResolvedValue(undefined),
-  getLiteLLMConfigB64: vi.fn().mockResolvedValue(null),
-}));
 
 // ── Imports after mocks ──────────────────────────────────────────────────────
 

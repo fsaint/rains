@@ -92,23 +92,12 @@ vi.mock('../notifications/telegram.js', () => ({ telegramNotifier: {} }));
 vi.mock('../mcp/agent-endpoint.js', () => ({ handleMCPRequest: vi.fn() }));
 vi.mock('../analytics/posthog.js', () => ({ getPostHog: () => null }));
 vi.mock('../services/email.js', () => ({ sendReauthEmail: vi.fn() }));
-vi.mock('../services/agent-backup.js', () => ({
-  performBackup: vi.fn(), listBackups: vi.fn(), getBackup: vi.fn(), restoreBackup: vi.fn(),
-}));
 vi.mock('../services/agent-uploads.js', () => ({
   createUpload: vi.fn(), getUpload: vi.fn(), MAX_UPLOAD_BYTES: 1024,
-}));
-vi.mock('../services/token-monitor.js', () => ({ isCodexTokenExpired: vi.fn() }));
-vi.mock('../services/agent-bot-relay.js', () => ({
-  forwardToOpenclaw: vi.fn(), handleMyChatMember: vi.fn(),
 }));
 vi.mock('../services/memory.js', () => ({
   parseWikilinks: vi.fn(), updateLinkIndex: vi.fn(), ensureMemoryRoot: vi.fn(),
   getDreamManifest: vi.fn(), setEntryParent: vi.fn(),
-}));
-vi.mock('../providers/index.js', () => ({}));
-vi.mock('../services/model-router.js', () => ({
-  listModelConfigs: vi.fn(), upsertModelConfig: vi.fn(), deleteModelConfig: vi.fn(),
 }));
 
 import { apiRoutes } from './routes.js';

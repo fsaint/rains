@@ -3,7 +3,6 @@
  *
  * A single Reins-wide bot (REINS_TELEGRAM_BOT_TOKEN) DMs the agent owner
  * when an approval is needed, with inline Approve / Deny buttons.
- * The bot is distinct from per-agent telegram bots in deployed_agents.
  */
 
 import { client } from '../db/index.js';
@@ -302,15 +301,11 @@ export class TelegramNotifier {
         sql: `UPDATE applicants SET notify_chat_id = ?, updated_at = NOW() WHERE telegram_user_id = ?`,
         args: [chatId, telegramUserId],
       });
-      await this.sendMessage(chatId, `Great. This is where your agent will ask for permissions when it needs a grown-up to review. Go back to @${config.onboardingBotUsername}`, {});
+      await this.sendMessage(chatId, `Great. This is where your agent will ask for permissions when it needs a grown-up to review. Go back to the onboarding bot to continue.`, {});
     } catch (err) {
       console.error('[telegram] handleOnboardingMessage error:', err);
     }
   }
-
-  // -------------------------------------------------------------------------
-  // Group join confirmation helpers (called by agent-bot-relay via approvals)
-  // -------------------------------------------------------------------------
 
   // -------------------------------------------------------------------------
   // Private helpers
@@ -732,16 +727,7 @@ export class TelegramNotifier {
 
     try {
       const result = await client.execute({
-        sql: `SELECT a.id, a.name, a.status,
-                     d.runtime, d.status AS deployment_status
-              FROM agents a
-              LEFT JOIN LATERAL (
-                SELECT da.runtime, da.status
-                FROM deployed_agents da
-                WHERE da.agent_id = a.id AND da.status NOT IN ('destroyed', 'error')
-                ORDER BY da.created_at DESC LIMIT 1
-              ) d ON true
-              WHERE a.id = ? LIMIT 1`,
+        sql: `SELECT a.id, a.name, a.status FROM agents a WHERE a.id = ? LIMIT 1`,
         args: [agentId],
       });
       if (result.rows.length === 0) return null;
@@ -761,8 +747,6 @@ export class TelegramNotifier {
         id: row.id as string,
         name: row.name as string,
         status: (row.status as string | null) ?? null,
-        runtime: (row.runtime as string | null) ?? null,
-        deploymentStatus: (row.deployment_status as string | null) ?? null,
         services: services.rows.map((s) => s.service_type as string),
       };
     } catch (err) {

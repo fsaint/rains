@@ -1,14 +1,10 @@
 import { buildApp } from './app.js';
 import { config } from './config/index.js';
-import { initializeDatabase, client } from './db/index.js';
+import { initializeDatabase } from './db/index.js';
 import { approvalQueue } from './approvals/queue.js';
 import { initializeNativeServers, shutdownNativeServers } from './mcp/init-servers.js';
 import { startTokenRefreshLoop, stopTokenRefreshLoop } from './credentials/vault.js';
-import { startBackupLoop, stopBackupLoop } from './services/agent-backup.js';
 import { startTokenMonitor, stopTokenMonitor } from './services/token-monitor.js';
-import { startDreamScheduler } from './services/dream.js';
-import { flyLifecycleMonitor } from './services/fly-lifecycle-monitor.js';
-import { startLapseCron } from './services/billing.js';
 import { startUploadGcCron } from './services/agent-uploads.js';
 import { telegramNotifier } from './notifications/telegram.js';
 import { initializeNotificationHandlers } from './notifications/handlers.js';
@@ -16,12 +12,10 @@ import { shutdownPostHog } from './analytics/posthog.js';
 
 const app = await buildApp();
 
-// Initialize database
 app.log.info('Initializing database...');
 await initializeDatabase();
 app.log.info('Database initialized');
 
-// Initialize native MCP servers
 app.log.info('Initializing native MCP servers...');
 await initializeNativeServers();
 app.log.info('Native MCP servers initialized');
@@ -35,7 +29,6 @@ app.register(async (fastify) => {
     const onApprovalRequest = (approval: unknown) => {
       ws.send(JSON.stringify({ type: 'approval_request', data: approval }));
     };
-
     const onApprovalResolved = (approval: unknown) => {
       ws.send(JSON.stringify({ type: 'approval_resolved', data: approval }));
     };
@@ -51,40 +44,22 @@ app.register(async (fastify) => {
   });
 });
 
-// Start background token refresh (every 45 minutes)
+// Background OAuth token refresh (every 45 minutes)
 startTokenRefreshLoop();
 app.log.info('Token refresh loop started');
 
-// Start 24-hour agent backup loop
-startBackupLoop();
-app.log.info('Agent backup loop started (every 24 hours)');
-
-// Start Codex token expiry monitor
+// OAuth credential expiry monitor
 startTokenMonitor();
 app.log.info('Token monitor started');
 
-// Start nightly dream scheduler (2am UTC)
-startDreamScheduler();
-app.log.info('Dream scheduler started (nightly at 2am UTC)');
-
-// Start billing lapse cron (checks for past_due subscriptions past grace period)
-startLapseCron();
-app.log.info('Billing lapse cron started');
-
-// Start agent-upload GC (purges expired attachment blobs hourly)
+// Agent-upload GC (purges expired attachment blobs hourly)
 startUploadGcCron();
 app.log.info('Agent upload GC started');
-
-// Start Fly.io machine lifecycle monitor (polls every 60 s; requires FLY_LIFECYCLE_MONITOR_ENABLED=1)
-if (process.env.FLY_LIFECYCLE_MONITOR_ENABLED === '1') {
-  flyLifecycleMonitor.start();
-  app.log.info('Fly lifecycle monitor started');
-}
 
 // Wire approval queue events to notification services
 initializeNotificationHandlers();
 
-// Initialize Telegram bot (non-fatal if not configured or fails)
+// Approvals bot (non-fatal if not configured or fails)
 if (telegramNotifier.isConfigured()) {
   telegramNotifier.init()
     .then(() => telegramNotifier.setupWebhook())
@@ -92,64 +67,10 @@ if (telegramNotifier.isConfigured()) {
   app.log.info('Telegram bot initialization started');
 }
 
-// Register shared bot webhook (non-fatal if not configured or fails)
-if (config.sharedBotToken) {
-  const reinsUrl = config.publicUrl || config.dashboardUrl;
-  const webhookUrl = `${reinsUrl}/api/webhooks/shared-bot`;
-  const params: Record<string, string> = { url: webhookUrl, allowed_updates: JSON.stringify(['message', 'edited_message', 'callback_query', 'my_chat_member']) };
-  if (config.sharedBotWebhookSecret) params.secret_token = config.sharedBotWebhookSecret;
-  fetch(`https://api.telegram.org/bot${config.sharedBotToken}/setWebhook`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  })
-    .then((res) => res.json())
-    .then((data) => app.log.info(`Shared bot webhook set: ${webhookUrl} — ${JSON.stringify(data)}`))
-    .catch((err) => app.log.error('Shared bot setWebhook failed:', err));
-}
-
-// Re-register Telegram webhooks for all active user-owned bots (non-fatal).
-// Covers the case where agenthelm-core or an agent machine restarts and the
-// Telegram webhook gets cleared — ensures messages are never silently dropped.
-{
-  const reinsUrl = config.publicUrl || config.dashboardUrl;
-  client.execute({
-    sql: `SELECT id, telegram_token, webhook_relay_secret, is_shared_bot
-          FROM deployed_agents
-          WHERE status = 'running'
-            AND telegram_token IS NOT NULL
-            AND is_shared_bot = 0`,
-    args: [],
-  }).then(async (result) => {
-    const rows = result.rows as Array<{ id: string; telegram_token: string; webhook_relay_secret: string | null; is_shared_bot: number }>;
-    app.log.info(`Re-registering Telegram webhooks for ${rows.length} active user bot(s)`);
-    for (const row of rows) {
-      const webhookUrl = `${reinsUrl}/api/webhooks/agent-bot/${row.id}`;
-      const params: Record<string, string> = { url: webhookUrl };
-      if (row.webhook_relay_secret) params.secret_token = row.webhook_relay_secret;
-      try {
-        const res = await fetch(`https://api.telegram.org/bot${row.telegram_token}/setWebhook`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(params),
-        });
-        const data = await res.json() as { ok: boolean };
-        if (!data.ok) app.log.warn(`setWebhook failed for deployment ${row.id}: ${JSON.stringify(data)}`);
-      } catch (err) {
-        app.log.warn(`setWebhook error for deployment ${row.id}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-    app.log.info('User bot webhook re-registration complete');
-  }).catch((err) => app.log.error('User bot webhook re-registration failed:', err));
-}
-
-// Graceful shutdown
 const shutdown = async () => {
   app.log.info('Shutting down...');
   stopTokenRefreshLoop();
-  stopBackupLoop();
   stopTokenMonitor();
-  flyLifecycleMonitor.stop();
   await shutdownNativeServers();
   await shutdownPostHog();
   await app.close();
@@ -159,10 +80,9 @@ const shutdown = async () => {
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-// Start server
 try {
   await app.listen({ port: config.port, host: config.host });
-  app.log.info(`Reins backend running at http://${config.host}:${config.port}`);
+  app.log.info(`Helm backend running at http://${config.host}:${config.port}`);
   app.log.info('Press Ctrl+C to stop');
 } catch (err) {
   app.log.error(err);

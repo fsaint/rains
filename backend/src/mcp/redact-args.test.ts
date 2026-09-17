@@ -74,7 +74,7 @@ describe('redactToolArgs — string truncation', () => {
 
 describe('redactToolArgs — passthrough', () => {
   it('preserves the scalar fields that JSONB lookups depend on', () => {
-    // approvals/queue.ts and services/agent-bot-relay.ts query
+    // approvals/queue.ts queries
     // arguments_json::jsonb->>'provider' and ->>'chatId'.
     const out = redactToolArgs({ provider: 'minimax', chatId: '-100123', count: 5, ok: true });
 

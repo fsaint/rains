@@ -38,18 +38,6 @@ vi.mock('../db/index.js', () => ({
   schema: {},
 }));
 
-vi.mock('../providers/index.js', () => ({
-  provision: vi.fn(),
-  start: vi.fn(),
-  stop: vi.fn(),
-  restart: vi.fn(),
-  getStatus: vi.fn().mockResolvedValue('running'),
-  destroy: vi.fn(),
-  redeploy: vi.fn(),
-  getLogs: vi.fn().mockResolvedValue({ logs: [], nextToken: undefined }),
-  getManagementUrl: vi.fn().mockResolvedValue(null),
-}));
-
 vi.mock('../credentials/vault.js', () => ({
   credentialVault: {
     getValidAccessToken: vi.fn().mockResolvedValue(null),
@@ -98,16 +86,6 @@ vi.mock('../services/billing.js', () => ({
   clearGrace: vi.fn().mockResolvedValue(undefined),
   cancelSubscription: vi.fn().mockResolvedValue(undefined),
   checkUsageGate: vi.fn().mockResolvedValue({ allowed: true }),
-}));
-vi.mock('../services/spend.js', () => ({
-  checkSpendCap: vi.fn().mockResolvedValue({ allowed: true }),
-  recordUsage: vi.fn().mockResolvedValue(undefined),
-}));
-vi.mock('../services/model-router.js', () => ({
-  listModelConfigs: vi.fn().mockResolvedValue([]),
-  upsertModelConfig: vi.fn().mockResolvedValue(undefined),
-  deleteModelConfig: vi.fn().mockResolvedValue(undefined),
-  getLiteLLMConfigB64: vi.fn().mockResolvedValue(null),
 }));
 
 // ── Import after mocks ────────────────────────────────────────────────────────

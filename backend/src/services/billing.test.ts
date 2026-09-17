@@ -16,12 +16,10 @@ import { client } from '../db/index.js';
 import {
   getSubscription,
   upsertSubscription,
-  checkDeployGate,
   checkUsageGate,
   applyGracePeriod,
   clearGrace,
   cancelSubscription,
-  softStopLapsedAccounts,
 } from './billing.js';
 
 const mockExecute = vi.mocked(client.execute);
@@ -170,50 +168,6 @@ describe('upsertSubscription', () => {
 });
 
 // ---------------------------------------------------------------------------
-// checkDeployGate
-// ---------------------------------------------------------------------------
-
-describe('checkDeployGate', () => {
-  it('blocks when no subscription exists', async () => {
-    mockQuery([]);
-    const result = await checkDeployGate('user-1');
-    expect(result).toEqual({ allowed: false, reason: 'no_subscription' });
-  });
-
-  it('allows when status is active', async () => {
-    mockQuery([activeRow]);
-    const result = await checkDeployGate('user-1');
-    expect(result).toEqual({ allowed: true });
-  });
-
-  it('blocks when status is canceled', async () => {
-    mockQuery([{ ...activeRow, status: 'canceled' }]);
-    const result = await checkDeployGate('user-1');
-    expect(result).toEqual({ allowed: false, reason: 'canceled' });
-  });
-
-  it('allows when past_due within grace period', async () => {
-    const graceUntil = new Date(Date.now() + 60_000).toISOString();
-    mockQuery([{ ...activeRow, status: 'past_due', grace_until: graceUntil }]);
-    const result = await checkDeployGate('user-1');
-    expect(result).toEqual({ allowed: true });
-  });
-
-  it('blocks when past_due and grace period expired', async () => {
-    const graceUntil = new Date(Date.now() - 60_000).toISOString();
-    mockQuery([{ ...activeRow, status: 'past_due', grace_until: graceUntil }]);
-    const result = await checkDeployGate('user-1');
-    expect(result).toEqual({ allowed: false, reason: 'lapsed' });
-  });
-
-  it('blocks when past_due with no grace_until set', async () => {
-    mockQuery([{ ...activeRow, status: 'past_due', grace_until: null }]);
-    const result = await checkDeployGate('user-1');
-    expect(result).toEqual({ allowed: false, reason: 'lapsed' });
-  });
-});
-
-// ---------------------------------------------------------------------------
 // checkUsageGate
 // ---------------------------------------------------------------------------
 
@@ -330,64 +284,5 @@ describe('cancelSubscription', () => {
     await cancelSubscription('sub_xyz');
     const call = mockExecute.mock.calls[0][0] as any;
     expect(call.args[1]).toBe('sub_xyz');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// softStopLapsedAccounts
-// ---------------------------------------------------------------------------
-
-describe('softStopLapsedAccounts', () => {
-  it('returns empty array when no lapsed subscriptions', async () => {
-    mockQuery([]); // No lapsed subs
-    const result = await softStopLapsedAccounts();
-    expect(result).toEqual([]);
-    expect(mockExecute).toHaveBeenCalledOnce();
-  });
-
-  it('soft-stops agents for lapsed users and returns agent IDs', async () => {
-    mockQuery([{ user_id: 'user-1' }]); // One lapsed user
-    mockQuery([{ agent_id: 'agent-a' }, { agent_id: 'agent-b' }]); // Two agents to stop
-
-    const result = await softStopLapsedAccounts();
-
-    expect(result).toEqual(['agent-a', 'agent-b']);
-    expect(mockExecute).toHaveBeenCalledTimes(2);
-  });
-
-  it('updates deployed_agents with spend_soft_stopped = 1 for lapsed users', async () => {
-    mockQuery([{ user_id: 'user-1' }]);
-    mockQuery([{ agent_id: 'agent-a' }]);
-
-    await softStopLapsedAccounts();
-
-    const updateCall = mockExecute.mock.calls[1][0] as any;
-    expect(updateCall.sql).toContain('UPDATE deployed_agents');
-    expect(updateCall.sql).toContain('spend_soft_stopped = 1');
-    expect(updateCall.sql).toContain('WHERE agent_id IN');
-    expect(updateCall.sql).toContain('SELECT id FROM agents WHERE user_id = ?');
-    expect(updateCall.args[1]).toBe('user-1');
-  });
-
-  it('handles multiple lapsed users', async () => {
-    mockQuery([{ user_id: 'user-1' }, { user_id: 'user-2' }]);
-    mockQuery([{ agent_id: 'agent-a' }]);
-    mockQuery([{ agent_id: 'agent-b' }, { agent_id: 'agent-c' }]);
-
-    const result = await softStopLapsedAccounts();
-
-    expect(result).toEqual(['agent-a', 'agent-b', 'agent-c']);
-    expect(mockExecute).toHaveBeenCalledTimes(3); // SELECT lapsed + UPDATE for user-1 + UPDATE for user-2
-  });
-
-  it('includes only running agents not already soft-stopped', async () => {
-    mockQuery([{ user_id: 'user-1' }]);
-    mockQuery([{ agent_id: 'agent-a' }]);
-
-    await softStopLapsedAccounts();
-
-    const updateCall = mockExecute.mock.calls[1][0] as any;
-    expect(updateCall.sql).toContain('status = \'running\'');
-    expect(updateCall.sql).toContain('spend_soft_stopped = 0');
   });
 });
