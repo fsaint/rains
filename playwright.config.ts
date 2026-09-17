@@ -46,9 +46,6 @@ export default defineConfig({
           env: {
             ADMIN_EMAIL: process.env.ADMIN_EMAIL || 'admin@reins.local',
             ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'changeme',
-            // Fly org for E2E test deployments — must be set explicitly, never default to personal (prod)
-            FLY_ORG: process.env.FLY_ORG || 'reins-dev',
-            FLY_API_TOKEN: process.env.FLY_API_TOKEN || '',
           },
         },
         {

@@ -22,7 +22,7 @@ const sqlite = new Database(SQLITE_PATH, { readonly: true });
 const sql = postgres(PG_URL);
 
 // Tables to migrate in dependency order.
-// audit_log and spend_records use SERIAL ids in PG, so we insert with explicit id.
+// audit_log uses SERIAL ids in PG, so we insert with explicit id.
 const TABLES = [
   'users',
   'agents',
@@ -31,7 +31,6 @@ const TABLES = [
   'agent_credentials',
   'audit_log',
   'approvals',
-  'spend_records',
   'mcp_servers',
   'device_tokens',
   'agent_service_access',
@@ -108,7 +107,7 @@ async function migrate() {
     }
 
     // Reset serial sequences for tables with SERIAL primary keys
-    if (table === 'audit_log' || table === 'spend_records') {
+    if (table === 'audit_log') {
       await sql.unsafe(
         `SELECT setval(pg_get_serial_sequence('${table}', 'id'), COALESCE((SELECT MAX(id) FROM ${table}), 0))`
       );
