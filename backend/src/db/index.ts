@@ -3,14 +3,13 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import bcrypt from 'bcryptjs';
 import { nanoid } from 'nanoid';
 import { readdir, readFile } from 'fs/promises';
-import { join, dirname, basename } from 'path';
+import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { config } from '../config/index.js';
 import * as schema from './schema.js';
 import { migrateDeployedAgents } from './migrate-deployed-agents.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const TEMPLATES_DIR = join(__dirname, '..', '..', '..', 'templates', 'initial-prompts');
 const SKILLS_TEMPLATES_DIR = join(__dirname, '..', '..', '..', 'templates', 'skills');
 
 const DATABASE_URL = config.databaseUrl;
@@ -105,6 +104,18 @@ export async function initializeDatabase() {
     EXCEPTION WHEN duplicate_column THEN NULL;
     END $$
   `;
+
+  // Agents carry their own MCP credential state now. Columns first, then the
+  // one-time copy out of deployed_agents (see migrate-deployed-agents.ts).
+  await sql`ALTER TABLE agents ADD COLUMN IF NOT EXISTS gateway_token TEXT`;
+  await sql`ALTER TABLE agents ADD COLUMN IF NOT EXISTS allow_unauthenticated BOOLEAN NOT NULL DEFAULT false`;
+  await migrateDeployedAgents(client);
+
+  // Runtime-era tables. The fold above has already read deployed_agents.
+  await sql`DROP TABLE IF EXISTS agent_model_configs`;
+  await sql`DROP TABLE IF EXISTS initial_prompt_templates`;
+  await sql`DROP TABLE IF EXISTS spend_records`;
+  await sql`DROP TABLE IF EXISTS deployed_agents`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS agent_credentials (
@@ -206,31 +217,7 @@ export async function initializeDatabase() {
     END $$
   `;
 
-  await sql`
-    CREATE TABLE IF NOT EXISTS spend_records (
-      id SERIAL PRIMARY KEY,
-      agent_id TEXT NOT NULL,
-      service_id TEXT NOT NULL,
-      amount REAL NOT NULL,
-      currency TEXT DEFAULT 'USD' NOT NULL,
-      recorded_at TEXT DEFAULT now() NOT NULL
-    )
-  `;
-
-  await sql`CREATE INDEX IF NOT EXISTS idx_spend_agent_date ON spend_records(agent_id, recorded_at)`;
-
-  // Spend cap columns on spend_records (migration)
-  await sql`
-    DO $$ BEGIN
-      ALTER TABLE spend_records ADD COLUMN IF NOT EXISTS input_tokens INTEGER DEFAULT 0;
-      ALTER TABLE spend_records ADD COLUMN IF NOT EXISTS output_tokens INTEGER DEFAULT 0;
-      ALTER TABLE spend_records ADD COLUMN IF NOT EXISTS billing_period TEXT;
-    EXCEPTION WHEN duplicate_column THEN NULL;
-    END $$
-  `;
-
-  // NOTE: the spend-cap columns on deployed_agents used to be added here, but
-  // that table is not created until further down. See below, after its CREATE.
+  // NOTE: spend_records table was dropped (Task 9)
 
   await sql`
     CREATE TABLE IF NOT EXISTS mcp_servers (
@@ -508,75 +495,7 @@ export async function initializeDatabase() {
 
   await sql`CREATE INDEX IF NOT EXISTS idx_pending_claim_code ON pending_agent_registrations(claim_code)`;
 
-  // ========================================================================
-  // Deployed agents table (Fly.io/Docker provisioning)
-  // ========================================================================
-
-  await sql`
-    CREATE TABLE IF NOT EXISTS deployed_agents (
-      id TEXT PRIMARY KEY,
-      agent_id TEXT NOT NULL REFERENCES agents(id),
-      fly_app_name TEXT,
-      fly_machine_id TEXT,
-      status TEXT DEFAULT 'pending' NOT NULL,
-      management_url TEXT,
-      telegram_token TEXT,
-      telegram_user_id TEXT,
-      soul_md TEXT,
-      model_provider TEXT DEFAULT 'anthropic',
-      model_name TEXT DEFAULT 'claude-sonnet-4-5',
-      region TEXT DEFAULT 'iad',
-      gateway_token TEXT NOT NULL,
-      created_at TEXT DEFAULT now() NOT NULL,
-      updated_at TEXT DEFAULT now() NOT NULL
-    )
-  `;
-
-  await sql`CREATE INDEX IF NOT EXISTS idx_deployed_agent ON deployed_agents(agent_id)`;
-
-  // Add new columns for agent creation flow (migration)
-  await sql`
-    DO $$ BEGIN
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS openai_api_key TEXT;
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS telegram_groups_json TEXT;
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS model_credentials TEXT;
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS mcp_config_json TEXT;
-    EXCEPTION WHEN duplicate_column THEN NULL;
-    END $$
-  `;
-
-  // Spend cap config on deployed_agents (migration).
-  // This has to run after the CREATE TABLE above. It used to sit next to the
-  // spend_records migration ~250 lines earlier, which worked on any database
-  // that already had the table and raised undefined_table on a fresh one —
-  // an error the duplicate_column handler does not catch, so initialisation
-  // died and the server never opened its port.
-  await sql`
-    DO $$ BEGIN
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS spend_limit_dollars REAL;
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS spend_limit_tokens INTEGER;
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS spend_soft_stopped INTEGER DEFAULT 0;
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS spend_alerted_80 INTEGER DEFAULT 0;
-    EXCEPTION WHEN duplicate_column THEN NULL;
-    END $$
-  `;
-
-  // Add is_manual column for manual agent support
-  await sql`
-    DO $$ BEGIN
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS is_manual INTEGER DEFAULT 0;
-    EXCEPTION WHEN duplicate_column THEN NULL;
-    END $$
-  `;
-
-  // Add initial_prompt and has_onboarded for first-run setup
-  await sql`
-    DO $$ BEGIN
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS initial_prompt TEXT;
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS has_onboarded INTEGER DEFAULT 0;
-    EXCEPTION WHEN duplicate_column THEN NULL;
-    END $$
-  `;
+  // NOTE: deployed_agents table was dropped (Task 9)
 
   // Add Telegram notification columns
   await sql`
@@ -613,59 +532,7 @@ export async function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS idx_approvals_parent ON approvals(parent_approval_id)
   `;
 
-  // Add webhook relay columns for per-agent bot group detection
-  await sql`
-    DO $$ BEGIN
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS openclaw_webhook_url TEXT;
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS webhook_relay_secret TEXT;
-    EXCEPTION WHEN duplicate_column THEN NULL;
-    END $$
-  `;
-
-  // Add runtime column for agent runtime selection (openclaw or hermes)
-  await sql`
-    DO $$ BEGIN
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS runtime TEXT DEFAULT 'openclaw';
-    EXCEPTION WHEN duplicate_column THEN NULL;
-    END $$
-  `;
-
-  // The MCP server name baked into this machine's MCP_CONFIG at deploy time.
-  //
-  // The agent's client derives its tool prefix from that value, so it is the
-  // only correct source for tool names rendered into text the agent reads —
-  // MCP_SERVER_NAME here moves ahead of it the moment the backend deploys.
-  // Existing rows predate the helm rename, hence the 'reins' default.
-  await sql`
-    DO $$ BEGIN
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS mcp_server_name TEXT DEFAULT 'reins';
-    EXCEPTION WHEN duplicate_column THEN NULL;
-    END $$
-  `;
-
-  // Add is_shared_bot column for shared platform bot routing
-  await sql`
-    DO $$ BEGIN
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS is_shared_bot INTEGER DEFAULT 0;
-    EXCEPTION WHEN duplicate_column THEN NULL;
-    END $$
-  `;
-
-  // Add telegram_bot_username for display in the dashboard
-  await sql`
-    DO $$ BEGIN
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS telegram_bot_username TEXT;
-    EXCEPTION WHEN duplicate_column THEN NULL;
-    END $$
-  `;
-
-  // Add fly_volume_id for per-agent persistent state (Fly volumes)
-  await sql`
-    DO $$ BEGIN
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS fly_volume_id TEXT;
-    EXCEPTION WHEN duplicate_column THEN NULL;
-    END $$
-  `;
+  // NOTE: deployed_agents migrations were dropped (Task 9)
 
   // Add path_rules column for Drive path-based permissions
   await sql`
@@ -772,23 +639,8 @@ export async function initializeDatabase() {
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_mcp_refresh_access ON mcp_refresh_tokens(access_token_id)`;
 
-  // Added as DEFAULT true so every agent that existed at the time kept
-  // working untouched; only the owner clears it, from the dashboard.
-  await sql`
-    DO $$ BEGIN
-      ALTER TABLE deployed_agents ADD COLUMN IF NOT EXISTS allow_unauthenticated BOOLEAN DEFAULT true NOT NULL;
-    EXCEPTION WHEN duplicate_column THEN NULL; END $$
-  `;
-  // Since the authenticated path works end-to-end, a *new* agent is born
-  // closed: its URL is not a credential. SET DEFAULT touches no existing row,
-  // so agents deployed before this keep whatever the owner chose. The live
-  // insert sites also name the column explicitly rather than lean on this.
-  await sql`ALTER TABLE deployed_agents ALTER COLUMN allow_unauthenticated SET DEFAULT false`;
-  // Agents carry their own MCP credential state now. Columns first, then the
-  // one-time copy out of deployed_agents (see migrate-deployed-agents.ts).
-  await sql`ALTER TABLE agents ADD COLUMN IF NOT EXISTS gateway_token TEXT`;
-  await sql`ALTER TABLE agents ADD COLUMN IF NOT EXISTS allow_unauthenticated BOOLEAN NOT NULL DEFAULT false`;
-  await migrateDeployedAgents(client);
+  // NOTE: deployed_agents allow_unauthenticated migration was dropped (Task 9)
+
   // Migrate existing columns to correct types for Postgres (was designed for SQLite)
   await sql`ALTER TABLE pending_oauth_flows ALTER COLUMN telegram_user_id TYPE BIGINT`;
   await sql`ALTER TABLE pending_oauth_flows ALTER COLUMN initiated_at TYPE TIMESTAMPTZ USING initiated_at::TIMESTAMPTZ`;
@@ -797,16 +649,7 @@ export async function initializeDatabase() {
   // OAuth consent page bounces through the dashboard login and must come back).
   await sql`ALTER TABLE pending_oauth_flows ADD COLUMN IF NOT EXISTS return_to TEXT`;
 
-  // initial_prompt_templates table
-  await sql`
-    CREATE TABLE IF NOT EXISTS initial_prompt_templates (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      content TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (now()),
-      updated_at TEXT NOT NULL DEFAULT (now())
-    )
-  `;
+  // NOTE: initial_prompt_templates table was dropped (Task 9)
 
   // ========================================================================
   // Memory system tables
@@ -1231,21 +1074,7 @@ export async function initializeDatabase() {
 
   await sql`CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id)`;
 
-  // Agent model configs table — per-agent model routing
-  await sql`
-    CREATE TABLE IF NOT EXISTS agent_model_configs (
-      id TEXT PRIMARY KEY,
-      agent_id TEXT NOT NULL,
-      provider TEXT NOT NULL,
-      model_name TEXT NOT NULL,
-      role TEXT NOT NULL,
-      api_key_encrypted TEXT NOT NULL,
-      created_at TEXT DEFAULT now() NOT NULL,
-      updated_at TEXT DEFAULT now() NOT NULL,
-      UNIQUE(agent_id, role)
-    )
-  `;
-  await sql`CREATE INDEX IF NOT EXISTS idx_agent_model_configs_agent ON agent_model_configs(agent_id)`;
+  // NOTE: agent_model_configs table was dropped (Task 9)
 
   // Agent uploads — short-lived blobs an agent POSTs from its own container so
   // it can attach a file it generated without the bytes passing through the
@@ -1290,13 +1119,6 @@ export async function initializeDatabase() {
     await sql`UPDATE credentials SET user_id = ${adminId} WHERE user_id IS NULL`;
 
     console.log(`Created admin user: ${adminEmail}`);
-  }
-
-  // Seed initial prompt templates from files
-  try {
-    await seedInitialPromptTemplates();
-  } catch (err) {
-    console.warn('[db] Could not seed initial prompt templates:', err);
   }
 
   // Seed system skills from files
@@ -1423,32 +1245,6 @@ async function seedSystemSkills() {
       `Their source is 'admin', so templates/skills/ no longer overwrites them. ` +
       `Delete the row in the dashboard to take the template version again.`
     );
-  }
-}
-
-async function seedInitialPromptTemplates() {
-  let files: string[];
-  try {
-    files = await readdir(TEMPLATES_DIR);
-  } catch {
-    // Templates directory not present (e.g. stripped Docker build)
-    return;
-  }
-
-  for (const file of files) {
-    if (!file.endsWith('.md')) continue;
-    const id = basename(file, '.md');
-    const name = id
-      .split('-')
-      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(' ')
-      .replace('And', '&');
-    const content = await readFile(join(TEMPLATES_DIR, file), 'utf-8');
-    await sql`
-      INSERT INTO initial_prompt_templates (id, name, content, created_at, updated_at)
-      VALUES (${id}, ${name}, ${content}, now(), now())
-      ON CONFLICT (id) DO UPDATE SET name = ${name}, content = ${content}, updated_at = now()
-    `;
   }
 }
 

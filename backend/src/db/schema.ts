@@ -1,4 +1,4 @@
-import { pgTable, text, integer, serial, real, boolean, primaryKey } from 'drizzle-orm/pg-core';
+import { pgTable, text, integer, serial, boolean, primaryKey } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 // Users table
@@ -109,18 +109,7 @@ export const telegramLinkCodes = pgTable('telegram_link_codes', {
   createdAt: text('created_at').notNull(),
 });
 
-// Spend records table
-export const spendRecords = pgTable('spend_records', {
-  id: serial('id').primaryKey(),
-  agentId: text('agent_id').notNull(),
-  serviceId: text('service_id').notNull(),
-  amount: real('amount').notNull(),
-  currency: text('currency').default('USD').notNull(),
-  inputTokens: integer('input_tokens').default(0),
-  outputTokens: integer('output_tokens').default(0),
-  billingPeriod: text('billing_period'), // e.g. '2026-05' for monthly grouping
-  recordedAt: text('recorded_at').default(sql`now()`).notNull(),
-});
+// NOTE: spendRecords table was dropped (Task 9)
 
 // MCP Servers table
 export const mcpServers = pgTable('mcp_servers', {
@@ -367,45 +356,7 @@ export const pendingAgentRegistrations = pgTable('pending_agent_registrations', 
 });
 
 // ============================================================================
-// Deployed Agents - tracks agent deployments on Fly.io or local Docker
-// ============================================================================
-
-export const deployedAgents = pgTable('deployed_agents', {
-  id: text('id').primaryKey(),
-  agentId: text('agent_id').notNull(),
-  flyAppName: text('fly_app_name'),
-  flyMachineId: text('fly_machine_id'),
-  status: text('status').default('pending').notNull(), // pending | starting | running | stopped | error | destroyed
-  managementUrl: text('management_url'),
-  telegramToken: text('telegram_token'),
-  telegramBotUsername: text('telegram_bot_username'),
-  telegramUserId: text('telegram_user_id'),
-  soulMd: text('soul_md'),
-  modelProvider: text('model_provider').default('anthropic'),
-  modelName: text('model_name').default('claude-sonnet-4-5'),
-  region: text('region').default('iad'),
-  gatewayToken: text('gateway_token').notNull(),
-  openaiApiKey: text('openai_api_key'),
-  telegramGroupsJson: text('telegram_groups_json'),
-  openclawWebhookUrl: text('openclaw_webhook_url'),
-  webhookRelaySecret: text('webhook_relay_secret'),
-  modelCredentials: text('model_credentials'),
-  mcpConfigJson: text('mcp_config_json'),
-  isManual: integer('is_manual').default(0),
-  // False only when the owner has closed the unauthenticated MCP endpoint for
-  // this agent. Defaults true so nothing that works today stops working.
-  allowUnauthenticated: boolean('allow_unauthenticated').default(false).notNull(),
-  initialPrompt: text('initial_prompt'),
-  hasOnboarded: integer('has_onboarded').default(0),
-  flyVolumeId: text('fly_volume_id'),
-  // Spend cap config
-  spendLimitDollars: real('spend_limit_dollars'), // monthly dollar cap (BYOK tier)
-  spendLimitTokens: integer('spend_limit_tokens'), // monthly token cap (Managed tier)
-  spendSoftStopped: integer('spend_soft_stopped').default(0), // 1 = tool calls blocked until user intervenes
-  spendAlerted80: integer('spend_alerted_80').default(0), // 1 = 80% alert sent this billing period
-  createdAt: text('created_at').default(sql`now()`).notNull(),
-  updatedAt: text('updated_at').default(sql`now()`).notNull(),
-});
+// NOTE: deployedAgents table was dropped (Task 9)
 
 // Stripe subscriptions — one row per user
 export const subscriptions = pgTable('subscriptions', {
@@ -421,14 +372,4 @@ export const subscriptions = pgTable('subscriptions', {
   updatedAt: text('updated_at').default(sql`now()`).notNull(),
 });
 
-// Agent model configurations — per-agent model routing
-export const agentModelConfigs = pgTable('agent_model_configs', {
-  id: text('id').primaryKey(),
-  agentId: text('agent_id').notNull(),
-  provider: text('provider').notNull(),    // 'anthropic' | 'openai' | 'minimax' | 'google'
-  modelName: text('model_name').notNull(), // e.g. 'claude-opus-4-7', 'gpt-4o'
-  role: text('role').notNull(),            // 'strong' | 'weak'
-  apiKeyEncrypted: text('api_key_encrypted').notNull(),
-  createdAt: text('created_at').default(sql`now()`).notNull(),
-  updatedAt: text('updated_at').default(sql`now()`).notNull(),
-});
+// NOTE: agentModelConfigs table was dropped (Task 9)
