@@ -30,7 +30,6 @@ import Notifications from './pages/Notifications';
 import Memory from './pages/Memory';
 import Skills from './pages/Skills';
 import MemoryEntry from './pages/MemoryEntry';
-import OAuthComplete from './pages/OAuthComplete';
 import Pricing from './pages/Pricing';
 import Billing from './pages/Billing';
 import HelmMark from './components/HelmMark';
@@ -85,11 +84,6 @@ function App() {
         <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-600 border-t-trust-blue" />
       </div>
     );
-  }
-
-  // Public routes — no auth required
-  if (location.pathname === '/oauth-complete') {
-    return <OAuthComplete />;
   }
 
   // Not authenticated

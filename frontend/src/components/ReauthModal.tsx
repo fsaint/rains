@@ -4,8 +4,6 @@ import { useQueryClient } from '@tanstack/react-query';
 import { approvals, credentials, oauth } from '../api/client';
 
 const PROVIDER_LABELS: Record<string, string> = {
-  fly: 'Fly.io',
-  docker: 'Docker',
   gmail: 'Gmail',
   drive: 'Google Drive',
   calendar: 'Google Calendar',
