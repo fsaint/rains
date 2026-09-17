@@ -24,6 +24,10 @@ export const agents = pgTable('agents', {
   description: text('description'),
   policyId: text('policy_id'),
   status: text('status').default('pending').notNull(),
+  gatewayToken: text('gateway_token'),
+  // False by default: an agent id is not a credential. The owner opens it
+  // from the dashboard, and the helm-admin latch can refuse that.
+  allowUnauthenticated: boolean('allow_unauthenticated').default(false).notNull(),
   createdAt: text('created_at').default(sql`now()`).notNull(),
   updatedAt: text('updated_at').default(sql`now()`).notNull(),
 });

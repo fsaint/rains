@@ -7,6 +7,7 @@ import { join, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
 import { config } from '../config/index.js';
 import * as schema from './schema.js';
+import { migrateDeployedAgents } from './migrate-deployed-agents.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEMPLATES_DIR = join(__dirname, '..', '..', '..', 'templates', 'initial-prompts');
@@ -783,6 +784,11 @@ export async function initializeDatabase() {
   // so agents deployed before this keep whatever the owner chose. The live
   // insert sites also name the column explicitly rather than lean on this.
   await sql`ALTER TABLE deployed_agents ALTER COLUMN allow_unauthenticated SET DEFAULT false`;
+  // Agents carry their own MCP credential state now. Columns first, then the
+  // one-time copy out of deployed_agents (see migrate-deployed-agents.ts).
+  await sql`ALTER TABLE agents ADD COLUMN IF NOT EXISTS gateway_token TEXT`;
+  await sql`ALTER TABLE agents ADD COLUMN IF NOT EXISTS allow_unauthenticated BOOLEAN NOT NULL DEFAULT false`;
+  await migrateDeployedAgents(client);
   // Migrate existing columns to correct types for Postgres (was designed for SQLite)
   await sql`ALTER TABLE pending_oauth_flows ALTER COLUMN telegram_user_id TYPE BIGINT`;
   await sql`ALTER TABLE pending_oauth_flows ALTER COLUMN initiated_at TYPE TIMESTAMPTZ USING initiated_at::TIMESTAMPTZ`;
