@@ -73,7 +73,7 @@ export function registerMcpOAuthRoutes(app: FastifyInstance): void {
 
   /**
    * RFC 9728. This is the document a 401 from /mcp/ points at, and what Claude
-   * Code and the OpenClaw bridge fetch to learn where to authenticate.
+   * Code fetches to learn where to authenticate.
    */
   app.get('/.well-known/oauth-protected-resource', async () => ({
     resource: `${baseUrl()}/mcp`,

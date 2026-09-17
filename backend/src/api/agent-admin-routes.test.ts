@@ -180,9 +180,6 @@ function wireDb(opts: { targetOwnedByCaller?: boolean } = {}) {
         ? rows([{ id: TARGET, name: 'Work', description: null, status: 'active' }])
         : rows([]);
     }
-    if (sql.includes('FROM agents a') && sql.includes('LEFT JOIN LATERAL')) {
-      return rows([{ id: TARGET, name: 'Work', description: null, status: 'active', deployment_status: 'running', runtime: 'openclaw', is_manual: false }]);
-    }
     return rows([]);
   });
 }

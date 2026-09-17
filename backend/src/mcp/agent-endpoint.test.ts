@@ -364,7 +364,7 @@ describe('handleMCPRequest', () => {
     it('returns deferred response immediately when tool requires approval', async () => {
       const { approvalQueue } = await import('../approvals/queue.js');
       vi.mocked(client.execute).mockResolvedValue({
-        rows: [{ id: 'dep-1', runtime: 'openclaw', mcp_server_name: 'helm', has_onboarded: true }],
+        rows: [{ id: 'dep-1', mcp_server_name: 'helm', has_onboarded: true }],
       } as any);
 
       const request: MCPRequest = {
@@ -1143,7 +1143,7 @@ describe('gateway token injection', () => {
     } as never);
 
     vi.mocked(client.execute).mockResolvedValue({
-      rows: [{ gateway_token: 'gw-secret', id: 'dep-1', runtime: 'openclaw', mcp_server_name: 'helm' }],
+      rows: [{ gateway_token: 'gw-secret', id: 'dep-1', mcp_server_name: 'helm' }],
     } as never);
 
     const response = await handleMCPRequest('agent-1', {

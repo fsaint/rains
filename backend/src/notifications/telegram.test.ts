@@ -503,7 +503,6 @@ describe('formatAdminApprovalMessage', () => {
     id: 'agent-work',
     name: 'Work Email',
     status: 'active',
-    runtime: 'openclaw',
     deploymentStatus: 'running',
     services: ['calendar', 'gmail'],
   };
