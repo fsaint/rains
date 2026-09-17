@@ -46,7 +46,7 @@ export const attachmentsSchema = {
     '• source="upload" — a file that exists in YOUR container (one you generated or ' +
     'downloaded). Upload it first with:\n' +
     '    curl -sS -X POST "$REINS_API_URL/api/agent-uploads?filename=NAME&mimeType=TYPE" \\\n' +
-    '      -H "x-reins-agent-secret: $OPENCLAW_GATEWAY_TOKEN" \\\n' +
+    '      -H "x-reins-agent-secret: $REINS_GATEWAY_TOKEN" \\\n' +
     '      -H "Content-Type: application/octet-stream" --data-binary @/path/to/file\n' +
     '  then pass the returned uploadId. Requires: uploadId. Uploads expire after 24 hours.\n' +
     '• source="base64" — raw bytes you encode inline. LAST RESORT: you must emit every ' +

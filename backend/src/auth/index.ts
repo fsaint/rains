@@ -552,11 +552,8 @@ export async function registerAuth(app: FastifyInstance) {
       path.startsWith('/mcp/') ||
       path.startsWith('/api/agents/register') || // agent self-registration
       path === '/api/webhooks/telegram' || // Telegram webhook (authenticated via secret_token header)
-      path === '/api/webhooks/shared-bot' || // Shared bot relay (authenticated via secret_token header)
       path === '/api/config/public' || // Public config (no secrets)
-      path.startsWith('/api/webhooks/agent-bot/') || // Agent bot relay (authenticated via secret_token header)
-      path === '/api/oauth/google/callback' || // Google OAuth callback — state token validated inside handler
-      /^\/api\/agents\/[^/]+\/topic-prompts$/.test(path) // Topic prompts (authenticated via x-reins-agent-secret)
+      path === '/api/oauth/google/callback' // Google OAuth callback — state token validated inside handler
     ) {
       return;
     }

@@ -16,7 +16,7 @@ interface Exec {
  */
 export async function migrateDeployedAgents(db: Exec): Promise<void> {
   const exists = await db.execute({
-    sql: `SELECT to_regclass('public.deployed_agents') IS NOT NULL AS exists`,
+    sql: `SELECT to_regclass('deployed_agents') IS NOT NULL AS exists`,
     args: [],
   });
   if (exists.rows[0]?.exists === true) {

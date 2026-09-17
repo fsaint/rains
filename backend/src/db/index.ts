@@ -572,9 +572,11 @@ export async function initializeDatabase() {
   // MCP endpoint authentication — OAuth 2.1, per the MCP specification
   //
   // The endpoint accepts a Bearer token; a request without one is still served
-  // while deployed_agents.allow_unauthenticated is true. New agents are created
-  // with it false; agents that predate that keep it true until their owner
-  // clears it. Nothing here changes how an existing agent behaves.
+  // while agents.allow_unauthenticated is true. It defaults false — every
+  // agent is born closed. The one-time fold out of the old deployed_agents
+  // table deliberately left closed any agent with no live deployment row,
+  // and only the owner can open one from the dashboard (subject to the
+  // helm-admin latch).
   //
   // Tokens are stored as sha256 so a stolen database yields nothing usable.
   // bcrypt — the repo's only other hash — is salted per row and so cannot be

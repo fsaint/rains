@@ -3096,12 +3096,18 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   /**
    * Authenticate a request to /mcp/:agentId.
    *
-   * Three outcomes, and the middle one is the whole migration story:
+   * `allow_unauthenticated` lives on `agents` and defaults false — every
+   * agent is born closed. The one-time fold out of the old deployed-agents
+   * table deliberately left closed any agent that had no live deployment
+   * row, rather than opening it. Only the owner can open an agent from the
+   * dashboard, and only subject to the helm-admin latch (an admin agent
+   * cannot exist while any agent is open to unauthenticated MCP).
+   *
+   * Three outcomes:
    *
    *  - A valid Bearer token for this agent → authenticated.
-   *  - No token at all → served exactly as before, *while* this agent still
-   *    allows it. That flag defaults true and is only ever cleared by the
-   *    owner, so no existing agent changes behaviour.
+   *  - No token at all → served only while this agent's
+   *    `allow_unauthenticated` is true.
    *  - A token that does not verify → 401, always, even where no token was
    *    required. Falling back to unauthenticated would hide a misconfigured
    *    client from the person who set it up.
@@ -3306,7 +3312,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
 
   /**
-   * Get agent detail with deployment info joined
+   * Get agent detail, including its MCP endpoint URL and auth state.
    */
   app.get<{ Params: { id: string } }>('/api/agents/:id/detail', async (request, reply) => {
     const { id } = request.params;
@@ -3431,7 +3437,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (!agentSecret) return null;
 
     const result = await client.execute({
-      sql: `SELECT id, user_id FROM agents WHERE gateway_token = ? LIMIT 1`,
+      sql: `SELECT id, user_id FROM agents WHERE gateway_token = ? AND gateway_token IS NOT NULL LIMIT 1`,
       args: [agentSecret],
     });
     if (result.rows.length === 0) return null;
@@ -4789,9 +4795,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   });
 
   /**
-   * Destroy an agent. Irreversible: the Fly machine goes, and seven tables are
-   * hard-deleted. Memory entries survive — they belong to the owner's scope,
-   * not to the agent.
+   * Destroy an agent. Irreversible: the MCP connection is dropped, and seven
+   * tables are hard-deleted. Memory entries survive — they belong to the
+   * owner's scope, not to the agent.
    */
   app.delete<{ Params: { agentId: string } }>('/api/agent-admin/agents/:agentId', async (request, reply) => {
     const agent = await resolveAdminCaller(request, reply);
