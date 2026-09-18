@@ -440,6 +440,17 @@ export interface DrivePathRule {
   permission: 'read' | 'write' | 'blocked';
 }
 
+export interface DriveFolderEntry {
+  id: string;
+  name: string;
+}
+
+export interface DriveFolderListing {
+  folders: DriveFolderEntry[];
+  /** Only at the top level (no parentId). */
+  sharedDrives?: DriveFolderEntry[];
+}
+
 export interface DrivePathConfig {
   defaultLevel: 'read' | 'write' | 'blocked';
   rules: DrivePathRule[];
@@ -587,6 +598,17 @@ export const permissions = {
       method: 'PUT',
       body: JSON.stringify(config),
     }),
+
+  // Folders of the agent's Drive account, for the path-rule picker. With no
+  // parentId: My Drive (id 'root') plus the shared drives; with one: its
+  // subfolders. Fails with code INVALID_TOKEN when the stored token no longer works.
+  listDriveFolders: (agentId: string, opts: { credentialId?: string; parentId?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (opts.credentialId) params.set('credentialId', opts.credentialId);
+    if (opts.parentId) params.set('parentId', opts.parentId);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return request<DriveFolderListing>(`/permissions/${agentId}/drive/folders${qs}`);
+  },
 
   // Which memory scopes this agent may reach. Narrowing only: 'all' means every
   // scope its owner has, which is what an agent with no grants gets.

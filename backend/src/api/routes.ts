@@ -114,7 +114,7 @@ import {
   clearGrace,
   cancelSubscription,
 } from '../services/billing.js';
-import { validateDrivePathRules, isDrivePermissionLevel, DrivePathRuleValidationError } from '../services/drive-path-rules.js';
+import { validateDrivePathRules, isDrivePermissionLevel, DrivePathRuleValidationError, normalizeDriveFolderId } from '../services/drive-path-rules.js';
 import { nanoid } from 'nanoid';
 import {
   CreateAgentSchema,
@@ -1144,6 +1144,137 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         .filter((p) => p.id !== undefined && p.id !== null)
         .map((p) => ({ id: String(p.id), name: typeof p.name === 'string' ? p.name : String(p.id) }));
       return { data };
+    }
+  );
+
+  /**
+   * GET /api/permissions/:agentId/drive/folders?credentialId=<id>&parentId=<id>
+   *
+   * The folder browser behind the Drive path-rule picker. With no parentId it
+   * answers the top level — My Drive (id `root`) and the account's shared
+   * drives; with one, that folder's subfolders. Same credential rules as the
+   * Hermeneutix projects route: the agent is the session user's, the
+   * credential is one of the owner's Google accounts, and with no credentialId
+   * the agent's default Drive instance supplies it. Plain Drive REST calls —
+   * the googleapis client lives in the servers package, not here.
+   */
+  app.get<{ Params: { agentId: string }; Querystring: { credentialId?: string; parentId?: string } }>(
+    '/api/permissions/:agentId/drive/folders',
+    async (request, reply) => {
+      const { agentId } = request.params;
+      const userId = getUserId(request);
+
+      const agentResult = await client.execute({
+        sql: `SELECT id, user_id FROM agents WHERE id = ? AND user_id = ?`,
+        args: [agentId, userId],
+      });
+      if (agentResult.rows.length === 0) {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Agent not found' } });
+      }
+      const ownerId = agentResult.rows[0].user_id as string;
+
+      // The parent goes into a Drive query string verbatim, so it is held to
+      // the id alphabet before anything else happens.
+      const rawParent = request.query.parentId?.trim() || undefined;
+      const parentId = rawParent ? normalizeDriveFolderId(rawParent) : null;
+      if (rawParent && !parentId) {
+        return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'parentId must be a Drive folder id' } });
+      }
+
+      let credentialId = request.query.credentialId?.trim() || undefined;
+      if (!credentialId) {
+        const inst = await client.execute({
+          sql: `SELECT credential_id FROM agent_service_instances
+                WHERE agent_id = ? AND service_type = 'drive' AND enabled = true AND credential_id IS NOT NULL
+                ORDER BY is_default DESC, created_at ASC LIMIT 1`,
+          args: [agentId],
+        });
+        credentialId = (inst.rows[0]?.credential_id as string | undefined) ?? undefined;
+      }
+      if (!credentialId) {
+        return reply.code(400).send({
+          error: { code: 'VALIDATION_ERROR', message: 'credentialId is required: this agent has no Drive account linked' },
+        });
+      }
+
+      const credResult = await client.execute({
+        sql: `SELECT id, service_id, user_id FROM credentials WHERE id = ?`,
+        args: [credentialId],
+      });
+      let cred = credResult.rows[0];
+      if (!cred) {
+        // Dangling id after a Credentials-page update: read through the
+        // owner's one Google account if there is exactly one. No write here.
+        const owned = await client.execute({
+          sql: `SELECT id, service_id, user_id FROM credentials WHERE user_id = ? AND service_id = 'google'`,
+          args: [ownerId],
+        });
+        if (owned.rows.length !== 1) {
+          return reply.code(404).send({
+            error: { code: 'NOT_FOUND', message: 'Google account is no longer connected — reconnect it on the Credentials page' },
+          });
+        }
+        cred = owned.rows[0];
+        credentialId = cred.id as string;
+      }
+      if (cred.service_id !== 'google' || cred.user_id !== ownerId) {
+        return reply.code(403).send({
+          error: { code: 'FORBIDDEN', message: "Credential is not a Google account of this agent's owner" },
+        });
+      }
+
+      const token = await credentialVault.getValidAccessToken(credentialId);
+      if (!token) {
+        return reply.code(401).send({ error: { code: 'INVALID_TOKEN', message: 'Google token is missing or expired' } });
+      }
+
+      const driveGet = async (path: string, params: Record<string, string>): Promise<Response> =>
+        fetch(`https://www.googleapis.com/drive/v3/${path}?${new URLSearchParams(params).toString()}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+      let res: Response;
+      try {
+        res = parentId
+          ? await driveGet('files', {
+              q: `'${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+              fields: 'files(id,name)',
+              orderBy: 'name',
+              pageSize: '200',
+              supportsAllDrives: 'true',
+              includeItemsFromAllDrives: 'true',
+            })
+          : await driveGet('drives', { fields: 'drives(id,name)', pageSize: '100' });
+      } catch {
+        return reply.code(502).send({ error: { code: 'SERVER_ERROR', message: 'Could not reach Google Drive' } });
+      }
+      if (res.status === 401 || res.status === 403) {
+        return reply.code(401).send({ error: { code: 'INVALID_TOKEN', message: 'Google rejected the Drive token' } });
+      }
+      if (!res.ok) {
+        return reply.code(502).send({ error: { code: 'SERVER_ERROR', message: `Google Drive returned ${res.status}` } });
+      }
+
+      let body: unknown;
+      try {
+        body = await res.json();
+      } catch {
+        return reply.code(502).send({ error: { code: 'SERVER_ERROR', message: 'Google Drive returned malformed JSON' } });
+      }
+      const entries = (list: unknown): Array<{ id: string; name: string }> =>
+        (Array.isArray(list) ? list : [])
+          .filter((f): f is Record<string, unknown> => isPlainObject(f) && typeof f.id === 'string')
+          .map((f) => ({ id: f.id as string, name: typeof f.name === 'string' ? f.name : (f.id as string) }));
+
+      if (parentId) {
+        return { data: { folders: entries(isPlainObject(body) ? body.files : []) } };
+      }
+      return {
+        data: {
+          folders: [{ id: 'root', name: 'My Drive' }],
+          sharedDrives: entries(isPlainObject(body) ? body.drives : []),
+        },
+      };
     }
   );
 

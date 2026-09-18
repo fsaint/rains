@@ -25,6 +25,7 @@ vi.mock('../api/client', () => ({
     getAgentMemoryScopes: vi.fn(),
     setAgentMemoryScopes: vi.fn(),
     listHermeneutixProjects: vi.fn(),
+    listDriveFolders: vi.fn(),
   },
   agents: { listPending: vi.fn(), update: vi.fn(), delete: vi.fn(), cancelPending: vi.fn() },
   credentials: { list: vi.fn() },
@@ -343,6 +344,43 @@ describe('Permissions page', () => {
       await waitFor(() => {
         expect(permissions.setDrivePathConfig).toHaveBeenCalledWith('a1', { defaultLevel: 'write', rules: [] });
       });
+    });
+
+    it('lets the user browse the account\'s folders and adds the chosen one with its path as label', async () => {
+      vi.mocked(permissions.listDriveFolders).mockImplementation(async (_agentId, opts) => {
+        if (!opts?.parentId) return { folders: [{ id: 'root', name: 'My Drive' }], sharedDrives: [{ id: 'sd-1', name: 'Marketing' }] };
+        if (opts.parentId === 'root') return { folders: [{ id: 'FOLDER_CLIENTS', name: 'Clients' }] };
+        if (opts.parentId === 'FOLDER_CLIENTS') return { folders: [{ id: 'FOLDER_ACME', name: 'Acme' }] };
+        return { folders: [] };
+      });
+      await openEditor();
+
+      fireEvent.click(screen.getByRole('button', { name: /^Browse$/ }));
+      expect(await screen.findByText('Marketing')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /^Open My Drive$/ }));
+      fireEvent.click(await screen.findByRole('button', { name: /^Open Clients$/ }));
+      fireEvent.click(await screen.findByRole('button', { name: /^Choose Acme$/ }));
+
+      // The picker filled the id and a readable path; Add saves it like a paste would.
+      expect(screen.getByPlaceholderText(/Folder ID or Drive URL/)).toHaveValue('FOLDER_ACME');
+      expect(screen.getByPlaceholderText(/^Label/)).toHaveValue('My Drive/Clients/Acme');
+      fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
+
+      await waitFor(() => {
+        expect(permissions.setDrivePathConfig).toHaveBeenCalledWith('a1', {
+          defaultLevel: 'write',
+          rules: [docsRule, { folderId: 'FOLDER_ACME', label: 'My Drive/Clients/Acme', permission: 'write' }],
+        });
+      });
+    });
+
+    it('says when the folders cannot be listed instead of failing silently', async () => {
+      vi.mocked(permissions.listDriveFolders).mockRejectedValue(new ApiError('INVALID_TOKEN', 'Google token expired'));
+      await openEditor();
+
+      fireEvent.click(screen.getByRole('button', { name: /^Browse$/ }));
+
+      expect(await screen.findByText(/Google token expired/)).toBeInTheDocument();
     });
 
     it('explains what the default level means and follows a change to it', async () => {

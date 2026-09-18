@@ -12,12 +12,14 @@ import {
   type PendingRegistration,
   type DrivePathConfig,
   type DrivePathRule,
+  type DriveFolderEntry,
   type HermeneutixInstanceConfig,
   skills as skillsApi,
 } from '../api/client';
 import {
   Mail,
   HardDrive,
+  FolderOpen,
   Calendar,
   Search,
   Globe,
@@ -1818,6 +1820,96 @@ function MemoryScopeEditor({ agentId }: { agentId: string }) {
   );
 }
 
+/**
+ * Browse the agent's Drive account to pick a folder for a path rule, instead
+ * of pasting an id. The path walked is what becomes the rule's label, so the
+ * list reads "My Drive/Clients/Acme" rather than a bare id.
+ */
+function DriveFolderBrowser({
+  agentId, onChoose, onClose,
+}: {
+  agentId: string;
+  onChoose: (folder: DriveFolderEntry, path: string) => void;
+  onClose: () => void;
+}) {
+  // Breadcrumb from the top level down; empty means the top level itself.
+  const [trail, setTrail] = useState<DriveFolderEntry[]>([]);
+  const parent = trail[trail.length - 1];
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['permissions', agentId, 'drive-folders', parent?.id ?? null],
+    queryFn: () => permissions.listDriveFolders(agentId, parent ? { parentId: parent.id } : {}),
+  });
+
+  const pathTo = (folder: DriveFolderEntry) => [...trail, folder].map((f) => f.name).join('/');
+
+  const row = (folder: DriveFolderEntry) => (
+    <div key={folder.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-white">
+      <FolderOpen className="w-4 h-4 text-gray-400 shrink-0" />
+      <span className="flex-1 min-w-0 text-sm text-reins-navy truncate">{folder.name}</span>
+      <button
+        type="button"
+        onClick={() => setTrail([...trail, folder])}
+        aria-label={`Open ${folder.name}`}
+        className="text-xs text-gray-500 hover:text-reins-navy px-2 py-0.5"
+      >
+        Open
+      </button>
+      <button
+        type="button"
+        onClick={() => onChoose(folder, pathTo(folder))}
+        aria-label={`Choose ${folder.name}`}
+        className="text-xs font-medium text-trust-blue hover:text-blue-600 px-2 py-0.5"
+      >
+        Choose
+      </button>
+    </div>
+  );
+
+  return (
+    <div className="border border-gray-200 rounded-lg bg-gray-50 p-2 space-y-2">
+      <div className="flex items-center gap-1 text-xs text-gray-500 flex-wrap">
+        <button type="button" onClick={() => setTrail([])} className="hover:text-reins-navy">
+          Drive
+        </button>
+        {trail.map((folder, i) => (
+          <span key={folder.id} className="flex items-center gap-1">
+            <span>/</span>
+            <button type="button" onClick={() => setTrail(trail.slice(0, i + 1))} className="hover:text-reins-navy">
+              {folder.name}
+            </button>
+          </span>
+        ))}
+        <span className="flex-1" />
+        <button type="button" onClick={onClose} aria-label="Close folder browser" className="text-gray-400 hover:text-gray-600">
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      {isLoading && <p className="text-xs text-gray-400 px-2">Loading folders…</p>}
+      {error && (
+        <p className="text-xs text-red-600 px-2">
+          {error instanceof Error ? error.message : 'Could not list folders.'}
+        </p>
+      )}
+      {data && (
+        <div className="space-y-0.5">
+          {data.folders.map(row)}
+          {data.sharedDrives && data.sharedDrives.length > 0 && (
+            <>
+              <div className="text-[11px] font-medium text-gray-400 uppercase tracking-wide px-2 pt-2">Shared drives</div>
+              {data.sharedDrives.map(row)}
+            </>
+          )}
+          {data.folders.length === 0 && !(data.sharedDrives && data.sharedDrives.length > 0) && (
+            <p className="text-xs text-gray-400 px-2">No subfolders here.</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DrivePathEditor({ agentId }: DrivePathEditorProps) {
   const queryClient = useQueryClient();
   const [newFolderId, setNewFolderId] = useState('');
@@ -1825,6 +1917,7 @@ function DrivePathEditor({ agentId }: DrivePathEditorProps) {
   const [newPermission, setNewPermission] = useState<'read' | 'write' | 'blocked'>('write');
   // Why the last Add was refused; cleared as soon as the folder field changes.
   const [addError, setAddError] = useState<string | null>(null);
+  const [browsing, setBrowsing] = useState(false);
 
   const { data: config, isLoading } = useQuery({
     queryKey: ['permissions', agentId, 'drive-path-config'],
@@ -1952,16 +2045,38 @@ function DrivePathEditor({ agentId }: DrivePathEditorProps) {
         <div>
           <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Add folder override</div>
           <div className="space-y-2">
-            <input
-              type="text"
-              placeholder="Folder ID or Drive URL"
-              value={newFolderId}
-              onChange={(e) => {
-                setNewFolderId(e.target.value);
-                setAddError(null);
-              }}
-              className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-trust-blue/30 focus:border-trust-blue"
-            />
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="Folder ID or Drive URL"
+                value={newFolderId}
+                onChange={(e) => {
+                  setNewFolderId(e.target.value);
+                  setAddError(null);
+                }}
+                className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-trust-blue/30 focus:border-trust-blue"
+              />
+              <button
+                type="button"
+                onClick={() => setBrowsing((b) => !b)}
+                className="flex items-center gap-1 text-sm text-gray-600 hover:text-reins-navy border border-gray-200 rounded-lg px-3 py-1.5 transition-all"
+              >
+                <FolderOpen className="w-3.5 h-3.5" />
+                Browse
+              </button>
+            </div>
+            {browsing && (
+              <DriveFolderBrowser
+                agentId={agentId}
+                onChoose={(folder, path) => {
+                  setNewFolderId(folder.id);
+                  if (!newLabel.trim()) setNewLabel(path);
+                  setAddError(null);
+                  setBrowsing(false);
+                }}
+                onClose={() => setBrowsing(false)}
+              />
+            )}
             {addError && <p className="text-xs text-red-600">{addError}</p>}
             <div className="flex gap-2">
               <input
