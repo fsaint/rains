@@ -114,7 +114,14 @@ export default function Credentials() {
         });
       }
     } else if (oauthError) {
+      const expected = searchParams.get('expected');
+      const got = searchParams.get('got');
       const errorMessages: Record<string, string> = {
+        account_mismatch:
+          expected && got
+            ? `That sign-in was for ${got}, but this credential is ${expected}. Nothing was changed. Choose ${expected} on the account picker (or sign out of ${got} first) and try Reconnect again.`
+            : 'The account you signed in with does not match the credential being reconnected. Nothing was changed.',
+        reconnect_not_found: 'The credential you were reconnecting no longer exists. Connect the account again instead.',
         missing_params: 'OAuth flow was interrupted.',
         invalid_state: 'Security validation failed. Please try again.',
         token_exchange_failed: 'Failed to exchange authorization code.',

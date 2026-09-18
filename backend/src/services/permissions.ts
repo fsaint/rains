@@ -1213,18 +1213,20 @@ export async function createServiceInstance(
 
   const now = new Date().toISOString();
 
-  // If no credential was explicitly provided, find the first matching one for this agent's user.
-  // This handles the common case where the credential already exists when the service is added.
+  // If no credential was explicitly provided and the user has exactly one
+  // matching account, attach it. With several accounts there is nothing to
+  // choose by — the first row returned is as likely the personal inbox as the
+  // business one — so the instance is created unlinked and the owner picks.
   if (!resolvedCredentialId) {
     const [agent] = await db.select().from(agents).where(eq(agents.id, agentId));
     if (agent?.userId) {
       const serviceIds = def.auth.credentialServiceIds ?? [serviceType];
-      const [matchingCred] = await db
+      const matching = await db
         .select()
         .from(credentials)
         .where(and(inArray(credentials.serviceId, serviceIds), eq(credentials.userId, agent.userId)));
-      if (matchingCred) {
-        resolvedCredentialId = matchingCred.id;
+      if (matching.length === 1) {
+        resolvedCredentialId = matching[0].id;
       }
     }
   }

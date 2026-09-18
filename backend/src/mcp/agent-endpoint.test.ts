@@ -1607,6 +1607,40 @@ describe('multi-account policy', () => {
     );
   });
 
+  /**
+   * The heal is a repair, not a guess. With two Google accounts on the owner,
+   * binding the first row returned would silently point a business inbox's
+   * instance at the personal account. Leave it unbound and fail the call so
+   * the owner picks the account in the dashboard.
+   */
+  it('does not heal when the owner has several matching credentials', async () => {
+    const dangling = { ...instA, serviceType: 'calendar', credentialId: 'cred-gone' };
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([dangling]);
+    dbWhereMock.mockResolvedValueOnce([]); // cred-gone has no credentials row
+    dbWhereMock.mockResolvedValueOnce([{ id: 'agent-1', userId: 'user-1' }]);
+    dbWhereMock.mockResolvedValueOnce([
+      { id: 'cred-personal', serviceId: 'calendar', userId: 'user-1', accountEmail: 'me@gmail.com' },
+      { id: 'cred-work', serviceId: 'calendar', userId: 'user-1', accountEmail: 'ops@acme.com' },
+    ]);
+    const { credentialVault } = await import('../credentials/vault.js');
+    vi.mocked(credentialVault.retrieve).mockResolvedValueOnce(null);
+    const { serverManager } = await import('./server-manager.js');
+    const server = serverManager.getServer('calendar')!;
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'calendar_list_events', arguments: {} },
+    });
+
+    expect(dbUpdateMock).not.toHaveBeenCalled();
+    expect(server.callTool).not.toHaveBeenCalled();
+    const text = JSON.stringify(response);
+    expect(text).toMatch(/No account is linked for calendar/);
+    expect(text).toContain('me@gmail.com');
+    expect(text).toContain('ops@acme.com');
+  });
+
   it('does not touch an instance whose credential is live', async () => {
     const cA = { ...instA, serviceType: 'calendar' };
     dbWhereMock.mockResolvedValueOnce(agentRow);

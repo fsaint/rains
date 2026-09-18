@@ -798,16 +798,31 @@ async function executeTool(
           const [agentRow] = await db.select().from(agents).where(eq(agents.id, agentId));
           if (def && agentRow?.userId) {
             const serviceIds = def.auth.credentialServiceIds ?? [serviceType];
-            const [matchingCred] = await db
+            const matching = await db
               .select()
               .from(credentials)
               .where(and(inArray(credentials.serviceId, serviceIds), eq(credentials.userId, agentRow.userId)));
-            if (matchingCred) {
+            // A repair, not a guess: with several accounts connected, the
+            // first row returned is as likely the wrong inbox as the right
+            // one. Leave the instance unbound so the owner picks the account.
+            if (matching.length === 1) {
+              const [matchingCred] = matching;
               await db
                 .update(agentServiceInstances)
                 .set({ credentialId: matchingCred.id, updatedAt: new Date().toISOString() })
                 .where(eq(agentServiceInstances.id, targetInstance.id));
               targetInstance = { ...targetInstance, credentialId: matchingCred.id };
+            } else if (matching.length > 1) {
+              const accounts = matching.map((c) => c.accountEmail).filter((e): e is string => !!e);
+              return {
+                success: false,
+                errorCode: MCP_ERROR_CODES.MISSING_CREDENTIALS,
+                errorMessage:
+                  `No account is linked for ${serviceType} on this agent, and its owner has ${matching.length} ${serviceType} accounts` +
+                  (accounts.length > 0 ? ` (${accounts.join(', ')})` : '') +
+                  `. Ask them to pick the account for this agent in the dashboard.`,
+                errorData: { service: serviceType, reason: 'ambiguous_account', accounts },
+              };
             }
           }
         } catch (healErr) {

@@ -2241,6 +2241,26 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   }
 
   /**
+   * The account a reconnect is for, or null when the credential is not this
+   * user's. Read without decrypting: only the label is needed here.
+   */
+  async function reconnectAccountEmail(credentialId: string, userId: string): Promise<string | null> {
+    const row = await client.execute({
+      sql: `SELECT account_email, user_id FROM credentials WHERE id = ? LIMIT 1`,
+      args: [credentialId],
+    });
+    const cred = row.rows[0];
+    if (!cred || cred.user_id !== userId) return null;
+    const email = cred.account_email as string | null;
+    return email && email.length > 0 ? email : null;
+  }
+
+  /** Case-insensitive account identity: mailbox addresses are not case-sensitive in practice. */
+  function sameAccount(a: string | undefined | null, b: string | undefined | null): boolean {
+    return !!a && !!b && a.trim().toLowerCase() === b.trim().toLowerCase();
+  }
+
+  /**
    * Initiate Google OAuth flow
    * Accepts optional `services` query param (comma-separated) to request specific scopes.
    * Example: /api/oauth/google?services=gmail,drive
@@ -2284,6 +2304,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       access_type: 'offline',
       prompt: 'consent',
     });
+    // A reconnect is for one specific account. Google picks the account from
+    // the browser session unless told otherwise, so name the stored one — the
+    // callback refuses a different account, but preselecting it here is what
+    // keeps a user signed into a personal account from hitting that refusal.
+    const hint = query.reconnect ? await reconnectAccountEmail(query.reconnect, userId) : null;
+    if (hint) params.set('login_hint', hint);
 
     const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
 
@@ -2366,11 +2392,28 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         // Calculate expiration date
         const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);
 
-        // Build token data — preserve existing refresh token if Google omits it (e.g. reconnect)
+        // A reconnect refreshes one specific credential. Google authorizes
+        // whichever account the browser is signed into, so check it is the
+        // account this credential holds before writing: otherwise a business
+        // mailbox's row would carry personal tokens under the business label,
+        // and every tool would read the wrong inbox while reporting the right
+        // address.
         let existingRefreshToken: string | undefined;
-        if (pendingFlow.reconnectCredentialId && !tokens.refresh_token) {
+        if (pendingFlow.reconnectCredentialId) {
           const existing = await credentialVault.retrieve(pendingFlow.reconnectCredentialId);
-          existingRefreshToken = (existing?.data as { refreshToken?: string } | undefined)?.refreshToken;
+          if (!existing) {
+            return reply.redirect(`${dashboardUrl}/credentials?oauth_error=reconnect_not_found`);
+          }
+          if (existing.accountEmail && !sameAccount(existing.accountEmail, userInfo.email)) {
+            return reply.redirect(
+              `${dashboardUrl}/credentials?oauth_error=account_mismatch` +
+                `&expected=${encodeURIComponent(existing.accountEmail)}&got=${encodeURIComponent(userInfo.email)}`
+            );
+          }
+          // Preserve the existing refresh token if Google omits it on reconnect.
+          if (!tokens.refresh_token) {
+            existingRefreshToken = (existing.data as { refreshToken?: string } | undefined)?.refreshToken;
+          }
         }
 
         const tokenData = {
@@ -2511,6 +2554,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       state,
       response_mode: 'query',
     });
+    // Same as the Google reconnect: preselect the account the credential holds.
+    const hint = query.reconnect ? await reconnectAccountEmail(query.reconnect, userId) : null;
+    if (hint) params.set('login_hint', hint);
 
     const authUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize?${params.toString()}`;
 
@@ -2592,11 +2638,23 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         const email = userInfo.mail || userInfo.userPrincipalName;
         const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);
 
-        // Preserve existing refresh token if Microsoft omits it (reconnect path)
+        // Same account check as the Google reconnect: never store one
+        // account's tokens under another account's label.
         let existingRefreshToken: string | undefined;
-        if (pendingFlow.reconnectCredentialId && !tokens.refresh_token) {
+        if (pendingFlow.reconnectCredentialId) {
           const existing = await credentialVault.retrieve(pendingFlow.reconnectCredentialId);
-          existingRefreshToken = (existing?.data as { refreshToken?: string } | undefined)?.refreshToken;
+          if (!existing) {
+            return reply.redirect(`${dashboardUrl}/credentials?oauth_error=reconnect_not_found`);
+          }
+          if (existing.accountEmail && !sameAccount(existing.accountEmail, email)) {
+            return reply.redirect(
+              `${dashboardUrl}/credentials?oauth_error=account_mismatch` +
+                `&expected=${encodeURIComponent(existing.accountEmail)}&got=${encodeURIComponent(email)}`
+            );
+          }
+          if (!tokens.refresh_token) {
+            existingRefreshToken = (existing.data as { refreshToken?: string } | undefined)?.refreshToken;
+          }
         }
 
         const tokenData = {

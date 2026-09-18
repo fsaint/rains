@@ -1014,6 +1014,20 @@ describe('Permission Service', () => {
       ]);
     });
 
+    it('does not guess between several accounts: with two credentials and no account named, the instance is created unlinked', async () => {
+      const { inserted } = mockTables(new Map<object, unknown[]>([
+        [agents, [agentRow]], [credentials, [cred1, cred2]], [agentServiceInstances, []],
+      ]));
+
+      const { created } = await createServiceInstance('agent-1', 'gmail');
+
+      expect(created).toBe(true);
+      expect(inserted(agentServiceInstances)).toEqual([
+        expect.objectContaining({ isDefault: true, credentialId: null }),
+      ]);
+      expect(inserted(agentServiceCredentials)).toEqual([]);
+    });
+
     it('adds a second account as a non-default sibling instance', async () => {
       const { inserted } = mockTables(new Map<object, unknown[]>([
         [agents, [agentRow]], [credentials, [cred1, cred2]], [agentServiceInstances, [inst1]],
