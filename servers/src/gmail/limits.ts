@@ -105,3 +105,12 @@ export function inferMimeFromFilename(filename: string): string {
   const ext = filename.split('.').pop()?.toLowerCase() ?? '';
   return EXT_TO_MIME[ext] ?? DEFAULT_MIME_TYPE;
 }
+
+/**
+ * Largest attachment `gmail_get_attachment` still returns inline as base64.
+ *
+ * Above this it returns only a download link: base64 inflates by 4/3 and
+ * lands in the model's context, where a few megabytes is millions of tokens.
+ * Small text files and thumbnails stay a single call.
+ */
+export const MAX_INLINE_DOWNLOAD_BYTES = 256 * 1024;

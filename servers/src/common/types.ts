@@ -68,7 +68,24 @@ export interface ServerContext {
    * has no settings. Must be forwarded by the init-servers whitelist.
    */
   instanceConfig?: Record<string, unknown>;
+  /**
+   * Mints a short-lived authenticated download URL for one Gmail attachment.
+   *
+   * Injected by the backend, which holds the signing secret and knows which
+   * credential this call resolved to. Absent when the backend did not supply
+   * it, in which case handlers fall back to inline base64.
+   */
+  signAttachmentUrl?: AttachmentLinkSigner;
 }
+
+/** See ServerContext.signAttachmentUrl. */
+export type AttachmentLinkSigner = (params: {
+  messageId: string;
+  attachmentId: string;
+  filename?: string;
+  mimeType?: string;
+  size?: number;
+}) => { url: string; token: string; expiresAt: string; curl: string };
 
 /**
  * Result of a tool execution

@@ -100,7 +100,22 @@ export const getMessageTool: ToolDefinition = {
 export const getAttachmentTool: ToolDefinition = {
   name: 'gmail_get_attachment',
   description:
-    'Download an email attachment as base64url-encoded data. Use gmail_get_message first to get attachment IDs.\n' +
+    'Get an email attachment. Use gmail_get_message first to get attachment IDs.\n' +
+    '\n' +
+    'Returns an authenticated download link, NOT the file bytes, so a large attachment never ' +
+    'enters your context. The response gives you: filename, mimeType, size, url, token, ' +
+    'expiresAt, and curl — where curl is the complete command, already filled in:\n' +
+    '\n' +
+    '  curl -fsSL -H "Authorization: Bearer <token>" -o "<filename>" "<url>"\n' +
+    '\n' +
+    'Run that command to write the file to disk. The token authorises this one attachment on ' +
+    'this one account, expires about 10 minutes after the call, and stops working if the owner ' +
+    'detaches the account — so download promptly and call this tool again if it expires. If you ' +
+    'cannot run shell commands, give the user the curl command or the url and token.\n' +
+    '\n' +
+    'Attachments under 256 KB also include the bytes inline as base64url in `data`, so small ' +
+    'text files and thumbnails need no download step.\n' +
+    '\n' +
     'DO NOT call this to forward or re-send a file. To attach a file from an existing email, ' +
     'pass {"source":"gmail","messageId":"…","attachmentId":"…"} in the attachments parameter of ' +
     'gmail_create_draft — Helm fetches the bytes server-side, so they never pass through your ' +

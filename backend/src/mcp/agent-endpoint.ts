@@ -35,6 +35,7 @@ import {
 } from '@reins/shared';
 
 import { checkUsageGate } from '../services/billing.js';
+import { buildAttachmentLink } from '../services/attachment-links.js';
 import { getAgentLimits, renderAgentLimits, describeToolLimit, type AgentLimits } from '../services/agent-limits.js';
 import {
   parseRequiredServices,
@@ -1009,6 +1010,16 @@ async function executeTool(
   // {success:false, error}, while googleapis THROWS (init-servers.callTool
   // does not catch), so the GaxiosError passes through this frame.
   const credentialId = resolvedCredentialId;
+
+  // Gmail attachments are delivered as a signed download link rather than
+  // base64 in the tool result. Injected here, after credential resolution,
+  // because the link is bound to the account this call actually resolved to
+  // — an agent with two mailboxes must not get a link that reads the other.
+  if (serviceType === 'gmail' && credentialId) {
+    context.signAttachmentUrl = (params) =>
+      buildAttachmentLink({ agentId, credentialId, ...params });
+  }
+
   let toolResult: Awaited<ReturnType<typeof server.callTool>>;
   try {
     toolResult = await server.callTool(toolName, args, context);

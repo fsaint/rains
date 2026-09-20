@@ -17,6 +17,9 @@ vi.mock('googleapis', () => {
         delete: vi.fn(),
         modify: vi.fn(),
         batchModify: vi.fn(),
+        attachments: {
+          get: vi.fn(),
+        },
       },
       drafts: {
         create: vi.fn(),
@@ -55,6 +58,7 @@ import {
   handleArchive,
   handleMarkRead,
   handleLabelMessage,
+  handleGetAttachment,
   GMAIL_BATCH_MODIFY_MAX,
 } from './handlers.js';
 
@@ -646,5 +650,104 @@ describe('Gmail Handlers', () => {
         });
       });
     });
+  });
+});
+
+
+/**
+ * The attachment tool hands back a download link instead of base64, because a
+ * 10 MB file inlined into a tool result is millions of tokens of context.
+ */
+describe('handleGetAttachment', () => {
+  const baseContext: ServerContext = { requestId: 'req-att', accessToken: 'test-access-token' };
+
+  const messageWithPdf = {
+    data: {
+      payload: {
+        parts: [
+          {
+            filename: 'report.pdf',
+            mimeType: 'application/pdf',
+            body: { attachmentId: 'att-1', size: 5 * 1024 * 1024 },
+          },
+        ],
+      },
+    },
+  };
+
+  function contextWithSigner() {
+    const signAttachmentUrl = vi.fn(() => ({
+      url: 'https://app.helm.mom/api/gmail/attachments/download',
+      token: 'tok-abc',
+      expiresAt: '2026-01-01T00:10:00.000Z',
+      curl: 'curl -fsSL -H "Authorization: Bearer tok-abc" -o "report.pdf" "https://app.helm.mom/api/gmail/attachments/download"',
+    }));
+    return { ...baseContext, signAttachmentUrl } as ServerContext & { signAttachmentUrl: typeof signAttachmentUrl };
+  }
+
+  it('returns a link and no bytes for a large attachment', async () => {
+    const gmail = google.gmail({ version: 'v1' }) as any;
+    gmail.users.messages.get.mockResolvedValue(messageWithPdf);
+    const context = contextWithSigner();
+
+    const result = await handleGetAttachment({ messageId: 'msg-1', attachmentId: 'att-1' }, context);
+
+    expect(result.success).toBe(true);
+    const payload = data(result) as Record<string, unknown>;
+    expect(payload.data).toBeUndefined();
+    expect(payload.url).toBe('https://app.helm.mom/api/gmail/attachments/download');
+    expect(payload.token).toBe('tok-abc');
+    expect(payload.curl).toContain('Authorization: Bearer tok-abc');
+    expect(payload).toMatchObject({ filename: 'report.pdf', mimeType: 'application/pdf', size: 5 * 1024 * 1024 });
+    // The whole point: the bytes were never fetched into the tool result.
+    expect(gmail.users.messages.attachments.get).not.toHaveBeenCalled();
+    expect(context.signAttachmentUrl).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: 'msg-1', attachmentId: 'att-1', filename: 'report.pdf' })
+    );
+  });
+
+  it('still inlines a small attachment alongside the link', async () => {
+    const gmail = google.gmail({ version: 'v1' }) as any;
+    gmail.users.messages.get.mockResolvedValue({
+      data: {
+        payload: {
+          parts: [{ filename: 'note.txt', mimeType: 'text/plain', body: { attachmentId: 'att-1', size: 11 } }],
+        },
+      },
+    });
+    gmail.users.messages.attachments.get.mockResolvedValue({
+      data: { size: 11, data: Buffer.from('hello world').toString('base64url') },
+    });
+
+    const result = await handleGetAttachment({ messageId: 'msg-1', attachmentId: 'att-1' }, contextWithSigner());
+
+    const payload = data(result) as Record<string, unknown>;
+    expect(payload.encoding).toBe('base64url');
+    expect(Buffer.from(payload.data as string, 'base64url').toString()).toBe('hello world');
+    expect(payload.url).toBe('https://app.helm.mom/api/gmail/attachments/download');
+  });
+
+  it('falls back to base64 when no link signer is available', async () => {
+    const gmail = google.gmail({ version: 'v1' }) as any;
+    gmail.users.messages.get.mockResolvedValue(messageWithPdf);
+    gmail.users.messages.attachments.get.mockResolvedValue({
+      data: { size: 5, data: Buffer.from('bytes').toString('base64url') },
+    });
+
+    const result = await handleGetAttachment({ messageId: 'msg-1', attachmentId: 'att-1' }, baseContext);
+
+    const payload = data(result) as Record<string, unknown>;
+    expect(payload.url).toBeUndefined();
+    expect(payload.encoding).toBe('base64url');
+  });
+
+  it('reports an attachment id the message does not contain', async () => {
+    const gmail = google.gmail({ version: 'v1' }) as any;
+    gmail.users.messages.get.mockResolvedValue(messageWithPdf);
+
+    const result = await handleGetAttachment({ messageId: 'msg-1', attachmentId: 'nope' }, contextWithSigner());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/attachment/i);
   });
 });

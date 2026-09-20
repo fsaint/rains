@@ -72,6 +72,11 @@ import { getSession, requireAdmin, type SessionPayload } from '../auth/index.js'
 import { getPostHog } from '../analytics/posthog.js';
 import { createUpload, getUpload, MAX_UPLOAD_BYTES } from '../services/agent-uploads.js';
 import {
+  ATTACHMENT_DOWNLOAD_PATH,
+  safeAttachmentFilename,
+  verifyAttachmentToken,
+} from '../services/attachment-links.js';
+import {
   parseWikilinkRefs,
   updateLinkIndex,
   updateTagIndex,
@@ -3722,6 +3727,89 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       .header('content-length', String(upload.sizeBytes))
       .header('x-upload-filename', encodeURIComponent(upload.filename))
       .send(upload.data);
+  });
+
+  /**
+   * GET /api/gmail/attachments/download
+   *
+   * Streams one Gmail attachment to whoever holds a valid download token, so
+   * the bytes never pass through the model's context. Authorized entirely by
+   * the bearer token minted by gmail_get_attachment — there is no session
+   * here, which is why the path sits in the auth-guard allowlist and this
+   * handler does the whole check itself.
+   *
+   * The token is re-authorized on every request: it is only honoured while
+   * the agent still has that Gmail account enabled, so detaching the account
+   * or disabling the service kills every outstanding link immediately.
+   */
+  app.get(ATTACHMENT_DOWNLOAD_PATH, async (request, reply) => {
+    const bearer = (request.headers.authorization ?? '').match(/^Bearer\s+(.+)$/i)?.[1];
+    const claims = bearer ? verifyAttachmentToken(bearer) : null;
+    if (!claims) {
+      return reply
+        .code(401)
+        .send({ error: { code: 'UNAUTHORIZED', message: 'Missing, expired, or invalid download token' } });
+    }
+
+    const instance = await client.execute({
+      sql: `SELECT id FROM agent_service_instances
+            WHERE agent_id = ? AND service_type = 'gmail' AND enabled = true AND credential_id = ?
+            LIMIT 1`,
+      args: [claims.agentId, claims.credentialId],
+    });
+    if (instance.rows.length === 0) {
+      return reply.code(403).send({
+        error: { code: 'FORBIDDEN', message: 'This agent no longer has access to that Gmail account' },
+      });
+    }
+
+    const accessToken = await credentialVault.getValidAccessToken(claims.credentialId);
+    if (!accessToken) {
+      return reply
+        .code(401)
+        .send({ error: { code: 'INVALID_TOKEN', message: 'Google token is missing or expired' } });
+    }
+
+    let res: Response;
+    try {
+      res = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(claims.messageId)}` +
+          `/attachments/${encodeURIComponent(claims.attachmentId)}`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+    } catch {
+      return reply.code(502).send({ error: { code: 'SERVER_ERROR', message: 'Could not reach Gmail' } });
+    }
+    if (res.status === 401 || res.status === 403) {
+      return reply.code(401).send({ error: { code: 'INVALID_TOKEN', message: 'Gmail rejected the token' } });
+    }
+    if (!res.ok) {
+      return reply.code(502).send({ error: { code: 'SERVER_ERROR', message: `Gmail returned ${res.status}` } });
+    }
+
+    let body: unknown;
+    try {
+      body = await res.json();
+    } catch {
+      return reply.code(502).send({ error: { code: 'SERVER_ERROR', message: 'Gmail returned malformed JSON' } });
+    }
+    const encoded = isPlainObject(body) && typeof body.data === 'string' ? body.data : null;
+    if (encoded === null) {
+      return reply.code(502).send({ error: { code: 'SERVER_ERROR', message: 'Gmail returned no attachment data' } });
+    }
+
+    const bytes = Buffer.from(encoded, 'base64url');
+    // Sender-controlled bytes served from the dashboard origin: always a
+    // download, never inline, and never sniffed into HTML or SVG.
+    const declared = claims.mimeType ?? '';
+    const mimeType = /^[\w.+-]+\/[\w.+-]+$/.test(declared) ? declared : 'application/octet-stream';
+
+    return reply
+      .header('content-type', mimeType)
+      .header('content-length', String(bytes.length))
+      .header('content-disposition', `attachment; filename="${safeAttachmentFilename(claims.filename)}"`)
+      .header('x-content-type-options', 'nosniff')
+      .send(bytes);
   });
 
   // =========================================================================

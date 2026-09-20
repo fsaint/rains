@@ -29,6 +29,15 @@ export interface NativeServerTool {
 /**
  * Context for tool execution
  */
+/** See ToolContext.signAttachmentUrl. Mirrors the servers-package type. */
+export type AttachmentLinkSigner = (params: {
+  messageId: string;
+  attachmentId: string;
+  filename?: string;
+  mimeType?: string;
+  size?: number;
+}) => { url: string; token: string; expiresAt: string; curl: string };
+
 export interface ToolContext {
   requestId: string;
   agentId: string;
@@ -51,6 +60,12 @@ export interface ToolContext {
    * it is scoped to from here. Absent on the legacy credential path.
    */
   instanceConfig?: Record<string, unknown>;
+  /**
+   * Mints a short-lived authenticated download URL for one Gmail attachment,
+   * so the bytes never enter the model's context. Injected per call, because
+   * it closes over the credential this call resolved to.
+   */
+  signAttachmentUrl?: AttachmentLinkSigner;
 }
 
 /**

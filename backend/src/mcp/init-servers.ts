@@ -55,6 +55,7 @@ export function createServerWrapper(
         drivePathRules: context.drivePathRules,
         gatewayToken: context.gatewayToken,
         instanceConfig: context.instanceConfig,
+        signAttachmentUrl: context.signAttachmentUrl,
       });
     },
   };

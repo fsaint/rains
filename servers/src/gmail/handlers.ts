@@ -5,6 +5,7 @@
 import { google, type drive_v3, type gmail_v1 } from 'googleapis';
 import type { ServerContext, ToolResult } from '../common/types.js';
 import { buildMimeMessage, toRawBase64Url, type ResolvedAttachment } from './mime.js';
+import { MAX_INLINE_DOWNLOAD_BYTES } from './limits.js';
 import {
   AttachmentError,
   collectAttachmentParts,
@@ -229,23 +230,71 @@ export async function handleGetAttachment(
   const messageId = args.messageId as string;
   const attachmentId = args.attachmentId as string;
 
-  const response = await gmail.users.messages.attachments.get({
-    userId: 'me',
+  // Filename, MIME type and size live on the message structure — the
+  // attachment endpoint answers only { data, size } — and they are what the
+  // download link is labelled with, so the message is read either way. This
+  // call carries no attachment bytes.
+  let parts: ReturnType<typeof collectAttachmentParts> = [];
+  try {
+    const message = await gmail.users.messages.get({ userId: 'me', id: messageId, format: 'full' });
+    parts = message.data.payload ? collectAttachmentParts(message.data.payload) : [];
+  } catch {
+    return {
+      success: false,
+      error: `Could not read message "${messageId}". Check the messageId from gmail_get_message or gmail_search.`,
+    };
+  }
+
+  const meta = parts.find((part) => part.attachmentId === attachmentId);
+  if (!meta) {
+    return {
+      success: false,
+      error:
+        `Message "${messageId}" has no attachment with id "${attachmentId}". ` +
+        'Call gmail_get_message to list its attachments.',
+    };
+  }
+
+  const link = context.signAttachmentUrl?.({
     messageId,
-    id: attachmentId,
+    attachmentId,
+    filename: meta.filename,
+    mimeType: meta.mimeType,
+    size: meta.size,
   });
 
-  const data = response.data.data ?? '';
-  const size = response.data.size ?? 0;
+  // Inline only what is cheap to carry. Without a link signer there is no
+  // other way to deliver the file, so fall back to base64 whatever the size.
+  let encoded: string | undefined;
+  if (!link || meta.size <= MAX_INLINE_DOWNLOAD_BYTES) {
+    const response = await gmail.users.messages.attachments.get({
+      userId: 'me',
+      messageId,
+      id: attachmentId,
+    });
+    encoded = response.data.data ?? '';
+  }
 
   return {
     success: true,
     data: {
-      attachmentId,
       messageId,
-      size,
-      encoding: 'base64url',
-      data,
+      attachmentId,
+      filename: meta.filename,
+      mimeType: meta.mimeType,
+      size: meta.size,
+      ...(link
+        ? {
+            url: link.url,
+            token: link.token,
+            expiresAt: link.expiresAt,
+            curl: link.curl,
+            note:
+              'Run `curl` to download the file. The bytes do not pass through this conversation. ' +
+              'The token authorises this one attachment and expires shortly.',
+          }
+        : {}),
+      ...(encoded === undefined ? {} : { encoding: 'base64url', data: encoded }),
     },
   };
 }

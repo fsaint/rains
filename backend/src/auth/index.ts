@@ -553,7 +553,8 @@ export async function registerAuth(app: FastifyInstance) {
       path.startsWith('/api/agents/register') || // agent self-registration
       path === '/api/webhooks/telegram' || // Telegram webhook (authenticated via secret_token header)
       path === '/api/config/public' || // Public config (no secrets)
-      path === '/api/oauth/google/callback' // Google OAuth callback — state token validated inside handler
+      path === '/api/oauth/google/callback' || // Google OAuth callback — state token validated inside handler
+      path === '/api/gmail/attachments/download' // Attachment download — capability token validated inside handler
     ) {
       return;
     }
