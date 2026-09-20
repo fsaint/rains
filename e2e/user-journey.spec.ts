@@ -73,8 +73,9 @@ test('login page shows error message for failed OAuth', async ({ page }) => {
   await page.goto('/?login_error=not_authorized');
   await expect(page.getByRole('button', { name: /continue with google/i }))
     .toBeVisible({ timeout: 10_000 });
-  // Error text from ERROR_MESSAGES['not_authorized']
-  await expect(page.getByText(/hasn't been set up yet/i)).toBeVisible({ timeout: 5_000 });
+  // Error text from ERROR_MESSAGES['not_authorized'] in pages/Login.tsx.
+  // Matches the same fragment the unit test asserts, so the two move together.
+  await expect(page.getByText(/not set up on Helm/i)).toBeVisible({ timeout: 5_000 });
 });
 
 test('login succeeds via API session injection', async ({ page, request }) => {
