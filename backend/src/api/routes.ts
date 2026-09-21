@@ -3730,6 +3730,25 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   });
 
   /**
+   * Walk a Gmail message payload for the attachment with this filename and
+   * return the id from *that* read. Used only to recover from a rotated id.
+   */
+  function findAttachmentIdByFilename(message: unknown, filename: string): string | null {
+    let found: string | null = null;
+    const walk = (part: unknown): void => {
+      if (found || !isPlainObject(part)) return;
+      const body = isPlainObject(part.body) ? part.body : undefined;
+      if (part.filename === filename && typeof body?.attachmentId === 'string') {
+        found = body.attachmentId;
+        return;
+      }
+      if (Array.isArray(part.parts)) part.parts.forEach(walk);
+    };
+    if (isPlainObject(message)) walk(message.payload);
+    return found;
+  }
+
+  /**
    * GET /api/gmail/attachments/download
    *
    * Streams one Gmail attachment to whoever holds a valid download token, so
@@ -3770,13 +3789,33 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         .send({ error: { code: 'INVALID_TOKEN', message: 'Google token is missing or expired' } });
     }
 
-    let res: Response;
-    try {
-      res = await fetch(
+    const fetchAttachment = (id: string): Promise<Response> =>
+      fetch(
         `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(claims.messageId)}` +
-          `/attachments/${encodeURIComponent(claims.attachmentId)}`,
+          `/attachments/${encodeURIComponent(id)}`,
         { headers: { Authorization: `Bearer ${accessToken}` } }
       );
+
+    let res: Response;
+    try {
+      res = await fetchAttachment(claims.attachmentId);
+
+      // Gmail rotates attachment ids between reads. Ids from earlier reads
+      // normally keep working, but if this one has stopped, the filename in
+      // the token still identifies the file: re-read the message and retry
+      // once with the id from that read.
+      if (res.status === 404 && claims.filename) {
+        const message = await fetch(
+          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(claims.messageId)}` +
+            `?format=full`,
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        );
+        if (message.ok) {
+          const parsed: unknown = await message.json().catch(() => null);
+          const fresh = findAttachmentIdByFilename(parsed, claims.filename);
+          if (fresh && fresh !== claims.attachmentId) res = await fetchAttachment(fresh);
+        }
+      }
     } catch {
       return reply.code(502).send({ error: { code: 'SERVER_ERROR', message: 'Could not reach Gmail' } });
     }

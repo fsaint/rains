@@ -5,7 +5,7 @@
 import { google, type drive_v3, type gmail_v1 } from 'googleapis';
 import type { ServerContext, ToolResult } from '../common/types.js';
 import { buildMimeMessage, toRawBase64Url, type ResolvedAttachment } from './mime.js';
-import { MAX_INLINE_DOWNLOAD_BYTES } from './limits.js';
+import { MAX_INLINE_DOWNLOAD_BYTES, formatBytes } from './limits.js';
 import {
   AttachmentError,
   collectAttachmentParts,
@@ -228,12 +228,12 @@ export async function handleGetAttachment(
   const gmail = getGmailClient(context);
 
   const messageId = args.messageId as string;
-  const attachmentId = args.attachmentId as string;
+  const filename = typeof args.filename === 'string' ? args.filename : undefined;
+  const attachmentId = typeof args.attachmentId === 'string' ? args.attachmentId : undefined;
 
   // Filename, MIME type and size live on the message structure — the
-  // attachment endpoint answers only { data, size } — and they are what the
-  // download link is labelled with, so the message is read either way. This
-  // call carries no attachment bytes.
+  // attachment endpoint answers only { data, size } — so the message is read
+  // either way. This call carries no attachment bytes.
   let parts: ReturnType<typeof collectAttachmentParts> = [];
   try {
     const message = await gmail.users.messages.get({ userId: 'me', id: messageId, format: 'full' });
@@ -245,32 +245,60 @@ export async function handleGetAttachment(
     };
   }
 
-  const meta = parts.find((part) => part.attachmentId === attachmentId);
-  if (!meta) {
+  if (parts.length === 0) {
+    return { success: false, error: `Message "${messageId}" has no attachments.` };
+  }
+
+  // Gmail mints a new attachmentId on every `messages.get`, so an id the
+  // caller was handed by an earlier call cannot appear in the list above.
+  // Matching on it and refusing when it is absent made every call fail, and
+  // told the caller to fetch a fresh id — a loop that cannot terminate,
+  // because the next id is stale too. Resolve on something stable instead,
+  // and download with the id from *this* read. Matching the id first is kept
+  // only for the case where it came from this very read.
+  const wanted = filename?.trim();
+  const meta =
+    (attachmentId ? parts.find((part) => part.attachmentId === attachmentId) : undefined) ??
+    (wanted
+      ? parts.find((part) => part.filename === wanted) ??
+        parts.find((part) => part.filename.toLowerCase() === wanted.toLowerCase())
+      : undefined) ??
+    (parts.length === 1 ? parts[0] : undefined);
+
+  const available = parts.map((part) => `"${part.filename}" (${formatBytes(part.size)})`).join(', ');
+
+  if (!meta && !attachmentId) {
     return {
       success: false,
-      error:
-        `Message "${messageId}" has no attachment with id "${attachmentId}". ` +
-        'Call gmail_get_message to list its attachments.',
+      error: wanted
+        ? `Message "${messageId}" has no attachment named "${wanted}". It has: ${available}.`
+        : `Message "${messageId}" has ${parts.length} attachments: ${available}. ` +
+          'Pass "filename" to say which one you want.',
     };
   }
 
+  // No stable way to tell which part a lone id refers to, so trust it: Gmail
+  // still honours ids issued by earlier reads. Better than refusing, and
+  // better than guessing at a part and handing back the wrong file.
+  const downloadId = meta?.attachmentId ?? (attachmentId as string);
+
   const link = context.signAttachmentUrl?.({
     messageId,
-    attachmentId,
-    filename: meta.filename,
-    mimeType: meta.mimeType,
-    size: meta.size,
+    attachmentId: downloadId,
+    filename: meta?.filename,
+    mimeType: meta?.mimeType,
+    size: meta?.size,
   });
 
   // Inline only what is cheap to carry. Without a link signer there is no
   // other way to deliver the file, so fall back to base64 whatever the size.
+  // An unidentified part has no known size, so it is never inlined.
   let encoded: string | undefined;
-  if (!link || meta.size <= MAX_INLINE_DOWNLOAD_BYTES) {
+  if (!link || (meta !== undefined && meta.size <= MAX_INLINE_DOWNLOAD_BYTES)) {
     const response = await gmail.users.messages.attachments.get({
       userId: 'me',
       messageId,
-      id: attachmentId,
+      id: downloadId,
     });
     encoded = response.data.data ?? '';
   }
@@ -279,10 +307,8 @@ export async function handleGetAttachment(
     success: true,
     data: {
       messageId,
-      attachmentId,
-      filename: meta.filename,
-      mimeType: meta.mimeType,
-      size: meta.size,
+      attachmentId: downloadId,
+      ...(meta ? { filename: meta.filename, mimeType: meta.mimeType, size: meta.size } : {}),
       ...(link
         ? {
             url: link.url,
@@ -291,7 +317,11 @@ export async function handleGetAttachment(
             curl: link.curl,
             note:
               'Run `curl` to download the file. The bytes do not pass through this conversation. ' +
-              'The token authorises this one attachment and expires shortly.',
+              'The token authorises this one attachment and expires shortly.' +
+              (meta
+                ? ''
+                : ' This message has several attachments and none was named, so the file could ' +
+                  'not be identified — pass "filename" to get its name and size.'),
           }
         : {}),
       ...(encoded === undefined ? {} : { encoding: 'base64url', data: encoded }),

@@ -219,6 +219,46 @@ describe('GET /api/gmail/attachments/download', () => {
     expect(res.headers['content-disposition']).toBe('attachment; filename="attachment.bin"');
   });
 
+  /**
+   * Gmail rotates attachment ids between reads. If the id in the token has
+   * stopped working, the filename still identifies the file.
+   */
+  it('recovers from a rotated id by re-reading the message and retrying once', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url);
+      calls.push(u);
+      if (u.includes('/attachments/att-1')) return new Response('{}', { status: 404 });
+      if (u.includes('?format=full')) {
+        return new Response(
+          JSON.stringify({ payload: { parts: [{ filename: 'report.pdf', body: { attachmentId: 'att-fresh' } }] } }),
+          { status: 200 }
+        );
+      }
+      if (u.includes('/attachments/att-fresh')) {
+        return new Response(JSON.stringify({ size: BYTES.length, data: BYTES.toString('base64url') }), { status: 200 });
+      }
+      return new Response('{}', { status: 404 });
+    }));
+
+    const res = await download(mintAttachmentToken(CLAIMS));
+
+    expect(res.statusCode).toBe(200);
+    expect(res.rawPayload.equals(BYTES)).toBe(true);
+    expect(calls.some((u) => u.includes('?format=full'))).toBe(true);
+    expect(calls.some((u) => u.includes('/attachments/att-fresh'))).toBe(true);
+  });
+
+  it('reports a 404 the filename cannot rescue', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) =>
+      String(url).includes('?format=full')
+        ? new Response(JSON.stringify({ payload: { parts: [] } }), { status: 200 })
+        : new Response('{}', { status: 404 })
+    ));
+
+    expect((await download(mintAttachmentToken(CLAIMS))).statusCode).toBe(502);
+  });
+
   /** A sender-chosen name must not be able to inject a header line. */
   it('neutralises a filename carrying a quote or newline', async () => {
     gmailAnswers();

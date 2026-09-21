@@ -100,7 +100,11 @@ export const getMessageTool: ToolDefinition = {
 export const getAttachmentTool: ToolDefinition = {
   name: 'gmail_get_attachment',
   description:
-    'Get an email attachment. Use gmail_get_message first to get attachment IDs.\n' +
+    'Get an email attachment. Use gmail_get_message first to see what a message carries.\n' +
+    '\n' +
+    'Name the attachment with "filename". Gmail issues a NEW attachmentId on every read, so an ' +
+    'id from an earlier call is already stale — the filename is the only stable way to point at ' +
+    'a file. If the message has exactly one attachment you may omit both and it is used.\n' +
     '\n' +
     'Returns an authenticated download link, NOT the file bytes, so a large attachment never ' +
     'enters your context. The response gives you: filename, mimeType, size, url, token, ' +
@@ -128,12 +132,20 @@ export const getAttachmentTool: ToolDefinition = {
         type: 'string',
         description: 'The ID of the message containing the attachment',
       },
+      filename: {
+        type: 'string',
+        description:
+          'Name of the attachment to get, as shown by gmail_get_message. The reliable way to ' +
+          'choose one. Optional when the message has exactly one attachment.',
+      },
       attachmentId: {
         type: 'string',
-        description: 'The attachment ID from gmail_get_message attachments list',
+        description:
+          'Optional. Gmail rotates these between reads, so prefer "filename". Accepted for ' +
+          'compatibility and passed straight through when no filename is given.',
       },
     },
-    required: ['messageId', 'attachmentId'],
+    required: ['messageId'],
   },
   handler: handleGetAttachment,
 };

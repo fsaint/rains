@@ -655,99 +655,198 @@ describe('Gmail Handlers', () => {
 
 
 /**
- * The attachment tool hands back a download link instead of base64, because a
- * 10 MB file inlined into a tool result is millions of tokens of context.
+ * Gmail mints a new attachmentId on every `messages.get`, so any id a caller
+ * holds is stale by the time it arrives. Selection must therefore key on
+ * something stable — the filename — and download with the id from the
+ * server's own fresh read. These tests model that rotation explicitly: the
+ * message always reports FRESH ids while callers pass STALE ones.
  */
 describe('handleGetAttachment', () => {
   const baseContext: ServerContext = { requestId: 'req-att', accessToken: 'test-access-token' };
 
-  const messageWithPdf = {
-    data: {
-      payload: {
-        parts: [
-          {
-            filename: 'report.pdf',
-            mimeType: 'application/pdf',
-            body: { attachmentId: 'att-1', size: 5 * 1024 * 1024 },
-          },
-        ],
-      },
-    },
+  const STALE = 'ANGjdJ8sZ0THXZ8i-stale-from-an-earlier-read';
+  const docx = {
+    filename: 'informe.docx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    body: { attachmentId: 'FRESH-docx', size: 20683 },
+  };
+  const signature = {
+    filename: 'image.png',
+    mimeType: 'image/png',
+    body: { attachmentId: 'FRESH-image', size: 57452 },
   };
 
+  function messageWith(parts: unknown[]) {
+    return { data: { payload: { parts } } };
+  }
+
   function contextWithSigner() {
-    const signAttachmentUrl = vi.fn(() => ({
+    const signAttachmentUrl = vi.fn((params: { filename?: string }) => ({
       url: 'https://app.helm.mom/api/gmail/attachments/download',
       token: 'tok-abc',
       expiresAt: '2026-01-01T00:10:00.000Z',
-      curl: 'curl -fsSL -H "Authorization: Bearer tok-abc" -o "report.pdf" "https://app.helm.mom/api/gmail/attachments/download"',
+      curl: `curl -fsSL -H "Authorization: Bearer tok-abc" -o "${params.filename ?? 'attachment.bin'}" "https://app.helm.mom/api/gmail/attachments/download"`,
     }));
     return { ...baseContext, signAttachmentUrl } as ServerContext & { signAttachmentUrl: typeof signAttachmentUrl };
   }
 
-  it('returns a link and no bytes for a large attachment', async () => {
-    const gmail = google.gmail({ version: 'v1' }) as any;
-    gmail.users.messages.get.mockResolvedValue(messageWithPdf);
+  let gmail: any;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    gmail = google.gmail({ version: 'v1' }) as any;
+    gmail.users.messages.attachments.get.mockResolvedValue({
+      data: { size: 11, data: Buffer.from('hello world').toString('base64url') },
+    });
+  });
+
+  /**
+   * The regression that made attachments unreachable: the id the caller was
+   * handed one call earlier can never appear in the next read's part list.
+   */
+  it('resolves a stale attachmentId when the filename names the file', async () => {
+    gmail.users.messages.get.mockResolvedValue(messageWith([signature, docx]));
     const context = contextWithSigner();
 
-    const result = await handleGetAttachment({ messageId: 'msg-1', attachmentId: 'att-1' }, context);
+    const result = await handleGetAttachment(
+      { messageId: 'msg-1', attachmentId: STALE, filename: 'informe.docx' },
+      context
+    );
 
     expect(result.success).toBe(true);
-    const payload = data(result) as Record<string, unknown>;
-    expect(payload.data).toBeUndefined();
-    expect(payload.url).toBe('https://app.helm.mom/api/gmail/attachments/download');
-    expect(payload.token).toBe('tok-abc');
-    expect(payload.curl).toContain('Authorization: Bearer tok-abc');
-    expect(payload).toMatchObject({ filename: 'report.pdf', mimeType: 'application/pdf', size: 5 * 1024 * 1024 });
-    // The whole point: the bytes were never fetched into the tool result.
-    expect(gmail.users.messages.attachments.get).not.toHaveBeenCalled();
+    // Minted against THIS read's id, never the caller's.
     expect(context.signAttachmentUrl).toHaveBeenCalledWith(
-      expect.objectContaining({ messageId: 'msg-1', attachmentId: 'att-1', filename: 'report.pdf' })
+      expect.objectContaining({ attachmentId: 'FRESH-docx', filename: 'informe.docx', size: 20683 })
     );
   });
 
-  it('still inlines a small attachment alongside the link', async () => {
-    const gmail = google.gmail({ version: 'v1' }) as any;
-    gmail.users.messages.get.mockResolvedValue({
-      data: {
-        payload: {
-          parts: [{ filename: 'note.txt', mimeType: 'text/plain', body: { attachmentId: 'att-1', size: 11 } }],
-        },
-      },
-    });
+  it('resolves a stale attachmentId on its own when the message has one attachment', async () => {
+    gmail.users.messages.get.mockResolvedValue(messageWith([docx]));
+    const context = contextWithSigner();
+
+    const result = await handleGetAttachment({ messageId: 'msg-1', attachmentId: STALE }, context);
+
+    expect(result.success).toBe(true);
+    expect(context.signAttachmentUrl).toHaveBeenCalledWith(
+      expect.objectContaining({ attachmentId: 'FRESH-docx' })
+    );
+  });
+
+  /** Picking the first part would hand back a signature image instead of the document. */
+  it('selects the named file on a multi-attachment message, not the first', async () => {
+    gmail.users.messages.get.mockResolvedValue(messageWith([signature, docx]));
+    const context = contextWithSigner();
+
+    const result = await handleGetAttachment({ messageId: 'msg-1', filename: 'informe.docx' }, context);
+
+    expect(result.success).toBe(true);
+    const payload = data(result) as Record<string, unknown>;
+    expect(payload).toMatchObject({ filename: 'informe.docx', size: 20683 });
+    expect(context.signAttachmentUrl).toHaveBeenCalledWith(
+      expect.objectContaining({ attachmentId: 'FRESH-docx' })
+    );
+  });
+
+  it('needs no selector at all when the message has exactly one attachment', async () => {
+    gmail.users.messages.get.mockResolvedValue(messageWith([docx]));
+
+    const result = await handleGetAttachment({ messageId: 'msg-1' }, contextWithSigner());
+
+    expect(result.success).toBe(true);
+    expect((data(result) as Record<string, unknown>).filename).toBe('informe.docx');
+  });
+
+  /**
+   * The old error told the caller to do the very thing that produced the
+   * failing id. The replacement names the choices instead.
+   */
+  it('lists the attachments when it cannot tell which one is meant', async () => {
+    gmail.users.messages.get.mockResolvedValue(messageWith([signature, docx]));
+
+    const result = await handleGetAttachment({ messageId: 'msg-1' }, contextWithSigner());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('informe.docx');
+    expect(result.error).toContain('image.png');
+    expect(result.error).toMatch(/filename/);
+    expect(result.error).not.toMatch(/list its attachments/i);
+  });
+
+  it('reports the available names when the filename matches nothing', async () => {
+    gmail.users.messages.get.mockResolvedValue(messageWith([signature, docx]));
+
+    const result = await handleGetAttachment({ messageId: 'msg-1', filename: 'nope.pdf' }, contextWithSigner());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('informe.docx');
+  });
+
+  /**
+   * Legacy shape: an id alone against a multi-attachment message. Nothing
+   * stable identifies the part, so trust the id — Gmail still honours ids
+   * from earlier reads — rather than refusing.
+   */
+  it('passes a lone stale id through instead of refusing it', async () => {
+    gmail.users.messages.get.mockResolvedValue(messageWith([signature, docx]));
+    const context = contextWithSigner();
+
+    const result = await handleGetAttachment({ messageId: 'msg-1', attachmentId: STALE }, context);
+
+    expect(result.success).toBe(true);
+    expect(context.signAttachmentUrl).toHaveBeenCalledWith(expect.objectContaining({ attachmentId: STALE }));
+    expect(gmail.users.messages.attachments.get).not.toHaveBeenCalled();
+  });
+
+  it('inlines a small attachment alongside the link', async () => {
+    gmail.users.messages.get.mockResolvedValue(
+      messageWith([{ filename: 'note.txt', mimeType: 'text/plain', body: { attachmentId: 'FRESH-note', size: 11 } }])
+    );
     gmail.users.messages.attachments.get.mockResolvedValue({
       data: { size: 11, data: Buffer.from('hello world').toString('base64url') },
     });
 
-    const result = await handleGetAttachment({ messageId: 'msg-1', attachmentId: 'att-1' }, contextWithSigner());
+    const result = await handleGetAttachment({ messageId: 'msg-1', filename: 'note.txt' }, contextWithSigner());
 
     const payload = data(result) as Record<string, unknown>;
-    expect(payload.encoding).toBe('base64url');
     expect(Buffer.from(payload.data as string, 'base64url').toString()).toBe('hello world');
-    expect(payload.url).toBe('https://app.helm.mom/api/gmail/attachments/download');
+    expect(payload.url).toBeTruthy();
+    // Downloaded with the fresh id, not the caller's.
+    expect(gmail.users.messages.attachments.get).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'FRESH-note' })
+    );
+  });
+
+  it('returns a link only, and fetches no bytes, for a large attachment', async () => {
+    gmail.users.messages.get.mockResolvedValue(
+      messageWith([{ filename: 'chile.xlsx', mimeType: 'application/vnd.ms-excel', body: { attachmentId: 'FRESH-xl', size: 5576454 } }])
+    );
+
+    const result = await handleGetAttachment({ messageId: 'msg-1', filename: 'chile.xlsx' }, contextWithSigner());
+
+    const payload = data(result) as Record<string, unknown>;
+    expect(payload.data).toBeUndefined();
+    expect(payload.size).toBe(5576454);
+    expect(gmail.users.messages.attachments.get).not.toHaveBeenCalled();
   });
 
   it('falls back to base64 when no link signer is available', async () => {
-    const gmail = google.gmail({ version: 'v1' }) as any;
-    gmail.users.messages.get.mockResolvedValue(messageWithPdf);
+    gmail.users.messages.get.mockResolvedValue(messageWith([docx]));
     gmail.users.messages.attachments.get.mockResolvedValue({
       data: { size: 5, data: Buffer.from('bytes').toString('base64url') },
     });
 
-    const result = await handleGetAttachment({ messageId: 'msg-1', attachmentId: 'att-1' }, baseContext);
+    const result = await handleGetAttachment({ messageId: 'msg-1', filename: 'informe.docx' }, baseContext);
 
     const payload = data(result) as Record<string, unknown>;
     expect(payload.url).toBeUndefined();
     expect(payload.encoding).toBe('base64url');
   });
 
-  it('reports an attachment id the message does not contain', async () => {
-    const gmail = google.gmail({ version: 'v1' }) as any;
-    gmail.users.messages.get.mockResolvedValue(messageWithPdf);
+  it('says so plainly when the message carries no attachments', async () => {
+    gmail.users.messages.get.mockResolvedValue(messageWith([]));
 
-    const result = await handleGetAttachment({ messageId: 'msg-1', attachmentId: 'nope' }, contextWithSigner());
+    const result = await handleGetAttachment({ messageId: 'msg-1', filename: 'x.pdf' }, contextWithSigner());
 
     expect(result.success).toBe(false);
-    expect(result.error).toMatch(/attachment/i);
+    expect(result.error).toMatch(/no attachments/i);
   });
 });
