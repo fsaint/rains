@@ -142,24 +142,47 @@ export function encodeAddressList(addresses: string[]): string {
  * Emit `Name: value`, folded onto continuation lines when it exceeds the soft
  * line limit. Folding only ever happens at existing spaces, so encoded-words
  * (which contain none) are never split.
+ *
+ * The value may arrive ALREADY folded: encodeHeaderWord joins encoded-words
+ * with CRLF + space, and encodeAddressList can do the same. Those CRLFs are
+ * existing line breaks, so each physical line is folded on its own.
+ *
+ * A long first token still goes on the field-name line, even past the soft
+ * limit: the alternative is a bare `Subject:` with the value starting on the
+ * continuation. Both are legal, but every mail client emits the former, and
+ * the 78-character limit is a recommendation where 998 is the hard cap.
+ *
+ * Wrapping across them instead — one pass of `split(' ')` over the whole
+ * string — left the CRLF attached to a token, and re-joining the folded lines
+ * with CRLF turned it into CRLF CRLF. That is the header/body separator: the
+ * header block ended mid-Subject, and the Subject's continuation line plus
+ * Content-Type and Content-Transfer-Encoding all became body text, so the
+ * recipient saw raw base64. Never emit a blank line from here.
  */
 export function foldHeader(name: string, value: string): string {
   const full = `${name}: ${value}`;
   if (full.length <= MAX_HEADER_LINE && !full.includes('\r\n')) return full;
 
   const out: string[] = [];
-  let line = '';
-  for (const word of full.split(' ')) {
-    if (line === '') {
-      line = word;
-    } else if (line.length + 1 + word.length > MAX_HEADER_LINE) {
-      out.push(line);
-      line = ` ${word}`;
-    } else {
-      line += ` ${word}`;
+  for (const physical of full.split('\r\n')) {
+    if (physical === '') continue;
+    let line = '';
+    let first = true;
+    for (const word of physical.split(' ')) {
+      if (first) {
+        // Keeps a continuation line's leading space: ' X' splits to ['', 'X'],
+        // so the empty first token seeds the line and the space comes back.
+        line = word;
+        first = false;
+      } else if (line.length + 1 + word.length > MAX_HEADER_LINE && line !== `${name}:`) {
+        out.push(line);
+        line = ` ${word}`;
+      } else {
+        line += ` ${word}`;
+      }
     }
+    if (line !== '') out.push(line);
   }
-  if (line !== '') out.push(line);
   return out.join('\r\n');
 }
 
