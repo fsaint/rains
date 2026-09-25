@@ -642,6 +642,7 @@ fly secrets set --app agenthelm-core KEY=value
 | [`docs/BETA_RELEASE_PLAN.md`](docs/BETA_RELEASE_PLAN.md) | Beta launch plan targeting May 5 2026 — cohort size, cost gates, milestones |
 | [`docs/ops/LOCAL_DEV_SETUP.md`](docs/ops/LOCAL_DEV_SETUP.md) | Local development setup: .env variables, Google OAuth redirect URIs, dev bots |
 | [`docs/ops/PROD_SETUP.md`](docs/ops/PROD_SETUP.md) | Production setup checklist: Google OAuth, Fly secrets, DNS, deployment steps |
+| [`docs/ops/GOOGLE_OAUTH_VERIFICATION.md`](docs/ops/GOOGLE_OAUTH_VERIFICATION.md) | Getting the Google app verified: scope tiers, per-scope justifications to paste into the console, demo video script, CASA, and the fallback if Google refuses full Drive |
 | [`docs/ops/COMMON_ERRORS.md`](docs/ops/COMMON_ERRORS.md) | Known traps and their fixes. The hosted-runtime sections (bot not responding, MiniMax startup, webhook relay) are history — that runtime was removed in September 2026. The platform-codebase sections (env-file handling, migration ordering, two-table service enablement, adding a native MCP server, skill token rendering) still apply. Read before debugging anything odd |
 | [`docs/ops/ADDING_SKILLS_VIA_MCP.md`](docs/ops/ADDING_SKILLS_VIA_MCP.md) | Authoring, reading, updating, deleting, and assigning skills through the skill-authoring MCP, including admin-only Helm platform skills |
 | [`docs/ops/DNS.md`](docs/ops/DNS.md) | DNS configuration: Vercel records, Fly app hostnames, common mistakes, fix runbook |
