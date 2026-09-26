@@ -20,6 +20,16 @@ export interface GateResult {
   reason?: 'no_subscription' | 'lapsed' | 'canceled';
 }
 
+export type AccessDenial = 'trial_ended' | 'subscription_lapsed' | 'subscription_canceled' | 'unknown_user';
+
+export interface AccessResult {
+  allowed: boolean;
+  reason?: AccessDenial;
+  /** Present while a trial is the thing granting access. */
+  trialEndsAt?: string;
+  daysLeft?: number;
+}
+
 function mapRow(row: Record<string, unknown>): Subscription {
   return {
     id: row.id as string,
@@ -94,24 +104,6 @@ export async function upsertSubscription(data: {
   }
 }
 
-/**
- * Check if an agent's tool calls should be allowed (lenient: passes if no subscription
- * record exists — handles legacy/onboarding users until they are migrated to paid plans).
- * Used by handleCallTool.
- */
-export async function checkUsageGate(userId: string): Promise<GateResult> {
-  if (process.env.BYPASS_BILLING === 'true') return { allowed: true };
-  const sub = await getSubscription(userId);
-  if (!sub) return { allowed: true }; // no record = legacy user, allow through
-  if (sub.status === 'active') return { allowed: true };
-  if (sub.status === 'past_due') {
-    if (sub.graceUntil && new Date(sub.graceUntil) > new Date()) {
-      return { allowed: true };
-    }
-    return { allowed: false, reason: 'lapsed' };
-  }
-  return { allowed: false, reason: 'canceled' };
-}
 
 /** Set grace_until to 3 days from now and status to past_due. */
 export async function applyGracePeriod(stripeSubscriptionId: string): Promise<void> {
@@ -140,4 +132,57 @@ export async function cancelSubscription(stripeSubscriptionId: string): Promise<
     sql: `UPDATE subscriptions SET status = 'canceled', updated_at = ? WHERE stripe_subscription_id = ?`,
     args: [new Date().toISOString(), stripeSubscriptionId],
   });
+}
+
+/**
+ * The single question: may this user's agents call tools right now?
+ *
+ * Access comes from an active subscription OR a trial that has not run out.
+ * Order matters and is deliberate:
+ *
+ *  - An admin is never locked out of their own platform.
+ *  - A cancelled subscription blocks even inside a live trial. Cancelling is a
+ *    decision, and a trial does not undo it.
+ *  - A user with no trial date and no subscription is allowed. Everyone who
+ *    predates trials falls here, and a missing date is not an expired one.
+ *  - An unknown user is refused rather than waved through.
+ *
+ * The dashboard is deliberately NOT gated on this: someone whose trial ended
+ * has to be able to sign in and pay.
+ */
+export async function checkAccess(userId: string): Promise<AccessResult> {
+  if (process.env.BYPASS_BILLING === 'true') return { allowed: true };
+
+  const userRow = await client.execute({
+    sql: `SELECT role, trial_ends_at FROM users WHERE id = ? LIMIT 1`,
+    args: [userId],
+  });
+  const user = userRow.rows[0];
+  if (!user) return { allowed: false, reason: 'unknown_user' };
+  if (user.role === 'admin') return { allowed: true };
+
+  const sub = await getSubscription(userId);
+  if (sub) {
+    if (sub.status === 'active') return { allowed: true };
+    if (sub.status === 'canceled') return { allowed: false, reason: 'subscription_canceled' };
+    if (sub.status === 'past_due') {
+      const inGrace = !!sub.graceUntil && new Date(sub.graceUntil) > new Date();
+      return inGrace ? { allowed: true } : { allowed: false, reason: 'subscription_lapsed' };
+    }
+  }
+
+  const trialEndsAt = user.trial_ends_at as string | null;
+  if (!trialEndsAt) return { allowed: true };
+
+  const endsAt = new Date(trialEndsAt);
+  if (Number.isNaN(endsAt.getTime())) return { allowed: true };
+  if (endsAt <= new Date()) return { allowed: false, reason: 'trial_ended', trialEndsAt };
+
+  return { allowed: true, trialEndsAt, daysLeft: daysUntil(trialEndsAt) };
+}
+
+/** Whole days from now until `iso`, rounded up; never negative. */
+export function daysUntil(iso: string): number {
+  const ms = new Date(iso).getTime() - Date.now();
+  return ms <= 0 ? 0 : Math.ceil(ms / 86400000);
 }

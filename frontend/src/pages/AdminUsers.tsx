@@ -9,7 +9,7 @@ import {
   Trash2,
   KeyRound,
 } from 'lucide-react';
-import { admin } from '../api/client';
+import { admin, TRIAL_DAY_OPTIONS, type TrialDays } from '../api/client';
 import type { AdminUser } from '../api/client';
 
 export default function AdminUsers() {
@@ -21,7 +21,7 @@ export default function AdminUsers() {
   // Create form state
   const [newEmail, setNewEmail] = useState('');
   const [newName, setNewName] = useState('');
-  const [newPassword, setNewPassword] = useState('');
+  const [newTrialDays, setNewTrialDays] = useState<TrialDays>(30);
   const [newRole, setNewRole] = useState<'user' | 'admin'>('user');
   const [createError, setCreateError] = useState('');
 
@@ -46,11 +46,11 @@ export default function AdminUsers() {
     e.preventDefault();
     setCreateError('');
     try {
-      await admin.createUser({ email: newEmail, name: newName, password: newPassword, role: newRole });
+      await admin.createUser({ email: newEmail, name: newName, trialDays: newTrialDays, role: newRole });
       setShowCreate(false);
       setNewEmail('');
       setNewName('');
-      setNewPassword('');
+      setNewTrialDays(30);
       setNewRole('user');
       loadUsers();
     } catch (err: any) {
@@ -124,15 +124,16 @@ export default function AdminUsers() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold">Create User</h2>
+              <h2 className="text-lg font-semibold">Send invite</h2>
               <button onClick={() => setShowCreate(false)} className="text-gray-400 hover:text-gray-600">
                 <X className="w-5 h-5" />
               </button>
             </div>
             <form onSubmit={handleCreate} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                <label htmlFor="invite-email" className="block text-sm font-medium text-gray-700 mb-1">Email</label>
                 <input
+                  id="invite-email"
                   type="email"
                   required
                   value={newEmail}
@@ -141,8 +142,9 @@ export default function AdminUsers() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                <label htmlFor="invite-name" className="block text-sm font-medium text-gray-700 mb-1">Name</label>
                 <input
+                  id="invite-name"
                   type="text"
                   required
                   value={newName}
@@ -151,16 +153,20 @@ export default function AdminUsers() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-                <input
-                  type="password"
-                  required
-                  minLength={8}
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
+                <label htmlFor="trial-days" className="block text-sm font-medium text-gray-700 mb-1">Free trial</label>
+                <select
+                  id="trial-days"
+                  value={newTrialDays}
+                  onChange={(e) => setNewTrialDays(Number(e.target.value) as TrialDays)}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-trust-blue/40"
-                  placeholder="Min 8 characters"
-                />
+                >
+                  {TRIAL_DAY_OPTIONS.map((d) => (
+                    <option key={d} value={d}>{d} days</option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">
+                  They get an email invitation and sign in with Google. No password is set.
+                </p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
@@ -188,7 +194,7 @@ export default function AdminUsers() {
                   type="submit"
                   className="px-4 py-2 bg-trust-blue text-white rounded-lg text-sm font-medium hover:bg-blue-600"
                 >
-                  Create
+                  Send invite
                 </button>
               </div>
             </form>
@@ -253,6 +259,7 @@ export default function AdminUsers() {
               <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase">User</th>
               <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase">Role</th>
               <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase">Status</th>
+              <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase">Trial</th>
               <th className="hidden sm:table-cell text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase">Created</th>
               <th className="text-right px-6 py-3 text-xs font-semibold text-gray-500 uppercase">Actions</th>
             </tr>
@@ -282,6 +289,9 @@ export default function AdminUsers() {
                   }`}>
                     {u.status}
                   </span>
+                </td>
+                <td className="px-6 py-4 text-sm">
+                  <TrialCell endsAt={u.trial_ends_at ?? null} />
                 </td>
                 <td className="hidden sm:table-cell px-6 py-4 text-sm text-gray-500">
                   {new Date(u.created_at).toLocaleDateString()}
@@ -329,5 +339,29 @@ export default function AdminUsers() {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * A user's trial at a glance. A null date is not an expired trial — it is a
+ * user who predates trials, and they are never blocked.
+ */
+function TrialCell({ endsAt }: { endsAt: string | null }) {
+  if (!endsAt) return <span className="text-gray-400">—</span>;
+
+  const ms = new Date(endsAt).getTime() - Date.now();
+  const days = Math.ceil(ms / 86400000);
+  const ended = ms <= 0;
+  const soon = !ended && days <= 7;
+
+  return (
+    <span
+      title={`Trial ends ${new Date(endsAt).toLocaleDateString()}`}
+      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+        ended ? 'bg-red-100 text-red-700' : soon ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'
+      }`}
+    >
+      {ended ? 'ended' : days === 1 ? '1 day left' : `${days} days left`}
+    </span>
   );
 }

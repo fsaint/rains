@@ -7,6 +7,10 @@ import { client } from '../db/index.js';
 import { nanoid } from 'nanoid';
 import { storePendingOAuthFlow, getPendingOAuthFlow, deletePendingOAuthFlow } from '../oauth/pending-flows.js';
 import { getPostHog } from '../analytics/posthog.js';
+import { sendInviteEmail } from '../services/email.js';
+
+/** Trial lengths an admin may choose when inviting someone. */
+export const TRIAL_DAY_OPTIONS = [30, 60, 90] as const as readonly number[];
 
 /**
  * Where to send the browser after a login that was started with `?next=`.
@@ -407,14 +411,21 @@ export async function registerAuth(app: FastifyInstance) {
   app.post('/api/admin/users', async (request, reply) => {
     if (!requireAdmin(request, reply)) return;
 
-    const body = request.body as { email?: string; name?: string; password?: string; role?: string } | undefined;
-    if (!body?.email || !body?.name || !body?.password) {
-      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'email, name, and password are required' } });
+    const body = request.body as
+      | { email?: string; name?: string; trialDays?: number; role?: string }
+      | undefined;
+    if (!body?.email || !body?.name) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'email and name are required' } });
     }
-
-    if (body.password.length < 8) {
-      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Password must be at least 8 characters' } });
+    if (!TRIAL_DAY_OPTIONS.includes(body.trialDays as number)) {
+      return reply.code(400).send({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: `trialDays must be one of ${TRIAL_DAY_OPTIONS.join(', ')}`,
+        },
+      });
     }
+    const trialDays = body.trialDays as number;
 
     // Check for duplicate email
     const existing = await client.execute({
@@ -427,17 +438,38 @@ export async function registerAuth(app: FastifyInstance) {
 
     const id = nanoid();
     const now = new Date().toISOString();
-    const passwordHash = await bcrypt.hash(body.password, 10);
     const role = body.role === 'admin' ? 'admin' : 'user';
+    const trialEndsAt = new Date(Date.now() + trialDays * 86400000).toISOString();
 
+    // No password: an invited user signs in with Google using this address.
+    // Sign-in needs only basic scopes, so it works regardless of where the
+    // app sits in Google's verification queue.
     await client.execute({
-      sql: `INSERT INTO users (id, email, name, password_hash, role, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'active', ?, ?)`,
-      args: [id, body.email, body.name, passwordHash, role, now, now],
+      sql: `INSERT INTO users (id, email, name, password_hash, role, status, trial_ends_at, created_at, updated_at)
+            VALUES (?, ?, ?, NULL, ?, 'active', ?, ?, ?)`,
+      args: [id, body.email, body.name, role, trialEndsAt, now, now],
     });
 
+    // The account exists either way; a mail outage must not undo it.
+    try {
+      await sendInviteEmail({
+        to: body.email,
+        name: body.name,
+        trialDays,
+        trialEndsAt,
+        dashboardUrl: config.dashboardUrl,
+      });
+    } catch (err) {
+      console.error('[invite] could not send invite email:', err instanceof Error ? err.message : err);
+    }
+
+    getPostHog()?.capture({ distinctId: id, event: 'user_invited', properties: { trialDays } });
+
     return reply.code(201).send({
-      data: { id, email: body.email, name: body.name, role, status: 'active', created_at: now, updated_at: now },
+      data: {
+        id, email: body.email, name: body.name, role, status: 'active',
+        trialEndsAt, created_at: now, updated_at: now,
+      },
     });
   });
 

@@ -6,6 +6,7 @@ import { initializeNativeServers, shutdownNativeServers } from './mcp/init-serve
 import { startTokenRefreshLoop, stopTokenRefreshLoop } from './credentials/vault.js';
 import { startTokenMonitor, stopTokenMonitor } from './services/token-monitor.js';
 import { startUploadGcCron } from './services/agent-uploads.js';
+import { startTrialReminderCron } from './services/trial-reminders.js';
 import { telegramNotifier } from './notifications/telegram.js';
 import { initializeNotificationHandlers } from './notifications/handlers.js';
 import { shutdownPostHog } from './analytics/posthog.js';
@@ -55,6 +56,10 @@ app.log.info('Token monitor started');
 // Agent-upload GC (purges expired attachment blobs hourly)
 startUploadGcCron();
 app.log.info('Agent upload GC started');
+
+// Trial reminders (7 days and 1 day before a trial ends)
+startTrialReminderCron();
+app.log.info('Trial reminder cron started');
 
 // Wire approval queue events to notification services
 initializeNotificationHandlers();

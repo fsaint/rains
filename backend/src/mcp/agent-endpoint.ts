@@ -34,7 +34,7 @@ import {
   resolveSkillTokens,
 } from '@reins/shared';
 
-import { checkUsageGate } from '../services/billing.js';
+import { checkAccess } from '../services/billing.js';
 import { buildAttachmentLink } from '../services/attachment-links.js';
 import { getAgentLimits, renderAgentLimits, describeToolLimit, type AgentLimits } from '../services/agent-limits.js';
 import {
@@ -1180,8 +1180,9 @@ async function handleCallTool(
     };
   }
 
-  // Subscription gate. Lenient: only blocks when the owner's subscription has
-  // explicitly lapsed or been canceled (see checkUsageGate).
+  // Access gate: an active subscription, or a trial that has not run out.
+  // A user with no trial date and no subscription predates trials and is
+  // allowed through — see checkAccess.
   {
     const agentOwner = await client.execute({
       sql: `SELECT user_id FROM agents WHERE id = ? LIMIT 1`,
@@ -1189,16 +1190,21 @@ async function handleCallTool(
     });
     const ownerId = agentOwner.rows[0]?.user_id as string | undefined;
     if (ownerId) {
-      const subGate = await checkUsageGate(ownerId);
-      if (!subGate.allowed) {
-        await auditLogger.logToolCall(agentId, toolName, args, 'blocked', Date.now() - startTime, { reason: 'subscription_lapsed' });
+      const gate = await checkAccess(ownerId);
+      if (!gate.allowed) {
+        await auditLogger.logToolCall(agentId, toolName, args, 'blocked', Date.now() - startTime, {
+          reason: gate.reason ?? 'access_denied',
+        });
+        const text =
+          gate.reason === 'trial_ended'
+            ? 'The free trial on this account has ended, so this agent cannot make tool calls. ' +
+              'Tell the user to choose a plan in the Helm dashboard; their data and memory are untouched.'
+            : 'This account\'s subscription is not active, so this agent cannot make tool calls. ' +
+              'Tell the user to review billing in the Helm dashboard.';
         return {
           jsonrpc: '2.0',
           id: requestId,
-          result: {
-            content: [{ type: 'text', text: 'Your subscription has lapsed. This agent cannot make tool calls until you renew. Visit the dashboard to manage your billing.' }],
-            isError: true,
-          },
+          result: { content: [{ type: 'text', text }], isError: true },
         };
       }
     }

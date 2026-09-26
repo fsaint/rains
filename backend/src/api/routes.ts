@@ -118,6 +118,7 @@ import {
   applyGracePeriod,
   clearGrace,
   cancelSubscription,
+  checkAccess,
 } from '../services/billing.js';
 import { validateDrivePathRules, isDrivePermissionLevel, DrivePathRuleValidationError, normalizeDriveFolderId } from '../services/drive-path-rules.js';
 import { nanoid } from 'nanoid';
@@ -6854,18 +6855,29 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const session = getSession(request);
     if (!session) return reply.code(401).send({ error: 'Unauthorized' });
     if (process.env.BYPASS_BILLING === 'true') {
-      return reply.send({ data: { subscribed: true, plan: 'byok', status: 'active' } });
+      return reply.send({ data: { subscribed: true, plan: 'byok', status: 'active', access: 'active' } });
     }
+
+    // One call decides what the banner says, so the dashboard and the MCP
+    // gate can never disagree about whether this account still has access.
+    const gate = await checkAccess(session.userId);
     const sub = await getSubscription(session.userId);
-    if (!sub) return reply.send({ data: { subscribed: false } });
-    const withinGrace = sub.status === 'past_due' && !!sub.graceUntil && new Date(sub.graceUntil) > new Date();
+    const withinGrace =
+      !!sub && sub.status === 'past_due' && !!sub.graceUntil && new Date(sub.graceUntil) > new Date();
+
+    const access = !gate.allowed ? 'blocked' : gate.trialEndsAt ? 'trial' : 'active';
+
     return reply.send({
       data: {
-        subscribed: sub.status === 'active' || withinGrace,
-        plan: sub.plan,
-        status: sub.status,
-        currentPeriodEnd: sub.currentPeriodEnd,
-        graceUntil: sub.graceUntil,
+        subscribed: !!sub && (sub.status === 'active' || withinGrace),
+        plan: sub?.plan,
+        status: sub?.status,
+        currentPeriodEnd: sub?.currentPeriodEnd,
+        graceUntil: sub?.graceUntil,
+        access,
+        reason: gate.reason,
+        trialEndsAt: gate.trialEndsAt,
+        daysLeft: gate.daysLeft,
       },
     });
   });

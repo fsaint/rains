@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { usePostHog } from '@posthog/react';
+import { useQuery } from '@tanstack/react-query';
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import {
   Users,
@@ -33,7 +34,7 @@ import MemoryEntry from './pages/MemoryEntry';
 import Pricing from './pages/Pricing';
 import Billing from './pages/Billing';
 import HelmMark from './components/HelmMark';
-import { auth } from './api/client';
+import { auth, billing } from './api/client';
 import type { User as UserType } from './api/client';
 
 const navItems = [
@@ -237,6 +238,7 @@ function App() {
         </header>
 
         <main className="flex-1 overflow-auto">
+          <TrialBanner />
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/agents/new" element={<AgentNew />} />
@@ -255,6 +257,53 @@ function App() {
           </Routes>
         </main>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The trial countdown, and the notice once it runs out.
+ *
+ * Reads the same access decision the MCP gate uses, so the banner can never
+ * claim access the tool calls do not have. Silent for paying users and for
+ * anyone with no trial, and it only starts counting inside the last two
+ * weeks — a banner that is always there stops being read.
+ */
+function TrialBanner() {
+  const { data } = useQuery({
+    queryKey: ['billing-status'],
+    queryFn: () => billing.status(),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  if (!data) return null;
+
+  if (data.access === 'blocked') {
+    const trialEnded = data.reason === 'trial_ended';
+    return (
+      <div className="bg-red-50 border-b border-red-200 px-4 py-3 text-sm text-red-800 flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="font-medium">
+          {trialEnded ? 'Your free trial has ended.' : 'Your subscription is not active.'}
+        </span>
+        <span>Your agents cannot make tool calls. Your data and memory are untouched.</span>
+        <Link to="/pricing" className="underline font-medium ml-auto">Choose a plan</Link>
+      </div>
+    );
+  }
+
+  const days = data.daysLeft;
+  if (data.access !== 'trial' || days === undefined || days > 14) return null;
+
+  return (
+    <div
+      className={`border-b px-4 py-2.5 text-sm flex flex-wrap items-center gap-x-2 gap-y-1 ${
+        days <= 3 ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-blue-50 border-blue-200 text-blue-900'
+      }`}
+    >
+      <span className="font-medium">
+        {days === 0 ? 'Your free trial ends today.' : days === 1 ? 'Your free trial ends tomorrow.' : `Your free trial ends in ${days} days.`}
+      </span>
+      <Link to="/pricing" className="underline font-medium ml-auto">Choose a plan</Link>
     </div>
   );
 }

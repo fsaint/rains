@@ -128,7 +128,7 @@ vi.mock('../services/billing.js', () => ({
   applyGracePeriod: vi.fn().mockResolvedValue(undefined),
   clearGrace: vi.fn().mockResolvedValue(undefined),
   cancelSubscription: vi.fn().mockResolvedValue(undefined),
-  checkUsageGate: vi.fn().mockResolvedValue({ allowed: true }),
+  checkAccess: vi.fn().mockResolvedValue({ allowed: true }),
 }));
 
 /** Every tool under test is allowed outright; the policy layer is not what is being tested. */

@@ -99,3 +99,92 @@ export async function sendReauthEmail(opts: {
 
   await sendEmail({ to: opts.to, subject, html, text });
 }
+
+/** Shared shell so every Helm email looks like the same product. */
+function wrap(title: string, bodyHtml: string): string {
+  return `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#141413">
+  <h1 style="font-size:20px;margin:0 0 16px">${title}</h1>
+  ${bodyHtml}
+  <p style="color:#6b7280;font-size:12px;margin-top:28px;border-top:1px solid #e5e7eb;padding-top:14px">Helm — the trust layer for AI agents</p>
+</div>`;
+}
+
+function button(href: string, label: string): string {
+  return `<p style="margin:22px 0"><a href="${href}" style="background:#2563eb;color:#fff;padding:11px 20px;border-radius:8px;text-decoration:none;display:inline-block">${label}</a></p>`;
+}
+
+/**
+ * Invite an admin-created user. They have no password — the account is reached
+ * by signing in with Google using this address — so the link goes to the
+ * dashboard, not to a password form.
+ */
+export async function sendInviteEmail(opts: {
+  to: string;
+  name: string;
+  trialDays: number;
+  trialEndsAt: string;
+  dashboardUrl: string;
+}): Promise<void> {
+  const ends = new Date(opts.trialEndsAt).toLocaleDateString('en-US', {
+    year: 'numeric', month: 'long', day: 'numeric',
+  });
+  const firstName = opts.name.trim().split(/\s+/)[0] || opts.name;
+
+  const html = wrap(
+    `You have been invited to Helm`,
+    `<p>Hi ${firstName},</p>
+     <p>An account has been created for you on Helm, with a <strong>${opts.trialDays}-day free trial</strong> running until <strong>${ends}</strong>.</p>
+     <p>Sign in with Google using <strong>${opts.to}</strong> — there is no password to set.</p>
+     ${button(opts.dashboardUrl, 'Open Helm')}
+     <p>Once you are in, connect Telegram from the Notifications page. Helm asks you to approve anything an agent does on your behalf, and that is where the approvals arrive.</p>`
+  );
+
+  const text = [
+    `Hi ${firstName},`,
+    ``,
+    `An account has been created for you on Helm, with a ${opts.trialDays}-day free trial running until ${ends}.`,
+    `Sign in with Google using ${opts.to} — there is no password to set.`,
+    ``,
+    opts.dashboardUrl,
+    ``,
+    `Once you are in, connect Telegram from the Notifications page. Helm asks you to approve anything an agent does on your behalf, and that is where the approvals arrive.`,
+  ].join('\n');
+
+  await sendEmail({ to: opts.to, subject: `Your Helm account is ready (${opts.trialDays}-day trial)`, html, text });
+}
+
+/** Trial running out. Sent at 7 days and again at 1 day. */
+export async function sendTrialReminderEmail(opts: {
+  to: string;
+  name: string;
+  daysLeft: number;
+  trialEndsAt: string;
+  dashboardUrl: string;
+}): Promise<void> {
+  const firstName = opts.name.trim().split(/\s+/)[0] || opts.name;
+  const when = opts.daysLeft === 1 ? 'tomorrow' : `in ${opts.daysLeft} days`;
+  const pricingUrl = `${opts.dashboardUrl.replace(/\/+$/, '')}/pricing`;
+
+  const html = wrap(
+    `Your Helm trial ends ${when}`,
+    `<p>Hi ${firstName},</p>
+     <p>Your free trial ends <strong>${when}</strong>. After that your agents stop making tool calls until you pick a plan — your data, memory and settings stay exactly as they are.</p>
+     ${button(pricingUrl, 'Choose a plan')}`
+  );
+
+  const text = [
+    `Hi ${firstName},`,
+    ``,
+    `Your Helm free trial ends ${when}. After that your agents stop making tool calls until you pick a plan.`,
+    `Your data, memory and settings stay exactly as they are.`,
+    ``,
+    pricingUrl,
+  ].join('\n');
+
+  await sendEmail({
+    to: opts.to,
+    subject: opts.daysLeft === 1 ? 'Your Helm trial ends tomorrow' : `Your Helm trial ends in ${opts.daysLeft} days`,
+    html,
+    text,
+  });
+}

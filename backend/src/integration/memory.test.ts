@@ -85,7 +85,7 @@ vi.mock('../services/billing.js', () => ({
   applyGracePeriod: vi.fn().mockResolvedValue(undefined),
   clearGrace: vi.fn().mockResolvedValue(undefined),
   cancelSubscription: vi.fn().mockResolvedValue(undefined),
-  checkUsageGate: vi.fn().mockResolvedValue({ allowed: true }),
+  checkAccess: vi.fn().mockResolvedValue({ allowed: true }),
 }));
 
 // ── Import after mocks ────────────────────────────────────────────────────────

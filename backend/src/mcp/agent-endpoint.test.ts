@@ -232,7 +232,7 @@ vi.mock('../services/billing.js', () => ({
   applyGracePeriod: vi.fn().mockResolvedValue(undefined),
   clearGrace: vi.fn().mockResolvedValue(undefined),
   cancelSubscription: vi.fn().mockResolvedValue(undefined),
-  checkUsageGate: vi.fn().mockResolvedValue({ allowed: true }),
+  checkAccess: vi.fn().mockResolvedValue({ allowed: true }),
 }));
 
 // Trigger ensureRegistry() so _getServiceType is populated before synchronous tests run
@@ -408,7 +408,7 @@ describe('handleMCPRequest', () => {
 
     it('blocks a tool call when the owner\'s subscription has lapsed', async () => {
       const { client } = await import('../db/index.js');
-      const { checkUsageGate } = await import('../services/billing.js');
+      const { checkAccess } = await import('../services/billing.js');
       vi.mocked(client.execute).mockImplementation(async (q: unknown) => {
         const sql = typeof q === 'string' ? q : (q as { sql: string }).sql;
         if (sql.includes('SELECT user_id FROM agents WHERE id = ?')) {
@@ -416,17 +416,42 @@ describe('handleMCPRequest', () => {
         }
         return { rows: [] } as never;
       });
-      vi.mocked(checkUsageGate).mockResolvedValueOnce({ allowed: false, reason: 'lapsed' });
+      vi.mocked(checkAccess).mockResolvedValueOnce({ allowed: false, reason: 'subscription_lapsed' });
 
       const res = await handleMCPRequest('agent-1', {
         jsonrpc: '2.0', id: 9, method: 'tools/call',
         params: { name: 'gmail_search', arguments: { query: 'x' } },
       });
 
-      expect(checkUsageGate).toHaveBeenCalledWith('owner-1');
+      expect(checkAccess).toHaveBeenCalledWith('owner-1');
       const result = res.result as { isError?: boolean; content: Array<{ text: string }> };
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain('subscription');
+    });
+
+    /** A trial that ran out must say so, not talk about a subscription. */
+    it('blocks a tool call, and names the trial, once the trial has ended', async () => {
+      const { client } = await import('../db/index.js');
+      const { checkAccess } = await import('../services/billing.js');
+      vi.mocked(client.execute).mockImplementation(async (q: unknown) => {
+        const sql = typeof q === 'string' ? q : (q as { sql: string }).sql;
+        if (sql.includes('SELECT user_id FROM agents WHERE id = ?')) {
+          return { rows: [{ user_id: 'owner-1' }] } as never;
+        }
+        return { rows: [] } as never;
+      });
+      vi.mocked(checkAccess).mockResolvedValueOnce({ allowed: false, reason: 'trial_ended' });
+
+      const res = await handleMCPRequest('agent-1', {
+        jsonrpc: '2.0', id: 10, method: 'tools/call',
+        params: { name: 'gmail_search', arguments: { query: 'x' } },
+      });
+
+      const result = res.result as { isError?: boolean; content: Array<{ text: string }> };
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toMatch(/free trial/i);
+      // Reassures the user their data survives, which is the first thing they ask.
+      expect(result.content[0].text).toMatch(/memory|data/i);
     });
   });
 });

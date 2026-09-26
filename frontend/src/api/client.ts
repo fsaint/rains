@@ -283,16 +283,23 @@ export interface AdminUser {
   name: string;
   role: string;
   status: string;
+  /** Null for users who predate trials; they are never blocked. */
+  trial_ends_at?: string | null;
   created_at: string;
   updated_at: string;
 }
 
+/** Trial lengths an admin may pick when inviting. Mirrors the backend. */
+export const TRIAL_DAY_OPTIONS = [30, 60, 90] as const;
+export type TrialDays = (typeof TRIAL_DAY_OPTIONS)[number];
+
 // Admin
 export const admin = {
   listUsers: () => request<AdminUser[]>('/admin/users'),
-  createUser: (data: { email: string; name: string; password: string; role?: string }) =>
+  /** Invite: creates the account with a trial and emails them. No password. */
+  createUser: (data: { email: string; name: string; trialDays: TrialDays; role?: string }) =>
     request<AdminUser>('/admin/users', { method: 'POST', body: JSON.stringify(data) }),
-  updateUser: (id: string, data: { name?: string; role?: string; status?: string }) =>
+  updateUser: (id: string, data: { name?: string; role?: string; status?: string; trialEndsAt?: string | null }) =>
     request<AdminUser>(`/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteUser: (id: string) =>
     request<void>(`/admin/users/${id}`, { method: 'DELETE' }),
@@ -920,17 +927,24 @@ export const skills = {
     request<{ removed: boolean }>(`/agents/${agentId}/skills/${skillId}`, { method: 'DELETE' }),
 };
 
+export interface BillingStatus {
+  subscribed: boolean;
+  plan?: 'byok' | 'managed';
+  status?: string;
+  currentPeriodEnd?: string;
+  graceUntil?: string;
+  /** What the dashboard should say: paying, on a trial, or cut off. */
+  access?: 'active' | 'trial' | 'blocked';
+  reason?: 'trial_ended' | 'subscription_lapsed' | 'subscription_canceled' | 'unknown_user';
+  trialEndsAt?: string;
+  daysLeft?: number;
+}
+
 export const billing = {
-  async status(): Promise<{
-    subscribed: boolean;
-    plan?: 'byok' | 'managed';
-    status?: string;
-    currentPeriodEnd?: string;
-    graceUntil?: string;
-  }> {
+  async status(): Promise<BillingStatus> {
     const res = await fetch('/api/billing/status');
     if (!res.ok) throw new Error('Failed to fetch billing status');
-    const body = await res.json() as { data: { subscribed: boolean; plan?: 'byok' | 'managed'; status?: string; currentPeriodEnd?: string; graceUntil?: string } };
+    const body = await res.json() as { data: BillingStatus };
     return body.data;
   },
 

@@ -925,6 +925,16 @@ export class TelegramNotifier {
   // Broadcast
   // -------------------------------------------------------------------------
 
+  /**
+   * Send one plain message to a chat we already hold the id for.
+   *
+   * The public door onto sendMessage, for callers like the trial reminder
+   * sweep that have already resolved the user's chat id.
+   */
+  async sendToChatId(chatId: string, text: string): Promise<void> {
+    await this.sendMessage(chatId, text, {});
+  }
+
   async broadcast(message: string, parseMode?: 'Markdown' | 'HTML'): Promise<{
     sent: number;
     failed: number;

@@ -84,6 +84,16 @@ export async function initializeDatabase() {
     )
   `;
 
+  // Trials. A null trial_ends_at means "no trial": every user who predates
+  // trials falls here and is never blocked, which is why checkAccess treats a
+  // missing date as allowed rather than expired. The two stamps make the
+  // reminder cron idempotent.
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_ends_at TEXT`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_reminder_7_sent_at TEXT`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_reminder_1_sent_at TEXT`;
+  // Invited users sign in with Google and never set one.
+  await sql`ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL`;
+
   await sql`
     CREATE TABLE IF NOT EXISTS agents (
       id TEXT PRIMARY KEY,
