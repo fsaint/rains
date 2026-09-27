@@ -11,6 +11,10 @@
  * - hermeneutix_get_conversation_preview: Full or capped conversation transcript
  * - hermeneutix_search_profiles: Search speaker profiles by name or email
  * - hermeneutix_search_instances: Search instances across a project by keyword or date range
+ * - hermeneutix_list_roles / _get_role: Who is on a project and what each is responsible for
+ * - hermeneutix_set_role: Create or update a person's role (approval required)
+ * - hermeneutix_remove_from_project: Drop a person's role on a project (approval required)
+ * - hermeneutix_update_profile / _set_coaching_notes: Correct a person's record (approval required)
  */
 
 import { BaseServer } from '../common/base-server.js';

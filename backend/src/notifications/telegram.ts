@@ -28,6 +28,8 @@ import {
   DRAFT_SEND_TOOLS,
   type AdminTargetSummary,
   type DraftSendSummary,
+  HERMENEUTIX_PEOPLE_TOOLS,
+  formatHermeneutixApprovalMessage,
 } from './approval-format.js';
 import { MAX_REVISIONS } from '../approvals/queue.js';
 import { credentialVault } from '../credentials/vault.js';
@@ -754,6 +756,8 @@ export class TelegramNotifier {
       ? formatAdminApprovalMessage(approval, adminTarget)
       : SKILL_TOOLS.has(approval.tool)
       ? formatSkillApprovalMessage(approval)
+      : HERMENEUTIX_PEOPLE_TOOLS.has(approval.tool)
+      ? formatHermeneutixApprovalMessage(approval)
       : this.formatGenericApprovalMessage(approval);
 
     return withCorrectionAffordance(approval, formatted, MAX_REVISIONS);

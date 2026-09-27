@@ -30,12 +30,24 @@ export const definition: ServiceDefinitionWithTools = {
       'hermeneutix_get_conversation_preview',
       'hermeneutix_search_profiles',
       'hermeneutix_search_instances',
+      'hermeneutix_list_roles',
+      'hermeneutix_get_role',
     ],
-    write: [],
+    // Writes land on a real person's record, so they keep the default
+    // require_approval rather than setting defaultWritePermission: 'allow'.
+    write: [
+      'hermeneutix_set_role',
+      'hermeneutix_remove_from_project',
+      'hermeneutix_update_profile',
+      'hermeneutix_set_coaching_notes',
+    ],
     blocked: [],
   },
   permissionDescriptions: {
-    read: 'Read-only access to projects, meetings, transcriptions, and speaker profiles.',
-    full: 'Read-only access to all meeting data. No write operations are available.',
+    read: 'Read projects, meetings, transcripts, speaker profiles, and who holds which role.',
+    full:
+      'Read all meeting data, and record what people are responsible for: set roles, correct ' +
+      "profiles and coaching notes, remove someone from a project. Every change to a person's " +
+      'record asks you to approve it first.',
   },
 };

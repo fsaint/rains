@@ -52,6 +52,23 @@ export const CALENDAR_TOOLS = new Set([
  */
 export const DRAFT_SEND_TOOLS = new Set(['gmail_send_draft']);
 
+/**
+ * Hermeneutix writes land on a real person's record, so the owner is shown
+ * the full text of what is being written rather than the generic formatter's
+ * 200-character JSON dump — a role description longer than that would
+ * otherwise be approved half-unseen.
+ *
+ * The person is identified by profile id, not name: the name lives behind the
+ * Hermeneutix API and this formatter has no token to resolve it with. The id
+ * is at least stable and checkable.
+ */
+export const HERMENEUTIX_PEOPLE_TOOLS = new Set([
+  'hermeneutix_set_role',
+  'hermeneutix_remove_from_project',
+  'hermeneutix_update_profile',
+  'hermeneutix_set_coaching_notes',
+]);
+
 /** What the notifier resolved about the draft a send-draft approval delivers. */
 export interface DraftSendSummary {
   to?: string;
@@ -880,6 +897,82 @@ export function formatSkillApprovalMessage(approval: ApprovalRequest): Formatted
   return {
     text: lines.join('\n'),
     keyboard: approveDenyKeyboard(approval.id),
+    parseMode: 'HTML',
+  };
+}
+
+/** A field being written, or null when the caller left it alone. */
+function writtenField(args: Record<string, unknown>, key: string, label: string): string | null {
+  const value = args[key];
+  if (typeof value !== 'string') return null;
+  if (value === '') return `<b>${label}:</b> <i>cleared</i>`;
+  return `<b>${label}:</b> ${escapeHtml(value)}`;
+}
+
+/**
+ * Approvals for changes to a person's Hermeneutix record.
+ *
+ * Shows every field in full, and says explicitly when a field is being
+ * cleared or replaced, because "unchanged", "cleared" and "overwritten" look
+ * identical in a JSON dump.
+ */
+export function formatHermeneutixApprovalMessage(approval: ApprovalRequest): FormattedApproval {
+  const args = (approval.arguments ?? {}) as Record<string, unknown>;
+  const profileId = typeof args.profile_id === 'string' ? args.profile_id : 'unknown';
+  const projectId = typeof args.project_id === 'string' ? args.project_id : null;
+
+  let heading: string;
+  let body: Array<string | null>;
+
+  switch (approval.tool) {
+    case 'hermeneutix_set_role':
+      heading = '👤 <b>Set someone\'s role</b>';
+      body = [
+        writtenField(args, 'name', 'Role'),
+        writtenField(args, 'role_description', 'Responsible for'),
+        writtenField(args, 'negative_prompt', 'Not responsible for'),
+        '<i>Fields not listed here are left as they are.</i>',
+      ];
+      break;
+    case 'hermeneutix_remove_from_project':
+      heading = '🚪 <b>Remove someone from a project</b>';
+      body = ['<i>Their profile and past meetings are untouched; they stop being a member.</i>'];
+      break;
+    case 'hermeneutix_update_profile':
+      heading = '✏️ <b>Change a person\'s details</b>';
+      body = [
+        writtenField(args, 'name', 'Name'),
+        writtenField(args, 'email', 'Email'),
+        '<i>A profile is shared across every project, so this changes them everywhere.</i>',
+      ];
+      break;
+    case 'hermeneutix_set_coaching_notes':
+      heading = '📝 <b>Replace coaching notes</b>';
+      body = [
+        writtenField(args, 'coaching_notes', 'Notes'),
+        '<i>This replaces the existing notes rather than adding to them.</i>',
+      ];
+      break;
+    default:
+      heading = '👤 <b>Change a person\'s record</b>';
+      body = [];
+  }
+
+  const lines = [
+    heading,
+    '',
+    `<b>Profile:</b> <code>${escapeHtml(profileId)}</code>`,
+    projectId ? `<b>Project:</b> <code>${escapeHtml(projectId)}</code>` : null,
+    '',
+    ...body,
+  ].filter((line): line is string => line !== null);
+
+  return {
+    text: lines.join('\n'),
+    keyboard: [[
+      { text: '✅ Approve', callback_data: `approve:${approval.id}` },
+      { text: '❌ Deny', callback_data: `deny:${approval.id}` },
+    ]],
     parseMode: 'HTML',
   };
 }

@@ -14,6 +14,12 @@ import {
   handleSearchInstances,
   handleListProjectSessions,
   handleListInstanceSessions,
+  handleListRoles,
+  handleGetRole,
+  handleSetRole,
+  handleRemoveFromProject,
+  handleUpdateProfile,
+  handleSetCoachingNotes,
   pinnedProject,
 } from './handlers.js';
 
@@ -241,6 +247,123 @@ export const listProjectSessionsTool: ToolDefinition = {
   },
 };
 
+
+// ---------------------------------------------------------------------------
+// Roles and profiles
+// ---------------------------------------------------------------------------
+
+export const listRolesTool: ToolDefinition = {
+  name: 'hermeneutix_list_roles',
+  description:
+    "Every person's role in a project: their profile id and name, the short role label, what they " +
+    'are responsible for, and the negative prompt. Start here when you need a profile_id, or to see ' +
+    'who is on the project and what each of them does.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'Project to list. Omit when this agent is pinned to one.' },
+      page: { type: 'number', description: 'Page number (default 1).' },
+      page_size: { type: 'number', description: 'Results per page.' },
+    },
+    required: [],
+  },
+  handler: handleListRoles,
+};
+
+export const getRoleTool: ToolDefinition = {
+  name: 'hermeneutix_get_role',
+  description:
+    'The role one person holds in a project. Answers that they are not a member if they have no ' +
+    'role there.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'Project. Omit when this agent is pinned to one.' },
+      profile_id: { type: 'string', description: 'Profile id, from hermeneutix_search_profiles or hermeneutix_list_roles.' },
+    },
+    required: ['profile_id'],
+  },
+  handler: handleGetRole,
+};
+
+export const setRoleTool: ToolDefinition = {
+  name: 'hermeneutix_set_role',
+  description:
+    "Set what a person is responsible for on a project. Creates the role if they are not yet a " +
+    'member, updates it if they are — use this to add someone as well as to change them.\n' +
+    '\n' +
+    'Send ONLY the fields you mean to change: a field you leave out is kept as it is. To clear a ' +
+    'field, pass an empty string for it.\n' +
+    '\n' +
+    'Base what you write on what the meetings actually show. This edits a real person\'s record, ' +
+    'so the account owner is asked to approve it first.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'Project. Omit when this agent is pinned to one.' },
+      profile_id: { type: 'string', description: 'Profile id, from hermeneutix_search_profiles or hermeneutix_list_roles.' },
+      name: { type: 'string', description: "Short role label, e.g. 'Superintendent'. Max 100 characters." },
+      role_description: { type: 'string', description: 'What this person is responsible for.' },
+      negative_prompt: { type: 'string', description: 'What this person is NOT responsible for, to keep analysis from misattributing work to them.' },
+    },
+    required: ['profile_id'],
+  },
+  handler: handleSetRole,
+};
+
+export const removeFromProjectTool: ToolDefinition = {
+  name: 'hermeneutix_remove_from_project',
+  description:
+    'Remove a person from a project, deleting their role on it. Their profile and their words in ' +
+    'past meetings are untouched; they simply stop being a member. Requires approval.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'Project. Omit when this agent is pinned to one.' },
+      profile_id: { type: 'string', description: 'Profile id of the person to remove.' },
+    },
+    required: ['profile_id'],
+  },
+  handler: handleRemoveFromProject,
+};
+
+export const updateProfileTool: ToolDefinition = {
+  name: 'hermeneutix_update_profile',
+  description:
+    "Correct a person's name or email. A profile is shared across every project it appears in, so " +
+    'this changes them everywhere, not just on one project. Use it to fix a misspelling or a ' +
+    'transcription artefact, not to record what someone does — that is hermeneutix_set_role.\n' +
+    '\n' +
+    'name is required and replaces the existing one. Requires approval.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      profile_id: { type: 'string', description: 'Profile id, from hermeneutix_search_profiles.' },
+      name: { type: 'string', description: "The person's full name. Required; replaces the current name." },
+      email: { type: 'string', description: 'Email address. Omit to leave it unchanged.' },
+    },
+    required: ['profile_id', 'name'],
+  },
+  handler: handleUpdateProfile,
+};
+
+export const setCoachingNotesTool: ToolDefinition = {
+  name: 'hermeneutix_set_coaching_notes',
+  description:
+    "Replace a person's coaching notes — standing observations about how they work, of the kind " +
+    'meetings reveal over time. This REPLACES the existing notes rather than appending, so read ' +
+    'them first if you mean to build on them. Pass an empty string to clear. Requires approval.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      profile_id: { type: 'string', description: 'Profile id, from hermeneutix_search_profiles.' },
+      coaching_notes: { type: 'string', description: 'The full notes text, replacing whatever is there.' },
+    },
+    required: ['profile_id', 'coaching_notes'],
+  },
+  handler: handleSetCoachingNotes,
+};
+
 export const hermeneutixTools: ToolDefinition[] = [
   listProjectsTool,
   listMeetingsTool,
@@ -251,4 +374,10 @@ export const hermeneutixTools: ToolDefinition[] = [
   searchProfilesTool,
   searchInstancesTool,
   listProjectSessionsTool,
+  listRolesTool,
+  getRoleTool,
+  setRoleTool,
+  removeFromProjectTool,
+  updateProfileTool,
+  setCoachingNotesTool,
 ];

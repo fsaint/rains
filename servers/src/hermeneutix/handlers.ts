@@ -34,7 +34,8 @@ export function outOfScope(pinned: { id: string; name?: string }, what: string):
 async function apiRequest(
   context: ServerContext,
   path: string,
-  params?: Record<string, string | number | undefined>
+  params?: Record<string, string | number | undefined>,
+  init?: { method?: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: Record<string, unknown> }
 ): Promise<Response> {
   const token = context.accessToken;
   if (!token) throw new Error('No Hermeneutix API token available');
@@ -49,11 +50,50 @@ async function apiRequest(
   }
 
   return fetch(url, {
+    method: init?.method ?? 'GET',
     headers: {
       Authorization: `Token ${token}`,
       'Content-Type': 'application/json',
     },
+    ...(init?.body === undefined ? {} : { body: JSON.stringify(init.body) }),
   });
+}
+
+/**
+ * Collect only the fields the caller actually named.
+ *
+ * The roles API reads an absent field as "leave unchanged" and an empty
+ * string as "clear it", so sending a key the caller never mentioned would
+ * silently wipe someone's role description. Undefined is dropped; an empty
+ * string is deliberate and passes through.
+ */
+function namedFields(
+  args: Record<string, unknown>,
+  keys: string[]
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (typeof args[key] === 'string') body[key] = args[key];
+  }
+  return body;
+}
+
+/** Turn a non-OK response into a ToolResult, preferring the API's own message. */
+async function apiFailure(response: Response, fallback: string): Promise<ToolResult> {
+  let detail = '';
+  try {
+    const body = await response.json() as Record<string, unknown>;
+    const candidate = body.error ?? body.detail ?? body.message;
+    if (typeof candidate === 'string') detail = candidate;
+  } catch {
+    // Body was not JSON; the status alone has to carry the meaning.
+  }
+  return {
+    success: false,
+    error: detail
+      ? `${fallback}: ${response.status} ${detail}`
+      : `${fallback}: ${response.status} ${response.statusText}`,
+  };
 }
 
 /**
@@ -452,4 +492,163 @@ export async function handleSearchInstances(
   }
   const data = await response.json() as Record<string, unknown>;
   return { success: true, data };
+}
+
+// ---------------------------------------------------------------------------
+// Roles and profiles (writes)
+//
+// A person's role is addressed by their profile id within a project — there
+// is no separate role id to discover. Every project-scoped call runs through
+// resolveProjectId, so a pinned agent cannot touch another project's people.
+// ---------------------------------------------------------------------------
+
+/** Every person's role in a project. */
+export async function handleListRoles(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const resolved = resolveProjectId(args, context);
+  if ('error' in resolved) return resolved.error;
+
+  const params: Record<string, string | number | undefined> = {};
+  if (typeof args.page === 'number') params.page = args.page;
+  if (typeof args.page_size === 'number') params.page_size = args.page_size;
+
+  const response = await apiRequest(context, `/v1/projects/${resolved.projectId}/roles/`, params);
+  if (!response.ok) return apiFailure(response, 'Could not list roles');
+  return { success: true, data: await response.json() as Record<string, unknown> };
+}
+
+/** One person's role in a project. */
+export async function handleGetRole(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const resolved = resolveProjectId(args, context);
+  if ('error' in resolved) return resolved.error;
+
+  const profileId = args.profile_id as string | undefined;
+  if (!profileId) return { success: false, error: 'profile_id is required' };
+
+  const response = await apiRequest(context, `/v1/projects/${resolved.projectId}/roles/${profileId}/`);
+  if (response.status === 404) {
+    return {
+      success: false,
+      error:
+        `Profile ${profileId} has no role on this project — they are not a member. ` +
+        'Use hermeneutix_set_role to add them with one.',
+    };
+  }
+  if (!response.ok) return apiFailure(response, 'Could not read the role');
+  return { success: true, data: await response.json() as Record<string, unknown> };
+}
+
+/**
+ * Create or update a person's role. The API upserts: absent fields are left
+ * alone, an empty string clears one.
+ */
+export async function handleSetRole(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const resolved = resolveProjectId(args, context);
+  if ('error' in resolved) return resolved.error;
+
+  const profileId = args.profile_id as string | undefined;
+  if (!profileId) return { success: false, error: 'profile_id is required' };
+
+  const body = namedFields(args, ['name', 'role_description', 'negative_prompt']);
+  if (Object.keys(body).length === 0) {
+    return {
+      success: false,
+      error:
+        'Give at least one of name, role_description or negative_prompt. ' +
+        'Pass an empty string to clear a field.',
+    };
+  }
+
+  const response = await apiRequest(
+    context,
+    `/v1/projects/${resolved.projectId}/roles/${profileId}/`,
+    undefined,
+    { method: 'PUT', body }
+  );
+  if (!response.ok) return apiFailure(response, 'Could not set the role');
+
+  const data = await response.json() as Record<string, unknown>;
+  return { success: true, data: { ...data, created: response.status === 201 } };
+}
+
+/** Remove a person from a project entirely. */
+export async function handleRemoveFromProject(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const resolved = resolveProjectId(args, context);
+  if ('error' in resolved) return resolved.error;
+
+  const profileId = args.profile_id as string | undefined;
+  if (!profileId) return { success: false, error: 'profile_id is required' };
+
+  const response = await apiRequest(
+    context,
+    `/v1/projects/${resolved.projectId}/roles/${profileId}/`,
+    undefined,
+    { method: 'DELETE' }
+  );
+  if (!response.ok) return apiFailure(response, 'Could not remove the person from the project');
+
+  // 204, no body.
+  return { success: true, data: { removed: true, projectId: resolved.projectId, profileId } };
+}
+
+/**
+ * Rename a person, or correct their email.
+ *
+ * Not project-scoped: a profile is shared across every project it appears in,
+ * so this changes the person everywhere. The approval names them for that
+ * reason.
+ */
+export async function handleUpdateProfile(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const profileId = args.profile_id as string | undefined;
+  if (!profileId) return { success: false, error: 'profile_id is required' };
+
+  const name = args.name;
+  if (typeof name !== 'string' || name.trim() === '') {
+    return { success: false, error: 'name is required — the API replaces the profile name with it' };
+  }
+
+  const body: Record<string, unknown> = { name };
+  if (typeof args.email === 'string') body.email = args.email;
+
+  const response = await apiRequest(context, `/profiles/${profileId}/update/`, undefined, {
+    method: 'POST',
+    body,
+  });
+  if (!response.ok) return apiFailure(response, 'Could not update the profile');
+  return { success: true, data: await response.json() as Record<string, unknown> };
+}
+
+/** Replace a person's coaching notes. */
+export async function handleSetCoachingNotes(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const profileId = args.profile_id as string | undefined;
+  if (!profileId) return { success: false, error: 'profile_id is required' };
+
+  const notes = args.coaching_notes;
+  if (typeof notes !== 'string') {
+    return { success: false, error: 'coaching_notes is required (pass an empty string to clear them)' };
+  }
+
+  const response = await apiRequest(context, `/profiles/${profileId}/coaching-notes/`, undefined, {
+    method: 'POST',
+    body: { coaching_notes: notes },
+  });
+  if (!response.ok) return apiFailure(response, 'Could not update coaching notes');
+  return { success: true, data: await response.json() as Record<string, unknown> };
 }
