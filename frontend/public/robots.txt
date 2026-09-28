@@ -1,0 +1,6 @@
+# app.helm.mom is the logged-in app and carries <meta name="robots" content="noindex">.
+# Crawling stays allowed so search engines can read that noindex; helm.mom is the page to index.
+User-agent: *
+Allow: /
+
+Sitemap: https://app.helm.mom/sitemap.xml

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Deliberately empty: every app.helm.mom page is noindex (Felipe, 2026-09-26). helm.mom's own
+     sitemap lists the pages search should find. Served as a file so the SPA fallback no longer
+     answers /sitemap.xml with index.html. -->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+</urlset>
