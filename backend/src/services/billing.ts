@@ -186,3 +186,23 @@ export function daysUntil(iso: string): number {
   const ms = new Date(iso).getTime() - Date.now();
   return ms <= 0 ? 0 : Math.ceil(ms / 86400000);
 }
+
+/** Stripe refuses a Checkout `subscription_data.trial_end` less than 48 hours ahead. */
+export const MIN_CHECKOUT_TRIAL_MS = 48 * 60 * 60 * 1000;
+
+/**
+ * The `subscription_data.trial_end` to send to Stripe Checkout, as a unix
+ * timestamp, or undefined to charge at once.
+ *
+ * A user who pays during a trial keeps the days they have left: the card is
+ * saved now and the first charge lands when the trial would have ended. Stripe
+ * requires the date to be at least 48 hours ahead, so a trial closer to its end
+ * than that is charged straight away (reins spec 2026-09-16 §2.8).
+ */
+export function checkoutTrialEnd(trialEndsAt: string | undefined | null, now: number = Date.now()): number | undefined {
+  if (!trialEndsAt) return undefined;
+  const endsMs = new Date(trialEndsAt).getTime();
+  if (Number.isNaN(endsMs)) return undefined;
+  if (endsMs - now < MIN_CHECKOUT_TRIAL_MS) return undefined;
+  return Math.floor(endsMs / 1000);
+}

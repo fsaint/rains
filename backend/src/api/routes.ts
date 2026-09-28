@@ -119,6 +119,7 @@ import {
   clearGrace,
   cancelSubscription,
   checkAccess,
+  checkoutTrialEnd,
 } from '../services/billing.js';
 import { validateDrivePathRules, isDrivePermissionLevel, DrivePathRuleValidationError, normalizeDriveFolderId } from '../services/drive-path-rules.js';
 import { nanoid } from 'nanoid';
@@ -6898,6 +6899,12 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const userRow = await client.execute({ sql: `SELECT email FROM users WHERE id = ?`, args: [session.userId] });
     const userEmail = userRow.rows[0]?.email as string | undefined;
 
+    // A user still inside a trial keeps its remaining days: Stripe saves the
+    // card now and charges when the trial would have ended. checkAccess only
+    // reports trialEndsAt for a running trial with no active subscription.
+    const gate = await checkAccess(session.userId);
+    const trialEnd = gate.allowed ? checkoutTrialEnd(gate.trialEndsAt) : undefined;
+
     const stripe = getStripe();
     const checkoutSession = await stripe.checkout.sessions.create({
       mode: 'subscription',
@@ -6909,7 +6916,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       success_url: body.successUrl,
       cancel_url: body.cancelUrl,
       metadata: { userId: session.userId, plan: body.plan },
-      subscription_data: { metadata: { userId: session.userId, plan: body.plan } },
+      subscription_data: {
+        metadata: { userId: session.userId, plan: body.plan },
+        ...(trialEnd ? { trial_end: trialEnd } : {}),
+      },
     });
 
     return reply.send({ data: { url: checkoutSession.url } });
@@ -6959,6 +6969,9 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
             const stripe2 = getStripe();
             const stripeSub = await stripe2.subscriptions.retrieve(cs.subscription as string);
             const periodEnd = stripeSub.items.data[0]?.current_period_end ?? 0;
+            // A Checkout run during a trial carries trial_end, so Stripe's
+            // status here is 'trialing', not 'active'. The row is still stored
+            // as active: the card is on file and the first charge is scheduled.
             await upsertSubscription({
               userId,
               stripeCustomerId: cs.customer as string,

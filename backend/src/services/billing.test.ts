@@ -331,3 +331,26 @@ describe('checkAccess', () => {
     process.env.BYPASS_BILLING = prev;
   });
 });
+
+describe('checkoutTrialEnd', () => {
+  const NOW = Date.parse('2026-09-28T12:00:00.000Z');
+
+  it('returns the trial end as a unix timestamp when 48 hours or more remain', async () => {
+    const { checkoutTrialEnd } = await import('./billing.js');
+    expect(checkoutTrialEnd('2026-10-13T12:00:00.000Z', NOW)).toBe(Date.parse('2026-10-13T12:00:00.000Z') / 1000);
+    expect(checkoutTrialEnd('2026-09-30T12:00:00.000Z', NOW)).toBe(Date.parse('2026-09-30T12:00:00.000Z') / 1000);
+  });
+
+  it('returns undefined when less than 48 hours remain', async () => {
+    const { checkoutTrialEnd } = await import('./billing.js');
+    expect(checkoutTrialEnd('2026-09-30T11:59:59.000Z', NOW)).toBeUndefined();
+    expect(checkoutTrialEnd('2026-09-27T12:00:00.000Z', NOW)).toBeUndefined();
+  });
+
+  it('returns undefined without a usable date', async () => {
+    const { checkoutTrialEnd } = await import('./billing.js');
+    expect(checkoutTrialEnd(undefined, NOW)).toBeUndefined();
+    expect(checkoutTrialEnd(null, NOW)).toBeUndefined();
+    expect(checkoutTrialEnd('not a date', NOW)).toBeUndefined();
+  });
+});
