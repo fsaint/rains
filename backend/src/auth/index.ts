@@ -7,7 +7,7 @@ import { client } from '../db/index.js';
 import { nanoid } from 'nanoid';
 import { storePendingOAuthFlow, getPendingOAuthFlow, deletePendingOAuthFlow } from '../oauth/pending-flows.js';
 import { getPostHog } from '../analytics/posthog.js';
-import { sendInviteEmail } from '../services/email.js';
+import { sendInviteEmail, sendWelcomeEmail } from '../services/email.js';
 
 /** Trial lengths an admin may choose when inviting someone. */
 export const TRIAL_DAY_OPTIONS = [30, 60, 90] as const as readonly number[];
@@ -33,6 +33,53 @@ export function safeReturnTo(next: string | undefined, dashboardUrl: string): st
   if (target.origin !== dash.origin) return dashboardUrl;
   if (target.protocol !== 'http:' && target.protocol !== 'https:') return dashboardUrl;
   return target.toString();
+}
+
+/**
+ * Create the account for someone who signed in with Google and was not yet a
+ * user (reins spec 2026-09-16 §2.5): names from their Google profile, no
+ * password, and a trial of `config.enrollment.selfTrialDays` days. Then the
+ * welcome email, which never fails the sign-in.
+ */
+async function selfEnrollGoogleUser(info: {
+  email: string;
+  name?: string;
+  given_name?: string;
+  family_name?: string;
+}): Promise<{ id: string; email: string; name: string; role: 'user'; status: 'active' }> {
+  const id = nanoid();
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const trialDays = config.enrollment.selfTrialDays;
+  const trialEndsAt = new Date(now.getTime() + trialDays * 86400000).toISOString();
+  const firstName = info.given_name?.trim() || null;
+  const lastName = info.family_name?.trim() || null;
+  const name =
+    info.name?.trim() ||
+    [firstName, lastName].filter(Boolean).join(' ').trim() ||
+    info.email.split('@')[0];
+
+  await client.execute({
+    sql: `INSERT INTO users (id, email, name, first_name, last_name, password_hash, role, status, trial_ends_at, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, NULL, 'user', 'active', ?, ?, ?)`,
+    args: [id, info.email, name, firstName, lastName, trialEndsAt, nowIso, nowIso],
+  });
+
+  try {
+    await sendWelcomeEmail({
+      to: info.email,
+      firstName: firstName ?? name.split(/\s+/)[0] ?? '',
+      trialDays,
+      trialEndsAt,
+      dashboardUrl: config.dashboardUrl,
+    });
+  } catch (err) {
+    console.error('[enroll] could not send welcome email:', err instanceof Error ? err.message : err);
+  }
+
+  getPostHog()?.capture({ distinctId: id, event: 'user_enrolled', properties: { method: 'google', trialDays } });
+
+  return { id, email: info.email, name, role: 'user', status: 'active' };
 }
 
 const COOKIE_NAME = 'reins_session';
@@ -278,18 +325,29 @@ export async function registerAuth(app: FastifyInstance) {
           return reply.redirect(`${config.dashboardUrl}/?login_error=userinfo_failed`);
         }
 
-        const userInfo = await userInfoResponse.json() as { email: string; name?: string };
+        const userInfo = await userInfoResponse.json() as {
+          email: string;
+          name?: string;
+          given_name?: string;
+          family_name?: string;
+        };
 
+        // Looked up by email whatever the status, so a suspended or deleted
+        // account is refused below instead of re-enrolling for a fresh trial.
         const result = await client.execute({
-          sql: `SELECT id, email, name, role, status FROM users WHERE email = ? AND status = 'active'`,
+          sql: `SELECT id, email, name, role, status FROM users WHERE email = ?`,
           args: [userInfo.email],
         });
 
-        if (result.rows.length === 0) {
+        if (result.rows.length > 0 && result.rows[0].status !== 'active') {
           return reply.redirect(`${config.dashboardUrl}/?login_error=not_authorized`);
         }
 
-        const user = result.rows[0];
+        if (result.rows.length === 0 && !config.enrollment.selfEnroll) {
+          return reply.redirect(`${config.dashboardUrl}/?login_error=not_authorized`);
+        }
+
+        const user = result.rows[0] ?? (await selfEnrollGoogleUser(userInfo));
         const token = signSession(user.id as string, user.email as string, user.role as 'admin' | 'user');
         reply.setCookie(COOKIE_NAME, token, {
           path: '/',

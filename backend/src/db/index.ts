@@ -89,6 +89,10 @@ export async function initializeDatabase() {
   // missing date as allowed rather than expired. The two stamps make the
   // reminder cron idempotent.
   await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_ends_at TEXT`;
+  // Set on Google self-enrollment from Google's given and family names; null
+  // for everyone created before it (reins spec 2026-09-16 §2.1).
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name TEXT`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name TEXT`;
   await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_reminder_7_sent_at TEXT`;
   await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_reminder_1_sent_at TEXT`;
   // Invited users sign in with Google and never set one.

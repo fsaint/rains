@@ -188,3 +188,58 @@ export async function sendTrialReminderEmail(opts: {
     text,
   });
 }
+
+/** Google profile names reach this HTML; they are the stranger's own input. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Welcome someone who created their own account by signing in with Google
+ * (reins spec 2026-09-16 §2.6): trial end date, where to set up the first
+ * agent, and the pricing page.
+ */
+export async function sendWelcomeEmail(opts: {
+  to: string;
+  firstName: string;
+  trialDays: number;
+  trialEndsAt: string;
+  dashboardUrl: string;
+}): Promise<void> {
+  const base = opts.dashboardUrl.replace(/\/+$/, '');
+  const pricingUrl = `${base}/pricing`;
+  const setupUrl = `${base}/agents/new`;
+  const ends = new Date(opts.trialEndsAt).toLocaleDateString('en-US', {
+    year: 'numeric', month: 'long', day: 'numeric',
+  });
+  const name = opts.firstName.trim();
+  const greeting = name ? `Hi ${name},` : 'Hi,';
+
+  const html = wrap(
+    `Welcome to Helm`,
+    `<p>${escapeHtml(greeting)}</p>
+     <p>Your <strong>${opts.trialDays}-day free trial</strong> runs until <strong>${ends}</strong>.</p>
+     <p>Start by creating an agent. It gets its own MCP address, which you add to Claude, Claude Code or any MCP client.</p>
+     ${button(setupUrl, 'Create your first agent')}
+     <p>To keep your agents working after ${ends}, choose a plan: <a href="${pricingUrl}">${pricingUrl}</a></p>`
+  );
+
+  const text = [
+    greeting,
+    ``,
+    `Your ${opts.trialDays}-day free trial of Helm runs until ${ends}.`,
+    ``,
+    `Start by creating an agent. It gets its own MCP address, which you add to Claude, Claude Code or any MCP client:`,
+    setupUrl,
+    ``,
+    `To keep your agents working after ${ends}, choose a plan:`,
+    pricingUrl,
+  ].join('\n');
+
+  await sendEmail({ to: opts.to, subject: `Welcome to Helm: your ${opts.trialDays}-day trial has started`, html, text });
+}

@@ -20,3 +20,9 @@ oauth:
 browser:
   max_instances: 5
   idle_timeout_ms: 300000
+
+# Google sign-in from an unknown email creates the account with a trial.
+# Env overrides: ENROLLMENT_SELF_ENROLL, ENROLLMENT_SELF_TRIAL_DAYS.
+enrollment:
+  self_enroll: true
+  self_trial_days: 15

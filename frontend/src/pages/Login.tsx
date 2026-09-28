@@ -1,14 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { AlertCircle } from 'lucide-react';
 import HelmMark from '../components/HelmMark';
+import { config as publicConfig } from '../api/client';
 
 interface LoginProps {
   onSuccess: (user: never) => void;
 }
 
 const ERROR_MESSAGES: Record<string, string> = {
-  not_authorized: 'This Google account is not set up on Helm. Ask your administrator for an invite.',
+  not_authorized: 'Sign-ups are closed. Ask your administrator for an invite.',
   invalid_state: 'Sign-in session expired. Please try again.',
   token_failed: 'Google authentication failed. Please try again.',
   userinfo_failed: 'Could not retrieve your Google account info. Please try again.',
@@ -33,7 +34,13 @@ function safeNext(raw: string | null): string | null {
 
 export default function Login(_props: LoginProps) {
   const [params] = useSearchParams();
-  const next = safeNext(params.get('next'));
+  const location = useLocation();
+  // The login page renders in place of whatever page was asked for, so a
+  // stranger arriving at /pricing from helm.mom comes back to /pricing.
+  const next =
+    safeNext(params.get('next')) ??
+    (location.pathname !== '/' ? safeNext(`${location.pathname}${location.search}`) : null);
+  const [selfEnroll, setSelfEnroll] = useState<{ days: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [showPasswordForm, setShowPasswordForm] = useState(false);
   const [email, setEmail] = useState('');
@@ -41,6 +48,16 @@ export default function Login(_props: LoginProps) {
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const errorKey = params.get('login_error');
   const error = errorKey ? (ERROR_MESSAGES[errorKey] ?? 'Sign-in failed. Please try again.') : null;
+
+  useEffect(() => {
+    let live = true;
+    publicConfig.getPublic()
+      .then((c) => {
+        if (live && c?.selfEnroll) setSelfEnroll({ days: c.selfTrialDays ?? 15 });
+      })
+      .catch(() => {});
+    return () => { live = false; };
+  }, []);
 
   useEffect(() => {
     // Clear the error param from the URL without navigating
@@ -99,7 +116,11 @@ export default function Login(_props: LoginProps) {
         <div className="bg-white/[0.04] backdrop-blur-sm border border-white/[0.06] rounded-2xl p-8">
           <div className="mb-6">
             <h1 className="text-lg font-medium text-white">Sign in</h1>
-            <p className="text-sm text-gray-400 mt-1">Use your Google account to continue</p>
+            <p className="text-sm text-gray-400 mt-1">
+              {selfEnroll
+                ? `Sign in with Google to start your ${selfEnroll.days}-day free trial`
+                : 'Use your Google account to continue'}
+            </p>
           </div>
 
           {error && (

@@ -3612,7 +3612,11 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // ========================================================================
 
   app.get('/api/config/public', async (_request, reply) => {
-    return reply.send({});
+    // The login page shows the trial pitch only when a stranger can sign up.
+    return reply.send({
+      selfEnroll: config.enrollment.selfEnroll,
+      selfTrialDays: config.enrollment.selfTrialDays,
+    });
   });
 
   // =========================================================================

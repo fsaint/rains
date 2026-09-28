@@ -35,7 +35,17 @@ type YamlConfig = {
     microsoft_tenant_id?: string;
   };
   browser?: { max_instances?: number; idle_timeout_ms?: number };
+  enrollment?: { self_enroll?: boolean; self_trial_days?: number };
 };
+
+/** 'true'/'1' and 'false'/'0' from an env var; anything else is unset. */
+export function parseBool(value: string | undefined): boolean | undefined {
+  if (value === undefined) return undefined;
+  const v = value.trim().toLowerCase();
+  if (v === 'true' || v === '1') return true;
+  if (v === 'false' || v === '0') return false;
+  return undefined;
+}
 
 const env = process.env.NODE_ENV ?? 'development';
 const yaml = loadYamlConfig(env) as YamlConfig;
@@ -102,6 +112,15 @@ const ConfigSchema = z.object({
   // PostHog analytics
   posthogApiKey: z.string().optional(),
   posthogHost: z.string().default('https://us.i.posthog.com'),
+
+  // Enrollment. With selfEnroll on, a Google sign-in from an unknown email
+  // creates the account with a selfTrialDays trial (reins spec 2026-09-16
+  // §2.2, §2.5). The defaults are the spec's: config/*.yaml is not copied into
+  // the production image, so these defaults are what app.helm.mom runs.
+  enrollment: z.object({
+    selfEnroll: z.boolean().default(true),
+    selfTrialDays: z.coerce.number().int().min(1).default(15),
+  }).default({}),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -149,6 +168,11 @@ function loadConfig(): Config {
     // PostHog
     posthogApiKey: process.env.POSTHOG_API_KEY,
     posthogHost: process.env.POSTHOG_HOST,
+    // Enrollment
+    enrollment: {
+      selfEnroll: parseBool(process.env.ENROLLMENT_SELF_ENROLL) ?? yaml.enrollment?.self_enroll,
+      selfTrialDays: process.env.ENROLLMENT_SELF_TRIAL_DAYS ?? yaml.enrollment?.self_trial_days,
+    },
   };
 
   const result = ConfigSchema.safeParse(raw);

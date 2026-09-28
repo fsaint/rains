@@ -316,8 +316,14 @@ export const health = {
 };
 
 // Public config (no auth required)
+export interface PublicConfig {
+  /** A Google sign-in from an unknown email creates the account. */
+  selfEnroll?: boolean;
+  /** Trial length for a self-enrolled account. */
+  selfTrialDays?: number;
+}
 export const config = {
-  getPublic: () => request<Record<string, never>>('/config/public'),
+  getPublic: () => request<PublicConfig>('/config/public'),
 };
 
 // Initial prompt templates

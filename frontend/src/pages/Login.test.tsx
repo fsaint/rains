@@ -3,14 +3,18 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Login from './Login';
 
+const { mockGetPublic } = vi.hoisted(() => ({ mockGetPublic: vi.fn() }));
+vi.mock('../api/client', () => ({ config: { getPublic: mockGetPublic } }));
+
 describe('Login', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetPublic.mockResolvedValue({ selfEnroll: false });
   });
 
-  function renderLogin(search = '') {
+  function renderLogin(search = '', path = '/') {
     return render(
-      <MemoryRouter initialEntries={[`/${search}`]}>
+      <MemoryRouter initialEntries={[`${path}${search}`]}>
         <Login onSuccess={vi.fn()} />
       </MemoryRouter>
     );
@@ -41,7 +45,35 @@ describe('Login', () => {
 
   it('shows error for not_authorized login error', () => {
     renderLogin('?login_error=not_authorized');
-    expect(screen.getByText(/not set up on Helm/i)).toBeInTheDocument();
+    expect(screen.getByText('Sign-ups are closed. Ask your administrator for an invite.')).toBeInTheDocument();
+  });
+
+  describe('trial pitch', () => {
+    it('invites a stranger to start the trial when self-enrollment is on', async () => {
+      mockGetPublic.mockResolvedValue({ selfEnroll: true, selfTrialDays: 15 });
+      renderLogin();
+      expect(await screen.findByText('Sign in with Google to start your 15-day free trial')).toBeInTheDocument();
+    });
+
+    it('takes the trial length from config', async () => {
+      mockGetPublic.mockResolvedValue({ selfEnroll: true, selfTrialDays: 30 });
+      renderLogin();
+      expect(await screen.findByText(/start your 30-day free trial/)).toBeInTheDocument();
+    });
+
+    it('keeps the plain subtitle when self-enrollment is off', async () => {
+      renderLogin();
+      await vi.waitFor(() => expect(mockGetPublic).toHaveBeenCalled());
+      expect(screen.getByText('Use your Google account to continue')).toBeInTheDocument();
+      expect(screen.queryByText(/free trial/)).not.toBeInTheDocument();
+    });
+
+    it('keeps the plain subtitle when config cannot be read', async () => {
+      mockGetPublic.mockRejectedValue(new Error('offline'));
+      renderLogin();
+      await vi.waitFor(() => expect(mockGetPublic).toHaveBeenCalled());
+      expect(screen.getByText('Use your Google account to continue')).toBeInTheDocument();
+    });
   });
 
   it('shows error for invalid_state login error', () => {
@@ -95,6 +127,18 @@ describe('Login', () => {
       fireEvent.submit(screen.getByRole('button', { name: /^sign in$/i }).closest('form')!);
       await vi.waitFor(() => expect(hrefSetter).toHaveBeenCalledWith(next));
       vi.unstubAllGlobals();
+    });
+
+    it('returns to the page it replaced, such as /pricing', () => {
+      renderLogin('', '/pricing');
+      fireEvent.click(screen.getByRole('button', { name: /continue with google/i }));
+      expect(hrefSetter).toHaveBeenCalledWith(`/api/auth/google?next=${encodeURIComponent('/pricing')}`);
+    });
+
+    it('prefers an explicit next over the current page', () => {
+      renderLogin(`?next=${encodeURIComponent('/billing')}`, '/pricing');
+      fireEvent.click(screen.getByRole('button', { name: /continue with google/i }));
+      expect(hrefSetter).toHaveBeenCalledWith(`/api/auth/google?next=${encodeURIComponent('/billing')}`);
     });
 
     it('ignores a foreign-origin next', () => {
