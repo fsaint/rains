@@ -614,3 +614,17 @@ describe('Permissions page', () => {
     });
   });
 });
+
+/**
+ * The agent detail page holds the MCP endpoint, the connected clients and the
+ * client config. Deleting the old deploy panel took the only link to it with
+ * it, leaving the page reachable only in the moment after creating an agent.
+ */
+describe('reaching an agent\'s MCP configuration', () => {
+  it('links each agent to its detail page', async () => {
+    render(<Permissions />, { wrapper: createWrapper() });
+
+    const connect = await screen.findByRole('link', { name: /connect Agent One/i });
+    expect(connect).toHaveAttribute('href', '/agents/a1');
+  });
+});

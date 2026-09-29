@@ -101,6 +101,20 @@ export default function AgentDetail() {
               </div>
             </div>
           )}
+
+          {connectPrompt.data?.openaiClawConfig && (
+            <div>
+              <label className="block text-xs font-medium text-gray-400 uppercase tracking-wider mb-1.5">
+                OpenAI-style clients
+              </label>
+              <div className="relative">
+                <pre className="p-3 bg-gray-900 text-gray-100 rounded-lg text-xs overflow-x-auto leading-relaxed">
+                  {JSON.stringify(connectPrompt.data.openaiClawConfig, null, 2)}
+                </pre>
+                <CopyButton text={JSON.stringify(connectPrompt.data.openaiClawConfig, null, 2)} k="openai" dark />
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="bg-white rounded-xl border border-gray-100 p-5">

@@ -23,6 +23,7 @@ import {
   Calendar,
   Search,
   Globe,
+  Plug,
   CheckCircle,
   AlertCircle,
   X,
@@ -384,6 +385,19 @@ export default function Permissions() {
                   </div>
                 </button>
                 <div className="flex items-center gap-1 shrink-0">
+                  {/* Connect: the MCP endpoint, connected clients and client config.
+                      The only route to the agent's detail page — without it that
+                      page is reachable only right after creating an agent. */}
+                  <Link
+                    to={`/agents/${agent.id}`}
+                    onClick={(e) => e.stopPropagation()}
+                    title="MCP endpoint and client configuration"
+                    aria-label={`Connect ${agent.name}`}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-trust-blue bg-trust-blue/5 hover:bg-trust-blue/10 border border-trust-blue/10 rounded-lg transition-all"
+                  >
+                    <Plug className="w-3.5 h-3.5" />
+                    Connect
+                  </Link>
                   {/* Service type icons summary */}
                   <div className="hidden sm:flex items-center gap-1.5 mr-3">
                     {[...new Set(agent.instances.map((i) => i.serviceType))].map((st) => (
