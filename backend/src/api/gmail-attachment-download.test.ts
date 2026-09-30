@@ -165,6 +165,26 @@ describe('GET /api/gmail/attachments/download', () => {
     expect(mockVault.getValidAccessToken).toHaveBeenCalledWith('cred-1');
   });
 
+  /**
+   * The 500 a caller hit on a real message: the accent in "término" arrives
+   * decomposed, and Node refuses to put U+0301 in a header value.
+   */
+  it('serves a file whose name has an accent', async () => {
+    gmailAnswers();
+    const filename = 'BANCO_ESTADO_fabrica_término al 30 09 2026.xlsx'.normalize('NFD');
+
+    const res = await download(mintAttachmentToken({ ...CLAIMS, filename }));
+
+    expect(res.statusCode).toBe(200);
+    expect(res.rawPayload.equals(BYTES)).toBe(true);
+
+    const disposition = res.headers['content-disposition'] as string;
+    expect(disposition).toContain('filename="BANCO_ESTADO_fabrica_termino al 30 09 2026.xlsx"');
+    expect(decodeURIComponent(/filename\*=UTF-8''([^;]+)/.exec(disposition)![1])).toBe(
+      filename.normalize('NFC')
+    );
+  });
+
   it('refuses a request with no token', async () => {
     gmailAnswers();
     expect((await download()).statusCode).toBe(401);

@@ -73,7 +73,7 @@ import { getPostHog } from '../analytics/posthog.js';
 import { createUpload, getUpload, MAX_UPLOAD_BYTES } from '../services/agent-uploads.js';
 import {
   ATTACHMENT_DOWNLOAD_PATH,
-  safeAttachmentFilename,
+  contentDispositionFor,
   verifyAttachmentToken,
 } from '../services/attachment-links.js';
 import {
@@ -3847,7 +3847,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     return reply
       .header('content-type', mimeType)
       .header('content-length', String(bytes.length))
-      .header('content-disposition', `attachment; filename="${safeAttachmentFilename(claims.filename)}"`)
+      .header('content-disposition', contentDispositionFor(claims.filename))
       .header('x-content-type-options', 'nosniff')
       .send(bytes);
   });
