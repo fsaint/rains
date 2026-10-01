@@ -76,6 +76,7 @@ import {
   contentDispositionFor,
   verifyAttachmentToken,
 } from '../services/attachment-links.js';
+import { buildUploadLink, verifyUploadToken } from '../services/upload-links.js';
 import {
   parseWikilinkRefs,
   updateLinkIndex,
@@ -3672,6 +3673,42 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // dependency (@fastify/multipart is not installed).
   // -------------------------------------------------------------------------
 
+  /** The raw credential from an `Authorization: Bearer …` header, if present. */
+  function bearerToken(request: any): string | null {
+    return (request.headers.authorization ?? '').match(/^Bearer\s+(.+)$/i)?.[1] ?? null;
+  }
+
+  /**
+   * Mint a short-lived upload link.
+   *
+   * Called by the create_upload_link tool on the agent's behalf, from inside
+   * Helm, so it authenticates on the gateway token the agent never sees. What
+   * comes back is a capability the agent can use from its own machine: it may
+   * add bytes under one filename, for fifteen minutes, and nothing else.
+   */
+  app.post('/api/agent-uploads/link', async (request, reply) => {
+    const agent = await resolveAgentFromGatewayToken(request);
+    if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const body = (request.body ?? {}) as { filename?: unknown; mimeType?: unknown; localPath?: unknown };
+    const filename = typeof body.filename === 'string' ? body.filename.trim() : '';
+    if (filename === '') {
+      return reply.status(400).send({ error: 'filename is required' });
+    }
+
+    const link = buildUploadLink(
+      {
+        agentId: agent.agentId,
+        userId: agent.userId,
+        filename,
+        mimeType: typeof body.mimeType === 'string' ? body.mimeType : undefined,
+      },
+      typeof body.localPath === 'string' ? body.localPath : undefined
+    );
+
+    return reply.status(201).send({ data: link });
+  });
+
   // Scoped parser — registering it does not change how any other route parses.
   app.addContentTypeParser(
     'application/octet-stream',
@@ -3691,7 +3728,14 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     // all decrypted OAuth tokens.
     { bodyLimit: MAX_UPLOAD_BYTES },
     async (request, reply) => {
-      const agent = await resolveAgentFromGatewayToken(request);
+      // Two credentials reach this route. The gateway token is the original,
+      // readable only by something running inside Helm. The capability token
+      // is what an agent on its own machine gets from a create_upload_link
+      // tool call, and it carries the filename it was minted for.
+      const staged = verifyUploadToken(bearerToken(request) ?? '');
+      const agent = staged
+        ? { agentId: staged.agentId, userId: staged.userId }
+        : await resolveAgentFromGatewayToken(request);
       if (!agent) return reply.status(401).send({ error: 'Unauthorized' });
 
       const query = request.query as { filename?: string; mimeType?: string };
@@ -3706,8 +3750,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         const upload = await createUpload({
           agentId: agent.agentId,
           userId: agent.userId,
-          filename: query.filename ?? 'upload.bin',
-          mimeType: query.mimeType ?? 'application/octet-stream',
+          // A capability token names its file; the query string cannot
+          // override it, or the binding would be decorative.
+          filename: staged?.filename ?? query.filename ?? 'upload.bin',
+          mimeType: staged?.mimeType ?? query.mimeType ?? 'application/octet-stream',
           data: body,
         });
         return reply.status(201).send({ data: upload });

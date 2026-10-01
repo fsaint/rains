@@ -3,6 +3,7 @@
  */
 
 import type { ToolDefinition } from '../common/base-server.js';
+import { createUploadLinkTool } from '../common/upload-link.js';
 import { attachmentsSchema } from './attachment-schema.js';
 import {
   handleListMessages,
@@ -556,6 +557,7 @@ export const labelMessageTool: ToolDefinition = {
  * All Gmail tools
  */
 export const gmailTools: ToolDefinition[] = [
+  createUploadLinkTool('gmail_'),
   listAccountsTool,
   listMessagesTool,
   getMessageTool,

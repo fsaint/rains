@@ -24,7 +24,11 @@ export const definition: ServiceDefinitionWithTools = {
   },
   tools: gmailTools,
   permissions: {
-    read: ['gmail_list_accounts', 'gmail_list_messages', 'gmail_get_message', 'gmail_get_attachment', 'gmail_search', 'gmail_list_labels', 'gmail_create_label', 'gmail_delete_label'],
+    // create_upload_link is read: it touches no mail. It mints a capability
+    // to add bytes to this agent's own 24-hour staging area, which the agent
+    // could already fill with source="base64". What the file is then used
+    // for — drafting, sending — is gated as it always was.
+    read: ['gmail_create_upload_link', 'gmail_list_accounts', 'gmail_list_messages', 'gmail_get_message', 'gmail_get_attachment', 'gmail_search', 'gmail_list_labels', 'gmail_create_label', 'gmail_delete_label'],
     write: ['gmail_create_draft', 'gmail_send_draft', 'gmail_mark_read', 'gmail_archive', 'gmail_modify_labels', 'gmail_label_message'],
     blocked: ['gmail_send_message', 'gmail_delete_message'],
   },

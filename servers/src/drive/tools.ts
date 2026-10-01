@@ -3,6 +3,7 @@
  */
 
 import type { ToolDefinition } from '../common/base-server.js';
+import { createUploadLinkTool } from '../common/upload-link.js';
 import {
   handleListFiles,
   handleGetFile,
@@ -166,8 +167,8 @@ export const createFileTool: ToolDefinition = {
         type: 'object',
         description:
           'The file bytes, from a reference source — use this to upload real files. Same shape as a ' +
-          'Gmail attachment: {"source":"upload","uploadId":…} for a file staged via /api/agent-uploads ' +
-          '(up to 20 MB; the bytes never enter your context), {"source":"base64","filename":…,"mimeType":…,"data":…} ' +
+          'Gmail attachment: {"source":"upload","uploadId":…} for a file on your own machine, staged ' +
+          'with drive_create_upload_link (up to 25 MB; the bytes never enter your context), {"source":"base64","filename":…,"mimeType":…,"data":…} ' +
           'for small inline files (≤384 KB decoded), {"source":"url","url":…} to fetch over HTTPS, ' +
           '{"source":"gmail","messageId":…,"attachmentId":…} to save an email attachment to Drive, ' +
           '{"source":"drive","fileId":…} to copy or export an existing Drive file, or ' +
@@ -210,8 +211,8 @@ export const updateFileTool: ToolDefinition = {
         type: 'object',
         description:
           'The file bytes, from a reference source — use this to upload real files. Same shape as a ' +
-          'Gmail attachment: {"source":"upload","uploadId":…} for a file staged via /api/agent-uploads ' +
-          '(up to 20 MB; the bytes never enter your context), {"source":"base64","filename":…,"mimeType":…,"data":…} ' +
+          'Gmail attachment: {"source":"upload","uploadId":…} for a file on your own machine, staged ' +
+          'with drive_create_upload_link (up to 25 MB; the bytes never enter your context), {"source":"base64","filename":…,"mimeType":…,"data":…} ' +
           'for small inline files (≤384 KB decoded), {"source":"url","url":…} to fetch over HTTPS, ' +
           '{"source":"gmail","messageId":…,"attachmentId":…} to save an email attachment to Drive, ' +
           '{"source":"drive","fileId":…} to copy or export an existing Drive file, or ' +
@@ -321,6 +322,7 @@ export const listSharedDrivesTool: ToolDefinition = {
  * All Drive tools
  */
 export const driveTools: ToolDefinition[] = [
+  createUploadLinkTool('drive_'),
   listFilesTool,
   getFileTool,
   readFileTool,
