@@ -74,8 +74,10 @@ test('login page shows error message for failed OAuth', async ({ page }) => {
   await expect(page.getByRole('button', { name: /continue with google/i }))
     .toBeVisible({ timeout: 10_000 });
   // Error text from ERROR_MESSAGES['not_authorized'] in pages/Login.tsx.
-  // Matches the same fragment the unit test asserts, so the two move together.
-  await expect(page.getByText(/not set up on Helm/i)).toBeVisible({ timeout: 5_000 });
+  // Matches the same fragment Login.test.tsx asserts, so the two move together
+  // — when self-enrollment was added, that copy changed and only the unit test
+  // was updated, which is how this assertion went stale.
+  await expect(page.getByText(/sign-ups are closed/i)).toBeVisible({ timeout: 5_000 });
 });
 
 test('login succeeds via API session injection', async ({ page, request }) => {
