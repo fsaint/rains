@@ -43,15 +43,13 @@ export const attachmentsSchema = {
     '• source="url" — a file at a public https:// address, fetched server-side. ' +
     'Requires: url. Optional: filename, mimeType. Only https is allowed, and addresses on ' +
     'private networks are refused.\n' +
-    '• source="upload" — a file that exists in YOUR container (one you generated or ' +
-    'downloaded). Upload it first with:\n' +
-    '    curl -sS -X POST "$REINS_API_URL/api/agent-uploads?filename=NAME&mimeType=TYPE" \\\n' +
-    '      -H "x-reins-agent-secret: $REINS_GATEWAY_TOKEN" \\\n' +
-    '      -H "Content-Type: application/octet-stream" --data-binary @/path/to/file\n' +
-    '  then pass the returned uploadId. Requires: uploadId. Uploads expire after 24 hours.\n' +
+    '• source="upload" — a file on YOUR machine (one you generated, downloaded, or that ' +
+    'the user has on disk). Call gmail_create_upload_link with the filename and local path, ' +
+    'run the curl command it returns, and pass the upload id from that command\'s output. ' +
+    'Requires: uploadId. Up to 25 MB; staged uploads expire after 24 hours.\n' +
     '• source="base64" — raw bytes you encode inline. LAST RESORT: you must emit every ' +
-    'byte as output, which is slow and corrupts easily above a few KB. Limit 384 KB. ' +
-    'Requires: filename, mimeType, data.\n' +
+    'byte as output, which is slow and corrupts easily above a few KB. Limit 384 KB. For a ' +
+    'local file of any real size use source="upload" instead. Requires: filename, mimeType, data.\n' +
     'To forward a file you received by email, ALWAYS use source="gmail" — never call ' +
     'gmail_get_attachment and paste the bytes back.',
   items: {
