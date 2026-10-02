@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { usePostHog } from '@posthog/react';
+import { registerHelmAttribution } from './utils/analytics';
 import { useQuery } from '@tanstack/react-query';
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import {
@@ -75,6 +76,8 @@ function App() {
       posthog?.identify(user.id, { email: user.email, name: user.name, role: user.role });
     } else if (user === null) {
       posthog?.reset();
+      // reset() clears super-properties; put the attribution back for this visit's events.
+      if (posthog) registerHelmAttribution(posthog);
     }
   }, [posthog, user]);
 
