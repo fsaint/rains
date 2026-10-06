@@ -113,7 +113,11 @@ describe('GET /api/config/public', () => {
     const res = await app.inject({ method: 'GET', url: '/api/config/public' });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ selfEnroll: true, selfTrialDays: 15 });
+    expect(res.json()).toEqual({
+      selfEnroll: true,
+      selfTrialDays: 15,
+      rootMcpUrl: 'http://localhost:3000/mcp',
+    });
   });
 
   it('reports self-enrollment off', async () => {
@@ -122,5 +126,18 @@ describe('GET /api/config/public', () => {
     const res = await app.inject({ method: 'GET', url: '/api/config/public' });
 
     expect(res.json().selfEnroll).toBe(false);
+  });
+});
+
+/**
+ * The dashboard shows the discovery endpoint, and in development the SPA and
+ * the API sit on different origins — so the URL has to come from the server
+ * rather than from window.location.
+ */
+describe('GET /api/config/public — the discovery endpoint', () => {
+  it('publishes the root MCP URL', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/config/public' });
+
+    expect(res.json().rootMcpUrl).toBe('http://localhost:3000/mcp');
   });
 });

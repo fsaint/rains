@@ -30,9 +30,10 @@ vi.mock('../api/client', () => ({
   agents: { listPending: vi.fn(), update: vi.fn(), delete: vi.fn(), cancelPending: vi.fn() },
   credentials: { list: vi.fn() },
   skills: { listForAgent: vi.fn(), list: vi.fn(), setForAgent: vi.fn() },
+  config: { getPublic: vi.fn() },
 }));
 
-import { permissions, agents, credentials, skills, ApiError } from '../api/client';
+import { permissions, agents, credentials, skills, config, ApiError } from '../api/client';
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -128,6 +129,7 @@ describe('Permissions page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(permissions.getAgentPermissions).mockResolvedValue(agentPerms as any);
+    vi.mocked(config.getPublic).mockResolvedValue({ rootMcpUrl: 'https://app.helm.mom/mcp' } as any);
     vi.mocked(agents.listPending).mockResolvedValue([]);
     vi.mocked(credentials.list).mockResolvedValue(googleCreds as any);
     vi.mocked(skills.listForAgent).mockResolvedValue([]);
@@ -626,5 +628,46 @@ describe('reaching an agent\'s MCP configuration', () => {
 
     const connect = await screen.findByRole('link', { name: /connect Agent One/i });
     expect(connect).toHaveAttribute('href', '/agents/a1');
+  });
+});
+
+/**
+ * The discovery endpoint card.
+ *
+ * It must say what the endpoint cannot do. A reader who has connected an
+ * agent will otherwise assume this URL carries the same reach, and the value
+ * of a single shared address is precisely that it does not.
+ */
+describe('the discovery endpoint', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(permissions.getAgentPermissions).mockResolvedValue(agentPerms as any);
+    vi.mocked(agents.listPending).mockResolvedValue([]);
+    vi.mocked(credentials.list).mockResolvedValue(googleCreds as any);
+    vi.mocked(skills.listForAgent).mockResolvedValue([]);
+    vi.mocked(skills.list).mockResolvedValue([]);
+    vi.mocked(config.getPublic).mockResolvedValue({ rootMcpUrl: 'https://app.helm.mom/mcp' } as any);
+  });
+
+  it('shows the root MCP URL the server published', async () => {
+    render(<Permissions />, { wrapper: createWrapper() });
+
+    expect(await screen.findByText('https://app.helm.mom/mcp')).toBeInTheDocument();
+  });
+
+  it('says it cannot act as an agent', async () => {
+    render(<Permissions />, { wrapper: createWrapper() });
+    await screen.findByText('https://app.helm.mom/mcp');
+
+    expect(screen.getByText(/cannot read your email or act as any agent/i)).toBeInTheDocument();
+  });
+
+  /** Nothing to show, and nothing broken, when the server did not send one. */
+  it('renders nothing when the server publishes no URL', async () => {
+    vi.mocked(config.getPublic).mockResolvedValue({} as any);
+    render(<Permissions />, { wrapper: createWrapper() });
+
+    await screen.findByText('Agents');
+    expect(screen.queryByText(/discovery endpoint/i)).toBeNull();
   });
 });

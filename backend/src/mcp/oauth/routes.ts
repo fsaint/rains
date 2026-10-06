@@ -46,6 +46,23 @@ function agentIdFromResource(resource: string | undefined): string | null {
   return match ? match[1] : null;
 }
 
+/**
+ * What an authorization request is for: one agent, or the root endpoint.
+ *
+ * The root endpoint lists the caller's agents and nothing else, so its token
+ * names no agent. Returning a discriminated result rather than a nullable
+ * agent id keeps "root" from being mistaken for "unparseable", which is the
+ * one confusion that would mint an unscoped token by accident.
+ */
+type ResourceTarget = { kind: 'root' } | { kind: 'agent'; agentId: string };
+
+function resourceTarget(resource: string | undefined): ResourceTarget | null {
+  if (!resource) return null;
+  if (/\/mcp\/?$/.test(resource)) return { kind: 'root' };
+  const agentId = agentIdFromResource(resource);
+  return agentId ? { kind: 'agent', agentId } : null;
+}
+
 function htmlEscape(value: string): string {
   return value.replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string
@@ -80,6 +97,14 @@ export function registerMcpOAuthRoutes(app: FastifyInstance): void {
     authorization_servers: [baseUrl()],
     bearer_methods_supported: ['header'],
     resource_documentation: `${baseUrl()}/docs/multi-agent-setup`,
+  }));
+
+  // The root endpoint's own document. `/mcp` is a resource in its own right —
+  // the discovery endpoint, scoped to the user rather than to an agent.
+  app.get('/.well-known/oauth-protected-resource/mcp', async () => ({
+    resource: `${baseUrl()}/mcp`,
+    authorization_servers: [baseUrl()],
+    bearer_methods_supported: ['header'],
   }));
 
   // Same document, per-agent. RFC 9728 allows the resource path to carry it,
@@ -179,12 +204,13 @@ export function registerMcpOAuthRoutes(app: FastifyInstance): void {
       );
     }
 
-    const agentId = agentIdFromResource(resource);
-    if (!agentId) {
+    const target = resourceTarget(resource);
+    if (!target) {
       return reply.code(400).type('text/html').send(
         errorPage(
-          'Missing or unrecognised `resource`. It must name the agent endpoint this token is for, ' +
-            'for example https://app.helm.mom/mcp/&lt;agentId&gt;.'
+          'Missing or unrecognised `resource`. It must name the endpoint this token is for: ' +
+            'https://app.helm.mom/mcp/&lt;agentId&gt; for one agent, or ' +
+            'https://app.helm.mom/mcp to discover your agents.'
         )
       );
     }
@@ -196,6 +222,23 @@ export function registerMcpOAuthRoutes(app: FastifyInstance): void {
       const back = encodeURIComponent(`${baseUrl()}${request.url}`);
       return reply.redirect(`${config.dashboardUrl}/login?next=${back}`);
     }
+
+    if (target.kind === 'root') {
+      if (request.method !== 'GET') return reply.code(405).send();
+      const owned = await client.execute({
+        sql: `SELECT COUNT(*)::int AS n FROM agents WHERE user_id = ?`,
+        args: [session.userId],
+      });
+      return reply.type('text/html').send(
+        rootConsentPage({
+          clientName: registered.clientName,
+          agentCount: Number(owned.rows[0]?.n ?? 0),
+          query: q,
+        })
+      );
+    }
+
+    const agentId = target.agentId;
 
     const agent = await client.execute({
       sql: `SELECT a.id, a.name, a.user_id FROM agents a WHERE a.id = ? LIMIT 1`,
@@ -245,21 +288,25 @@ export function registerMcpOAuthRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: 'invalid_request' });
     }
 
-    const agentId = agentIdFromResource(resource);
-    if (!agentId) return reply.code(400).send({ error: 'invalid_target' });
+    const grantFor = resourceTarget(resource);
+    if (!grantFor) return reply.code(400).send({ error: 'invalid_target' });
 
-    const agent = await client.execute({
-      sql: `SELECT id, user_id FROM agents WHERE id = ? LIMIT 1`,
-      args: [agentId],
-    });
-    const agentRow = agent.rows[0];
-    if (!agentRow || (agentRow.user_id as string) !== session.userId) {
-      return reply.code(404).send({ error: 'not_found' });
+    // A root grant names no agent, so there is no ownership check to make
+    // beyond the session: it can only ever list what this user already owns.
+    if (grantFor.kind === 'agent') {
+      const agent = await client.execute({
+        sql: `SELECT id, user_id FROM agents WHERE id = ? LIMIT 1`,
+        args: [grantFor.agentId],
+      });
+      const agentRow = agent.rows[0];
+      if (!agentRow || (agentRow.user_id as string) !== session.userId) {
+        return reply.code(404).send({ error: 'not_found' });
+      }
     }
 
     const code = await issueAuthCode({
       clientId: client_id,
-      agentId,
+      agentId: grantFor.kind === 'agent' ? grantFor.agentId : null,
       userId: session.userId,
       redirectUri: redirect_uri,
       codeChallenge: code_challenge,
@@ -386,6 +433,45 @@ function consentPage(opts: {
     <p class="muted">Tools that need approval will still ask you first, on Telegram or in the
        dashboard. This token works only for this one agent, and you can revoke it at any time
        from the agent's page.</p>
+    <form method="POST" action="/mcp/oauth/authorize">
+      ${hidden}
+      <button type="submit">Allow access</button>
+    </form>
+  `);
+}
+
+/**
+ * Consent for the root endpoint.
+ *
+ * Deliberately says what this token cannot do. A reader who has connected an
+ * agent before will assume this grants the same reach, and the whole value of
+ * the root endpoint is that it does not.
+ */
+function rootConsentPage(opts: {
+  clientName: string;
+  agentCount: number;
+  query: Record<string, string | undefined>;
+}): string {
+  const hidden = ['client_id', 'redirect_uri', 'state', 'code_challenge', 'resource']
+    .map((k) =>
+      opts.query[k]
+        ? `<input type="hidden" name="${k}" value="${htmlEscape(opts.query[k] as string)}">`
+        : ''
+    )
+    .join('');
+
+  const count =
+    opts.agentCount === 1 ? 'your 1 agent' : `your ${opts.agentCount} agents`;
+
+  return page(`
+    <h1>Connect ${htmlEscape(opts.clientName)}</h1>
+    <p><strong>${htmlEscape(opts.clientName)}</strong> is asking to see the list of
+       ${htmlEscape(count)}.</p>
+    <p>It will be able to read each agent's name, description, connected services and
+       MCP address.</p>
+    <p class="muted">It cannot read your email, use any connected service, or act as any
+       agent. To let it do that, connect that agent separately. You can revoke this at any
+       time from the dashboard.</p>
     <form method="POST" action="/mcp/oauth/authorize">
       ${hidden}
       <button type="submit">Allow access</button>
