@@ -68,6 +68,7 @@ import {
   deletePendingOAuthFlow,
 } from '../oauth/pending-flows.js';
 import { handleMCPRequest, type MCPRequest } from '../mcp/agent-endpoint.js';
+import { handleRootMcpRequest } from '../mcp/root-endpoint.js';
 import { getSession, requireAdmin, type SessionPayload } from '../auth/index.js';
 import { getPostHog } from '../analytics/posthog.js';
 import { createUpload, getUpload, MAX_UPLOAD_BYTES } from '../services/agent-uploads.js';
@@ -3507,6 +3508,105 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
   );
 
+  // ========================================================================
+  // Root MCP endpoint — the same URL for every user
+  // ========================================================================
+
+  /**
+   * Authenticate a request to `/mcp`.
+   *
+   * A root token is one whose `agentId` is null. Both halves of that check
+   * matter and neither is redundant:
+   *
+   *  - There is no unauthenticated path. `/mcp/:agentId` has one, because an
+   *    open agent is a deliberate choice an owner makes about one agent. There
+   *    is no equivalent choice here — the endpoint's whole answer depends on
+   *    knowing who is asking, so with no token there is nothing to say.
+   *  - An agent token is refused rather than accepted as its owner. It would
+   *    be a widening: a client trusted with one agent would learn the ids of
+   *    its siblings, and an agent id is a live credential for any agent whose
+   *    owner has opened it to unauthenticated MCP.
+   */
+  async function authenticateRootMcp(
+    request: any
+  ): Promise<{ ok: true; principal: McpPrincipal } | { ok: false; reason: string }> {
+    const bearer = (request.headers?.authorization as string | undefined)?.match(
+      /^Bearer\s+(.+)$/i
+    )?.[1];
+    if (!bearer) return { ok: false, reason: 'token_required' };
+
+    const principal = await verifyAccessToken(bearer);
+    if (!principal) return { ok: false, reason: 'invalid_token' };
+    if (principal.agentId !== null) return { ok: false, reason: 'invalid_token' };
+    return { ok: true, principal };
+  }
+
+  /** RFC 9728, pointing at the root resource rather than an agent's. */
+  function rootMcpUnauthorized(reply: any, reason: string) {
+    const base = (config.publicUrl || config.dashboardUrl || '').replace(/\/$/, '');
+    return reply
+      .code(401)
+      .header(
+        'WWW-Authenticate',
+        `Bearer realm="helm", error="${reason}", ` +
+          `resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"`
+      )
+      .send({
+        jsonrpc: '2.0',
+        id: null,
+        error: {
+          code: -32000,
+          message:
+            reason === 'invalid_token'
+              ? 'Invalid or expired access token. A token for one agent cannot be used here — ' +
+                'this endpoint needs its own authorization.'
+              : 'This endpoint requires an access token. Connect it from the Helm dashboard.',
+        },
+      });
+  }
+
+  app.post('/mcp', async (request, reply) => {
+    const body = request.body as MCPRequest;
+    if (!body || typeof body !== 'object') {
+      return reply.code(400).send({
+        jsonrpc: '2.0',
+        id: null,
+        error: { code: -32600, message: 'Invalid request: expected JSON-RPC 2.0 request body' },
+      });
+    }
+
+    const auth = await authenticateRootMcp(request);
+    if (!auth.ok) return rootMcpUnauthorized(reply, auth.reason);
+
+    if (!checkMcpRate(auth.principal.tokenId)) {
+      return reply.code(429).send({
+        jsonrpc: '2.0',
+        id: null,
+        error: { code: -32029, message: 'Rate limit exceeded' },
+      });
+    }
+
+    // Plain JSON throughout: nothing here waits on an approval, so the SSE
+    // keep-alive the agent endpoint needs has no purpose.
+    return handleRootMcpRequest(auth.principal.userId, body);
+  });
+
+  app.get('/mcp', async (request, reply) => {
+    const auth = await authenticateRootMcp(request);
+    if (!auth.ok) return rootMcpUnauthorized(reply, auth.reason);
+    return reply.code(405).send({
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32000, message: 'This endpoint is request-response; use POST.' },
+    });
+  });
+
+  app.delete('/mcp', async (request, reply) => {
+    const auth = await authenticateRootMcp(request);
+    if (!auth.ok) return rootMcpUnauthorized(reply, auth.reason);
+    return reply.code(204).send();
+  });
+
 
   /**
    * Get agent detail, including its MCP endpoint URL and auth state.
@@ -3617,6 +3717,10 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     return reply.send({
       selfEnroll: config.enrollment.selfEnroll,
       selfTrialDays: config.enrollment.selfTrialDays,
+      // The root MCP endpoint, same for every user. Served from here rather
+      // than built in the browser: in development the dashboard and the API
+      // are on different origins, so window.location would be wrong.
+      rootMcpUrl: `${(config.publicUrl || config.dashboardUrl || '').replace(/\/+$/, '')}/mcp`,
     });
   });
 

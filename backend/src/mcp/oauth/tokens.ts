@@ -33,7 +33,15 @@ const ACCESS_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
 export interface McpPrincipal {
   tokenId: string;
-  agentId: string;
+  /**
+   * The agent this credential names, or null for a root credential.
+   *
+   * Null is load-bearing rather than a missing value: it is what separates a
+   * token for /mcp from a token for /mcp/:agentId, and both endpoints check
+   * it. A root token presented to an agent is refused, and an agent token
+   * presented to the root endpoint is refused.
+   */
+  agentId: string | null;
   userId: string;
   clientId: string | null;
   name: string;
@@ -68,7 +76,7 @@ export function secretMatches(provided: string, expectedHash: string): boolean {
 // ── Access tokens ────────────────────────────────────────────────────────────
 
 export async function issueAccessToken(opts: {
-  agentId: string;
+  agentId: string | null;
   userId: string;
   clientId?: string | null;
   name: string;
@@ -135,7 +143,7 @@ export async function verifyAccessToken(token: string): Promise<McpPrincipal | n
 
   return {
     tokenId: row.id as string,
-    agentId: row.agent_id as string,
+    agentId: (row.agent_id as string | null) ?? null,
     userId: row.user_id as string,
     clientId: (row.client_id as string | null) ?? null,
     name: row.name as string,
@@ -160,12 +168,18 @@ export async function listAgentTokens(agentId: string) {
   }));
 }
 
-/** Scoped by agent so one owner's revoke cannot touch another agent's token. */
-export async function revokeAccessToken(tokenId: string, agentId: string): Promise<boolean> {
+/**
+ * Scoped by agent so one owner's revoke cannot touch another agent's token.
+ *
+ * `IS NOT DISTINCT FROM` rather than `=` because a root token's agent_id is
+ * NULL, and `NULL = NULL` is unknown in SQL — plain equality would silently
+ * match nothing and leave a rotated root token live.
+ */
+export async function revokeAccessToken(tokenId: string, agentId: string | null): Promise<boolean> {
   const now = new Date().toISOString();
   const result = await client.execute({
     sql: `UPDATE mcp_access_tokens SET revoked_at = ?
-          WHERE id = ? AND agent_id = ? AND revoked_at IS NULL`,
+          WHERE id = ? AND agent_id IS NOT DISTINCT FROM ? AND revoked_at IS NULL`,
     args: [now, tokenId, agentId],
   });
   await client.execute({
@@ -192,7 +206,8 @@ export function verifyPkce(verifier: string, challenge: string): boolean {
 
 export async function issueAuthCode(opts: {
   clientId: string;
-  agentId: string;
+  /** Null for a root-endpoint code. See McpPrincipal.agentId. */
+  agentId: string | null;
   userId: string;
   redirectUri: string;
   codeChallenge: string;
@@ -225,7 +240,7 @@ export async function issueAuthCode(opts: {
  */
 export async function redeemAuthCode(code: string): Promise<{
   clientId: string;
-  agentId: string;
+  agentId: string | null;
   userId: string;
   redirectUri: string;
   codeChallenge: string;
@@ -243,7 +258,7 @@ export async function redeemAuthCode(code: string): Promise<{
 
   return {
     clientId: row.client_id as string,
-    agentId: row.agent_id as string,
+    agentId: (row.agent_id as string | null) ?? null,
     userId: row.user_id as string,
     redirectUri: row.redirect_uri as string,
     codeChallenge: row.code_challenge as string,
@@ -255,7 +270,7 @@ export async function redeemAuthCode(code: string): Promise<{
 
 export async function issueRefreshToken(opts: {
   accessTokenId: string;
-  agentId: string;
+  agentId: string | null;
   userId: string;
   clientId: string | null;
 }): Promise<string> {
@@ -300,17 +315,17 @@ export async function rotateRefreshToken(refreshToken: string): Promise<{
   });
   const name = (prior.rows[0]?.name as string | undefined) ?? 'MCP client';
 
-  await revokeAccessToken(row.access_token_id as string, row.agent_id as string);
+  await revokeAccessToken(row.access_token_id as string, (row.agent_id as string | null) ?? null);
 
   const access = await issueAccessToken({
-    agentId: row.agent_id as string,
+    agentId: (row.agent_id as string | null) ?? null,
     userId: row.user_id as string,
     clientId: (row.client_id as string | null) ?? null,
     name,
   });
   const refresh = await issueRefreshToken({
     accessTokenId: access.id,
-    agentId: row.agent_id as string,
+    agentId: (row.agent_id as string | null) ?? null,
     userId: row.user_id as string,
     clientId: (row.client_id as string | null) ?? null,
   });

@@ -655,6 +655,14 @@ export async function initializeDatabase() {
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_mcp_refresh_access ON mcp_refresh_tokens(access_token_id)`;
 
+  // The root MCP endpoint (/mcp) is scoped to a user rather than an agent, so
+  // its credentials carry no agent_id. NULL is the right representation: every
+  // existing query filters `agent_id = ?`, and NULL matches none of them, so an
+  // agent-scoped lookup can never return a root row by accident.
+  await sql`ALTER TABLE mcp_access_tokens ALTER COLUMN agent_id DROP NOT NULL`;
+  await sql`ALTER TABLE mcp_auth_codes ALTER COLUMN agent_id DROP NOT NULL`;
+  await sql`ALTER TABLE mcp_refresh_tokens ALTER COLUMN agent_id DROP NOT NULL`;
+
   // NOTE: deployed_agents allow_unauthenticated migration was dropped (Task 9)
 
   // Migrate existing columns to correct types for Postgres (was designed for SQLite)

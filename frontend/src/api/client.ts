@@ -321,6 +321,8 @@ export interface PublicConfig {
   selfEnroll?: boolean;
   /** Trial length for a self-enrolled account. */
   selfTrialDays?: number;
+  /** The discovery endpoint, identical for every user. */
+  rootMcpUrl?: string;
 }
 export const config = {
   getPublic: () => request<PublicConfig>('/config/public'),

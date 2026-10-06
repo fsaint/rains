@@ -15,6 +15,7 @@ import {
   type DriveFolderEntry,
   type HermeneutixInstanceConfig,
   skills as skillsApi,
+  config as publicConfig,
 } from '../api/client';
 import {
   Mail,
@@ -40,6 +41,9 @@ import {
   Radio,
   ShieldAlert,
   ShieldCheck,
+  Compass,
+  Copy,
+  Check,
 } from 'lucide-react';
 import AgentSkillToggles from '../components/AgentSkillToggles';
 import { parseDriveFolderId } from '../utils/drive';
@@ -50,6 +54,54 @@ import { parseDriveFolderId } from '../utils/drive';
  * says before the click.
  */
 const ADMIN_SERVICE_TYPE = 'helm-admin';
+
+/**
+ * The discovery endpoint: one address, the same for every account, that lists
+ * the agents on it.
+ *
+ * It sits on this page rather than an agent's because it is the one MCP URL
+ * that is not about a single agent — a client connects here to find out which
+ * agents exist, then connects to the ones it needs.
+ */
+function DiscoveryEndpoint() {
+  const [copied, setCopied] = useState(false);
+  const { data } = useQuery({ queryKey: ['config', 'public'], queryFn: publicConfig.getPublic });
+  const url = data?.rootMcpUrl;
+  if (!url) return null;
+
+  const copy = () => {
+    void navigator.clipboard.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <div className="mb-6 bg-white rounded-xl border border-gray-100 p-4 sm:p-5">
+      <div className="flex items-start gap-3">
+        <div className="w-9 h-9 rounded-lg bg-gray-100 flex items-center justify-center shrink-0">
+          <Compass className="w-5 h-5 text-gray-500" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-sm font-semibold text-reins-navy">Discovery endpoint</h2>
+          <p className="text-sm text-gray-400 mt-0.5">
+            Connect a client here and it can list your agents and their addresses. It cannot read
+            your email or act as any agent — each of those needs its own connection.
+          </p>
+          <div className="flex items-center gap-2 mt-3 p-3 bg-gray-50 rounded-lg font-mono text-xs text-gray-700 border border-gray-200">
+            <span className="flex-1 break-all">{url}</span>
+            <button
+              onClick={copy}
+              aria-label="Copy discovery endpoint URL"
+              className="p-1.5 text-gray-400 hover:text-reins-navy rounded transition-colors shrink-0"
+            >
+              {copied ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const serviceIcons: Record<string, React.ReactNode> = {
   gmail: <Mail className="w-5 h-5" />,
@@ -257,6 +309,8 @@ export default function Permissions() {
           Add Agent
         </button>
       </div>
+
+      <DiscoveryEndpoint />
 
       {/* Pending Registrations */}
       {hasPending && (
