@@ -44,8 +44,10 @@ import {
   Compass,
   Copy,
   Check,
+  Download,
 } from 'lucide-react';
 import AgentSkillToggles from '../components/AgentSkillToggles';
+import { PLUGIN_DOWNLOADS, pluginUrl, formatBytes } from '../plugins';
 import { parseDriveFolderId } from '../utils/drive';
 
 /**
@@ -97,6 +99,60 @@ function DiscoveryEndpoint() {
               {copied ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The desktop plugins, offered next to the discovery endpoint because both
+ * answer the same question: how do I point a client at Helm.
+ *
+ * A plain anchor with `download`, not a fetch — the files are static assets on
+ * this origin, so the browser handles the save and nothing needs to buffer a
+ * zip in memory.
+ */
+function PluginDownloads() {
+  if (PLUGIN_DOWNLOADS.length === 0) return null;
+
+  return (
+    <div className="mb-6 bg-white rounded-xl border border-gray-100 p-4 sm:p-5">
+      <div className="flex items-start gap-3">
+        <div className="w-9 h-9 rounded-lg bg-gray-100 flex items-center justify-center shrink-0">
+          <Download className="w-5 h-5 text-gray-500" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-sm font-semibold text-reins-navy">Desktop plugins</h2>
+          <p className="text-sm text-gray-400 mt-0.5">
+            Install one of these to connect a desktop client to Helm without editing config by
+            hand.
+          </p>
+          <ul className="mt-3 space-y-2">
+            {PLUGIN_DOWNLOADS.map((plugin) => (
+              <li
+                key={plugin.id}
+                className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-sm font-medium text-reins-navy">{plugin.client}</span>
+                    <span className="text-xs text-gray-400 font-mono">v{plugin.version}</span>
+                    <span className="text-xs text-gray-400">{formatBytes(plugin.bytes)}</span>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-0.5">{plugin.summary}</p>
+                </div>
+                <a
+                  href={pluginUrl(plugin)}
+                  download={plugin.file}
+                  className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-sm font-medium text-reins-navy bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors shrink-0 self-start sm:self-auto"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Download
+                </a>
+              </li>
+            ))}
+          </ul>
         </div>
       </div>
     </div>
@@ -311,6 +367,7 @@ export default function Permissions() {
       </div>
 
       <DiscoveryEndpoint />
+      <PluginDownloads />
 
       {/* Pending Registrations */}
       {hasPending && (
