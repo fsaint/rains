@@ -34,6 +34,7 @@ vi.mock('../api/client', () => ({
 }));
 
 import { permissions, agents, credentials, skills, config, ApiError } from '../api/client';
+import { PLUGIN_DOWNLOADS } from '../plugins';
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -668,6 +669,52 @@ describe('the discovery endpoint', () => {
     render(<Permissions />, { wrapper: createWrapper() });
 
     await screen.findByText('Agents');
-    expect(screen.queryByText(/discovery endpoint/i)).toBeNull();
+    // By heading, not loose text: a plugin summary also mentions the
+    // discovery endpoint, and matching that would pass for the wrong reason.
+    expect(screen.queryByRole('heading', { name: /^discovery endpoint$/i })).toBeNull();
+  });
+});
+
+/**
+ * The plugin downloads card.
+ *
+ * The link must be a real anchor with a download attribute: the sandboxed
+ * preview and the browser both save it directly, and routing a static asset
+ * through fetch would buffer a zip in memory for no reason.
+ */
+describe('the plugin downloads', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(permissions.getAgentPermissions).mockResolvedValue(agentPerms as any);
+    vi.mocked(agents.listPending).mockResolvedValue([]);
+    vi.mocked(credentials.list).mockResolvedValue(googleCreds as any);
+    vi.mocked(skills.listForAgent).mockResolvedValue([]);
+    vi.mocked(skills.list).mockResolvedValue([]);
+    vi.mocked(config.getPublic).mockResolvedValue({ rootMcpUrl: 'https://app.helm.mom/mcp' } as any);
+  });
+
+  it('offers a download for every listed plugin', async () => {
+    render(<Permissions />, { wrapper: createWrapper() });
+    await screen.findByText('Desktop plugins');
+
+    const links = screen.getAllByRole('link', { name: /download/i });
+    expect(links).toHaveLength(PLUGIN_DOWNLOADS.length);
+  });
+
+  it('points at the file on this origin and asks the browser to save it', async () => {
+    render(<Permissions />, { wrapper: createWrapper() });
+    await screen.findByText('Desktop plugins');
+
+    const link = screen.getAllByRole('link', { name: /download/i })[0];
+    expect(link).toHaveAttribute('href', '/downloads/helm-chatgpt-0.2.0.zip');
+    expect(link).toHaveAttribute('download', 'helm-chatgpt-0.2.0.zip');
+  });
+
+  it('names the client and the version it is shipping', async () => {
+    render(<Permissions />, { wrapper: createWrapper() });
+
+    expect(await screen.findByText('ChatGPT')).toBeInTheDocument();
+    expect(screen.getByText('v0.2.0')).toBeInTheDocument();
+    expect(screen.getByText('9.2 KB')).toBeInTheDocument();
   });
 });
