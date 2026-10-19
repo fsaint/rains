@@ -664,6 +664,7 @@ fly secrets set --app agenthelm-core KEY=value
 |------|-------------|
 | [`docs/specs/agent-self-registration.md`](docs/specs/agent-self-registration.md) | Flow for agents to self-register and users to claim them |
 | [`docs/superpowers/specs/2026-09-16-mcp-only-enrollment-trials-design.md`](docs/superpowers/specs/2026-09-16-mcp-only-enrollment-trials-design.md) | Design: remove the deployed-agent runtime; add admin enrollment, Google self-enrollment, and trials |
+| [`docs/superpowers/specs/2026-10-17-threads-design.md`](docs/superpowers/specs/2026-10-17-threads-design.md) | Design: threads — approval-minted, time-bound focus topics built on memory, with timeline, reminders, watchers, and a Threads nav page |
 | [`docs/superpowers/plans/2026-09-16-phase1-remove-agent-runtime.md`](docs/superpowers/plans/2026-09-16-phase1-remove-agent-runtime.md) | Phase 1 implementation plan: remove the hosted agent runtime (Fly machines, OpenClaw/Hermes containers, Telegram onboarding bot) |
 
 ### Branding
