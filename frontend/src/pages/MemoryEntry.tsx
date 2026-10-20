@@ -12,6 +12,7 @@ import {
   Folder,
   FileText,
   Hash,
+  Route,
   Link as LinkIcon,
   Tag,
 } from 'lucide-react';
@@ -24,6 +25,7 @@ const TYPE_ICONS: Record<MemoryEntryType, React.ElementType> = {
   company: Building2,
   project: Folder,
   index: Hash,
+  thread: Route,
 };
 
 const TYPE_OPTIONS: MemoryEntryType[] = ['note', 'person', 'company', 'project'];

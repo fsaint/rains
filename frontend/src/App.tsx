@@ -18,10 +18,13 @@ import {
   Brain,
   BookOpen,
   CreditCard,
+  Route as RouteIcon,
 } from 'lucide-react';
 import Dashboard from './pages/Dashboard';
 import Credentials from './pages/Credentials';
 import Approvals from './pages/Approvals';
+import Threads from './pages/Threads';
+import ThreadDetail from './pages/ThreadDetail';
 import AuditLog from './pages/AuditLog';
 import Permissions from './pages/Permissions';
 import Login from './pages/Login';
@@ -35,11 +38,12 @@ import MemoryEntry from './pages/MemoryEntry';
 import Pricing from './pages/Pricing';
 import Billing from './pages/Billing';
 import HelmMark from './components/HelmMark';
-import { auth, billing } from './api/client';
+import { auth, billing, threads } from './api/client';
 import type { User as UserType } from './api/client';
 
 const navItems = [
   { path: '/', label: 'Dashboard', icon: Activity },
+  { path: '/threads', label: 'Threads', icon: RouteIcon },
   { path: '/agents', label: 'Agents', icon: Users },
   { path: '/credentials', label: 'Credentials', icon: Key },
   { path: '/approvals', label: 'Approvals', icon: CheckCircle },
@@ -81,6 +85,15 @@ function App() {
     }
   }, [posthog, user]);
 
+  // Count of threads needing attention, shown as a pill beside the nav label.
+  const { data: threadsBadge } = useQuery({
+    queryKey: ['threads-badge'],
+    queryFn: threads.badge,
+    refetchInterval: 30000,
+    enabled: !!user,
+  });
+  const threadsBadgeCount = threadsBadge?.count ?? 0;
+
   // Loading session check
   if (user === undefined) {
     return (
@@ -120,6 +133,11 @@ function App() {
               >
                 <Icon className="w-5 h-5" />
                 <span className="font-medium">{item.label}</span>
+                {item.path === '/threads' && threadsBadgeCount > 0 && (
+                  <span className="ml-auto text-xs font-semibold bg-trust-blue text-white px-2 py-0.5 rounded-full">
+                    {threadsBadgeCount}
+                  </span>
+                )}
               </Link>
             </li>
           );
@@ -248,6 +266,8 @@ function App() {
             <Route path="/agents/:id" element={<AgentDetail />} />
             <Route path="/agents" element={<Permissions />} />
             <Route path="/credentials" element={<Credentials />} />
+            <Route path="/threads" element={<Threads />} />
+            <Route path="/threads/:id" element={<ThreadDetail />} />
             <Route path="/approvals" element={<Approvals />} />
             <Route path="/audit" element={<AuditLog />} />
             <Route path="/notifications" element={<Notifications />} />

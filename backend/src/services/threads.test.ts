@@ -55,6 +55,7 @@ import {
   parseThreadSections,
   mintThread,
   getThread,
+  listThreads,
   getThreadBrief,
   BRIEF_EVENT_LIMIT,
   addItem,
@@ -144,6 +145,22 @@ describe('getThread', () => {
     const call = vi.mocked(client.execute).mock.calls[0][0] as { sql: string; args: unknown[] };
     expect(call.sql).toContain('scope_id IN');
     expect(call.args).toEqual(['t1', 'other']);
+  });
+});
+
+describe('listThreads', () => {
+  it('carries nextDueAt, the earliest due_at among open items, from a subquery', async () => {
+    vi.mocked(client.execute).mockResolvedValue({
+      rows: [{ ...threadRow, next_due_at: '2026-11-01T00:00:00.000Z' }, { ...threadRow, id: 't2', next_due_at: null }],
+      rowsAffected: 0, lastInsertRowid: 0n, columns: [],
+    });
+
+    const rows = await listThreads(['s1'], 'active');
+
+    expect(rows.map((r) => r.nextDueAt)).toEqual(['2026-11-01T00:00:00.000Z', null]);
+    const call = vi.mocked(client.execute).mock.calls[0][0] as { sql: string };
+    expect(call.sql).toContain('MIN(due_at)');
+    expect(call.sql).toContain("status = 'open'");
   });
 });
 

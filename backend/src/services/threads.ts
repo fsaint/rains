@@ -39,6 +39,8 @@ export interface Thread {
   createdAt: string;
   updatedAt: string;
   closedAt: string | null;
+  /** Earliest due_at among open items; only the list query fills it. */
+  nextDueAt?: string | null;
 }
 
 export interface ThreadItem {
@@ -247,10 +249,13 @@ export async function listThreads(scopeIds: string[], status?: ThreadStatus): Pr
     args.push(status);
   }
   const result = await client.execute({
-    sql: `SELECT * FROM threads WHERE ${where} ORDER BY updated_at DESC`,
+    sql: `SELECT threads.*,
+            (SELECT MIN(due_at) FROM thread_items
+              WHERE thread_items.thread_id = threads.id AND status = 'open') AS next_due_at
+          FROM threads WHERE ${where} ORDER BY updated_at DESC`,
     args: args as never[],
   });
-  return result.rows.map((r) => mapThread(r as Row));
+  return result.rows.map((r) => ({ ...mapThread(r as Row), nextDueAt: str((r as Row).next_due_at) }));
 }
 
 /** The thread an entry belongs to — as its root, or as a descendant of the root. null if none. */

@@ -687,7 +687,7 @@ export interface AgentMemoryScopeGrants {
 // Memory System
 // ============================================================================
 
-export type MemoryEntryType = 'note' | 'person' | 'company' | 'project' | 'index';
+export type MemoryEntryType = 'note' | 'person' | 'company' | 'project' | 'index' | 'thread';
 
 /**
  * A compartment of the vault. Entries belong to exactly one and nothing crosses
@@ -981,4 +981,151 @@ export const billing = {
     const body = await res.json() as { data: { url: string } };
     return body.data.url;
   },
+};
+
+// ============================================================================
+// Threads
+// ============================================================================
+
+export type ThreadStatus = 'active' | 'paused' | 'closed';
+export type ThreadItemKind = 'event' | 'todo' | 'deadline' | 'reminder' | 'milestone';
+export type ThreadItemStatus = 'open' | 'done' | 'cancelled';
+export type ThreadSourceType = 'gmail' | 'hermeneutix' | 'memory' | 'manual';
+export type ThreadSectionName = 'Goal' | 'Past' | 'Now' | 'Next' | 'Retrospective';
+
+export interface Thread {
+  id: string;
+  userId: string;
+  scopeId: string;
+  rootEntryId: string;
+  title: string;
+  goal: string | null;
+  targetDate: string | null;
+  status: ThreadStatus;
+  approvalId: string | null;
+  createdByAgentId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  closedAt: string | null;
+  /** Earliest due_at among open items; only the list endpoint fills it. */
+  nextDueAt?: string | null;
+}
+
+export interface ThreadItem {
+  id: string;
+  threadId: string;
+  kind: ThreadItemKind;
+  title: string;
+  body: string | null;
+  occurredAt: string | null;
+  dueAt: string | null;
+  remindAt: string | null;
+  status: ThreadItemStatus;
+  nudgeFiredAt: string | null;
+  firedAt: string | null;
+  acknowledgedAt: string | null;
+  memoryEntryId: string | null;
+  sourceType: ThreadSourceType | null;
+  sourceRef: string | null;
+  createdAt: string;
+}
+
+export interface ThreadCandidate {
+  id: string;
+  threadId: string;
+  watcherId: string | null;
+  sourceType: ThreadSourceType;
+  sourceRef: string;
+  summary: string;
+  foundAt: string;
+  status: 'pending' | 'accepted' | 'dismissed';
+}
+
+export interface ThreadWatcher {
+  id: string;
+  threadId: string;
+  agentId: string;
+  kind: string;
+  value: string;
+  account: string | null;
+  createdAt: string;
+  /** Human-readable summary of what the watcher looks for. */
+  description: string;
+}
+
+export interface ThreadBrief {
+  thread: Thread;
+  sections: Record<ThreadSectionName, string>;
+  events: ThreadItem[];
+  openTodos: ThreadItem[];
+  upcoming: ThreadItem[];
+  firedUnacknowledged: ThreadItem[];
+  pendingCandidates: ThreadCandidate[];
+  activeCount: number;
+}
+
+export interface ThreadItemInput {
+  kind: ThreadItemKind;
+  title: string;
+  body?: string | null;
+  sourceType?: ThreadSourceType | null;
+  sourceRef?: string | null;
+  memoryEntryId?: string | null;
+  occurredAt?: string | null;
+  dueAt?: string | null;
+  remindAt?: string | null;
+}
+
+export interface ThreadCloseInput {
+  retrospective: string;
+  decisions: Array<{ itemId: string; action: 'cancel' | 'carry'; successorThreadId?: string }>;
+}
+
+export const threads = {
+  list: (status?: ThreadStatus) =>
+    request<Thread[]>(`/threads${status ? `?status=${status}` : ''}`),
+
+  get: (id: string) => request<Thread>(`/threads/${id}`),
+
+  brief: (id: string) => request<ThreadBrief>(`/threads/${id}/brief`),
+
+  /** Dashboard session only. `scope` is a scope id or slug. */
+  create: (input: { title: string; goal?: string; scope?: string; targetDate?: string }) =>
+    request<Thread>('/threads', { method: 'POST', body: JSON.stringify(input) }),
+
+  addItem: (id: string, input: ThreadItemInput) =>
+    request<ThreadItem>(`/threads/${id}/items`, { method: 'POST', body: JSON.stringify(input) }),
+
+  updateItem: (id: string, itemId: string, patch: Partial<ThreadItem>) =>
+    request<ThreadItem>(`/threads/${id}/items/${itemId}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+
+  acknowledge: (id: string, itemId: string) =>
+    request<void>(`/threads/${id}/items/${itemId}/acknowledge`, { method: 'POST' }),
+
+  /** Retrospective is written only by close. */
+  updateSections: (id: string, edits: Record<string, { text: string; mode: 'replace' | 'append' }>) =>
+    request<void>(`/threads/${id}/sections`, { method: 'PUT', body: JSON.stringify(edits) }),
+
+  setStatus: (id: string, status: 'active' | 'paused') =>
+    request<Thread>(`/threads/${id}/status`, { method: 'POST', body: JSON.stringify({ status }) }),
+
+  /** Dashboard session only. */
+  close: (id: string, input: ThreadCloseInput) =>
+    request<Thread>(`/threads/${id}/close`, { method: 'POST', body: JSON.stringify(input) }),
+
+  candidates: (id: string) => request<ThreadCandidate[]>(`/threads/${id}/candidates`),
+
+  acceptCandidate: (id: string, cid: string) =>
+    request<ThreadItem>(`/threads/${id}/candidates/${cid}/accept`, { method: 'POST' }),
+
+  dismissCandidate: (id: string, cid: string) =>
+    request<void>(`/threads/${id}/candidates/${cid}/dismiss`, { method: 'POST' }),
+
+  watchers: (id: string) => request<ThreadWatcher[]>(`/threads/${id}/watchers`),
+
+  /** Dashboard session only. */
+  removeWatcher: (id: string, wid: string) =>
+    request<void>(`/threads/${id}/watchers/${wid}`, { method: 'DELETE' }),
+
+  badge: () => request<{ count: number }>('/threads/badge'),
 };
