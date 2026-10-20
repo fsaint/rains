@@ -983,60 +983,111 @@ function closeDecisionLines(raw: unknown, resolved: ThreadApprovalSummary['decis
   });
 }
 
+// Telegram rejects a message over 4096 characters and the owner then sees
+// nothing; 4000 leaves room for the revision prefix. Raw HTML length is
+// measured, which over-counts entities and so errs short.
+const THREAD_MESSAGE_LIMIT = 4000;
+const THREAD_TITLE_LIMIT = 200;
+const THREAD_GOAL_LIMIT = 1000;
+const THREAD_LINE_LIMIT = 500;
+const THREAD_LIST_LIMIT = 10;
+// The close's retrospective gets what the decision list leaves, but never less.
+const RETRO_MIN = 300;
+
+/** HTML-escaped, then cut at n characters without splitting an entity. */
+function clipHtml(raw: string, n: number): string {
+  const escaped = escapeHtml(raw);
+  if (escaped.length <= n) return escaped;
+  return `${escaped.slice(0, n).replace(/&[a-z]*$/, '')}…`;
+}
+
+/**
+ * before + list + after, with the list cut to THREAD_LIST_LIMIT lines and then
+ * to whatever fits in limit, and a "…and N more" line for the rest. before and
+ * after are kept whole.
+ */
+function fitList(before: string[], list: string[], after: string[], limit: number): string[] {
+  let shown = Math.min(list.length, THREAD_LIST_LIMIT);
+  const build = () => [
+    ...before,
+    ...list.slice(0, shown),
+    ...(shown < list.length ? [`…and ${list.length - shown} more`] : []),
+    ...after,
+  ];
+  while (shown > 0 && build().join('\n').length > limit) shown--;
+  return build();
+}
+
 export function formatThreadApprovalMessage(
   approval: ApprovalRequest,
   summary: ThreadApprovalSummary | null
 ): FormattedApproval {
   const args = (approval.arguments ?? {}) as Record<string, unknown>;
   const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
-  const e = (v: string) => escapeHtml(v);
+  const kept = (lines: Array<string | null>): string[] => lines.filter((l): l is string => l !== null);
+  const threadLine = () =>
+    `<b>Thread:</b> ${summary?.threadTitle
+      ? clipHtml(summary.threadTitle, THREAD_TITLE_LIMIT)
+      : `<code>${clipHtml(str(args.thread_id) ?? '?', THREAD_TITLE_LIMIT)}</code>`}`;
+  const footer = [
+    `\n<b>Requested by:</b> <code>${escapeHtml(approval.agentId)}</code>`,
+    ``,
+    expiresLine(approval),
+  ];
 
-  let body: Array<string | null>;
+  let lines: string[];
   if (approval.tool === 'thread_propose') {
     const watchers = Array.isArray(args.watchers) ? (args.watchers as unknown[]) : [];
     const when = str(args.target_date) ? formatEventWhen({ start: str(args.target_date) as string, allDay: true }) : null;
     const active = summary?.activeCount;
-    body = [
-      '🧵 <b>Start a thread</b>',
-      `<b>Title:</b> ${e(str(args.title) ?? '(untitled)')}`,
-      str(args.goal) ? `<b>Goal:</b> ${e(str(args.goal) as string)}` : null,
-      `<b>Scope:</b> ${summary?.scopeName ? e(summary.scopeName) : '<i>unknown</i>'}`,
-      str(args.target_date) ? `<b>Target date:</b> ${e(when ?? (str(args.target_date) as string))}` : null,
-      ...watchers.map((w) =>
-        `👁 ${e(describeWatcherForApproval((w && typeof w === 'object' ? w : {}) as Record<string, unknown>))}`
+    lines = fitList(
+      kept([
+        '🧵 <b>Start a thread</b>',
+        `<b>Title:</b> ${clipHtml(str(args.title) ?? '(untitled)', THREAD_TITLE_LIMIT)}`,
+        str(args.goal) ? `<b>Goal:</b> ${clipHtml(str(args.goal) as string, THREAD_GOAL_LIMIT)}` : null,
+        `<b>Scope:</b> ${summary?.scopeName ? clipHtml(summary.scopeName, THREAD_TITLE_LIMIT) : '<i>unknown</i>'}`,
+        str(args.target_date) ? `<b>Target date:</b> ${clipHtml(when ?? (str(args.target_date) as string), THREAD_TITLE_LIMIT)}` : null,
+      ]),
+      watchers.map((w) =>
+        `👁 ${clipHtml(describeWatcherForApproval((w && typeof w === 'object' ? w : {}) as Record<string, unknown>), THREAD_LINE_LIMIT)}`
       ),
-      active !== undefined ? `\nActive threads: ${active} of ${THREAD_SOFT_CAP}` : null,
-      active !== undefined && active >= THREAD_SOFT_CAP ? `⚠️ Over your limit of ${THREAD_SOFT_CAP}` : null,
-    ];
+      kept([
+        active !== undefined ? `\nActive threads: ${active} of ${THREAD_SOFT_CAP}` : null,
+        active !== undefined && active >= THREAD_SOFT_CAP ? `⚠️ Over your limit of ${THREAD_SOFT_CAP}` : null,
+        ...footer,
+      ]),
+      THREAD_MESSAGE_LIMIT,
+    );
   } else if (approval.tool === 'thread_close') {
-    const retro = str(args.retrospective);
-    const retroPreview = retro
-      ? retro.length > BODY_PREVIEW_LIMIT
-        ? `${e(retro.slice(0, BODY_PREVIEW_LIMIT))}\n…`
-        : e(retro)
-      : null;
-    body = [
-      '🏁 <b>Close a thread</b>',
-      `<b>Thread:</b> ${summary?.threadTitle ? e(summary.threadTitle) : `<code>${e(str(args.thread_id) ?? '?')}</code>`}`,
-      retroPreview ? `\n<b>Retrospective:</b>\n<blockquote>${retroPreview}</blockquote>` : null,
-      ...closeDecisionLines(args.decisions, summary?.decisions ?? []).map(e),
-      ...(summary?.undecidedItems ?? []).map((t) => `cancel: ${e(t)}`),
+    const heading = ['🏁 <b>Close a thread</b>', threadLine()];
+    const items = [
+      ...closeDecisionLines(args.decisions, summary?.decisions ?? []),
+      ...(summary?.undecidedItems ?? []).map((t) => `cancel: ${t}`),
+    ].map((l) => clipHtml(l, THREAD_LINE_LIMIT));
+    const after = kept([
       summary?.undecidedItems ? null : '⚠️ Any open item without a decision will be cancelled.',
-    ];
+      ...footer,
+    ]);
+    const retroOpen = '\n<b>Retrospective:</b>\n<blockquote>';
+    const retroClose = '</blockquote>';
+    // The list is fitted first, keeping RETRO_MIN back; the retrospective then
+    // takes the room that is left, up to its own 3000-character cap.
+    lines = fitList(heading, items, after, THREAD_MESSAGE_LIMIT - RETRO_MIN);
+    const retro = str(args.retrospective);
+    if (retro) {
+      const room = THREAD_MESSAGE_LIMIT - lines.join('\n').length - retroOpen.length - retroClose.length - 2;
+      const preview = clipHtml(retro, Math.min(BODY_PREVIEW_LIMIT, room));
+      const cut = preview !== escapeHtml(retro);
+      lines.splice(heading.length, 0, `${retroOpen}${cut ? `${preview.slice(0, -1)}\n…` : preview}${retroClose}`);
+    }
   } else {
-    body = [
-      '👁 <b>Watch for thread material</b>',
-      `<b>Thread:</b> ${summary?.threadTitle ? e(summary.threadTitle) : `<code>${e(str(args.thread_id) ?? '?')}</code>`}`,
-      e(describeWatcherForApproval(args)),
-    ];
+    lines = fitList(
+      ['👁 <b>Watch for thread material</b>', threadLine()],
+      [clipHtml(describeWatcherForApproval(args), THREAD_LINE_LIMIT)],
+      footer,
+      THREAD_MESSAGE_LIMIT,
+    );
   }
-
-  const lines = [
-    ...body,
-    `\n<b>Requested by:</b> <code>${e(approval.agentId)}</code>`,
-    ``,
-    expiresLine(approval),
-  ].filter((l) => l !== null);
 
   return {
     text: lines.join('\n'),

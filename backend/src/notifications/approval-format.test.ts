@@ -220,6 +220,68 @@ describe('formatThreadApprovalMessage', () => {
     expect(text).toContain('carry → retrospective note: item “i3”');
   });
 
+  describe('length caps', () => {
+    const LIMIT = 4096;
+    const huge = (ch: string) => ch.repeat(20_000);
+
+    it('keeps a huge thread_propose under the Telegram limit with heading and active-count lines intact', () => {
+      const { text } = formatThreadApprovalMessage(
+        approval('thread_propose', {
+          title: huge('T'),
+          goal: huge('<'),
+          watchers: Array.from({ length: 60 }, (_, i) => ({ kind: 'gmail_query', value: `${i}${huge('&')}`, account: huge('a') })),
+        }),
+        summary({ activeCount: 7, scopeName: huge('S') })
+      );
+      expect(text.length).toBeLessThanOrEqual(LIMIT);
+      expect(text.startsWith('🧵 <b>Start a thread</b>')).toBe(true);
+      expect(text).toContain('Active threads: 7 of 5');
+      expect(text).toContain('⚠️ Over your limit of 5');
+      expect(text).toContain('<b>Requested by:</b>');
+      expect(text).toMatch(/…and \d+ more/);
+      expect(text).toContain('T'.repeat(200) + '…');
+      expect(text).not.toContain('T'.repeat(201));
+      expect(text).not.toMatch(/&[a-z]*…/); // never cut inside an entity
+    });
+
+    it('caps the close decision list with "…and N more" and keeps the message under the limit', () => {
+      const decisions = Array.from({ length: 40 }, (_, i) => ({ item_id: `i${i}`, action: 'cancel' }));
+      const { text } = formatThreadApprovalMessage(
+        approval('thread_close', { thread_id: 't1', retrospective: huge('r'), decisions }),
+        summary({
+          threadTitle: huge('L'),
+          decisions: decisions.map((_, i) => ({ itemTitle: `${i}${huge('>')}`, action: 'cancel' as const, successorTitle: null })),
+          undecidedItems: Array.from({ length: 40 }, (_, i) => `u${i}${huge('x')}`),
+        })
+      );
+      expect(text.length).toBeLessThanOrEqual(LIMIT);
+      expect(text.startsWith('🏁 <b>Close a thread</b>')).toBe(true);
+      expect(text).toContain('<b>Retrospective:</b>');
+      expect(text).toMatch(/…and \d+ more/);
+      expect(text).toContain('<b>Requested by:</b>');
+      expect(text).toContain('Expires in');
+      expect(text).not.toMatch(/&[a-z]*…/);
+    });
+
+    it('shows a short list in full with no "more" line', () => {
+      const { text } = formatThreadApprovalMessage(
+        approval('thread_close', { thread_id: 't1', retrospective: 'r', decisions: [] }),
+        summary({ threadTitle: 'L', undecidedItems: ['a', 'b', 'c'] })
+      );
+      expect(text).toContain('cancel: c');
+      expect(text).not.toContain('more');
+    });
+
+    it('keeps a huge thread_add_watcher under the limit', () => {
+      const { text } = formatThreadApprovalMessage(
+        approval('thread_add_watcher', { thread_id: 't1', kind: 'gmail_query', value: huge('<'), account: huge('<') }),
+        summary({ threadTitle: huge('<') })
+      );
+      expect(text.length).toBeLessThanOrEqual(LIMIT);
+      expect(text.startsWith('👁 <b>Watch for thread material</b>')).toBe(true);
+    });
+  });
+
   it('still lists every propose watcher when the summary is null', () => {
     const { text } = formatThreadApprovalMessage(
       approval('thread_propose', {
