@@ -57,6 +57,7 @@ import {
   getThread,
   listThreads,
   getThreadBrief,
+  listOpenItems,
   BRIEF_EVENT_LIMIT,
   addItem,
   updateItem,
@@ -393,5 +394,19 @@ describe('getThreadApprovalSummary', () => {
     const s = await getThreadApprovalSummary(approval('thread_add_watcher', { thread_id: 't1', kind: 'gmail_sender', value: 'bob@x.com' }));
     expect(s.threadTitle).toBe('Launch');
     expect(s.watcherDescriptions[0]).toContain('“bob@x.com”');
+  });
+});
+
+describe('listOpenItems', () => {
+  it('selects every open non-event item without a limit, dated first', async () => {
+    vi.mocked(client.execute).mockResolvedValue(res([itemRow({ id: 'm1', kind: 'milestone', due_at: null, remind_at: null })]) as never);
+    const items = await listOpenItems('t1');
+    expect(items.map((i) => [i.id, i.kind, i.dueAt])).toEqual([['m1', 'milestone', null]]);
+    const call = execCalls().at(-1)!;
+    expect(call.sql).toContain("status = 'open'");
+    expect(call.sql).toContain("kind <> 'event'");
+    expect(call.sql).not.toContain('LIMIT');
+    expect(call.sql).toMatch(/ORDER BY CASE WHEN COALESCE\(remind_at, due_at\) IS NULL/);
+    expect(call.args).toEqual(['t1']);
   });
 });

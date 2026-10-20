@@ -8,7 +8,8 @@ const formatDay = (iso: string) => new Date(iso).toLocaleDateString();
  * Horizontal band: past events left of a Today marker, upcoming dated
  * deadlines, milestones and todos right of it. Capped at 20 items in all.
  */
-export default function ThreadTimeline({ items, now = new Date() }: { items: ThreadItem[]; now?: Date }) {
+export default function ThreadTimeline({ items: all, now = new Date() }: { items: ThreadItem[]; now?: Date }) {
+  const items = all.filter((item, i) => all.findIndex((o) => o.id === item.id) === i);
   const past = items
     .filter((i) => i.kind === 'event' && i.occurredAt)
     .sort((a, b) => a.occurredAt!.localeCompare(b.occurredAt!))

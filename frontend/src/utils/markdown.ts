@@ -53,10 +53,12 @@ export function renderMarkdown(
       }
       return `<span class="text-amber-400 underline decoration-dotted" title="No entry named '${name.trim()}' yet">${name.trim()}${heading ? `#${heading.trim()}` : ''}</span>`;
     })
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, text, url) =>
-      /^(https?:|mailto:|\/|#)/i.test(url.trim())
-        ? `<a href="${url.trim()}" class="text-trust-blue underline" target="_blank" rel="noopener">${text}</a>`
-        : m)
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, text, url) => {
+      const href = url.trim();
+      return /^(https?:|mailto:|\/|#)/i.test(href) && !/[\s<>"]/.test(href)
+        ? `<a href="${href}" class="text-trust-blue underline" target="_blank" rel="noopener">${text}</a>`
+        : m;
+    })
     .replace(/^- (.+)$/gm, '<li class="ml-4 list-disc text-gray-300">$1</li>')
     .replace(/\n{2,}/g, '</p><p class="mb-2">')
     .replace(/\n/g, '<br/>');

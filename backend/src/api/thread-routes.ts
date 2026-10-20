@@ -25,6 +25,7 @@ import {
   dismissCandidate,
   listPendingCandidates,
   listWatchers,
+  listOpenItems,
   countBadge,
   mintThread,
   closeThread,
@@ -219,6 +220,16 @@ export function registerThreadRoutes(app: FastifyInstance, deps: ThreadRouteDeps
     if (!brief) return reply.status(404).send({ error: 'Thread not found', code: 'NOT_FOUND' });
     return reply.send({ data: brief });
   });
+
+  app.get<{ Params: { id: string }; Querystring: { status?: string } }>(
+    '/api/threads/:id/items',
+    async (request, reply) => {
+      const loaded = await loadThread(request, reply);
+      if (!loaded) return;
+      if (request.query.status !== 'open') return invalid(reply, 'status must be "open"');
+      return reply.send({ data: await listOpenItems(loaded.thread.id) });
+    }
+  );
 
   app.post<{ Params: { id: string } }>('/api/threads/:id/items', async (request, reply) => {
     const loaded = await loadThread(request, reply);

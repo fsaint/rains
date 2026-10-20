@@ -53,6 +53,12 @@ describe('ThreadTimeline', () => {
     ]);
   });
 
+  it('renders an item once even when it arrives in two lists', () => {
+    const todo = item({ id: 'd1', kind: 'todo', title: 'Dated todo', dueAt: '2026-10-25T00:00:00.000Z' });
+    render(<ThreadTimeline now={now} items={[todo, todo]} />);
+    expect(screen.getAllByTestId('timeline-item')).toHaveLength(1);
+  });
+
   it('renders at most 20 items', () => {
     const many = Array.from({ length: 30 }, (_, i) =>
       item({ id: `e${i}`, title: `Event ${i}`, occurredAt: `2026-09-${String((i % 28) + 1).padStart(2, '0')}T00:00:00.000Z` })

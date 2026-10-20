@@ -22,6 +22,7 @@ const svc = vi.hoisted(() => ({
   dismissCandidate: vi.fn(),
   listPendingCandidates: vi.fn(),
   listWatchers: vi.fn(),
+  listOpenItems: vi.fn(),
   countBadge: vi.fn(),
   mintThread: vi.fn(),
   closeThread: vi.fn(),
@@ -303,6 +304,43 @@ describe('thread routes', () => {
     expect(res.statusCode).toBe(400);
     expect(res.json().code).toBe('INVALID');
     expect(svc.updateSections).not.toHaveBeenCalled();
+  });
+
+  describe('GET /api/threads/:id/items', () => {
+    it('returns the open items for a session', async () => {
+      svc.listOpenItems.mockResolvedValue([{ id: 'i1' }]);
+      const res = await app.inject({ method: 'GET', url: '/api/threads/t1/items?status=open' });
+      expect(res.json()).toEqual({ data: [{ id: 'i1' }] });
+      expect(svc.listOpenItems).toHaveBeenCalledWith('t1');
+    });
+
+    it('allows an agent caller with threads enabled', async () => {
+      ctx = agentCtx as never;
+      svc.listOpenItems.mockResolvedValue([]);
+      const res = await app.inject({ method: 'GET', url: '/api/threads/t1/items?status=open' });
+      expect(res.statusCode).toBe(200);
+    });
+
+    it.each(['', '?status=done', '?status=all'])('rejects %s with 400 INVALID', async (qs) => {
+      const res = await app.inject({ method: 'GET', url: `/api/threads/t1/items${qs}` });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().code).toBe('INVALID');
+      expect(svc.listOpenItems).not.toHaveBeenCalled();
+    });
+
+    it('404s for a thread outside the caller scopes', async () => {
+      svc.getThread.mockResolvedValue(null);
+      const res = await app.inject({ method: 'GET', url: '/api/threads/t1/items?status=open' });
+      expect(res.statusCode).toBe(404);
+      expect(svc.listOpenItems).not.toHaveBeenCalled();
+    });
+
+    it('403s an agent without the threads service', async () => {
+      ctx = agentCtx as never;
+      mockIsServiceEnabled.mockResolvedValue(false);
+      const res = await app.inject({ method: 'GET', url: '/api/threads/t1/items?status=open' });
+      expect(res.statusCode).toBe(403);
+    });
   });
 
   it('candidates: list, accept, dismiss', async () => {

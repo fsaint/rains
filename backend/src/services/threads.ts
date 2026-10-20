@@ -341,6 +341,21 @@ export async function listWatchers(threadId: string): Promise<ThreadWatcher[]> {
   }));
 }
 
+/**
+ * Every open item the close dialog must decide on: uncapped, undated rows
+ * included. Events are left out; they record what happened and are not carried.
+ * Dated items come first, soonest first.
+ */
+export async function listOpenItems(threadId: string): Promise<ThreadItem[]> {
+  const result = await client.execute({
+    sql: `SELECT * FROM thread_items WHERE thread_id = ? AND status = 'open' AND kind <> 'event'
+          ORDER BY CASE WHEN COALESCE(remind_at, due_at) IS NULL THEN 1 ELSE 0 END ASC,
+                   COALESCE(remind_at, due_at) ASC, created_at ASC`,
+    args: [threadId],
+  });
+  return result.rows.map((r) => mapItem(r as Row));
+}
+
 /** Fired-but-unacknowledged items plus pending candidates across the user's non-closed threads. */
 export async function countBadge(userId: string): Promise<number> {
   const result = await client.execute({

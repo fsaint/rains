@@ -8,7 +8,14 @@ import ThreadTimeline from '../components/ThreadTimeline';
 import { renderMarkdown } from '../utils/markdown';
 
 const formatDay = (iso: string) => new Date(iso).toLocaleDateString();
-const toDateInput = (iso: string | null) => (iso ? iso.slice(0, 10) : '');
+const pad = (n: number) => String(n).padStart(2, '0');
+/** ISO instant -> the user's local wall-clock time, as a datetime-local value. */
+const toLocalInput = (iso: string | null) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+const errorMessage = (err: unknown) => (err instanceof ApiError ? err.message : 'That did not work. Try again.');
 
 const inputClass =
   'bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-trust-blue';
@@ -34,17 +41,7 @@ function Markdown({ text }: { text: string }) {
   );
 }
 
-function CloseDialog({
-  threadId,
-  items,
-  onDone,
-  onCancel,
-}: {
-  threadId: string;
-  items: ThreadItem[];
-  onDone: () => void;
-  onCancel: () => void;
-}) {
+function CloseDialog({ threadId, onDone, onCancel }: { threadId: string; onDone: () => void; onCancel: () => void }) {
   const [retrospective, setRetrospective] = useState('');
   // 'cancel' | 'carry' (note in retrospective) | 'carry:<threadId>'
   const [choices, setChoices] = useState<Record<string, string>>({});
@@ -53,11 +50,17 @@ function CloseDialog({
     queryKey: ['threads', 'active'],
     queryFn: () => threads.list('active'),
   });
+  // The dialog decides on every open item, so it asks for them all rather than reusing the capped brief lists.
+  const { data: items, error: itemsError } = useQuery({
+    queryKey: ['thread-open-items', threadId],
+    queryFn: () => threads.openItems(threadId),
+    gcTime: 0,
+  });
   const targets = (active ?? []).filter((t) => t.id !== threadId);
 
   const close = useMutation({
     mutationFn: () => {
-      const decisions: ThreadCloseInput['decisions'] = items.map((item) => {
+      const decisions: ThreadCloseInput['decisions'] = (items ?? []).map((item) => {
         const choice = choices[item.id] ?? 'cancel';
         if (choice === 'cancel') return { itemId: item.id, action: 'cancel' };
         const successorThreadId = choice.startsWith('carry:') ? choice.slice('carry:'.length) : undefined;
@@ -89,7 +92,8 @@ function CloseDialog({
           />
         </div>
 
-        {items.length > 0 && (
+        {itemsError && <p className="text-sm text-red-400">Could not load the open items.</p>}
+        {items && items.length > 0 && (
           <div className="space-y-2">
             <p className="text-xs text-gray-400">Open items</p>
             {items.map((item) => (
@@ -114,7 +118,7 @@ function CloseDialog({
 
         {close.error && (
           <p className="text-sm text-red-400">
-            {close.error instanceof ApiError ? close.error.message : 'Could not close the thread.'}
+            {errorMessage(close.error)}
           </p>
         )}
 
@@ -122,7 +126,7 @@ function CloseDialog({
           <button onClick={onCancel} className={smallButton}>Cancel</button>
           <button
             onClick={() => close.mutate()}
-            disabled={!retrospective.trim() || close.isPending}
+            disabled={!retrospective.trim() || !items || close.isPending}
             className="px-4 py-2 bg-trust-blue text-white text-sm rounded-lg hover:bg-trust-blue/90 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Close thread
@@ -150,6 +154,7 @@ export default function ThreadDetail() {
     queryKey: ['thread-watchers', id],
     queryFn: () => threads.watchers(id!),
     enabled: !!id,
+    refetchInterval: 15000,
   });
 
   const refresh = () => {
@@ -187,9 +192,8 @@ export default function ThreadDetail() {
   const { thread, sections } = brief;
   const readOnly = thread.status === 'closed';
   const timelineItems = [...brief.events, ...brief.openTodos, ...brief.upcoming];
-  const openItems = [...brief.openTodos, ...brief.upcoming, ...brief.firedUnacknowledged].filter(
-    (item, i, all) => all.findIndex((o) => o.id === item.id) === i
-  );
+  const dated = brief.upcoming.filter((item) => item.kind !== 'todo');
+  const mutationError = [acknowledge, updateItem, accept, dismiss, removeWatcher, setStatus].find((m) => m.error)?.error;
 
   return (
     <div className="p-4 sm:p-8 max-w-4xl mx-auto space-y-4">
@@ -217,6 +221,8 @@ export default function ThreadDetail() {
           </div>
         )}
       </div>
+
+      {mutationError && <p className="text-sm text-red-400">{errorMessage(mutationError)}</p>}
 
       <ThreadTimeline items={timelineItems} />
 
@@ -263,6 +269,8 @@ export default function ThreadDetail() {
                   <input
                     type="checkbox"
                     aria-label={`Mark done: ${item.title}`}
+                    checked={item.status !== 'open'}
+                    disabled={updateItem.isPending}
                     onChange={() => updateItem.mutate({ itemId: item.id, patch: { status: 'done' } })}
                   />
                 )}
@@ -275,11 +283,11 @@ export default function ThreadDetail() {
       </Section>
 
       <Section title="Deadlines & reminders">
-        {brief.upcoming.length === 0 ? (
+        {dated.length === 0 ? (
           <p className="text-sm text-gray-500">Nothing upcoming.</p>
         ) : (
           <ul className="space-y-2">
-            {brief.upcoming.map((item) => {
+            {dated.map((item) => {
               const field = item.kind === 'reminder' ? 'remindAt' : 'dueAt';
               const value = item[field];
               return (
@@ -289,15 +297,15 @@ export default function ThreadDetail() {
                     value && <span className="text-xs text-gray-500">{formatDay(value)}</span>
                   ) : (
                     <input
-                      type="date"
+                      type="datetime-local"
                       aria-label={`Date for ${item.title}`}
                       className={`${inputClass} py-1`}
-                      value={toDateInput(value)}
+                      value={toLocalInput(value)}
                       onChange={(e) =>
                         e.target.value &&
                         updateItem.mutate({
                           itemId: item.id,
-                          patch: { [field]: new Date(e.target.value).toISOString() },
+                          patch: { [field]: new Date(e.target.value).toISOString() }, // local wall-clock -> instant
                         })
                       }
                     />
@@ -341,7 +349,7 @@ export default function ThreadDetail() {
                 <span className="flex items-center gap-2 text-sm text-gray-200">
                   <Eye className="w-3.5 h-3.5 text-gray-500" />
                   {w.description}
-                  {thread.status === 'paused' && (
+                  {w.status === 'suspended' && (
                     <span className="px-2 py-0.5 text-xs rounded-full bg-amber-500/20 text-amber-300">suspended</span>
                   )}
                 </span>
@@ -371,7 +379,6 @@ export default function ThreadDetail() {
       {closing && (
         <CloseDialog
           threadId={thread.id}
-          items={openItems}
           onCancel={() => setClosing(false)}
           onDone={() => {
             setClosing(false);

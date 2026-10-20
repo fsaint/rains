@@ -1049,6 +1049,9 @@ export interface ThreadWatcher {
   value: string;
   account: string | null;
   createdAt: string;
+  /** 'suspended' once a sweep finds the source is no longer granted. */
+  status: 'active' | 'suspended';
+  lastCheckedAt: string | null;
   /** Human-readable summary of what the watcher looks for. */
   description: string;
 }
@@ -1098,6 +1101,9 @@ export const threads = {
 
   updateItem: (id: string, itemId: string, patch: Partial<ThreadItem>) =>
     request<ThreadItem>(`/threads/${id}/items/${itemId}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+
+  /** Every open non-event item, uncapped; the close dialog decides on each. */
+  openItems: (id: string) => request<ThreadItem[]>(`/threads/${id}/items?status=open`),
 
   acknowledge: (id: string, itemId: string) =>
     request<void>(`/threads/${id}/items/${itemId}/acknowledge`, { method: 'POST' }),

@@ -16,6 +16,7 @@ vi.mock('../api/client', () => ({
     setStatus: vi.fn(),
     close: vi.fn(),
     removeWatcher: vi.fn(),
+    openItems: vi.fn(),
   },
   ApiError: class ApiError extends Error {},
 }));
@@ -78,9 +79,10 @@ const candidate = {
   id: 'c1', threadId: 't1', watcherId: 'w1', sourceType: 'gmail', sourceRef: 'm1',
   summary: 'Email from investor', foundAt: '2026-10-18T00:00:00.000Z', status: 'pending',
 };
+const milestone = { ...baseItem, id: 'ms1', kind: 'milestone', title: 'Undated milestone' };
 const watcher = {
   id: 'w1', threadId: 't1', agentId: 'a1', kind: 'gmail_query', value: 'from:investor',
-  account: null, createdAt: '2026-10-01T00:00:00.000Z', description: 'Gmail matching from:investor',
+  account: null, createdAt: '2026-10-01T00:00:00.000Z', status: 'active', lastCheckedAt: null, description: 'Gmail matching from:investor',
 };
 
 function brief(over: Record<string, unknown> = {}, threadOver: Record<string, unknown> = {}) {
@@ -89,7 +91,7 @@ function brief(over: Record<string, unknown> = {}, threadOver: Record<string, un
     sections: { Goal: 'Close the round', Past: '', Now: 'Waiting on **lawyer**', Next: 'Sign the term sheet', Retrospective: '' },
     events: [event],
     openTodos: [todo],
-    upcoming: [deadline],
+    upcoming: [todo, deadline],
     firedUnacknowledged: [due],
     pendingCandidates: [candidate],
     activeCount: 2,
@@ -102,6 +104,7 @@ describe('ThreadDetail page', () => {
     vi.clearAllMocks();
     vi.mocked(threads.brief).mockResolvedValue(brief() as never);
     vi.mocked(threads.watchers).mockResolvedValue([watcher] as never);
+    vi.mocked(threads.openItems).mockResolvedValue([todo, deadline, due, milestone] as never);
     vi.mocked(threads.list).mockResolvedValue([
       thread,
       { ...thread, id: 't2', title: 'Hire a CTO' },
@@ -183,7 +186,15 @@ describe('ThreadDetail page', () => {
         ]),
       })
     );
-    expect((vi.mocked(threads.close).mock.calls[0][1] as { decisions: unknown[] }).decisions).toHaveLength(3);
+    expect((vi.mocked(threads.close).mock.calls[0][1] as { decisions: unknown[] }).decisions).toHaveLength(4);
+  });
+
+  it('close dialog lists every open item, including an undated milestone', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Close thread' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByLabelText('Undated milestone')).toBeInTheDocument();
+    expect(threads.openItems).toHaveBeenCalledWith('t1');
   });
 
   it('carry with no successor sends a bare carry (note in retrospective)', async () => {
@@ -195,6 +206,40 @@ describe('ThreadDetail page', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close thread' }));
     await waitFor(() => expect(threads.close).toHaveBeenCalled());
     expect(vi.mocked(threads.close).mock.calls[0][1].decisions).toContainEqual({ itemId: 'todo1', action: 'carry' });
+  });
+
+  it('the suspended badge follows the watcher status, not the thread status', async () => {
+    vi.mocked(threads.watchers).mockResolvedValue([
+      { ...watcher, id: 'w1', description: 'Healthy watcher' },
+      { ...watcher, id: 'w2', description: 'Cut-off watcher', status: 'suspended' },
+    ] as never);
+    renderPage();
+    const healthy = (await screen.findByText('Healthy watcher')).closest('li')!;
+    const cutOff = screen.getByText('Cut-off watcher').closest('li')!;
+    expect(within(healthy).queryByText('suspended')).not.toBeInTheDocument();
+    expect(within(cutOff).getByText('suspended')).toBeInTheDocument();
+  });
+
+  it('the date edit keeps local time of day and converts to ISO', async () => {
+    renderPage();
+    const input = (await screen.findByLabelText('Date for Wire deadline')) as HTMLInputElement;
+    const d = new Date('2026-11-15T00:00:00.000Z');
+    const p = (n: number) => String(n).padStart(2, '0');
+    expect(input.value).toBe(`${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`);
+
+    fireEvent.change(input, { target: { value: '2026-11-20T17:30' } });
+    await waitFor(() =>
+      expect(threads.updateItem).toHaveBeenCalledWith('t1', 'dl1', { dueAt: new Date('2026-11-20T17:30').toISOString() })
+    );
+  });
+
+  it('a failed todo update shows the error and leaves the checkbox unticked', async () => {
+    vi.mocked(threads.updateItem).mockRejectedValue(new Error('boom'));
+    renderPage();
+    const box = (await screen.findByRole('checkbox', { name: /Send term sheet/ })) as HTMLInputElement;
+    fireEvent.click(box);
+    expect(await screen.findByText('That did not work. Try again.')).toBeInTheDocument();
+    expect(box.checked).toBe(false);
   });
 
   it('a closed thread shows no write controls', async () => {
