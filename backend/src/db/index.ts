@@ -845,6 +845,82 @@ export async function initializeDatabase() {
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_memory_scopes_default ON agent_memory_scopes(agent_id) WHERE is_default`;
   await sql`CREATE INDEX IF NOT EXISTS idx_agent_memory_scopes_scope ON agent_memory_scopes(scope_id)`;
 
+  // Threads: approval-minted, time-bound focus topics. The narrative lives in
+  // an ordinary memory entry (root_entry_id); these tables hold the structure
+  // around it — timeline items, watchers, and match candidates.
+  await sql`
+    CREATE TABLE IF NOT EXISTS threads (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      scope_id TEXT NOT NULL REFERENCES memory_scopes(id) ON DELETE CASCADE,
+      root_entry_id TEXT NOT NULL REFERENCES memory_entries(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      goal TEXT,
+      target_date TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      approval_id TEXT,
+      created_by_agent_id TEXT,
+      created_at TEXT DEFAULT now() NOT NULL,
+      updated_at TEXT DEFAULT now() NOT NULL,
+      closed_at TEXT
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_threads_user_status ON threads(user_id, status)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_threads_scope ON threads(scope_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_threads_root ON threads(root_entry_id)`;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS thread_items (
+      id TEXT PRIMARY KEY,
+      thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT,
+      occurred_at TEXT,
+      due_at TEXT,
+      remind_at TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      nudge_fired_at TEXT,
+      fired_at TEXT,
+      memory_entry_id TEXT,
+      source_type TEXT,
+      source_ref TEXT,
+      acknowledged_at TEXT,
+      created_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_thread_items_thread ON thread_items(thread_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_thread_items_remind ON thread_items(remind_at) WHERE nudge_fired_at IS NULL`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_thread_items_due ON thread_items(due_at) WHERE fired_at IS NULL`;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS thread_watchers (
+      id TEXT PRIMARY KEY,
+      thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      value TEXT NOT NULL,
+      account TEXT,
+      last_checked_at TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT now() NOT NULL
+    )
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS thread_candidates (
+      id TEXT PRIMARY KEY,
+      thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+      watcher_id TEXT,
+      source_type TEXT NOT NULL,
+      source_ref TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      found_at TEXT DEFAULT now() NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending'
+    )
+  `;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_candidates_ref ON thread_candidates(thread_id, source_ref)`;
+
   // Branches and links carry scope_id so composite FKs can make cross-scope
   // parenting and cross-scope wikilinks structurally impossible rather than
   // merely policed. Attributes cannot: a relation's target lives in a
@@ -1160,7 +1236,7 @@ export async function initializeDatabase() {
  * (`[a, b]`) and block (`- a`) sequences. Pulling in a YAML dependency for
  * four keys isn't worth it.
  */
-function parseSkillFrontmatter(raw: string): { meta: Record<string, string | string[]>; body: string } {
+export function parseSkillFrontmatter(raw: string): { meta: Record<string, string | string[]>; body: string } {
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   if (!match) return { meta: {}, body: raw.trim() };
 

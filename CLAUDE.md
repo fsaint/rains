@@ -444,6 +444,21 @@ a system-scoped write. Do not let these fall back to the generic formatter: it t
 argument JSON at 200 characters, and a real skill body pushes `scope` off the end — the owner
 would approve a platform-wide change without seeing that it was one.
 
+**6. Three thread tools are locked to approval: `thread_propose`, `thread_close`,
+`thread_add_watcher`.** They create or end the user's focus objects and start background scans
+of their mail, so no per-agent setting may run them unattended. `ALWAYS_APPROVE_TOOLS` in
+`backend/src/mcp/agent-endpoint.ts`, built from each definition's `permissions.alwaysApprove`,
+raises an `allow` override to approval after permission resolution in `resolveToolPolicy`;
+`block` stays `block`. Once approved they run in-process through `runApprovedThreadTool`
+(`backend/src/services/thread-approved.ts`), which re-reads the agent's owner, scopes and watcher
+access at execution, because the approval can land long after the call. The threads MCP
+handlers for these tools only refuse, and no route accepts agent auth for mint, close, or watcher
+creation: `POST /api/threads`, `/:id/close` and `/:id/watchers` take a dashboard session only. Do
+not add an agent-auth path to any of them, or route the executor back through REST with the
+agent's gateway token — either is a mint without consent. Unlike the caveat above, the watcher
+source check runs *before* the approval is raised (`refuseUngrantedWatchers`) as well as in the
+executor.
+
 ## Phase 1 Priorities
 
 1. **P0 - MCP proxy core** - Transparent proxy with tool filtering
@@ -664,6 +679,8 @@ fly secrets set --app agenthelm-core KEY=value
 |------|-------------|
 | [`docs/specs/agent-self-registration.md`](docs/specs/agent-self-registration.md) | Flow for agents to self-register and users to claim them |
 | [`docs/superpowers/specs/2026-09-16-mcp-only-enrollment-trials-design.md`](docs/superpowers/specs/2026-09-16-mcp-only-enrollment-trials-design.md) | Design: remove the deployed-agent runtime; add admin enrollment, Google self-enrollment, and trials |
+| [`docs/superpowers/specs/2026-10-17-threads-design.md`](docs/superpowers/specs/2026-10-17-threads-design.md) | Design: threads — approval-minted, time-bound focus topics built on memory, with timeline, reminders, watchers, and a Threads nav page |
+| [`docs/superpowers/plans/2026-10-19-threads.md`](docs/superpowers/plans/2026-10-19-threads.md) | Implementation plan for threads: schema, service, locked approval tools, scheduler, watchers, skill, Threads pages |
 | [`docs/superpowers/plans/2026-09-16-phase1-remove-agent-runtime.md`](docs/superpowers/plans/2026-09-16-phase1-remove-agent-runtime.md) | Phase 1 implementation plan: remove the hosted agent runtime (Fly machines, OpenClaw/Hermes containers, Telegram onboarding bot) |
 
 ### Branding

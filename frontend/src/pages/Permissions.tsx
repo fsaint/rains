@@ -45,6 +45,7 @@ import {
   Copy,
   Check,
   Download,
+  Route as RouteIcon,
 } from 'lucide-react';
 import AgentSkillToggles from '../components/AgentSkillToggles';
 import { PLUGIN_DOWNLOADS, pluginUrl, formatBytes } from '../plugins';
@@ -165,6 +166,7 @@ const serviceIcons: Record<string, React.ReactNode> = {
   calendar: <Calendar className="w-5 h-5" />,
   'web-search': <Search className="w-5 h-5" />,
   browser: <Globe className="w-5 h-5" />,
+  threads: <RouteIcon className="w-5 h-5" />,
   [ADMIN_SERVICE_TYPE]: <ShieldCheck className="w-5 h-5" />,
 };
 

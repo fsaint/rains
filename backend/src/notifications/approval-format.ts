@@ -901,6 +901,201 @@ export function formatSkillApprovalMessage(approval: ApprovalRequest): Formatted
   };
 }
 
+/**
+ * Thread approvals.
+ *
+ * Starting, closing and adding a watcher to a thread are all locked to owner
+ * approval. A watcher is a standing instruction to scan the owner's mail or
+ * meetings every 15 minutes, and its value is text the agent chose — so each
+ * agent-supplied string is quoted, flattened and cut here, where it cannot read
+ * as part of the sentence around it.
+ */
+export const THREAD_TOOLS = new Set(['thread_propose', 'thread_close', 'thread_add_watcher']);
+
+export interface ThreadApprovalSummary {
+  scopeName: string | null;
+  /** The owner's active threads now; the soft cap is 5. */
+  activeCount: number;
+  threadTitle: string | null;
+  watcherDescriptions: string[];
+  /** thread_close only: each decision with its item and successor titles resolved. */
+  decisions: Array<{ itemTitle: string | null; action: 'cancel' | 'carry'; successorTitle: string | null }>;
+  /**
+   * thread_close only: titles of the open items the agent gave no decision for,
+   * which the close cancels. Null when they could not be loaded.
+   */
+  undecidedItems: string[] | null;
+}
+
+export const THREAD_SOFT_CAP = 5;
+const AGENT_TEXT_LIMIT = 200;
+
+/** Agent-supplied text on one line, cut at 200 characters, in curly quotes. Not HTML-escaped. */
+export function quoteAgentText(value: unknown): string {
+  const flat = String(value ?? '').replace(/\s+/g, ' ').trim();
+  const cut = flat.length > AGENT_TEXT_LIMIT ? `${flat.slice(0, AGENT_TEXT_LIMIT)}…` : flat;
+  return `“${cut}”`;
+}
+
+/** A watcher in plain words with every agent-supplied part quoted. Not HTML-escaped. */
+export function describeWatcherForApproval(w: { kind?: unknown; value?: unknown; account?: unknown }): string {
+  const inbox = w.account ? `account ${quoteAgentText(w.account)}` : 'the default Gmail account';
+  const value = quoteAgentText(w.value);
+  switch (w.kind) {
+    case 'gmail_sender':
+      return `scan ${inbox} for mail from ${value} every 15 minutes`;
+    case 'gmail_query':
+      return `scan ${inbox} for mail matching ${value} every 15 minutes`;
+    case 'gmail_thread':
+      return `scan ${inbox} for new messages in Gmail thread ${value} every 15 minutes`;
+    case 'hx_project':
+      return `scan Hermeneutix project ${value} for new sessions every 15 minutes`;
+    case 'hx_meeting':
+      return `scan Hermeneutix meeting ${value} for new sessions every 15 minutes`;
+    default:
+      return `watch ${quoteAgentText(w.kind)} ${value}`;
+  }
+}
+
+/**
+ * One line per close decision. Built from the agent's own decisions so a failed
+ * summary lookup cannot hide what is being approved; resolved titles replace
+ * the quoted ids when the summary has them. Not HTML-escaped.
+ */
+function closeDecisionLines(raw: unknown, resolved: ThreadApprovalSummary['decisions']): string[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return resolved.map((d) =>
+      d.action === 'carry'
+        ? `carry → ${d.successorTitle ?? '(unknown thread)'}: ${d.itemTitle ?? '(unknown item)'}`
+        : `cancel: ${d.itemTitle ?? '(unknown item)'}`
+    );
+  }
+  return raw.map((r, i) => {
+    const d = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>;
+    const item = resolved[i]?.itemTitle ?? `item ${quoteAgentText(d.item_id)}`;
+    if (d.action !== 'carry') return `cancel: ${item}`;
+    const to =
+      resolved[i]?.successorTitle ??
+      (typeof d.successor_thread_id === 'string' && d.successor_thread_id !== ''
+        ? `thread ${quoteAgentText(d.successor_thread_id)}`
+        : 'retrospective note');
+    return `carry → ${to}: ${item}`;
+  });
+}
+
+// Telegram rejects a message over 4096 characters and the owner then sees
+// nothing; 4000 leaves room for the revision prefix. Raw HTML length is
+// measured, which over-counts entities and so errs short.
+const THREAD_MESSAGE_LIMIT = 4000;
+const THREAD_TITLE_LIMIT = 200;
+const THREAD_GOAL_LIMIT = 1000;
+const THREAD_LINE_LIMIT = 500;
+const THREAD_LIST_LIMIT = 10;
+// The close's retrospective gets what the decision list leaves, but never less.
+const RETRO_MIN = 300;
+
+/** HTML-escaped, then cut at n characters without splitting an entity. */
+function clipHtml(raw: string, n: number): string {
+  const escaped = escapeHtml(raw);
+  if (escaped.length <= n) return escaped;
+  return `${escaped.slice(0, n).replace(/&[a-z]*$/, '')}…`;
+}
+
+/**
+ * before + list + after, with the list cut to THREAD_LIST_LIMIT lines and then
+ * to whatever fits in limit, and a "…and N more" line for the rest. before and
+ * after are kept whole.
+ */
+function fitList(before: string[], list: string[], after: string[], limit: number): string[] {
+  let shown = Math.min(list.length, THREAD_LIST_LIMIT);
+  const build = () => [
+    ...before,
+    ...list.slice(0, shown),
+    ...(shown < list.length ? [`…and ${list.length - shown} more`] : []),
+    ...after,
+  ];
+  while (shown > 0 && build().join('\n').length > limit) shown--;
+  return build();
+}
+
+export function formatThreadApprovalMessage(
+  approval: ApprovalRequest,
+  summary: ThreadApprovalSummary | null
+): FormattedApproval {
+  const args = (approval.arguments ?? {}) as Record<string, unknown>;
+  const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
+  const kept = (lines: Array<string | null>): string[] => lines.filter((l): l is string => l !== null);
+  const threadLine = () =>
+    `<b>Thread:</b> ${summary?.threadTitle
+      ? clipHtml(summary.threadTitle, THREAD_TITLE_LIMIT)
+      : `<code>${clipHtml(str(args.thread_id) ?? '?', THREAD_TITLE_LIMIT)}</code>`}`;
+  const footer = [
+    `\n<b>Requested by:</b> <code>${escapeHtml(approval.agentId)}</code>`,
+    ``,
+    expiresLine(approval),
+  ];
+
+  let lines: string[];
+  if (approval.tool === 'thread_propose') {
+    const watchers = Array.isArray(args.watchers) ? (args.watchers as unknown[]) : [];
+    const when = str(args.target_date) ? formatEventWhen({ start: str(args.target_date) as string, allDay: true }) : null;
+    const active = summary?.activeCount;
+    lines = fitList(
+      kept([
+        '🧵 <b>Start a thread</b>',
+        `<b>Title:</b> ${clipHtml(str(args.title) ?? '(untitled)', THREAD_TITLE_LIMIT)}`,
+        str(args.goal) ? `<b>Goal:</b> ${clipHtml(str(args.goal) as string, THREAD_GOAL_LIMIT)}` : null,
+        `<b>Scope:</b> ${summary?.scopeName ? clipHtml(summary.scopeName, THREAD_TITLE_LIMIT) : '<i>unknown</i>'}`,
+        str(args.target_date) ? `<b>Target date:</b> ${clipHtml(when ?? (str(args.target_date) as string), THREAD_TITLE_LIMIT)}` : null,
+      ]),
+      watchers.map((w) =>
+        `👁 ${clipHtml(describeWatcherForApproval((w && typeof w === 'object' ? w : {}) as Record<string, unknown>), THREAD_LINE_LIMIT)}`
+      ),
+      kept([
+        active !== undefined ? `\nActive threads: ${active} of ${THREAD_SOFT_CAP}` : null,
+        active !== undefined && active >= THREAD_SOFT_CAP ? `⚠️ Over your limit of ${THREAD_SOFT_CAP}` : null,
+        ...footer,
+      ]),
+      THREAD_MESSAGE_LIMIT,
+    );
+  } else if (approval.tool === 'thread_close') {
+    const heading = ['🏁 <b>Close a thread</b>', threadLine()];
+    const items = [
+      ...closeDecisionLines(args.decisions, summary?.decisions ?? []),
+      ...(summary?.undecidedItems ?? []).map((t) => `cancel: ${t}`),
+    ].map((l) => clipHtml(l, THREAD_LINE_LIMIT));
+    const after = kept([
+      summary?.undecidedItems ? null : '⚠️ Any open item without a decision will be cancelled.',
+      ...footer,
+    ]);
+    const retroOpen = '\n<b>Retrospective:</b>\n<blockquote>';
+    const retroClose = '</blockquote>';
+    // The list is fitted first, keeping RETRO_MIN back; the retrospective then
+    // takes the room that is left, up to its own 3000-character cap.
+    lines = fitList(heading, items, after, THREAD_MESSAGE_LIMIT - RETRO_MIN);
+    const retro = str(args.retrospective);
+    if (retro) {
+      const room = THREAD_MESSAGE_LIMIT - lines.join('\n').length - retroOpen.length - retroClose.length - 2;
+      const preview = clipHtml(retro, Math.min(BODY_PREVIEW_LIMIT, room));
+      const cut = preview !== escapeHtml(retro);
+      lines.splice(heading.length, 0, `${retroOpen}${cut ? `${preview.slice(0, -1)}\n…` : preview}${retroClose}`);
+    }
+  } else {
+    lines = fitList(
+      ['👁 <b>Watch for thread material</b>', threadLine()],
+      [clipHtml(describeWatcherForApproval(args), THREAD_LINE_LIMIT)],
+      footer,
+      THREAD_MESSAGE_LIMIT,
+    );
+  }
+
+  return {
+    text: lines.join('\n'),
+    keyboard: approveDenyKeyboard(approval.id),
+    parseMode: 'HTML',
+  };
+}
+
 /** A field being written, or null when the caller left it alone. */
 function writtenField(args: Record<string, unknown>, key: string, label: string): string | null {
   const value = args[key];

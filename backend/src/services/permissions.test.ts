@@ -113,6 +113,18 @@ vi.mock('@reins/servers', () => {
         blocked: ['browser_evaluate'],
       },
     },
+    {
+      type: 'threads',
+      name: 'Threads',
+      auth: { required: false, type: 'none', credentialServiceIds: [] },
+      permissions: {
+        read: ['thread_list', 'thread_get_brief'],
+        write: ['thread_log_event', 'thread_propose', 'thread_close'],
+        blocked: [],
+        defaultWritePermission: 'allow',
+        alwaysApprove: ['thread_propose', 'thread_close'],
+      },
+    },
   ];
   return {
     serviceDefinitions: defs,
@@ -124,6 +136,7 @@ vi.mock('@reins/servers', () => {
       if (name === 'web_search' || name.startsWith('web_search_')) return 'web-search';
       if (name.startsWith('browser_')) return 'browser';
       if (name.startsWith('hermeneutix_')) return 'hermeneutix';
+      if (name.startsWith('thread_')) return 'threads';
       return null;
     },
   };
@@ -160,6 +173,8 @@ import {
   setDrivePathConfig,
   ServiceCombinationError,
   UnauthenticatedEndpointsOpenError,
+  enableDefaultServices,
+  ADMIN_COMPATIBLE_SERVICES,
 } from './permissions.js';
 
 // Tool lists mirroring the vi.mock('@reins/servers') registry above
@@ -262,8 +277,8 @@ describe('Permission Service', () => {
       const result = await getPermissionMatrix();
 
       expect(result.agents).toHaveLength(2);
-      expect(result.services).toHaveLength(6);
-      expect(result.cells).toHaveLength(12); // 2 agents * 6 services
+      expect(result.services).toHaveLength(7);
+      expect(result.cells).toHaveLength(14); // 2 agents * 7 services
     });
 
     it('should count blocked and approval-required tools', async () => {
@@ -1374,6 +1389,61 @@ describe('Permission Service', () => {
       expect(accessCalls()).toEqual([]);
       // The sibling is promoted to default, as before.
       expect(updated(agentServiceInstances)).toEqual([expect.objectContaining({ isDefault: true })]);
+    });
+  });
+
+  describe('threads', () => {
+    it('enableDefaultServices enables threads', async () => {
+      // enableDefaultServices looks each service up with .where().limit(), which
+      // mockTables does not serve; answer both shapes with no rows.
+      const none = () => Object.assign(Promise.resolve([]), { limit: () => Promise.resolve([]) });
+      const { inserted } = mockTables(new Map());
+      vi.mocked(db.select).mockReturnValue({
+        from: vi.fn().mockReturnValue({ where: vi.fn().mockImplementation(none) }),
+      } as never);
+
+      await enableDefaultServices('agent-1');
+
+      const types = inserted(agentServiceInstances).map((row) => (row as { serviceType: string }).serviceType);
+      expect(types).toContain('threads');
+    });
+
+    it.each([['full', 'require_approval'], ['read', 'block']] as const)(
+      'setPermissionLevel %s sets thread_propose to %s and ordinary writes accordingly',
+      async (level, proposePermission) => {
+        vi.mocked(db.select).mockReturnValue({
+          from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+        } as never);
+        const values = vi.fn().mockResolvedValue(undefined);
+        vi.mocked(db.insert).mockReturnValue({ values } as never);
+
+        await setPermissionLevel('agent-1', 'threads', level);
+
+        const rows = values.mock.calls.map((c) => c[0] as { toolName?: string; permission?: string });
+        const perm = (tool: string) => rows.find((r) => r.toolName === tool)?.permission;
+        expect(perm('thread_propose')).toBe(proposePermission);
+        expect(perm('thread_log_event')).toBe(level === 'full' ? 'allow' : 'block');
+      }
+    );
+
+    it('threads is not in ADMIN_COMPATIBLE_SERVICES', () => {
+      expect(ADMIN_COMPATIBLE_SERVICES.has('threads')).toBe(false);
+    });
+
+    it('alwaysApprove tools stay require_approval when the service defaults writes to allow', async () => {
+      vi.mocked(db.select)
+        .mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([{ enabled: true }]) }),
+        } as never)
+        .mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+        } as never);
+
+      const result = await getEffectivePermissions('agent-1', 'threads');
+
+      expect(result.tools.thread_propose).toBe('require_approval');
+      expect(result.tools.thread_close).toBe('require_approval');
+      expect(result.tools.thread_log_event).toBe('allow');
     });
   });
 });

@@ -80,11 +80,12 @@ export interface PermissionMatrix {
 /**
  * Get default permissions for a service from the registry
  */
-function getDefaultPermsFromDef(def: { permissions: { read: string[]; write: string[]; blocked: string[]; defaultWritePermission?: 'allow' | 'require_approval' } }): Record<string, ToolPermission> {
+function getDefaultPermsFromDef(def: { permissions: { read: string[]; write: string[]; blocked: string[]; defaultWritePermission?: 'allow' | 'require_approval'; alwaysApprove?: string[] } }): Record<string, ToolPermission> {
   const result: Record<string, ToolPermission> = {};
   const defaultWrite = def.permissions.defaultWritePermission ?? 'require_approval';
   for (const tool of def.permissions.read) result[tool] = 'allow';
   for (const tool of def.permissions.write) result[tool] = defaultWrite;
+  for (const tool of def.permissions.alwaysApprove ?? []) result[tool] = 'require_approval';
   for (const tool of def.permissions.blocked) result[tool] = 'block';
   return result;
 }
@@ -908,6 +909,11 @@ export async function setPermissionLevel(
     permissions[tool] = level === 'read' ? 'block' : (def.permissions.defaultWritePermission ?? 'require_approval');
   }
 
+  // Picking Full must not loosen the tools that never run unattended.
+  if (level !== 'read') {
+    for (const tool of preset.alwaysApprove ?? []) permissions[tool] = 'require_approval';
+  }
+
   for (const tool of preset.blocked) {
     permissions[tool] = 'block';
   }
@@ -1285,11 +1291,17 @@ export async function createServiceInstance(
 }
 
 /**
- * Enable services that are on by default for every new agent (memory, skills).
+ * Enable services that are on by default for every new agent (memory, skills, threads).
+ *
+ * Never add helm-admin or skill-authoring here: every new agent would become
+ * privileged. threads is allowed because its dangerous tools (thread_propose,
+ * thread_close, thread_add_watcher) are alwaysApprove, so enabling it grants
+ * only ordinary bookkeeping writes.
+ *
  * Idempotent — safe to call multiple times; will not create duplicate instances.
  */
 export async function enableDefaultServices(agentId: string): Promise<void> {
-  const defaults = ['memory', 'skills'];
+  const defaults = ['memory', 'skills', 'threads'];
   for (const serviceType of defaults) {
     try {
       const existing = await db

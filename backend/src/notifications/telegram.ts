@@ -18,6 +18,9 @@ import {
   escapeMarkdown,
   formatAdminApprovalMessage,
   formatSkillApprovalMessage,
+  formatThreadApprovalMessage,
+  THREAD_TOOLS,
+  type ThreadApprovalSummary,
   formatBatchScope,
   formatCalendarApprovalMessage,
   formatDraftSendApprovalMessage,
@@ -32,6 +35,7 @@ import {
   formatHermeneutixApprovalMessage,
 } from './approval-format.js';
 import { MAX_REVISIONS } from '../approvals/queue.js';
+import { getThreadApprovalSummary } from '../services/threads.js';
 import { credentialVault } from '../credentials/vault.js';
 
 // Re-exported so existing callers and tests can keep importing from the
@@ -161,7 +165,10 @@ export class TelegramNotifier {
       const draftSummary = DRAFT_SEND_TOOLS.has(approval.tool)
         ? await this.resolveDraftSendSummary(approval)
         : null;
-      const { text, keyboard, parseMode } = this.formatApprovalMessage(approval, magicLinkUrl, adminTarget, draftSummary);
+      const threadSummary = THREAD_TOOLS.has(approval.tool)
+        ? await this.resolveThreadSummary(approval)
+        : null;
+      const { text, keyboard, parseMode } = this.formatApprovalMessage(approval, magicLinkUrl, adminTarget, draftSummary, threadSummary);
       const sent = await this.sendMessage(owner.chatId, text, {
         parse_mode: parseMode ?? 'Markdown',
         reply_markup: { inline_keyboard: keyboard },
@@ -688,6 +695,16 @@ export class TelegramNotifier {
     return credentialVault.getValidAccessToken(match.credential_id);
   }
 
+  private async resolveThreadSummary(approval: ApprovalRequest): Promise<ThreadApprovalSummary | null> {
+    try {
+      return await getThreadApprovalSummary(approval);
+    } catch (err) {
+      // Better a message with ids than no message; the agent is blocked waiting.
+      console.warn('[telegram] could not resolve thread approval summary:', err);
+      return null;
+    }
+  }
+
   private async resolveAdminTargetSummary(
     approval: ApprovalRequest
   ): Promise<AdminTargetSummary | null> {
@@ -730,7 +747,8 @@ export class TelegramNotifier {
     approval: ApprovalRequest,
     magicLinkUrl: string | null,
     adminTarget: AdminTargetSummary | null = null,
-    draftSummary: DraftSendSummary | null = null
+    draftSummary: DraftSendSummary | null = null,
+    threadSummary: ThreadApprovalSummary | null = null
   ): {
     text: string;
     keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>>;
@@ -756,6 +774,8 @@ export class TelegramNotifier {
       ? formatAdminApprovalMessage(approval, adminTarget)
       : SKILL_TOOLS.has(approval.tool)
       ? formatSkillApprovalMessage(approval)
+      : THREAD_TOOLS.has(approval.tool)
+      ? formatThreadApprovalMessage(approval, threadSummary)
       : HERMENEUTIX_PEOPLE_TOOLS.has(approval.tool)
       ? formatHermeneutixApprovalMessage(approval)
       : this.formatGenericApprovalMessage(approval);

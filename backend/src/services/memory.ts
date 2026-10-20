@@ -275,7 +275,7 @@ export async function getDreamManifest(scopeIds: string[]): Promise<DreamManifes
           JOIN memory_scopes s ON s.id = e.scope_id
           LEFT JOIN memory_branches b ON b.entry_id = e.id
           LEFT JOIN memory_links ml ON ml.target_id = e.id
-          WHERE e.scope_id IN (${placeholders}) AND e.is_deleted = false
+          WHERE e.scope_id IN (${placeholders}) AND e.is_deleted = false AND e.type <> 'thread'
           GROUP BY e.id, e.title, e.type, b.parent_entry_id, e.updated_at, e.version, s.slug, s.name
           ORDER BY s.name ASC, e.type ASC, e.title ASC`,
     args: scopeIds,

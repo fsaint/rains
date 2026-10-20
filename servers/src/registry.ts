@@ -25,6 +25,7 @@ import { definition as skills } from './skills/definition.js';
 import { definition as skillAuthoring } from './skill-authoring/definition.js';
 import { definition as pipedrive } from './pipedrive/definition.js';
 import { definition as helmAdmin } from './helm-admin/definition.js';
+import { definition as threads } from './threads/definition.js';
 
 // Re-export the type from its canonical location
 export type { ServiceDefinitionWithTools } from './common/types.js';
@@ -52,6 +53,7 @@ export const serviceDefinitions: ServiceDefinitionWithTools[] = [
   skillAuthoring,
   pipedrive,
   helmAdmin,
+  threads,
   ...devOnlyServices,
 ];
 
@@ -68,13 +70,19 @@ export function getServiceTypeFromToolName(toolName: string): string | null {
   return null;
 }
 
-/** Build default permission map for a service (read→allow, write→require_approval, blocked→block) */
+/**
+ * Build default permission map for a service (read→allow, blocked→block).
+ * Write tools take the service's defaultWritePermission (require_approval when
+ * unset), except alwaysApprove tools, which are require_approval regardless.
+ */
 export function getDefaultPermissions(serviceType: string): Record<string, 'allow' | 'require_approval' | 'block'> {
   const def = serviceRegistry.get(serviceType);
   if (!def) return {};
   const result: Record<string, 'allow' | 'require_approval' | 'block'> = {};
   for (const tool of def.permissions.read) result[tool] = 'allow';
-  for (const tool of def.permissions.write) result[tool] = 'require_approval';
+  const defaultWrite = def.permissions.defaultWritePermission ?? 'require_approval';
+  for (const tool of def.permissions.write) result[tool] = defaultWrite;
+  for (const tool of def.permissions.alwaysApprove ?? []) result[tool] = 'require_approval';
   for (const tool of def.permissions.blocked) result[tool] = 'block';
   return result;
 }

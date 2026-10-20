@@ -7,6 +7,7 @@ import { startTokenRefreshLoop, stopTokenRefreshLoop } from './credentials/vault
 import { startTokenMonitor, stopTokenMonitor } from './services/token-monitor.js';
 import { startUploadGcCron } from './services/agent-uploads.js';
 import { startTrialReminderCron } from './services/trial-reminders.js';
+import { startThreadScheduler } from './services/thread-scheduler.js';
 import { telegramNotifier } from './notifications/telegram.js';
 import { initializeNotificationHandlers } from './notifications/handlers.js';
 import { shutdownPostHog } from './analytics/posthog.js';
@@ -60,6 +61,10 @@ app.log.info('Agent upload GC started');
 // Trial reminders (7 days and 1 day before a trial ends)
 startTrialReminderCron();
 app.log.info('Trial reminder cron started');
+
+// Thread reminders (per-minute claim of due thread items)
+startThreadScheduler();
+app.log.info('Thread scheduler started');
 
 // Wire approval queue events to notification services
 initializeNotificationHandlers();

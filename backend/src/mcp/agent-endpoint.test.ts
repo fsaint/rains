@@ -12,6 +12,7 @@ import {
   type MCPRequest,
   looksLikeAuthFailure,
   _resetReauthThrottleForTests,
+  runAgentReadTool,
 } from './agent-endpoint.js';
 import { client } from '../db/index.js';
 
@@ -28,6 +29,15 @@ vi.mock('../config/index.js', () => ({
     databaseUrl: 'postgres://localhost/test',
     encryptionKey: '0'.repeat(64),
   },
+}));
+
+vi.mock('../services/thread-watchers.js', () => ({
+  checkWatcherAccess: vi.fn().mockResolvedValue({ ok: true }),
+}));
+
+vi.mock('../services/thread-approved.js', () => ({
+  IN_PROCESS_THREAD_TOOLS: new Set(['thread_propose', 'thread_close', 'thread_add_watcher']),
+  runApprovedThreadTool: vi.fn().mockResolvedValue({ success: true, data: { id: 't-new' } }),
 }));
 
 vi.mock('../services/email.js', () => ({
@@ -115,6 +125,11 @@ vi.mock('@reins/servers', () => ({
     { type: 'calendar', name: 'Google Calendar', auth: { required: true, credentialServiceIds: ['calendar'] } },
     { type: 'web-search', name: 'Web Search' },
     { type: 'browser', name: 'Browser' },
+    {
+      type: 'threads',
+      name: 'Threads',
+      permissions: { alwaysApprove: ['thread_propose', 'thread_close', 'thread_add_watcher'] },
+    },
   ],
   serviceRegistry: new Map([
     ['gmail', { type: 'gmail', auth: { required: false } }],
@@ -128,6 +143,7 @@ vi.mock('@reins/servers', () => ({
     // these prefixes do not overlap, but the ordering is the property.
     if (name.startsWith('helm_admin_')) return 'helm-admin';
     if (name.startsWith('gmail_')) return 'gmail';
+    if (name.startsWith('thread_')) return 'threads';
     if (name.startsWith('drive_')) return 'drive';
     if (name.startsWith('calendar_')) return 'calendar';
     if (name === 'web_search' || name.startsWith('web_search_')) return 'web-search';
@@ -1339,6 +1355,397 @@ describe('owner-set limits surfaced by the MCP', () => {
     });
     const text = (response.result as { content: Array<{ text: string }> }).content[0].text;
     expect(JSON.parse(text)).toEqual({ agentId: 'agent-1', name: 'Test Agent', limits: null });
+  });
+});
+
+describe('runAgentReadTool', () => {
+  const agentRow = [{ id: 'agent-1', name: 'Test Agent', status: 'active' }];
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    dbWhereMock.mockReset();
+    dbWhereMock.mockResolvedValue([{ id: 'agent-1', name: 'Test Agent', status: 'active' }]);
+    const { serverManager } = await import('./server-manager.js');
+    vi.mocked(serverManager.getServer).mockReturnValue({
+      serverType: 'gmail',
+      name: 'Gmail',
+      getToolDefinitions: () => [],
+      callTool: vi.fn().mockResolvedValue({ success: true, data: [{ id: 'msg1' }] }),
+    } as never);
+  });
+
+  it('runAgentReadTool returns needs_approval and submits nothing when the tool is require_approval', async () => {
+    const { auditLogger } = await import('../audit/logger.js');
+    dbWhereMock.mockResolvedValueOnce(agentRow); // agent status check
+    dbWhereMock.mockResolvedValueOnce([]); // no instances → legacy canAccessTool
+
+    const res = await runAgentReadTool('agent-1', 'gmail_create_draft', { to: 'x@y.com' });
+
+    expect(res).toEqual({ ok: false, reason: 'needs_approval' });
+    expect(approvalQueue.submit).not.toHaveBeenCalled();
+    expect(approvalQueue.registerExecutor).not.toHaveBeenCalled();
+    expect(auditLogger.logToolCall).not.toHaveBeenCalled();
+  });
+
+  it('returns blocked for a blocked tool', async () => {
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([]);
+
+    const res = await runAgentReadTool('agent-1', 'gmail_send_message', {});
+
+    expect(res).toEqual({ ok: false, reason: 'blocked' });
+  });
+
+  it('returns not_enabled when the agent does not hold the service', async () => {
+    const { getEffectivePermissions } = await import('../services/permissions.js');
+    vi.mocked(getEffectivePermissions).mockResolvedValueOnce({ enabled: false, tools: {} } as never);
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([]);
+
+    const res = await runAgentReadTool('agent-1', 'gmail_list_messages', {});
+
+    expect(res.ok).toBe(false);
+    expect(!res.ok && res.reason).toBe('not_enabled');
+  });
+
+  it('returns not_enabled for an account the agent does not hold', async () => {
+    const inst = { id: 'inst-a', agentId: 'agent-1', serviceType: 'gmail', enabled: true, isDefault: true, credentialId: 'cred-a' };
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([inst]);
+    dbWhereMock.mockResolvedValueOnce([{ accountEmail: 'a@example.com' }]);
+
+    const res = await runAgentReadTool('agent-1', 'gmail_list_messages', { account: 'nobody@example.com' });
+
+    expect(res.ok).toBe(false);
+    expect(!res.ok && res.reason).toBe('not_enabled');
+  });
+
+  it('runs an allow tool and returns its data', async () => {
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([]);
+
+    const res = await runAgentReadTool('agent-1', 'gmail_list_messages', {});
+
+    expect(res).toEqual({ ok: true, data: [{ id: 'msg1' }] });
+    expect(approvalQueue.submit).not.toHaveBeenCalled();
+  });
+
+  it('audits each read it runs as a background watcher read', async () => {
+    const { auditLogger } = await import('../audit/logger.js');
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([]);
+
+    await runAgentReadTool('agent-1', 'gmail_list_messages', { q: 'x' }, { watcherId: 'w1', threadId: 't1' });
+
+    expect(auditLogger.logToolCall).toHaveBeenCalledTimes(1);
+    expect(auditLogger.logToolCall).toHaveBeenCalledWith('agent-1', 'gmail_list_messages', { q: 'x' }, 'success', expect.any(Number), {
+      serviceType: 'gmail', source: 'thread_watcher', watcherId: 'w1', threadId: 't1',
+    });
+  });
+
+  it('audits a failed read as an error', async () => {
+    const { auditLogger } = await import('../audit/logger.js');
+    const { serverManager } = await import('./server-manager.js');
+    vi.mocked(serverManager.getServer).mockReturnValue({
+      serverType: 'gmail',
+      name: 'Gmail',
+      getToolDefinitions: () => [],
+      callTool: vi.fn().mockResolvedValue({ success: false, error: 'quota' }),
+    } as never);
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([]);
+
+    const res = await runAgentReadTool('agent-1', 'gmail_list_messages', {}, { watcherId: 'w1' });
+
+    expect(res.ok).toBe(false);
+    expect(auditLogger.logToolCall).toHaveBeenCalledWith('agent-1', 'gmail_list_messages', {}, 'error', expect.any(Number),
+      expect.objectContaining({ serviceType: 'gmail', source: 'thread_watcher', watcherId: 'w1' }));
+  });
+
+  it('runs nothing for an agent that is not active', async () => {
+    const { serverManager } = await import('./server-manager.js');
+    dbWhereMock.mockResolvedValueOnce([{ id: 'agent-1', name: 'Test Agent', status: 'suspended' }]);
+
+    const res = await runAgentReadTool('agent-1', 'gmail_list_messages', {});
+
+    expect(res.ok).toBe(false);
+    expect(!res.ok && res.reason).toBe('error');
+    expect(serverManager.getServer).not.toHaveBeenCalled();
+  });
+
+  it('runs nothing for an agent whose owner\'s billing has lapsed', async () => {
+    const { serverManager } = await import('./server-manager.js');
+    const { checkAccess } = await import('../services/billing.js');
+    vi.mocked(checkAccess).mockResolvedValueOnce({ allowed: false, reason: 'trial_ended' });
+    dbWhereMock.mockResolvedValueOnce([{ id: 'agent-1', name: 'Test Agent', status: 'active', userId: 'owner-1' }]);
+
+    const res = await runAgentReadTool('agent-1', 'gmail_list_messages', {});
+
+    expect(checkAccess).toHaveBeenCalledWith('owner-1');
+    expect(res).toEqual({ ok: false, reason: 'error', message: 'trial_ended' });
+    expect(serverManager.getServer).not.toHaveBeenCalled();
+  });
+
+  it('returns error for an unknown tool', async () => {
+    const res = await runAgentReadTool('agent-1', 'unknown_tool', {});
+
+    expect(res.ok).toBe(false);
+    expect(!res.ok && res.reason).toBe('error');
+  });
+});
+
+describe('watcher pre-approval check', () => {
+  const refusal = 'WATCHER_SOURCE_NOT_GRANTED: this agent cannot read Gmail.';
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    dbWhereMock.mockReset();
+    dbWhereMock.mockResolvedValue([{ id: 'agent-1', name: 'Test Agent', status: 'active' }]);
+    const { client } = await import('../db/index.js');
+    vi.mocked(client.execute).mockReset();
+    vi.mocked(client.execute).mockResolvedValue({ rows: [] } as never);
+    // Policy alone puts these behind approval here; 'locked thread tools'
+    // covers an agent whose override says allow.
+    const { canAccessTool } = await import('../services/permissions.js');
+    vi.mocked(canAccessTool).mockResolvedValue({ allowed: true, requiresApproval: true });
+  });
+
+  const call = (name: string, args: Record<string, unknown>) => {
+    dbWhereMock.mockResolvedValueOnce([{ id: 'agent-1', name: 'Test Agent', status: 'active' }]); // agent status check
+    dbWhereMock.mockResolvedValueOnce([]); // no threads instances → legacy canAccessTool
+    return handleMCPRequest('agent-1', { jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name, arguments: args } });
+  };
+
+  it('thread_add_watcher with an ungranted source returns a tool error before any approval is submitted', async () => {
+    const { checkWatcherAccess } = await import('../services/thread-watchers.js');
+    vi.mocked(checkWatcherAccess).mockResolvedValueOnce({ ok: false, message: refusal });
+
+    const res = await call('thread_add_watcher', { thread_id: 't1', kind: 'gmail_sender', value: 'bob@x.com', account: 'ana@y.com' });
+
+    expect(checkWatcherAccess).toHaveBeenCalledWith('agent-1', { kind: 'gmail_sender', value: 'bob@x.com', account: 'ana@y.com' });
+    const result = res.result as { isError?: boolean; content: Array<{ text: string }> };
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe(refusal);
+    expect(approvalQueue.submit).not.toHaveBeenCalled();
+    expect(approvalQueue.registerExecutor).not.toHaveBeenCalled();
+  });
+
+  it('thread_propose with an ungranted watcher returns a tool error before any approval is submitted', async () => {
+    const { checkWatcherAccess } = await import('../services/thread-watchers.js');
+    vi.mocked(checkWatcherAccess)
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: false, message: refusal });
+
+    const res = await call('thread_propose', {
+      title: 'Seed round',
+      watchers: [
+        { kind: 'hx_project', value: 'p-1' },
+        { kind: 'gmail_query', value: 'from:vc' },
+      ],
+    });
+
+    expect(checkWatcherAccess).toHaveBeenCalledTimes(2);
+    expect(checkWatcherAccess).toHaveBeenLastCalledWith('agent-1', { kind: 'gmail_query', value: 'from:vc', account: undefined });
+    const result = res.result as { isError?: boolean; content: Array<{ text: string }> };
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe(refusal);
+    expect(approvalQueue.submit).not.toHaveBeenCalled();
+  });
+
+  it('thread_propose refuses a malformed watchers argument before any approval is submitted', async () => {
+    for (const watchers of ['gmail_sender:bob', [null], ['x']]) {
+      const res = await call('thread_propose', { title: 'Seed round', watchers });
+      const result = res.result as { isError?: boolean; content: Array<{ text: string }> };
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toMatch(/^WATCHER_SOURCE_NOT_GRANTED/);
+    }
+    expect(approvalQueue.submit).not.toHaveBeenCalled();
+  });
+
+  it('raises the approval when every watcher is granted', async () => {
+    const { checkWatcherAccess } = await import('../services/thread-watchers.js');
+
+    const res = await call('thread_add_watcher', { thread_id: 't1', kind: 'hx_project', value: 'p-1' });
+
+    expect(checkWatcherAccess).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.submit).toHaveBeenCalledTimes(1);
+    expect((res.result as { content: Array<{ text: string }> }).content[0].text).toContain('APPROVAL_PENDING');
+  });
+
+  describe('with a threads instance and a Gmail account', () => {
+    // Every agent has a credential-less threads instance (enableDefaultServices),
+    // so a watcher's `account` must not be read as the threads routing account.
+    const threadsInst = { id: 'inst-t', agentId: 'agent-1', serviceType: 'threads', enabled: true, isDefault: true, credentialId: null };
+
+    beforeEach(async () => {
+      const { getEffectiveInstancePermissions } = await import('../services/permissions.js');
+      vi.mocked(getEffectiveInstancePermissions).mockResolvedValue({
+        enabled: true,
+        tools: { thread_add_watcher: 'require_approval', thread_propose: 'require_approval' },
+      } as never);
+    });
+
+    const callWithInstance = (args: Record<string, unknown>) => {
+      dbWhereMock.mockResolvedValueOnce([{ id: 'agent-1', name: 'Test Agent', status: 'active' }]);
+      dbWhereMock.mockResolvedValueOnce([threadsInst]);
+      return handleMCPRequest('agent-1', {
+        jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 'thread_add_watcher', arguments: args },
+      });
+    };
+
+    it('thread_add_watcher with a held account reaches the watcher check and the approval', async () => {
+      const { checkWatcherAccess } = await import('../services/thread-watchers.js');
+
+      const res = await callWithInstance({ thread_id: 't1', kind: 'gmail_sender', value: 'bob@x.com', account: 'ana@y.com' });
+
+      expect(res.error).toBeUndefined();
+      expect(checkWatcherAccess).toHaveBeenCalledWith('agent-1', { kind: 'gmail_sender', value: 'bob@x.com', account: 'ana@y.com' });
+      expect(approvalQueue.submit).toHaveBeenCalledTimes(1);
+      expect((res.result as { content: Array<{ text: string }> }).content[0].text).toContain('APPROVAL_PENDING');
+    });
+
+    it('thread_add_watcher with an account the agent does not hold gets the watcher refusal, no approval', async () => {
+      const { checkWatcherAccess } = await import('../services/thread-watchers.js');
+      vi.mocked(checkWatcherAccess).mockResolvedValueOnce({
+        ok: false, message: 'WATCHER_SOURCE_NOT_GRANTED: this agent does not hold the Gmail account other@z.com.',
+      });
+
+      const res = await callWithInstance({ thread_id: 't1', kind: 'gmail_sender', value: 'bob@x.com', account: 'other@z.com' });
+
+      expect(res.error).toBeUndefined();
+      const result = res.result as { isError?: boolean; content: Array<{ text: string }> };
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toMatch(/^WATCHER_SOURCE_NOT_GRANTED/);
+      expect(approvalQueue.submit).not.toHaveBeenCalled();
+    });
+  });
+
+  it('thread_propose without watchers checks nothing and raises the approval', async () => {
+    const { checkWatcherAccess } = await import('../services/thread-watchers.js');
+
+    await call('thread_propose', { title: 'Seed round' });
+
+    expect(checkWatcherAccess).not.toHaveBeenCalled();
+    expect(approvalQueue.submit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('locked thread tools', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    dbWhereMock.mockReset();
+    dbWhereMock.mockResolvedValue([{ id: 'agent-1', name: 'Test Agent', status: 'active' }]);
+    const { client } = await import('../db/index.js');
+    vi.mocked(client.execute).mockReset();
+    vi.mocked(client.execute).mockResolvedValue({ rows: [] } as never);
+    // The agent's override says allow for every threads tool.
+    const { canAccessTool } = await import('../services/permissions.js');
+    vi.mocked(canAccessTool).mockResolvedValue({ allowed: true, requiresApproval: false });
+  });
+
+  const call = (name: string, args: Record<string, unknown>) => {
+    dbWhereMock.mockResolvedValueOnce([{ id: 'agent-1', name: 'Test Agent', status: 'active' }]); // agent status check
+    dbWhereMock.mockResolvedValueOnce([]); // no threads instances → legacy canAccessTool
+    return handleMCPRequest('agent-1', { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name, arguments: args } });
+  };
+  const text = (res: Awaited<ReturnType<typeof handleMCPRequest>>) =>
+    (res.result as { content: Array<{ text: string }> }).content[0].text;
+
+  it('thread_propose requires approval even when the agent override is allow', async () => {
+    const { serverManager } = await import('./server-manager.js');
+
+    const res = await call('thread_propose', { title: 'Seed round', goal: 'Close it' });
+
+    expect(approvalQueue.submit).toHaveBeenCalledWith('agent-1', 'thread_propose', { title: 'Seed round', goal: 'Close it' }, expect.any(String));
+    expect(text(res).startsWith('APPROVAL_PENDING')).toBe(true);
+    expect(serverManager.getServer).not.toHaveBeenCalled();
+  });
+
+  it.each(['thread_close', 'thread_add_watcher'])('%s requires approval even when the override is allow', async (tool) => {
+    const res = await call(tool, { thread_id: 't1', retrospective: 'r', decisions: [], kind: 'hx_project', value: 'p-1' });
+    expect(approvalQueue.submit).toHaveBeenCalledTimes(1);
+    expect(text(res).startsWith('APPROVAL_PENDING')).toBe(true);
+  });
+
+  it('the lock holds on the instance path too', async () => {
+    const { getEffectiveInstancePermissions } = await import('../services/permissions.js');
+    vi.mocked(getEffectiveInstancePermissions).mockResolvedValueOnce({
+      enabled: true, tools: { thread_close: 'allow' },
+    } as never);
+    const threadsInst = { id: 'inst-t', agentId: 'agent-1', serviceType: 'threads', enabled: true, isDefault: true, credentialId: null };
+    dbWhereMock.mockResolvedValueOnce([{ id: 'agent-1', name: 'Test Agent', status: 'active' }]);
+    dbWhereMock.mockResolvedValueOnce([threadsInst]);
+
+    const res = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 10, method: 'tools/call',
+      params: { name: 'thread_close', arguments: { thread_id: 't1', retrospective: 'r', decisions: [] } },
+    });
+
+    expect(approvalQueue.submit).toHaveBeenCalledTimes(1);
+    expect(text(res).startsWith('APPROVAL_PENDING')).toBe(true);
+  });
+
+  it('a blocked thread_close stays blocked', async () => {
+    const { canAccessTool } = await import('../services/permissions.js');
+    vi.mocked(canAccessTool).mockResolvedValue({ allowed: false, requiresApproval: false });
+
+    const res = await call('thread_close', { thread_id: 't1', retrospective: 'r', decisions: [] });
+
+    expect(res.error?.code).toBe(MCP_ERROR_CODES.TOOL_BLOCKED);
+    expect(approvalQueue.submit).not.toHaveBeenCalled();
+    expect(approvalQueue.registerExecutor).not.toHaveBeenCalled();
+  });
+
+  it('a tool outside the lock still runs at allow', async () => {
+    const res = await call('thread_log_event', { thread_id: 't1', title: 'Met Bob' });
+    expect(approvalQueue.submit).not.toHaveBeenCalled();
+    expect(res.error).toBeUndefined();
+    expect((res.result as { isError?: boolean }).isError).toBeUndefined();
+  });
+
+  it('the registered executor for thread_propose calls runApprovedThreadTool, not executeTool', async () => {
+    const { runApprovedThreadTool } = await import('../services/thread-approved.js');
+    const { serverManager } = await import('./server-manager.js');
+    const args = { title: 'Seed round', goal: 'Close it', scope: 'work' };
+
+    await call('thread_propose', args);
+
+    expect(approvalQueue.registerExecutor).toHaveBeenCalledWith('approval-123', expect.any(Function));
+    const executor = vi.mocked(approvalQueue.registerExecutor).mock.calls[0][1];
+    await expect(executor()).resolves.toEqual({ success: true, data: { id: 't-new' } });
+    expect(runApprovedThreadTool).toHaveBeenCalledWith('agent-1', 'thread_propose', args, 'approval-123');
+    expect(serverManager.getServer).not.toHaveBeenCalled();
+  });
+
+  it('the executor for an ordinary approval still goes through executeTool', async () => {
+    const { runApprovedThreadTool } = await import('../services/thread-approved.js');
+    const { canAccessTool } = await import('../services/permissions.js');
+    vi.mocked(canAccessTool).mockResolvedValue({ allowed: true, requiresApproval: true });
+
+    await call('gmail_create_draft', { to: 'x@y.com' });
+
+    const executor = vi.mocked(approvalQueue.registerExecutor).mock.calls[0][1];
+    await executor();
+    expect(runApprovedThreadTool).not.toHaveBeenCalled();
+  });
+
+  it('an allow-override agent naming an ungranted watcher is refused before any approval', async () => {
+    const { checkWatcherAccess } = await import('../services/thread-watchers.js');
+    vi.mocked(checkWatcherAccess).mockResolvedValueOnce({ ok: false, message: 'WATCHER_SOURCE_NOT_GRANTED: no.' });
+
+    const res = await call('thread_add_watcher', { thread_id: 't1', kind: 'gmail_sender', value: 'bob@x.com' });
+
+    expect(text(res)).toBe('WATCHER_SOURCE_NOT_GRANTED: no.');
+    expect(approvalQueue.submit).not.toHaveBeenCalled();
+  });
+
+  it('runAgentReadTool reports needs_approval for a locked tool at allow', async () => {
+    dbWhereMock.mockResolvedValueOnce([{ id: 'agent-1', name: 'Test Agent', status: 'active' }]);
+    dbWhereMock.mockResolvedValueOnce([]);
+
+    const res = await runAgentReadTool('agent-1', 'thread_propose', { title: 'x', goal: 'g' });
+
+    expect(res).toEqual({ ok: false, reason: 'needs_approval' });
   });
 });
 

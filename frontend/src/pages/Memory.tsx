@@ -12,6 +12,7 @@ import {
   Folder,
   FileText,
   Hash,
+  Route,
   X,
   Layers,
   Check,
@@ -29,6 +30,7 @@ const TYPE_ICONS: Record<MemoryEntryType, React.ElementType> = {
   company: Building2,
   project: Folder,
   index: Hash,
+  thread: Route,
 };
 
 const TYPE_LABELS: Record<MemoryEntryType, string> = {
@@ -37,6 +39,7 @@ const TYPE_LABELS: Record<MemoryEntryType, string> = {
   company: 'Companies',
   project: 'Projects',
   index: 'Index',
+  thread: 'Threads',
 };
 
 const TYPE_COLORS: Record<MemoryEntryType, string> = {
@@ -45,6 +48,7 @@ const TYPE_COLORS: Record<MemoryEntryType, string> = {
   company: 'text-purple-400',
   project: 'text-green-400',
   index: 'text-yellow-400',
+  thread: 'text-orange-400',
 };
 
 function buildTree(nodes: MemoryTreeNode[]): Map<string | null, MemoryTreeNode[]> {

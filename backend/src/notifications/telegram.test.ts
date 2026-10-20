@@ -760,3 +760,24 @@ describe('formatDraftSendApprovalMessage', () => {
     expect(text).not.toContain('<script>');
   });
 });
+
+describe('telegram dispatch for thread tools', () => {
+  it('telegram dispatch uses the thread formatter, not the generic one, for thread_propose', async () => {
+    const { telegramNotifier } = await import('./telegram.js');
+    const approval = makeApproval({
+      tool: 'thread_propose',
+      arguments: { title: 'Launch', goal: 'g'.repeat(400) },
+    });
+    const out = (telegramNotifier as any).formatApprovalMessage(approval, null, null, null, {
+      scopeName: 'Work',
+      activeCount: 1,
+      threadTitle: null,
+      watcherDescriptions: [],
+      decisions: [],
+    });
+    expect(out.parseMode).toBe('HTML');
+    expect(out.text).toContain('Start a thread');
+    expect(out.text).toContain('g'.repeat(400));
+    expect(out.text).not.toContain('*Args:*');
+  });
+});

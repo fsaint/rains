@@ -90,6 +90,8 @@ import {
   lookupEntryByTitleOrAlias,
   replaceSection,
 } from '../services/memory.js';
+import { threadForEntry, scopeHasOpenThreads } from '../services/threads.js';
+import { registerThreadRoutes } from './thread-routes.js';
 import {
   resolveMemoryContext,
   listUserScopes,
@@ -3768,6 +3770,19 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     );
   }
 
+  /**
+   * Refuse a write that would change a closed thread's record. Call it after the
+   * entry's own reachability check, so an unreachable entry still reads as 404.
+   */
+  async function refuseIfThreadClosed(entryId: string, reply: any): Promise<boolean> {
+    if ((await threadForEntry(entryId))?.status !== 'closed') return false;
+    reply.status(409).send({
+      error: 'This entry belongs to a closed thread and can no longer be changed.',
+      code: 'THREAD_CLOSED',
+    });
+    return true;
+  }
+
   // -------------------------------------------------------------------------
   // Agent uploads — short-lived blobs an agent POSTs from its own container.
   //
@@ -5824,6 +5839,13 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (!title) return reply.status(400).send({ error: 'title is required' });
 
     const type = (body.type as string | undefined) ?? 'note';
+    // Thread roots are minted by the threads service, which owns their lifecycle.
+    if (type === 'thread') {
+      return reply.status(400).send({
+        error: 'The "thread" type is reserved. Threads are proposed with thread_propose.',
+        code: 'THREAD_TYPE_RESERVED',
+      });
+    }
     const content = (body.content as string | undefined) ?? null;
     const parentId = (body.parent_id as string | undefined) ?? null;
     const requestedScope = (body.scope as string | undefined) ?? null;
@@ -5855,6 +5877,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           code: 'SCOPE_CONFLICT',
         });
       }
+      if (await refuseIfThreadClosed(parentId, reply)) return;
       scopeId = parentScopeId;
     }
 
@@ -6119,6 +6142,21 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       });
     }
 
+    // `thread` is reserved in both directions: no entry becomes a thread root,
+    // and a root cannot be retyped into an ordinary note.
+    if (
+      body.type !== undefined &&
+      (body.type === 'thread' || (existing.rows[0].type === 'thread' && body.type !== 'thread'))
+    ) {
+      return reply.status(400).send({
+        error: 'The "thread" type is reserved and cannot be set or removed through memory updates.',
+        code: 'THREAD_TYPE_RESERVED',
+      });
+    }
+
+    // A closed thread is a record; its root and notes are no longer editable.
+    if (await refuseIfThreadClosed(id, reply)) return;
+
     // Root index is read-only from dashboard sessions — only the agent (gateway token) may update it
     if (existing.rows[0].type === 'index' && getSession(request)) {
       return reply.status(403).send({ error: 'Root index can only be updated by the agent' });
@@ -6283,6 +6321,27 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       });
     }
 
+    // Only for an entry the caller can reach, so an unreachable root still reads as 404.
+    const reachable = await client.execute({
+      sql: `SELECT id FROM memory_entries WHERE id = ? AND scope_id IN (${scopeIn}) AND is_deleted = false`,
+      args: [id, ...memCtx.scopeIds],
+    });
+    if (reachable.rows.length > 0) {
+      const owning = await threadForEntry(id);
+      if (owning?.isRoot) {
+        return reply.status(400).send({
+          error: "A thread's root entry cannot be deleted. Close the thread instead.",
+          code: 'THREAD_ROOT_PROTECTED',
+        });
+      }
+      if (owning?.status === 'closed') {
+        return reply.status(409).send({
+          error: 'This entry belongs to a closed thread and can no longer be changed.',
+          code: 'THREAD_CLOSED',
+        });
+      }
+    }
+
     const deleted = await client.execute({
       sql: `UPDATE memory_entries SET is_deleted = true, updated_at = ?
             WHERE id = ? AND scope_id IN (${scopeIn}) AND is_deleted = false`,
@@ -6406,6 +6465,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       args: [id, ...memCtx.scopeIds],
     });
     if (ownerCheck.rows.length === 0) return reply.status(404).send({ error: 'Entry not found' });
+    if (await refuseIfThreadClosed(id, reply)) return;
 
     // A relation points at another entry by id, and that entry must live in the
     // same scope. This is the one cross-scope rule with no database constraint
@@ -6453,12 +6513,13 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     // Verify reachability via joined query
     const scopeIn = memCtx.scopeIds.map(() => '?').join(', ');
     const check = await client.execute({
-      sql: `SELECT ma.id FROM memory_attributes ma
+      sql: `SELECT ma.id, ma.entry_id FROM memory_attributes ma
             JOIN memory_entries e ON e.id = ma.entry_id
             WHERE ma.id = ? AND e.scope_id IN (${scopeIn})`,
       args: [attrId, ...memCtx.scopeIds],
     });
     if (check.rows.length === 0) return reply.status(404).send({ error: 'Attribute not found' });
+    if (await refuseIfThreadClosed(check.rows[0].entry_id as string, reply)) return;
 
     await client.execute({
       sql: `UPDATE memory_attributes SET is_deleted = true WHERE id = ?`,
@@ -6491,6 +6552,24 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const { id } = request.params;
     const body = request.body as { parent_id?: string | null };
     const newParentId = body.parent_id ?? null;
+
+    // An unreachable entry is a 404 before any thread fact is revealed; the new parent's 404 stays with setEntryParent.
+    const scopeIn = memCtx.scopeIds.map(() => '?').join(', ');
+    const reachable = async (entryId: string) =>
+      (await client.execute({
+        sql: `SELECT id, scope_id FROM memory_entries WHERE id = ? AND scope_id IN (${scopeIn}) AND is_deleted = false`,
+        args: [entryId, ...memCtx.scopeIds],
+      })).rows.length > 0;
+    if (!(await reachable(id))) return reply.status(404).send({ error: 'Entry not found' });
+    const owning = await threadForEntry(id);
+    if (owning?.isRoot) {
+      return reply.status(400).send({
+        error: "A thread's root entry cannot be re-parented.",
+        code: 'THREAD_ROOT_PROTECTED',
+      });
+    }
+    if (await refuseIfThreadClosed(id, reply)) return;
+    if (newParentId && (await reachable(newParentId)) && (await refuseIfThreadClosed(newParentId, reply))) return;
 
     const result = await setEntryParent(id, memCtx.scopeIds, newParentId);
     if ('error' in result) {
@@ -6638,6 +6717,22 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   });
 
   /** Scope CRUD beyond creation is the user's, not an agent's. */
+  /**
+   * Refuse to delete or archive a scope holding active or paused threads.
+   * Closed threads go with a deleted scope by FK cascade; live ones would be
+   * destroyed silently, and reassign_to does not carry them across. An archived
+   * scope leaves the dashboard while its live threads keep firing reminders
+   * that link nowhere.
+   */
+  async function refuseIfScopeHasThreads(scopeId: string, reply: any): Promise<boolean> {
+    if (!(await scopeHasOpenThreads(scopeId))) return false;
+    reply.status(409).send({
+      error: 'This scope has active or paused threads. Close them first.',
+      code: 'SCOPE_HAS_THREADS',
+    });
+    return true;
+  }
+
   async function requireScopeOwner(memCtx: MemoryContext, scopeId: string, reply: any) {
     if (!memCtx.isSession) {
       reply.status(403).send({ error: 'Only the account owner can manage scopes' });
@@ -6668,6 +6763,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (body.archived !== undefined && scope.is_system) {
       return reply.status(409).send({ error: 'The default scope cannot be archived' });
     }
+    if (body.archived && (await refuseIfScopeHasThreads(request.params.id, reply))) return;
     if (body.is_default === false && scope.is_default) {
       return reply.status(409).send({
         error: 'Choose another scope as the default rather than clearing this one',
@@ -6740,6 +6836,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const query = request.query as Record<string, string>;
     const now = new Date().toISOString();
 
+    if (await refuseIfScopeHasThreads(request.params.id, reply)) return;
+
     if (query.archive === 'true') {
       await client.execute({
         sql: `UPDATE memory_scopes SET archived_at = ?, updated_at = ? WHERE id = ?`,
@@ -6800,6 +6898,13 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           args: [query.reassign_to, request.params.id],
         });
       }
+      // Only closed threads can be here (open ones were refused above). They move
+      // with their root entries; left behind, the scope delete would cascade the
+      // thread away and strand a locked `thread` entry.
+      await client.execute({
+        sql: `UPDATE threads SET scope_id = ?, updated_at = ? WHERE scope_id = ?`,
+        args: [query.reassign_to, now, request.params.id],
+      });
       // Re-point grants. Old rows go first: an agent may hold one default, and
       // the partial unique index enforces it, so the old default row must be
       // gone before the same flag is written on the target. An agent already
@@ -6865,6 +6970,20 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.status(400).send({ error: "A scope's index entry cannot be moved" });
     }
 
+    const owning = await threadForEntry(id);
+    if (owning?.isRoot) {
+      return reply.status(400).send({
+        error: "A thread's root entry cannot be moved to another scope.",
+        code: 'THREAD_ROOT_PROTECTED',
+      });
+    }
+    if (owning?.status === 'closed') {
+      return reply.status(409).send({
+        error: 'This entry belongs to a closed thread and can no longer be changed.',
+        code: 'THREAD_CLOSED',
+      });
+    }
+
     const oldScopeId = entry.rows[0].scope_id as string;
     const now = new Date().toISOString();
 
@@ -6913,6 +7032,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     return reply.send({ data: { moved: true, scope: targetScopeId } });
   });
+
+  registerThreadRoutes(app, { resolveMemoryScopeContext, getSession });
 
   // -------------------------------------------------------------------------
   // Per-agent scope grants
