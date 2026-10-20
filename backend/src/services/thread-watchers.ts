@@ -154,6 +154,10 @@ export function describeWatcher(w: WatcherInput): string {
 }
 
 const GMAIL_MAX_RESULTS = 50;
+// Gmail can index a message after the sweep that should have seen it, so each
+// gmail sweep reaches back this far past the last one. The unique
+// (thread_id, source_ref) index makes the overlap free.
+const GMAIL_LAG_MARGIN_MS = 15 * 60 * 1000;
 const MAX_PAGES = 5;
 
 interface SweepWatcher {
@@ -266,7 +270,10 @@ export async function runWatcherSweep(
 
       checked++;
       const isGmail = w.kind.startsWith('gmail_');
-      const since = new Date(isGmail ? (w.last_checked_at ?? w.created_at) : w.created_at);
+      const created = new Date(w.created_at).getTime();
+      const since = new Date(isGmail && w.last_checked_at
+        ? Math.max(created, new Date(w.last_checked_at).getTime() - GMAIL_LAG_MARGIN_MS)
+        : created);
       const { tool, args } = readCall(w, since);
 
       // Only the project listing pages. Gmail search and the instance listing

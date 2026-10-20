@@ -316,7 +316,7 @@ describe('runWatcherSweep', () => {
     expect(res).toEqual({ checked: 1, found: 2, suspended: 0 });
   });
 
-  it('passes the account and uses last_checked_at as since for a gmail_query', async () => {
+  it('passes the account and uses last_checked_at less a 15-minute lag margin as since for a gmail_query', async () => {
     wire([watcherRow({ kind: 'gmail_query', value: 'invoice', account: 'me@y.com', last_checked_at: '2026-10-19T11:00:00.000Z' })]);
     grantAccess();
     vi.mocked(runAgentReadTool).mockResolvedValue({ ok: true, data: { results: [] } });
@@ -324,10 +324,21 @@ describe('runWatcherSweep', () => {
     await runWatcherSweep(NOW);
 
     expect(runAgentReadTool).toHaveBeenCalledWith('a1', 'gmail_search', {
-      query: `(invoice) after:${Math.floor(new Date('2026-10-19T11:00:00.000Z').getTime() / 1000)}`,
+      query: `(invoice) after:${Math.floor(new Date('2026-10-19T10:45:00.000Z').getTime() / 1000)}`,
       maxResults: 50,
       account: 'me@y.com',
     }, { watcherId: 'w1', threadId: 't1' });
+  });
+
+  it('never reaches back before created_at with the lag margin', async () => {
+    wire([watcherRow({ last_checked_at: '2026-10-19T10:05:00.000Z' })]);
+    grantAccess();
+    vi.mocked(runAgentReadTool).mockResolvedValue({ ok: true, data: { results: [] } });
+
+    await runWatcherSweep(NOW);
+
+    const since = Math.floor(new Date(CREATED).getTime() / 1000);
+    expect(vi.mocked(runAgentReadTool).mock.calls[0][2]).toMatchObject({ query: `from:"bob@x.com" after:${since}` });
   });
 
   it('gmail_thread keeps only messages in the watched thread', async () => {
