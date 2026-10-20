@@ -111,6 +111,30 @@ const entryRow = (over: Record<string, unknown> = {}) =>
 /** Entry e-1 is the root of a thread with the given status. */
 const rootOf = (status: string) => [/FROM threads WHERE root_entry_id = \?/, rows([{ id: 'th-1', status }])] as [RegExp, unknown];
 
+
+/**
+ * Routing for a graph where `closedIds` sit under the closed-thread root e-root
+ * and `e-root` itself is that root. Every id in `reachable` passes the scope check.
+ */
+function closedGraph(closedIds: string[], extra: Array<[RegExp, unknown]> = []) {
+  mockExecute.mockImplementation((q: any) => {
+    const args: unknown[] = q.args ?? [];
+    for (const [pattern, result] of extra) {
+      if (pattern.test(q.sql)) return Promise.resolve(result);
+    }
+    if (/FROM threads WHERE root_entry_id = \?/.test(q.sql)) {
+      return Promise.resolve(args[0] === 'e-root' ? rows([{ id: 'th-1', status: 'closed' }]) : empty);
+    }
+    if (/FROM memory_branches WHERE entry_id = \?/.test(q.sql)) {
+      return Promise.resolve(closedIds.includes(args[0] as string) ? rows([{ parent_entry_id: 'e-root' }]) : empty);
+    }
+    return Promise.resolve(empty);
+  });
+}
+
+const reachableEntry = (id: string) =>
+  [/FROM memory_entries\s+WHERE id = \? AND scope_id IN/, rows([{ id, scope_id: 'scope-1', type: 'note', title: 't', content: 'c', version: 1 }])] as [RegExp, unknown];
+
 async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   await app.register(cookie);
@@ -228,6 +252,30 @@ describe('memory routes — thread guards', () => {
       expect(res.json().code).toBe('SCOPE_HAS_THREADS');
     });
 
+    it('with an open thread and reassign_to → still 409 SCOPE_HAS_THREADS', async () => {
+      routeDb([scopeRow, [/FROM threads WHERE scope_id = \?/, rows([{ '?column?': 1 }])]]);
+      const res = await app.inject({ method: 'DELETE', url: '/api/memory/scopes/scope-2?reassign_to=scope-1' });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().code).toBe('SCOPE_HAS_THREADS');
+    });
+
+    it('with closed threads and reassign_to → threads move with their entries before the scope goes', async () => {
+      routeDb([
+        scopeRow,
+        [/FROM memory_scopes WHERE id = \? AND user_id = \?/, rows([{ id: 'scope-2', slug: 'p', name: 'P', is_system: false }])],
+        [/COUNT\(\*\) AS count/, rows([{ count: 3 }])],
+      ]);
+      const res = await app.inject({ method: 'DELETE', url: '/api/memory/scopes/scope-2?reassign_to=scope-1' });
+      expect(res.statusCode).toBe(200);
+      const calls = mockExecute.mock.calls.map((c) => c[0] as { sql: string; args: unknown[] });
+      const moveIdx = calls.findIndex((c) => /UPDATE threads SET scope_id = \?/.test(c.sql));
+      const deleteIdx = calls.findIndex((c) => /DELETE FROM memory_scopes/.test(c.sql));
+      expect(moveIdx).toBeGreaterThan(-1);
+      expect(moveIdx).toBeLessThan(deleteIdx);
+      expect(calls[moveIdx].args).toContain('scope-1');
+      expect(calls[moveIdx].args).toContain('scope-2');
+    });
+
     it('allows deleting a scope whose threads are all closed', async () => {
       routeDb([scopeRow, [/FROM threads WHERE scope_id = \?/, empty], [/COUNT\(\*\) AS count/, rows([{ count: 0 }])]]);
       const res = await app.inject({ method: 'DELETE', url: '/api/memory/scopes/scope-2' });
@@ -236,6 +284,74 @@ describe('memory routes — thread guards', () => {
       expect(sqls.find((q) => /FROM threads WHERE scope_id/.test(q))).toContain("status <> 'closed'");
       expect(sqls.some((q) => /DELETE FROM memory_scopes/.test(q))).toBe(true);
     });
+  });
+
+
+  describe('closed threads are read-only through every memory write route', () => {
+    it('DELETE of a child of a closed thread → 409 THREAD_CLOSED', async () => {
+      closedGraph(['e-1'], [reachableEntry('e-1')]);
+      const res = await app.inject({ method: 'DELETE', url: '/api/memory/entries/e-1' });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().code).toBe('THREAD_CLOSED');
+    });
+
+    it('POST with a parent_id inside a closed thread → 409 THREAD_CLOSED', async () => {
+      closedGraph(['e-1'], [[/SELECT scope_id FROM memory_entries WHERE id = \?/, rows([{ scope_id: 'scope-1' }])]]);
+      const res = await app.inject({
+        method: 'POST', url: '/api/memory/entries', payload: { title: 'Note', parent_id: 'e-root' },
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().code).toBe('THREAD_CLOSED');
+    });
+
+    it('PUT /parent moving an entry out of a closed thread → 409 THREAD_CLOSED', async () => {
+      closedGraph(['e-1'], [reachableEntry('e-1')]);
+      const res = await app.inject({ method: 'PUT', url: '/api/memory/entries/e-1/parent', payload: { parent_id: null } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().code).toBe('THREAD_CLOSED');
+    });
+
+    it('PUT /parent moving an entry into a closed thread → 409 THREAD_CLOSED', async () => {
+      closedGraph([], [reachableEntry('e-2')]);
+      const res = await app.inject({ method: 'PUT', url: '/api/memory/entries/e-2/parent', payload: { parent_id: 'e-root' } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().code).toBe('THREAD_CLOSED');
+    });
+
+    it('PUT /parent on a thread root of any status → 400 THREAD_ROOT_PROTECTED', async () => {
+      routeDb([reachableEntry('e-1'), rootOf('active')]);
+      const res = await app.inject({ method: 'PUT', url: '/api/memory/entries/e-1/parent', payload: { parent_id: null } });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().code).toBe('THREAD_ROOT_PROTECTED');
+    });
+
+    it('PUT /parent on an unreachable thread root still reads as 404', async () => {
+      routeDb([rootOf('active')]);
+      const res = await app.inject({ method: 'PUT', url: '/api/memory/entries/e-1/parent', payload: { parent_id: null } });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('POST attributes on an entry of a closed thread → 409 THREAD_CLOSED', async () => {
+      closedGraph(['e-1'], [reachableEntry('e-1')]);
+      const res = await app.inject({
+        method: 'POST', url: '/api/memory/entries/e-1/attributes', payload: { type: 'label', name: 'a', value: 'b' },
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().code).toBe('THREAD_CLOSED');
+    });
+
+    it('DELETE attribute on an entry of a closed thread → 409 THREAD_CLOSED', async () => {
+      closedGraph(['e-1'], [[/FROM memory_attributes ma/, rows([{ id: 'at-1', entry_id: 'e-1' }])]]);
+      const res = await app.inject({ method: 'DELETE', url: '/api/memory/attributes/at-1' });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().code).toBe('THREAD_CLOSED');
+    });
+  });
+
+  it('PUT /scope on an unreachable thread root still reads as 404', async () => {
+    routeDb([rootOf('active')]);
+    const res = await app.inject({ method: 'PUT', url: '/api/memory/entries/e-1/scope', payload: { scope: 'work' } });
+    expect(res.statusCode).toBe(404);
   });
 
   it('GET /api/memory/dream omits thread entries', async () => {
