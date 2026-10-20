@@ -901,6 +901,121 @@ export function formatSkillApprovalMessage(approval: ApprovalRequest): Formatted
   };
 }
 
+/**
+ * Thread approvals.
+ *
+ * Starting, closing and adding a watcher to a thread are all locked to owner
+ * approval. A watcher is a standing instruction to scan the owner's mail or
+ * meetings every 15 minutes, and its value is text the agent chose — so each
+ * agent-supplied string is quoted, flattened and cut here, where it cannot read
+ * as part of the sentence around it.
+ */
+export const THREAD_TOOLS = new Set(['thread_propose', 'thread_close', 'thread_add_watcher']);
+
+export interface ThreadApprovalSummary {
+  scopeName: string | null;
+  /** The owner's active threads now; the soft cap is 5. */
+  activeCount: number;
+  threadTitle: string | null;
+  watcherDescriptions: string[];
+  /** thread_close only: each decision with its item and successor titles resolved. */
+  decisions: Array<{ itemTitle: string | null; action: 'cancel' | 'carry'; successorTitle: string | null }>;
+}
+
+const THREAD_SOFT_CAP = 5;
+const AGENT_TEXT_LIMIT = 200;
+
+/** Agent-supplied text on one line, cut at 200 characters, in curly quotes. Not HTML-escaped. */
+export function quoteAgentText(value: unknown): string {
+  const flat = String(value ?? '').replace(/\s+/g, ' ').trim();
+  const cut = flat.length > AGENT_TEXT_LIMIT ? `${flat.slice(0, AGENT_TEXT_LIMIT)}…` : flat;
+  return `“${cut}”`;
+}
+
+/** A watcher in plain words with every agent-supplied part quoted. Not HTML-escaped. */
+export function describeWatcherForApproval(w: { kind?: unknown; value?: unknown; account?: unknown }): string {
+  const inbox = w.account ? `account ${quoteAgentText(w.account)}` : 'the default Gmail account';
+  const value = quoteAgentText(w.value);
+  switch (w.kind) {
+    case 'gmail_sender':
+      return `scan ${inbox} for mail from ${value} every 15 minutes`;
+    case 'gmail_query':
+      return `scan ${inbox} for mail matching ${value} every 15 minutes`;
+    case 'gmail_thread':
+      return `scan ${inbox} for new messages in Gmail thread ${value} every 15 minutes`;
+    case 'hx_project':
+      return `scan Hermeneutix project ${value} for new sessions every 15 minutes`;
+    case 'hx_meeting':
+      return `scan Hermeneutix meeting ${value} for new sessions every 15 minutes`;
+    default:
+      return `watch ${quoteAgentText(w.kind)} ${value}`;
+  }
+}
+
+export function formatThreadApprovalMessage(
+  approval: ApprovalRequest,
+  summary: ThreadApprovalSummary | null
+): FormattedApproval {
+  const args = (approval.arguments ?? {}) as Record<string, unknown>;
+  const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
+  const e = (v: string) => escapeHtml(v);
+
+  let body: Array<string | null>;
+  if (approval.tool === 'thread_propose') {
+    const watchers = Array.isArray(args.watchers) ? (args.watchers as unknown[]) : [];
+    const when = str(args.target_date) ? formatEventWhen({ start: str(args.target_date) as string, allDay: true }) : null;
+    const active = summary?.activeCount;
+    body = [
+      '🧵 <b>Start a thread</b>',
+      `<b>Title:</b> ${e(str(args.title) ?? '(untitled)')}`,
+      str(args.goal) ? `<b>Goal:</b> ${e(str(args.goal) as string)}` : null,
+      `<b>Scope:</b> ${summary?.scopeName ? e(summary.scopeName) : '<i>unknown</i>'}`,
+      str(args.target_date) ? `<b>Target date:</b> ${e(when ?? (str(args.target_date) as string))}` : null,
+      ...watchers.map((w) =>
+        `👁 ${e(describeWatcherForApproval((w && typeof w === 'object' ? w : {}) as Record<string, unknown>))}`
+      ),
+      active !== undefined ? `\nActive threads: ${active} of ${THREAD_SOFT_CAP}` : null,
+      active !== undefined && active >= THREAD_SOFT_CAP ? `⚠️ Over your limit of ${THREAD_SOFT_CAP}` : null,
+    ];
+  } else if (approval.tool === 'thread_close') {
+    const retro = str(args.retrospective);
+    const retroPreview = retro
+      ? retro.length > BODY_PREVIEW_LIMIT
+        ? `${e(retro.slice(0, BODY_PREVIEW_LIMIT))}\n…`
+        : e(retro)
+      : null;
+    body = [
+      '🏁 <b>Close a thread</b>',
+      `<b>Thread:</b> ${summary?.threadTitle ? e(summary.threadTitle) : `<code>${e(str(args.thread_id) ?? '?')}</code>`}`,
+      retroPreview ? `\n<b>Retrospective:</b>\n<blockquote>${retroPreview}</blockquote>` : null,
+      ...(summary?.decisions ?? []).map((d) =>
+        d.action === 'carry'
+          ? `carry → ${e(d.successorTitle ?? '(unknown thread)')}: ${e(d.itemTitle ?? '(unknown item)')}`
+          : `cancel: ${e(d.itemTitle ?? '(unknown item)')}`
+      ),
+    ];
+  } else {
+    body = [
+      '👁 <b>Watch for thread material</b>',
+      `<b>Thread:</b> ${summary?.threadTitle ? e(summary.threadTitle) : `<code>${e(str(args.thread_id) ?? '?')}</code>`}`,
+      e(describeWatcherForApproval(args)),
+    ];
+  }
+
+  const lines = [
+    ...body,
+    `\n<b>Requested by:</b> <code>${e(approval.agentId)}</code>`,
+    ``,
+    expiresLine(approval),
+  ].filter((l) => l !== null);
+
+  return {
+    text: lines.join('\n'),
+    keyboard: approveDenyKeyboard(approval.id),
+    parseMode: 'HTML',
+  };
+}
+
 /** A field being written, or null when the caller left it alone. */
 function writtenField(args: Record<string, unknown>, key: string, label: string): string | null {
   const value = args[key];

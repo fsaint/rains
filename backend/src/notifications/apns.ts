@@ -48,6 +48,7 @@ interface APNsPayload {
   approvalId?: string;
   agentId?: string;
   tool?: string;
+  [key: string]: unknown;
 }
 
 export class APNsService {
@@ -174,11 +175,41 @@ export class APNsService {
     });
   }
 
+  /** The user who owns the agent an approval belongs to, or null. */
+  private async getAgentOwner(agentId: string): Promise<string | null> {
+    const result = await client.execute({
+      sql: `SELECT user_id FROM agents WHERE id = ?`,
+      args: [agentId],
+    });
+    return (result.rows[0]?.user_id as string | null | undefined) ?? null;
+  }
+
   /**
-   * Send approval request notification to all registered devices
+   * Send an arbitrary alert to one user's iOS devices
+   */
+  async notifyUser(
+    userId: string,
+    alert: { title: string; body: string },
+    data: Record<string, string> = {}
+  ): Promise<void> {
+    const devices = await this.getIOSDevices(userId);
+    if (devices.length === 0) return;
+
+    const payload: APNsPayload = {
+      aps: { alert, sound: 'default' },
+      ...data,
+    };
+    await Promise.all(devices.map((device) => this.sendNotification(device.token, payload)));
+  }
+
+  /**
+   * Send approval request notification to the agent owner's devices
    */
   async notifyApprovalRequest(approval: ApprovalRequest): Promise<void> {
-    const devices = await this.getIOSDevices();
+    const ownerId = await this.getAgentOwner(approval.agentId);
+    if (!ownerId) return;
+
+    const devices = await this.getIOSDevices(ownerId);
 
     if (devices.length === 0) {
       console.log('No iOS devices registered for push notifications');
@@ -192,7 +223,7 @@ export class APNsService {
           subtitle: approval.tool,
           body: approval.context || `Agent ${approval.agentId} needs your approval`,
         },
-        badge: await this.getPendingCount(),
+        badge: await this.getPendingCount(ownerId),
         sound: 'default',
         category: 'APPROVAL_REQUEST',
         'mutable-content': 1,
@@ -214,7 +245,10 @@ export class APNsService {
    * Send approval resolved notification
    */
   async notifyApprovalResolved(approval: ApprovalRequest): Promise<void> {
-    const devices = await this.getIOSDevices();
+    const ownerId = await this.getAgentOwner(approval.agentId);
+    if (!ownerId) return;
+
+    const devices = await this.getIOSDevices(ownerId);
 
     if (devices.length === 0) return;
 
@@ -224,7 +258,7 @@ export class APNsService {
           title: `Request ${approval.status === 'approved' ? 'Approved' : 'Rejected'}`,
           body: `${approval.tool} - ${approval.status}`,
         },
-        badge: await this.getPendingCount(),
+        badge: await this.getPendingCount(ownerId),
         sound: 'default',
       },
       approvalId: approval.id,
@@ -236,12 +270,12 @@ export class APNsService {
   }
 
   /**
-   * Get all registered iOS devices
+   * Get a user's registered iOS devices. Rows with no user_id match no one.
    */
-  private async getIOSDevices(): Promise<DeviceToken[]> {
+  private async getIOSDevices(userId: string): Promise<DeviceToken[]> {
     const result = await client.execute({
-      sql: `SELECT * FROM device_tokens WHERE platform = 'ios'`,
-      args: [],
+      sql: `SELECT * FROM device_tokens WHERE platform = 'ios' AND user_id = ?`,
+      args: [userId],
     });
 
     return result.rows.map((row) => ({
@@ -256,12 +290,14 @@ export class APNsService {
   }
 
   /**
-   * Get count of pending approvals for badge
+   * Get count of a user's pending approvals for badge
    */
-  private async getPendingCount(): Promise<number> {
+  private async getPendingCount(userId: string): Promise<number> {
     const result = await client.execute({
-      sql: `SELECT COUNT(*) as count FROM approvals WHERE status = 'pending'`,
-      args: [],
+      sql: `SELECT COUNT(*) as count FROM approvals
+            JOIN agents ON agents.id = approvals.agent_id
+            WHERE approvals.status = 'pending' AND agents.user_id = ?`,
+      args: [userId],
     });
 
     return (result.rows[0]?.count as number) || 0;

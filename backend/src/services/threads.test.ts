@@ -16,6 +16,23 @@ vi.mock('../db/index.js', () => ({
   },
 }));
 
+vi.mock('./memory-scopes.js', () => ({
+  resolveMemoryContext: vi.fn(async () => ({
+    userId: 'u1', agentId: 'a1', isSession: false, defaultScopeId: 's-def',
+    scopes: [
+      { id: 's-def', slug: 'personal', name: 'Personal', isDefault: true },
+      { id: 's-work', slug: 'work', name: 'Work', isDefault: false },
+    ],
+    scopeIds: ['s-def', 's-work'],
+  })),
+  pickScope: vi.fn((ctx: { scopes: Array<{ id: string; slug: string }>; defaultScopeId: string }, req?: string) => {
+    if (req === undefined) return { scopeIds: [ctx.defaultScopeId] };
+    const m = ctx.scopes.find((x) => x.slug === req || x.id === req);
+    return m ? { scopeIds: [m.id] } : { status: 403, body: { error: 'no', code: 'SCOPE_NOT_GRANTED' } };
+  }),
+  isRejection: (r: object) => 'status' in r,
+}));
+
 vi.mock('nanoid', () => ({
   nanoid: vi.fn(() => 'test-id'),
 }));
@@ -45,6 +62,7 @@ import {
   updateSections,
   acceptCandidate,
   closeThread,
+  getThreadApprovalSummary,
   type Thread,
 } from './threads.js';
 
@@ -316,5 +334,47 @@ describe('closeThread', () => {
     const q = execCalls().find((c) => c.args[0] === 'bad')!;
     expect(q.sql).toContain("status = 'active'");
     expect(q.args).toContain('u1');
+  });
+});
+
+describe('getThreadApprovalSummary', () => {
+  const approval = (tool: string, args: Record<string, unknown>) => ({ id: 'ap1', agentId: 'a1', tool, arguments: args }) as never;
+  beforeEach(() => {
+    vi.mocked(client.execute).mockImplementation((async ({ sql: q, args }: { sql: string; args: unknown[] }) => {
+      const rows = (r: Record<string, unknown>[]) => ({ rows: r, rowsAffected: 0, lastInsertRowid: 0n, columns: [] });
+      if (/FROM agents/.test(q)) return rows([{ user_id: 'u1' }]);
+      if (/COUNT\(\*\)/.test(q)) return rows([{ n: 5 }]);
+      if (/FROM threads WHERE id/.test(q)) return rows(args[0] === 't1' ? [{ title: 'Launch' }] : args[0] === 't2' ? [{ title: 'Launch 2' }] : []);
+      if (/FROM thread_items WHERE id/.test(q)) return rows(args[0] === 'i1' ? [{ title: 'Book venue' }] : []);
+      return rows([]);
+    }) as never);
+  });
+
+  it('resolves the requested scope by slug, falling back to the default scope', async () => {
+    const w = await getThreadApprovalSummary(approval('thread_propose', { title: 'x', scope: 'work' }));
+    expect(w.scopeName).toBe('Work');
+    expect(w.activeCount).toBe(5);
+    const d = await getThreadApprovalSummary(approval('thread_propose', { title: 'x' }));
+    expect(d.scopeName).toBe('Personal');
+    const bad = await getThreadApprovalSummary(approval('thread_propose', { title: 'x', scope: 'nope' }));
+    expect(bad.scopeName).toBeNull();
+  });
+
+  it('resolves the thread, item and successor titles for a close', async () => {
+    const s = await getThreadApprovalSummary(approval('thread_close', {
+      thread_id: 't1', retrospective: 'r',
+      decisions: [{ item_id: 'i1', action: 'carry', successor_thread_id: 't2' }, { item_id: 'gone', action: 'cancel' }],
+    }));
+    expect(s.threadTitle).toBe('Launch');
+    expect(s.decisions).toEqual([
+      { action: 'carry', itemTitle: 'Book venue', successorTitle: 'Launch 2' },
+      { action: 'cancel', itemTitle: null, successorTitle: null },
+    ]);
+  });
+
+  it('describes the watcher for add_watcher with the value quoted', async () => {
+    const s = await getThreadApprovalSummary(approval('thread_add_watcher', { thread_id: 't1', kind: 'gmail_sender', value: 'bob@x.com' }));
+    expect(s.threadTitle).toBe('Launch');
+    expect(s.watcherDescriptions[0]).toContain('“bob@x.com”');
   });
 });

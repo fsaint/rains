@@ -9,6 +9,9 @@
 
 import { nanoid } from 'nanoid';
 import { client, sql } from '../db/index.js';
+import type { ApprovalRequest } from '@reins/shared';
+import { resolveMemoryContext, pickScope, isRejection } from './memory-scopes.js';
+import { describeWatcherForApproval, type ThreadApprovalSummary } from '../notifications/approval-format.js';
 import { ensureMemoryRoot, splitSections, replaceSection, updateLinkIndex, updateTagIndex } from './memory.js';
 
 export type ThreadStatus = 'active' | 'paused' | 'closed';
@@ -708,4 +711,62 @@ export async function closeThread(thread: Thread, input: CloseInput): Promise<Th
   await updateLinkIndex(thread.rootEntryId, thread.scopeId, content);
   await updateTagIndex(thread.rootEntryId, content);
   return { ...thread, status: 'closed', closedAt: now, updatedAt: now };
+}
+
+/**
+ * What the owner needs to see to decide on a thread_propose, thread_close or
+ * thread_add_watcher, resolved from the live rows rather than the agent's
+ * arguments: the scope's name, the thread's real title, and the titles of the
+ * items and successor threads a close touches. Never throws on a bad reference
+ * — an unresolved title is null and the message says so.
+ */
+export async function getThreadApprovalSummary(approval: ApprovalRequest): Promise<ThreadApprovalSummary> {
+  const args = (approval.arguments ?? {}) as Record<string, unknown>;
+  const owner = await client.execute({ sql: `SELECT user_id FROM agents WHERE id = ? LIMIT 1`, args: [approval.agentId] });
+  const userId = (owner.rows[0]?.user_id as string | null | undefined) ?? null;
+
+  const summary: ThreadApprovalSummary = {
+    scopeName: null,
+    activeCount: userId ? await countActiveThreads(userId) : 0,
+    threadTitle: null,
+    watcherDescriptions: [],
+    decisions: [],
+  };
+
+  const asWatcher = (w: unknown) => (w && typeof w === 'object' ? w : {}) as Record<string, unknown>;
+
+  if (approval.tool === 'thread_propose') {
+    if (userId) {
+      const ctx = await resolveMemoryContext(null, async () => ({ agentId: approval.agentId, userId }));
+      if (ctx) {
+        const requested = typeof args.scope === 'string' ? args.scope : undefined;
+        const picked = pickScope(ctx, requested, 'write');
+        if (!isRejection(picked)) summary.scopeName = ctx.scopes.find((sc) => sc.id === picked.scopeIds[0])?.name ?? null;
+      }
+    }
+    if (Array.isArray(args.watchers)) summary.watcherDescriptions = args.watchers.map((w) => describeWatcherForApproval(asWatcher(w)));
+    return summary;
+  }
+
+  const titleOf = async (table: 'threads' | 'thread_items', id: unknown, extra = ''): Promise<string | null> => {
+    if (typeof id !== 'string' || id === '') return null;
+    const r = await client.execute({ sql: `SELECT title FROM ${table} WHERE id = ? ${extra} LIMIT 1`, args: [id] });
+    return (r.rows[0]?.title as string | undefined) ?? null;
+  };
+
+  summary.threadTitle = await titleOf('threads', args.thread_id);
+
+  if (approval.tool === 'thread_add_watcher') {
+    summary.watcherDescriptions = [describeWatcherForApproval(args)];
+  } else if (approval.tool === 'thread_close' && Array.isArray(args.decisions)) {
+    for (const raw of args.decisions) {
+      const d = asWatcher(raw);
+      summary.decisions.push({
+        action: d.action === 'carry' ? 'carry' : 'cancel',
+        itemTitle: await titleOf('thread_items', d.item_id),
+        successorTitle: await titleOf('threads', d.successor_thread_id),
+      });
+    }
+  }
+  return summary;
 }
