@@ -85,8 +85,8 @@ A `thread` entry is the root of a time-bound focus topic (design: [`docs/superpo
 |------|-----------|
 | Creation | Only `mintThread` (`backend/src/services/threads.ts`) creates one, in a single transaction (entry, branch, thread row) under the scope root. `POST /api/memory/entries` with `type: "thread"` and any type change to or from `thread` return 400 `THREAD_TYPE_RESERVED` |
 | Root protection | A thread root cannot be deleted or re-parented (`PUT /parent`) or moved to another scope — 400 `THREAD_ROOT_PROTECTED` |
-| Closed threads | Once a thread is `closed`, its root and every descendant are read-only on each memory write route: entry update and delete, child create with that `parent_id`, `PUT /parent` (as entry or new parent), and attribute add/remove — 409 `THREAD_CLOSED` |
-| Scope delete | Deleting a scope with active or paused threads returns 409 `SCOPE_HAS_THREADS`. With `reassign_to`, closed threads move to the target scope together with their entries |
+| Closed threads | Once a thread is `closed`, its root and every descendant are read-only on each memory write route: entry update and delete, child create with that `parent_id`, `PUT /parent` (as entry or new parent), `PUT /scope` (moving a descendant to another scope), and attribute add/remove — 409 `THREAD_CLOSED` |
+| Scope delete and archive | Deleting or archiving a scope with active or paused threads (`DELETE /api/memory/scopes/:id`, with or without `?archive=true`, and `PUT /api/memory/scopes/:id` with `archived: true`) returns 409 `SCOPE_HAS_THREADS`. With `reassign_to`, closed threads move to the target scope together with their entries |
 | Dream | `memory_dream` skips `thread` entries; the manifest query excludes them |
 
 ### Migration

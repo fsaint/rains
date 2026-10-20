@@ -276,6 +276,21 @@ describe('memory routes — thread guards', () => {
       expect(calls[moveIdx].args).toContain('scope-2');
     });
 
+    it('archive=true with an active or paused thread → 409 SCOPE_HAS_THREADS, nothing archived', async () => {
+      routeDb([scopeRow, [/FROM threads WHERE scope_id = \?/, rows([{ '?column?': 1 }])]]);
+      const res = await app.inject({ method: 'DELETE', url: '/api/memory/scopes/scope-2?archive=true' });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().code).toBe('SCOPE_HAS_THREADS');
+      expect(mockExecute.mock.calls.some((c) => /UPDATE memory_scopes/.test(c[0].sql))).toBe(false);
+    });
+
+    it('archive=true with only closed threads → archived', async () => {
+      routeDb([scopeRow, [/FROM threads WHERE scope_id = \?/, empty]]);
+      const res = await app.inject({ method: 'DELETE', url: '/api/memory/scopes/scope-2?archive=true' });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data).toEqual({ archived: true });
+    });
+
     it('allows deleting a scope whose threads are all closed', async () => {
       routeDb([scopeRow, [/FROM threads WHERE scope_id = \?/, empty], [/COUNT\(\*\) AS count/, rows([{ count: 0 }])]]);
       const res = await app.inject({ method: 'DELETE', url: '/api/memory/scopes/scope-2' });
@@ -287,7 +302,33 @@ describe('memory routes — thread guards', () => {
   });
 
 
+  describe('PUT /api/memory/scopes/:id archived', () => {
+    const scopeRow = [/FROM memory_scopes WHERE id = \? AND user_id = \?/, rows([{ id: 'scope-2', slug: 'p', name: 'P', is_system: false }])] as [RegExp, unknown];
+
+    it('archived: true with an active or paused thread → 409 SCOPE_HAS_THREADS, nothing written', async () => {
+      routeDb([scopeRow, [/FROM threads WHERE scope_id = \?/, rows([{ '?column?': 1 }])]]);
+      const res = await app.inject({ method: 'PUT', url: '/api/memory/scopes/scope-2', payload: { archived: true, name: 'Renamed' } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().code).toBe('SCOPE_HAS_THREADS');
+      expect(mockExecute.mock.calls.some((c) => /UPDATE memory_scopes/.test(c[0].sql))).toBe(false);
+    });
+
+    it('archived: false (unarchive) is not refused', async () => {
+      routeDb([scopeRow, [/FROM threads WHERE scope_id = \?/, rows([{ '?column?': 1 }])]]);
+      const res = await app.inject({ method: 'PUT', url: '/api/memory/scopes/scope-2', payload: { archived: false } });
+      expect(res.statusCode).toBe(200);
+    });
+  });
+
   describe('closed threads are read-only through every memory write route', () => {
+    it('PUT /scope moving a child of a closed thread to another scope → 409 THREAD_CLOSED, nothing moved', async () => {
+      closedGraph(['e-1'], [[/SELECT id, scope_id FROM memory_entries/, rows([{ id: 'e-1', scope_id: 'scope-2' }])]]);
+      const res = await app.inject({ method: 'PUT', url: '/api/memory/entries/e-1/scope', payload: { scope: 'work' } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().code).toBe('THREAD_CLOSED');
+      expect(mockExecute.mock.calls.some((c) => /^\s*(UPDATE|DELETE)/.test(c[0].sql))).toBe(false);
+    });
+
     it('DELETE of a child of a closed thread → 409 THREAD_CLOSED', async () => {
       closedGraph(['e-1'], [reachableEntry('e-1')]);
       const res = await app.inject({ method: 'DELETE', url: '/api/memory/entries/e-1' });

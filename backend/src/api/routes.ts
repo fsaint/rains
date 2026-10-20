@@ -6717,6 +6717,22 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   });
 
   /** Scope CRUD beyond creation is the user's, not an agent's. */
+  /**
+   * Refuse to delete or archive a scope holding active or paused threads.
+   * Closed threads go with a deleted scope by FK cascade; live ones would be
+   * destroyed silently, and reassign_to does not carry them across. An archived
+   * scope leaves the dashboard while its live threads keep firing reminders
+   * that link nowhere.
+   */
+  async function refuseIfScopeHasThreads(scopeId: string, reply: any): Promise<boolean> {
+    if (!(await scopeHasOpenThreads(scopeId))) return false;
+    reply.status(409).send({
+      error: 'This scope has active or paused threads. Close them first.',
+      code: 'SCOPE_HAS_THREADS',
+    });
+    return true;
+  }
+
   async function requireScopeOwner(memCtx: MemoryContext, scopeId: string, reply: any) {
     if (!memCtx.isSession) {
       reply.status(403).send({ error: 'Only the account owner can manage scopes' });
@@ -6747,6 +6763,7 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (body.archived !== undefined && scope.is_system) {
       return reply.status(409).send({ error: 'The default scope cannot be archived' });
     }
+    if (body.archived && (await refuseIfScopeHasThreads(request.params.id, reply))) return;
     if (body.is_default === false && scope.is_default) {
       return reply.status(409).send({
         error: 'Choose another scope as the default rather than clearing this one',
@@ -6819,21 +6836,14 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const query = request.query as Record<string, string>;
     const now = new Date().toISOString();
 
+    if (await refuseIfScopeHasThreads(request.params.id, reply)) return;
+
     if (query.archive === 'true') {
       await client.execute({
         sql: `UPDATE memory_scopes SET archived_at = ?, updated_at = ? WHERE id = ?`,
         args: [now, now, request.params.id],
       });
       return reply.send({ data: { archived: true } });
-    }
-
-    // Closed threads go with the scope by FK cascade; live ones would be destroyed
-    // silently, and reassign_to does not carry threads across.
-    if (await scopeHasOpenThreads(request.params.id)) {
-      return reply.status(409).send({
-        error: 'This scope has active or paused threads. Close them first.',
-        code: 'SCOPE_HAS_THREADS',
-      });
     }
 
     // Agents granted this scope. One whose ONLY grant is this scope would be
@@ -6960,10 +6970,17 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.status(400).send({ error: "A scope's index entry cannot be moved" });
     }
 
-    if ((await threadForEntry(id))?.isRoot) {
+    const owning = await threadForEntry(id);
+    if (owning?.isRoot) {
       return reply.status(400).send({
         error: "A thread's root entry cannot be moved to another scope.",
         code: 'THREAD_ROOT_PROTECTED',
+      });
+    }
+    if (owning?.status === 'closed') {
+      return reply.status(409).send({
+        error: 'This entry belongs to a closed thread and can no longer be changed.',
+        code: 'THREAD_CLOSED',
       });
     }
 
