@@ -292,10 +292,24 @@ describe('threads handlers', () => {
     });
 
     it('thread_add_watcher handler refuses', async () => {
-      const result = await handleAddWatcher({ thread_id: 't1', kind: 'gmail_label', value: 'x' }, mockContext);
+      const result = await handleAddWatcher({ thread_id: 't1', kind: 'gmail_sender', value: 'x' }, mockContext);
       expect(result.success).toBe(false);
       expect(result.error).toBe(`thread_add_watcher ${REFUSAL_SUFFIX}`);
       expect(mockFetch).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('watcher tool schemas', () => {
+  it('constrain kind to the five watcher kinds on thread_add_watcher and thread_propose', async () => {
+    const { threadAddWatcherTool, threadProposeTool } = await import('./tools.js');
+    const kinds = ['gmail_thread', 'gmail_query', 'gmail_sender', 'hx_project', 'hx_meeting'];
+    const addProps = threadAddWatcherTool.inputSchema.properties as Record<string, { enum?: string[] }>;
+    expect(addProps.kind.enum).toEqual(kinds);
+    const proposeProps = threadProposeTool.inputSchema.properties as Record<
+      string,
+      { items?: { properties: Record<string, { enum?: string[] }> } }
+    >;
+    expect(proposeProps.watchers.items?.properties.kind.enum).toEqual(kinds);
   });
 });

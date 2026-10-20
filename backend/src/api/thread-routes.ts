@@ -27,6 +27,7 @@ import {
   type Thread,
   type ThreadStatus,
 } from '../services/threads.js';
+import { describeWatcher, type WatcherInput } from '../services/thread-watchers.js';
 
 export interface ThreadRouteDeps {
   resolveMemoryScopeContext(req: any): Promise<MemoryContext | null>;
@@ -273,6 +274,7 @@ export function registerThreadRoutes(app: FastifyInstance, deps: ThreadRouteDeps
   app.get<{ Params: { id: string } }>('/api/threads/:id/watchers', async (request, reply) => {
     const loaded = await loadThread(request, reply);
     if (!loaded) return;
-    return reply.send({ data: await listWatchers(loaded.thread.id) });
+    const rows = await listWatchers(loaded.thread.id);
+    return reply.send({ data: rows.map((row) => ({ ...row, description: describeWatcher(row as WatcherInput) })) });
   });
 }

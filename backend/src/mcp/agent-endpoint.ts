@@ -35,6 +35,7 @@ import {
 } from '@reins/shared';
 
 import { checkAccess } from '../services/billing.js';
+import { checkWatcherAccess, type WatcherInput } from '../services/thread-watchers.js';
 import { buildAttachmentLink } from '../services/attachment-links.js';
 import { getAgentLimits, renderAgentLimits, describeToolLimit, type AgentLimits } from '../services/agent-limits.js';
 import {
@@ -1050,6 +1051,191 @@ async function executeTool(
 }
 
 // ============================================================================
+// Tool policy resolution
+// ============================================================================
+
+type ServiceInstanceRow = typeof agentServiceInstances.$inferSelect;
+
+interface ToolPolicy {
+  allowed: boolean;
+  requiresApproval: boolean;
+  hasInstances: boolean;
+  serviceInstances: ServiceInstanceRow[];
+  /** The instance the call is policy-checked against; undefined on the legacy path. */
+  policyInstance: ServiceInstanceRow | undefined;
+}
+
+interface ToolPolicyError {
+  error: { code: number; message: string; data: Record<string, unknown> };
+}
+
+/**
+ * Load the agent's instances of `serviceType` and resolve the effective
+ * permission of `toolName` for this call. The one definition of "what may this
+ * agent do with this tool": tools/call and runAgentReadTool both answer it here,
+ * so a watcher sweep can never read more than the agent could itself.
+ */
+export async function resolveToolPolicy(
+  agentId: string,
+  serviceType: string,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<ToolPolicy | ToolPolicyError> {
+  // Find instances for this agent+service
+  const serviceInstances = await db
+    .select()
+    .from(agentServiceInstances)
+    .where(and(
+      eq(agentServiceInstances.agentId, agentId),
+      eq(agentServiceInstances.serviceType, serviceType),
+      eq(agentServiceInstances.enabled, true)
+    ));
+
+  // Check if service is enabled (either via instances or legacy).
+  //
+  // Same rule as isServiceEnabledForAgent() in services/permissions.ts, which is
+  // what the gateway-token HTTP routes use. Kept inline here because the rows are
+  // needed below for credential resolution and the helper would re-query them —
+  // change one, change the other, or a tool blocked over MCP becomes reachable
+  // over HTTP.
+  const hasInstances = serviceInstances.length > 0;
+  if (!hasInstances) {
+    const { enabled } = await getEffectivePermissions(agentId, serviceType);
+    if (!enabled) {
+      return {
+        error: {
+          code: MCP_ERROR_CODES.SERVICE_NOT_ENABLED,
+          message: `Service not enabled for this agent: ${serviceType}`,
+          data: { service: serviceType },
+        },
+      };
+    }
+  }
+
+  // Check tool permission (instance-based or legacy)
+  let allowed: boolean;
+  let requiresApproval: boolean;
+  let policyInstance: (typeof serviceInstances)[number] | undefined;
+
+  if (hasInstances) {
+    // Resolve which instance to use based on `account` arg — same rule as
+    // executeTool: the named account, else the default, else the first.
+    const requestedAccount = args.account as string | undefined;
+    let targetInstance = serviceInstances.find((i) => i.isDefault) ?? serviceInstances[0];
+
+    if (requestedAccount) {
+      let found = false;
+      for (const inst of serviceInstances) {
+        if (inst.credentialId) {
+          const [cred] = await db.select().from(credentials).where(eq(credentials.id, inst.credentialId));
+          if (cred?.accountEmail === requestedAccount) {
+            targetInstance = inst;
+            found = true;
+            break;
+          }
+        }
+      }
+      // An unmatched account used to silently fall through to [0] and be
+      // policy-checked against an instance the caller never named. Refuse it
+      // here with the same error executeTool would produce.
+      if (!found) {
+        return {
+          error: {
+            code: MCP_ERROR_CODES.MISSING_CREDENTIALS,
+            message: `No credential found for account: ${requestedAccount}. Use ${serviceType}_list_accounts to see available accounts.`,
+            data: { service: serviceType, requestedAccount },
+          },
+        };
+      }
+    }
+
+    policyInstance = targetInstance;
+    const { tools: instanceToolPerms } = await getEffectiveInstancePermissions(targetInstance.id);
+    const toolPerm = instanceToolPerms[toolName] ?? 'block';
+    allowed = toolPerm !== 'block';
+    requiresApproval = toolPerm === 'require_approval';
+  } else {
+    const result = await canAccessTool(agentId, serviceType, toolName);
+    allowed = result.allowed;
+    requiresApproval = result.requiresApproval;
+  }
+
+  return { allowed, requiresApproval, hasInstances, serviceInstances, policyInstance };
+}
+
+export type AgentReadResult =
+  | { ok: true; data: unknown }
+  | { ok: false; reason: 'not_enabled' | 'blocked' | 'needs_approval' | 'error'; message?: string };
+
+/**
+ * Run a tool as the agent only if its effective permission is 'allow'. Never
+ * submits an approval; never audits as pending. For background reads (watcher
+ * sweeps) that must stay inside what the agent can already do unprompted.
+ */
+export async function runAgentReadTool(
+  agentId: string,
+  rawToolName: string,
+  args: Record<string, unknown>,
+): Promise<AgentReadResult> {
+  await ensureRegistry();
+  const toolName = canonicalToolName(rawToolName);
+
+  // Same gate handleMCPRequest applies before any tools/call.
+  const [agent] = await db.select().from(agents).where(eq(agents.id, agentId));
+  if (!agent || agent.status !== 'active') {
+    return { ok: false, reason: 'error', message: 'Agent not found or not active' };
+  }
+
+  const serviceType = getServiceTypeFromTool(toolName);
+  if (!serviceType) return { ok: false, reason: 'error', message: `Unknown tool: ${toolName}` };
+
+  const policy = await resolveToolPolicy(agentId, serviceType, toolName, args);
+  if ('error' in policy) {
+    // An unknown account is a source the agent does not hold, same as a
+    // service it does not have.
+    return { ok: false, reason: 'not_enabled', message: policy.error.message };
+  }
+  if (!policy.allowed) return { ok: false, reason: 'blocked' };
+  if (policy.requiresApproval) return { ok: false, reason: 'needs_approval' };
+
+  try {
+    const result = await executeTool(agentId, serviceType, toolName, args, policy.hasInstances, policy.serviceInstances);
+    if (result.success) return { ok: true, data: result.data };
+    return { ok: false, reason: 'error', message: result.errorMessage };
+  } catch (error) {
+    return { ok: false, reason: 'error', message: error instanceof Error ? error.message : 'Unknown error' };
+  }
+}
+
+/**
+ * The refusal message for a thread_add_watcher / thread_propose call naming a
+ * watcher the agent could not itself read, or null when every watcher is granted.
+ */
+async function refuseUngrantedWatchers(
+  agentId: string,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<string | null> {
+  let watchers: unknown[];
+  if (toolName === 'thread_add_watcher') {
+    watchers = [args];
+  } else if (toolName === 'thread_propose' && args.watchers !== undefined) {
+    if (!Array.isArray(args.watchers)) return 'WATCHER_SOURCE_NOT_GRANTED: watchers must be an array.';
+    watchers = args.watchers;
+  } else {
+    return null;
+  }
+
+  for (const w of watchers) {
+    if (!w || typeof w !== 'object') return 'WATCHER_SOURCE_NOT_GRANTED: each watcher must be an object.';
+    const { kind, value, account } = w as Record<string, unknown>;
+    const check = await checkWatcherAccess(agentId, { kind, value, account } as WatcherInput);
+    if (!check.ok) return check.message;
+  }
+  return null;
+}
+
+// ============================================================================
 // tools/call Handler
 // ============================================================================
 
@@ -1226,88 +1412,11 @@ async function handleCallTool(
     };
   }
 
-  // Find instances for this agent+service
-  const serviceInstances = await db
-    .select()
-    .from(agentServiceInstances)
-    .where(and(
-      eq(agentServiceInstances.agentId, agentId),
-      eq(agentServiceInstances.serviceType, serviceType),
-      eq(agentServiceInstances.enabled, true)
-    ));
-
-  // Check if service is enabled (either via instances or legacy).
-  //
-  // Same rule as isServiceEnabledForAgent() in services/permissions.ts, which is
-  // what the gateway-token HTTP routes use. Kept inline here because the rows are
-  // needed below for credential resolution and the helper would re-query them —
-  // change one, change the other, or a tool blocked over MCP becomes reachable
-  // over HTTP.
-  const hasInstances = serviceInstances.length > 0;
-  if (!hasInstances) {
-    const { enabled } = await getEffectivePermissions(agentId, serviceType);
-    if (!enabled) {
-      return {
-        jsonrpc: '2.0',
-        id: requestId,
-        error: {
-          code: MCP_ERROR_CODES.SERVICE_NOT_ENABLED,
-          message: `Service not enabled for this agent: ${serviceType}`,
-          data: { service: serviceType },
-        },
-      };
-    }
+  const policy = await resolveToolPolicy(agentId, serviceType, toolName, args);
+  if ('error' in policy) {
+    return { jsonrpc: '2.0', id: requestId, error: policy.error };
   }
-
-  // Check tool permission (instance-based or legacy)
-  let allowed: boolean;
-  let requiresApproval: boolean;
-  let policyInstance: (typeof serviceInstances)[number] | undefined;
-
-  if (hasInstances) {
-    // Resolve which instance to use based on `account` arg — same rule as
-    // executeTool: the named account, else the default, else the first.
-    const requestedAccount = args.account as string | undefined;
-    let targetInstance = serviceInstances.find((i) => i.isDefault) ?? serviceInstances[0];
-
-    if (requestedAccount) {
-      let found = false;
-      for (const inst of serviceInstances) {
-        if (inst.credentialId) {
-          const [cred] = await db.select().from(credentials).where(eq(credentials.id, inst.credentialId));
-          if (cred?.accountEmail === requestedAccount) {
-            targetInstance = inst;
-            found = true;
-            break;
-          }
-        }
-      }
-      // An unmatched account used to silently fall through to [0] and be
-      // policy-checked against an instance the caller never named. Refuse it
-      // here with the same error executeTool would produce.
-      if (!found) {
-        return {
-          jsonrpc: '2.0',
-          id: requestId,
-          error: {
-            code: MCP_ERROR_CODES.MISSING_CREDENTIALS,
-            message: `No credential found for account: ${requestedAccount}. Use ${serviceType}_list_accounts to see available accounts.`,
-            data: { service: serviceType, requestedAccount },
-          },
-        };
-      }
-    }
-
-    policyInstance = targetInstance;
-    const { tools: instanceToolPerms } = await getEffectiveInstancePermissions(targetInstance.id);
-    const toolPerm = instanceToolPerms[toolName] ?? 'block';
-    allowed = toolPerm !== 'block';
-    requiresApproval = toolPerm === 'require_approval';
-  } else {
-    const result = await canAccessTool(agentId, serviceType, toolName);
-    allowed = result.allowed;
-    requiresApproval = result.requiresApproval;
-  }
+  const { allowed, requiresApproval, hasInstances, serviceInstances, policyInstance } = policy;
 
   if (!allowed) {
     // tools/list is a union across instances, so a tool can be advertised yet
@@ -1346,6 +1455,21 @@ async function handleCallTool(
 
   // Handle approval workflow if required
   if (requiresApproval) {
+    // A watcher may only cover what the agent can already read. Refuse here,
+    // before the owner is asked, rather than after they approve.
+    const watcherRefusal = await refuseUngrantedWatchers(agentId, toolName, args);
+    if (watcherRefusal) {
+      await auditLogger.logToolCall(agentId, toolName, args, 'blocked', Date.now() - startTime, {
+        reason: 'Watcher source not granted',
+        serviceType,
+      });
+      return {
+        jsonrpc: '2.0',
+        id: requestId,
+        result: { content: [{ type: 'text', text: watcherRefusal }], isError: true },
+      };
+    }
+
     const approvalId = await approvalQueue.submit(
       agentId,
       toolName,

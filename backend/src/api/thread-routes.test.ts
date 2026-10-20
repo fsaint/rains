@@ -306,14 +306,31 @@ describe('thread routes', () => {
   });
 
   it('GET watchers and brief are scoped through getThread / getThreadBrief', async () => {
-    svc.listWatchers.mockResolvedValue([{ id: 'w1' }]);
+    svc.listWatchers.mockResolvedValue([{ id: 'w1', kind: 'hx_project', value: 'p1', account: null }]);
     svc.getThreadBrief.mockResolvedValue({ thread });
     const w = await app.inject({ method: 'GET', url: '/api/threads/t1/watchers' });
-    expect(w.json()).toEqual({ data: [{ id: 'w1' }] });
+    expect(w.json()).toEqual({
+      data: [{
+        id: 'w1', kind: 'hx_project', value: 'p1', account: null,
+        description: 'scan Hermeneutix project p1 for new sessions every 15 minutes',
+      }],
+    });
     expect(svc.listWatchers).toHaveBeenCalledWith('t1');
     const b = await app.inject({ method: 'GET', url: '/api/threads/t1/brief' });
     expect(b.json()).toEqual({ data: { thread } });
     expect(svc.getThreadBrief).toHaveBeenCalledWith('t1', ['s1']);
+  });
+
+  it('GET watchers describes each watcher in plain words', async () => {
+    svc.listWatchers.mockResolvedValue([
+      { id: 'w1', kind: 'gmail_sender', value: 'bob@x.com', account: 'ana@y.com' },
+      { id: 'w2', kind: 'gmail_query', value: 'from:vc', account: null },
+    ]);
+    const res = await app.inject({ method: 'GET', url: '/api/threads/t1/watchers' });
+    expect(res.json().data.map((w: { description: string }) => w.description)).toEqual([
+      'scan ana@y.com for mail from bob@x.com every 15 minutes',
+      'scan the default Gmail account for mail matching "from:vc" every 15 minutes',
+    ]);
   });
 
   it('GET brief returns 404 when the brief is null', async () => {

@@ -44,11 +44,16 @@ const DATE_NOTE = 'ISO 8601 date or datetime (e.g. "2026-11-01" or "2026-11-01T0
 const WATCHER_FIELDS = {
   kind: {
     type: 'string' as const,
-    description: 'What to watch, e.g. a Gmail label, sender or search query.',
+    enum: ['gmail_thread', 'gmail_query', 'gmail_sender', 'hx_project', 'hx_meeting'],
+    description:
+      'What to watch: gmail_thread (new messages in one Gmail thread), gmail_query (mail matching a ' +
+      'Gmail search), gmail_sender (mail from one address), hx_project (new sessions in your pinned ' +
+      'Hermeneutix project), hx_meeting (new sessions of one Hermeneutix meeting). You can only watch ' +
+      'a source you can already read without approval.',
   },
   value: {
     type: 'string' as const,
-    description: 'The label, sender address or query to watch for.',
+    description: 'The Gmail thread id, search query, sender address, Hermeneutix project id or meeting id.',
   },
   account: {
     type: 'string' as const,
