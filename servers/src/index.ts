@@ -27,6 +27,7 @@ export { MemoryServer, memoryTools } from './memory/index.js';
 export { SkillsServer, skillsTools } from './skills/index.js';
 export { SkillAuthoringServer, skillAuthoringTools } from './skill-authoring/index.js';
 export { PipedriveServer, pipedriveTools } from './pipedrive/index.js';
+export { ThreadsServer, threadsTools } from './threads/index.js';
 
 export { BaseServer } from './common/base-server.js';
 export { GoogleOAuthHandler } from './common/oauth-handler.js';

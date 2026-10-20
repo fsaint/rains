@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { serviceDefinitions } from './registry.js';
+import { serviceDefinitions, getDefaultPermissions, getServiceTypeFromToolName } from './registry.js';
 
 describe('service registry — tool permission coverage', () => {
   for (const def of serviceDefinitions) {
@@ -63,5 +63,33 @@ describe('service registry — Google scopes cover the handlers', () => {
         `"${def.type}" exposes write tools (${def.permissions.write.join(', ')}) but requests only readonly scopes`
       ).toBe(true);
     }
+  });
+});
+
+describe('service registry — threads', () => {
+  it('threads alwaysApprove tools default to require_approval and other writes to allow', () => {
+    const p = getDefaultPermissions('threads');
+    expect(p.thread_propose).toBe('require_approval');
+    expect(p.thread_close).toBe('require_approval');
+    expect(p.thread_add_watcher).toBe('require_approval');
+    expect(p.thread_log_event).toBe('allow');
+    expect(p.thread_get_brief).toBe('allow');
+  });
+
+  it('every alwaysApprove tool is a write tool of the service', () => {
+    for (const def of serviceDefinitions) {
+      for (const tool of def.permissions.alwaysApprove ?? []) {
+        expect(def.permissions.write, `${def.type}.${tool}`).toContain(tool);
+      }
+    }
+  });
+
+  it('thread_ prefix does not collide with any other service prefix', () => {
+    const others = serviceDefinitions.filter((d) => d.type !== 'threads');
+    for (const d of others) {
+      expect(d.toolPrefix.startsWith('thread_')).toBe(false);
+      expect('thread_'.startsWith(d.toolPrefix)).toBe(false);
+    }
+    expect(getServiceTypeFromToolName('thread_propose')).toBe('threads');
   });
 });

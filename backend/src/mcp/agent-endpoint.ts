@@ -705,7 +705,8 @@ async function executeTool(
   // Inject gateway token for services that call back into the Reins API.
   // memory reads/writes memory entries; gmail and drive resolve
   // source="upload" files via /api/agent-uploads; skills reads
-  // /api/agent-skills; helm-admin reads and writes /api/agent-admin.
+  // /api/agent-skills; helm-admin reads and writes /api/agent-admin; threads
+  // calls /api/threads.
   //
   // Omitting a service here does not fail loudly: its handlers send no
   // x-reins-agent-secret and every call comes back 401, which reads like a
@@ -716,7 +717,8 @@ async function executeTool(
     serviceType === 'drive' ||
     serviceType === 'skills' ||
     serviceType === 'skill-authoring' ||
-    serviceType === 'helm-admin'
+    serviceType === 'helm-admin' ||
+    serviceType === 'threads'
   ) {
     const tokenRow = await client.execute({
       sql: `SELECT gateway_token FROM agents WHERE id = ? LIMIT 1`,
