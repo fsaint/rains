@@ -29,6 +29,22 @@ export interface WatcherInput {
 const GMAIL_READ_TOOL = 'gmail_search';
 const HX_READ_TOOL = 'hermeneutix_list_sessions';
 
+/**
+ * Kind-specific shape of the value. It is spliced into a Gmail query, so a
+ * sender or thread id must not be able to carry operators of its own. A
+ * gmail_query is the owner's approved text and is bounded by parentheses
+ * instead (see readCall).
+ */
+function valueProblem(kind: WatcherKind, value: string): string | null {
+  if (kind === 'gmail_sender' && !/^[A-Za-z0-9._%+\-@]+$/.test(value)) {
+    return 'a sender must be a single address or domain, with no spaces, quotes, parentheses or operators.';
+  }
+  if (kind === 'gmail_thread' && !/^[A-Za-z0-9]+$/.test(value)) {
+    return 'a Gmail thread id is letters and digits only.';
+  }
+  return null;
+}
+
 const refuse = (message: string) => ({ ok: false as const, message: `WATCHER_SOURCE_NOT_GRANTED: ${message}` });
 
 /**
@@ -50,6 +66,8 @@ export async function checkWatcherAccess(
   if (w.account != null && typeof w.account !== 'string') {
     return refuse('account must be a string.');
   }
+  const problem = valueProblem(w.kind, w.value);
+  if (problem) return refuse(problem);
   const account = w.account || undefined;
 
   // Imported lazily: agent-endpoint imports this module for its pre-approval check.
@@ -135,6 +153,9 @@ export function describeWatcher(w: WatcherInput): string {
   }
 }
 
+const GMAIL_MAX_RESULTS = 50;
+const MAX_PAGES = 5;
+
 interface SweepWatcher {
   id: string;
   thread_id: string;
@@ -167,11 +188,14 @@ function toCandidates(w: SweepWatcher, data: unknown, since: Date): Candidate[] 
       .map((m) => ({
         sourceType: 'gmail' as const,
         sourceRef: `gmail:${m.id}`,
-        summary: `${m.from ?? 'Unknown sender'} — ${m.subject || '(no subject)'}`,
+        summary: `${m.from || 'Unknown sender'} — ${m.subject || '(no subject)'}`,
       }));
   }
 
-  // A session with no start time cannot be placed after `since`, so it is skipped.
+  // Hermeneutix exposes only started_at, and a session is listed after its
+  // meeting is processed, so `since` here is the watcher's creation, never the
+  // last sweep. The unique index keeps already-filed sessions from repeating.
+  // A session with no start time cannot be placed, so it is skipped.
   return asRecords(body.sessions)
     .filter((s) => typeof s.id === 'string' && s.id)
     .filter((s) => {
@@ -190,11 +214,11 @@ function readCall(w: SweepWatcher, since: Date): { tool: string; args: Record<st
   const account = w.account ? { account: w.account } : {};
   switch (w.kind) {
     case 'gmail_sender':
-      return { tool: GMAIL_READ_TOOL, args: { query: `from:${w.value} after:${afterSeconds}`, maxResults: 50, ...account } };
+      return { tool: GMAIL_READ_TOOL, args: { query: `from:"${w.value}" after:${afterSeconds}`, maxResults: GMAIL_MAX_RESULTS, ...account } };
     case 'gmail_query':
-      return { tool: GMAIL_READ_TOOL, args: { query: `${w.value} after:${afterSeconds}`, maxResults: 50, ...account } };
+      return { tool: GMAIL_READ_TOOL, args: { query: `(${w.value}) after:${afterSeconds}`, maxResults: GMAIL_MAX_RESULTS, ...account } };
     case 'gmail_thread':
-      return { tool: GMAIL_READ_TOOL, args: { query: `after:${afterSeconds}`, maxResults: 50, ...account } };
+      return { tool: GMAIL_READ_TOOL, args: { query: `after:${afterSeconds}`, maxResults: GMAIL_MAX_RESULTS, ...account } };
     case 'hx_project':
       return { tool: HX_READ_TOOL, args: { project_id: w.value } };
     case 'hx_meeting':
@@ -241,19 +265,44 @@ export async function runWatcherSweep(
       }
 
       checked++;
-      const since = new Date(w.last_checked_at ?? w.created_at);
+      const isGmail = w.kind.startsWith('gmail_');
+      const since = new Date(isGmail ? (w.last_checked_at ?? w.created_at) : w.created_at);
       const { tool, args } = readCall(w, since);
-      const read = await runAgentReadTool(w.agent_id, tool, args);
 
-      if (!read.ok) {
-        if (read.reason !== 'error') {
-          await suspendWatcher(w.id);
-          suspended++;
+      // Only the project listing pages. Gmail search and the instance listing
+      // return one capped page, so a full page is warned about and accepted.
+      const pages: unknown[] = [];
+      let read = await runAgentReadTool(w.agent_id, tool, args);
+      let failed = false;
+      for (let page = 1; ; page++) {
+        if (!read.ok) {
+          if (read.reason !== 'error') {
+            await suspendWatcher(w.id);
+            suspended++;
+          }
+          failed = true;
+          break;
         }
-        continue;
+        pages.push(read.data);
+        if (w.kind !== 'hx_project') break;
+        const hasNext = (read.data as { pagination?: { has_next?: unknown } } | null)?.pagination?.has_next === true;
+        if (!hasNext) break;
+        if (page >= MAX_PAGES) {
+          console.warn(`[thread-watchers] watcher ${w.id} has more than ${MAX_PAGES} pages; later sessions skipped`);
+          break;
+        }
+        read = await runAgentReadTool(w.agent_id, tool, { ...args, page: page + 1 });
+      }
+      if (failed) continue;
+
+      if (isGmail) {
+        const count = asRecords((pages[0] as { results?: unknown } | null)?.results).length;
+        if (count >= GMAIL_MAX_RESULTS) {
+          console.warn(`[thread-watchers] watcher ${w.id} hit the ${GMAIL_MAX_RESULTS}-result cap; older matches in this window are skipped`);
+        }
       }
 
-      for (const c of toCandidates(w, read.data, since)) {
+      for (const c of pages.flatMap((data) => toCandidates(w, data, since))) {
         const inserted = await client.execute({
           sql: `INSERT INTO thread_candidates (id, thread_id, watcher_id, source_type, source_ref, summary, found_at, status)
                 VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')

@@ -93,7 +93,7 @@ describe('checkWatcherAccess', () => {
   ])('refuses a gmail watcher when gmail_search is %s', async (_label, over) => {
     vi.mocked(resolveToolPolicy).mockResolvedValue(policy(over) as never);
 
-    const res = await checkWatcherAccess('a1', { kind: 'gmail_thread', value: 'th-1' });
+    const res = await checkWatcherAccess('a1', { kind: 'gmail_thread', value: 'th1' });
 
     expect(res.ok).toBe(false);
     expect(!res.ok && res.message).toMatch(/^WATCHER_SOURCE_NOT_GRANTED/);
@@ -304,7 +304,7 @@ describe('runWatcherSweep', () => {
 
     const since = Math.floor(new Date(CREATED).getTime() / 1000);
     expect(runAgentReadTool).toHaveBeenCalledWith('a1', 'gmail_search', {
-      query: `from:bob@x.com after:${since}`,
+      query: `from:"bob@x.com" after:${since}`,
       maxResults: 50,
     });
     const inserts = callsMatching('INSERT INTO thread_candidates');
@@ -324,7 +324,7 @@ describe('runWatcherSweep', () => {
     await runWatcherSweep(NOW);
 
     expect(runAgentReadTool).toHaveBeenCalledWith('a1', 'gmail_search', {
-      query: `invoice after:${Math.floor(new Date('2026-10-19T11:00:00.000Z').getTime() / 1000)}`,
+      query: `(invoice) after:${Math.floor(new Date('2026-10-19T11:00:00.000Z').getTime() / 1000)}`,
       maxResults: 50,
       account: 'me@y.com',
     });
@@ -355,6 +355,8 @@ describe('runWatcherSweep', () => {
         sessions: [
           { id: 's-new', title: 'Kickoff', started_at: '2026-10-19T11:30:00+00:00' },
           { id: 's-old', title: 'Old', started_at: '2026-10-19T09:00:00+00:00' },
+          // before last_checked_at but after the watcher's created_at: still a candidate
+          { id: 's-late', title: 'Late', started_at: '2026-10-19T10:30:00+00:00' },
           { id: 's-untitled', title: '', started_at: '2026-10-19T11:45:00+00:00' },
         ],
       },
@@ -364,11 +366,12 @@ describe('runWatcherSweep', () => {
 
     expect(runAgentReadTool).toHaveBeenCalledWith('a1', 'hermeneutix_list_sessions', { project_id: 'p1' });
     const inserts = callsMatching('INSERT INTO thread_candidates');
-    expect(inserts).toHaveLength(2);
+    expect(inserts).toHaveLength(3);
+    expect(inserts.map((q: any) => q.args[4])).toContain('hx:s-late');
     expect(inserts[0].args).toContain('hx:s-new');
     expect(inserts[0].args).toContain('hermeneutix');
     expect(inserts[0].args).toContain('Kickoff');
-    expect(inserts[1].args).toContain('s-untitled');
+    expect(inserts[2].args).toContain('s-untitled');
   });
 
   it('hx_meeting lists by instance_id', async () => {
@@ -443,5 +446,74 @@ describe('runWatcherSweep', () => {
     expect(runAgentReadTool).toHaveBeenCalledTimes(2);
     expect(res.found).toBe(1);
     expect(callsMatching('last_checked_at = ?')[0].args).toEqual([NOW.toISOString(), 'w2']);
+  });
+
+  it('suspends a stored gmail_sender watcher whose value carries operators, without reading', async () => {
+    wire([watcherRow({ value: 'bob@x.com OR in:anywhere' })]);
+    grantAccess();
+
+    const res = await runWatcherSweep(NOW);
+
+    expect(runAgentReadTool).not.toHaveBeenCalled();
+    expect(res.suspended).toBe(1);
+  });
+
+  it('walks hx_project pages up to 5 and warns when still truncated', async () => {
+    wire([watcherRow({ kind: 'hx_project', value: 'p1', id: 'w9' })]);
+    grantHxAccess();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.mocked(runAgentReadTool).mockImplementation((async (_a: string, _t: string, args: any) => ({
+      ok: true,
+      data: {
+        sessions: [{ id: `s${args.page ?? 1}`, title: 'T', started_at: '2026-10-19T11:00:00+00:00' }],
+        pagination: { has_next: true },
+      },
+    })) as never);
+
+    const res = await runWatcherSweep(NOW);
+
+    expect(runAgentReadTool).toHaveBeenCalledTimes(5);
+    expect(vi.mocked(runAgentReadTool).mock.calls[4][2]).toEqual({ project_id: 'p1', page: 5 });
+    expect(res.found).toBe(5);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('w9'));
+    warn.mockRestore();
+  });
+
+  it('warns when a gmail read fills the result cap, and still advances', async () => {
+    wire([watcherRow({ id: 'w7' })]);
+    grantAccess();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.mocked(runAgentReadTool).mockResolvedValue({
+      ok: true,
+      data: { results: Array.from({ length: 50 }, (_, i) => msg(`m${i}`)) },
+    });
+
+    await runWatcherSweep(NOW);
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('w7'));
+    expect(callsMatching('last_checked_at = ?')).toHaveLength(1);
+    warn.mockRestore();
+  });
+});
+
+describe('checkWatcherAccess value hardening', () => {
+  it('refuses a sender carrying a Gmail operator before any policy lookup', async () => {
+    const res = await checkWatcherAccess('a1', { kind: 'gmail_sender', value: 'bob@x.com OR in:anywhere' });
+    expect(res.ok).toBe(false);
+    expect(!res.ok && res.message).toMatch(/^WATCHER_SOURCE_NOT_GRANTED/);
+    expect(resolveToolPolicy).not.toHaveBeenCalled();
+  });
+
+  it('refuses a malformed gmail thread id', async () => {
+    const res = await checkWatcherAccess('a1', { kind: 'gmail_thread', value: 'abc OR in:anywhere' });
+    expect(res.ok).toBe(false);
+    expect(!res.ok && res.message).toMatch(/^WATCHER_SOURCE_NOT_GRANTED/);
+  });
+
+  it('accepts a plain address, a domain and a hex thread id', async () => {
+    vi.mocked(resolveToolPolicy).mockResolvedValue(policy() as never);
+    for (const [kind, value] of [['gmail_sender', 'bob@x.com'], ['gmail_sender', '@x.com'], ['gmail_thread', '18c3fa09bd']] as const) {
+      expect((await checkWatcherAccess('a1', { kind, value })).ok).toBe(true);
+    }
   });
 });
