@@ -275,3 +275,22 @@ describe('buildSetupNotice', () => {
     }
   });
 });
+
+describe('threads platform skill template', () => {
+  it('is discoverable under templates/skills and parses as seedSystemSkills reads it', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { parseSkillFrontmatter } = await import('../db/index.js');
+
+    const dir = join(__dirname, '..', '..', '..', 'templates', 'skills', 'threads');
+    const raw = await readFile(join(dir, 'SKILL.md'), 'utf-8');
+    const { meta, body } = parseSkillFrontmatter(raw);
+
+    expect(meta.name).toBe('Threads');
+    expect(meta.requires).toEqual(['memory', 'threads']);
+    expect(meta.autoAssign).toBe('false');
+    expect(meta.version).toBe('1.0.0');
+    expect(body).toContain('Helm thread held: ');
+    expect(body).toContain('Helm thread released');
+  });
+});

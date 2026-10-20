@@ -1236,7 +1236,7 @@ export async function initializeDatabase() {
  * (`[a, b]`) and block (`- a`) sequences. Pulling in a YAML dependency for
  * four keys isn't worth it.
  */
-function parseSkillFrontmatter(raw: string): { meta: Record<string, string | string[]>; body: string } {
+export function parseSkillFrontmatter(raw: string): { meta: Record<string, string | string[]>; body: string } {
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   if (!match) return { meta: {}, body: raw.trim() };
 
