@@ -69,6 +69,7 @@ describe('formatThreadApprovalMessage', () => {
     threadTitle: null,
     watcherDescriptions: [],
     decisions: [],
+    undecidedItems: null,
     ...over,
   });
 
@@ -126,6 +127,33 @@ describe('formatThreadApprovalMessage', () => {
     expect(text).toContain('It went well');
     expect(text).toContain('cancel: Book venue');
     expect(text).toContain('carry → Launch 2');
+  });
+
+  it('lists each open item with no decision as a cancel, after the explicit decisions', () => {
+    const { text } = formatThreadApprovalMessage(
+      approval('thread_close', {
+        thread_id: 't1',
+        retrospective: 'done',
+        decisions: [{ item_id: 'i1', action: 'carry', successor_thread_id: 't2' }],
+      }),
+      summary({
+        threadTitle: 'Launch',
+        decisions: [{ itemTitle: 'Book venue', action: 'carry', successorTitle: 'Launch 2' }],
+        undecidedItems: ['Pay <deposit>', 'Call caterer'],
+      })
+    );
+    expect(text).toContain('carry → Launch 2: Book venue');
+    expect(text).toContain('cancel: Pay &lt;deposit&gt;');
+    expect(text).toContain('cancel: Call caterer');
+    expect(text.indexOf('carry → Launch 2')).toBeLessThan(text.indexOf('cancel: Call caterer'));
+    expect(text).not.toContain('will be cancelled');
+  });
+
+  it('says plainly that undecided open items will be cancelled when they could not be loaded', () => {
+    const args = { thread_id: 't1', retrospective: 'done', decisions: [] };
+    const warning = 'Any open item without a decision will be cancelled.';
+    expect(formatThreadApprovalMessage(approval('thread_close', args), null).text).toContain(warning);
+    expect(formatThreadApprovalMessage(approval('thread_close', args), summary({ undecidedItems: null })).text).toContain(warning);
   });
 
   it('cuts a long retrospective at 3000 characters', () => {

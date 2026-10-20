@@ -751,6 +751,7 @@ export async function getThreadApprovalSummary(approval: ApprovalRequest): Promi
     threadTitle: null,
     watcherDescriptions: [],
     decisions: [],
+    undecidedItems: null,
   };
 
   const asWatcher = (w: unknown) => (w && typeof w === 'object' ? w : {}) as Record<string, unknown>;
@@ -783,14 +784,22 @@ export async function getThreadApprovalSummary(approval: ApprovalRequest): Promi
 
   if (approval.tool === 'thread_add_watcher') {
     summary.watcherDescriptions = [describeWatcherForApproval(args)];
-  } else if (approval.tool === 'thread_close' && Array.isArray(args.decisions)) {
-    for (const raw of args.decisions) {
-      const d = asWatcher(raw);
+  } else if (approval.tool === 'thread_close') {
+    const decisions = Array.isArray(args.decisions) ? args.decisions.map(asWatcher) : [];
+    for (const d of decisions) {
       summary.decisions.push({
         action: d.action === 'carry' ? 'carry' : 'cancel',
         itemTitle: await itemTitle(d.item_id),
         successorTitle: await threadTitle(d.successor_thread_id),
       });
+    }
+    // The close cancels every open item it has no decision for, so the owner
+    // sees each one. Only for the owner's own thread.
+    if (summary.threadTitle !== null) {
+      const decided = new Set(decisions.map((d) => d.item_id));
+      summary.undecidedItems = (await listOpenItems(args.thread_id as string))
+        .filter((i) => !decided.has(i.id))
+        .map((i) => i.title);
     }
   }
   return summary;

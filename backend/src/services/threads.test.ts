@@ -364,6 +364,13 @@ describe('getThreadApprovalSummary', () => {
       if (/COUNT\(\*\)/.test(q)) return rows([{ n: 5 }]);
       if (/FROM threads WHERE id/.test(q)) return rows(args[0] === 't1' ? [{ title: 'Launch' }] : args[0] === 't2' ? [{ title: 'Launch 2' }] : []);
       if (/FROM thread_items WHERE id/.test(q)) return rows(args[0] === 'i1' ? [{ title: 'Book venue' }] : []);
+      if (/FROM thread_items WHERE thread_id/.test(q)) {
+        return rows(args[0] === 't1' ? [
+          itemRow({ id: 'i1', title: 'Book venue' }),
+          itemRow({ id: 'i3', title: 'Pay deposit' }),
+          itemRow({ id: 'i4', kind: 'milestone', title: 'Venue signed' }),
+        ] : []);
+      }
       return rows([]);
     }) as never);
   });
@@ -388,6 +395,28 @@ describe('getThreadApprovalSummary', () => {
       { action: 'carry', itemTitle: 'Book venue', successorTitle: 'Launch 2' },
       { action: 'cancel', itemTitle: null, successorTitle: null },
     ]);
+  });
+
+  it('lists every open item the close cancels because the agent gave no decision for it', async () => {
+    const s = await getThreadApprovalSummary(approval('thread_close', {
+      thread_id: 't1', retrospective: 'r', decisions: [{ item_id: 'i1', action: 'cancel' }],
+    }));
+    expect(s.undecidedItems).toEqual(['Pay deposit', 'Venue signed']);
+    const open = execCalls().find((c) => /FROM thread_items WHERE thread_id/.test(c.sql))!;
+    expect(open.sql).toContain("kind <> 'event'");
+    expect(open.args).toEqual(['t1']);
+  });
+
+  it('lists every open item when the close has no decisions at all', async () => {
+    const s = await getThreadApprovalSummary(approval('thread_close', { thread_id: 't1', retrospective: 'r' }));
+    expect(s.undecidedItems).toEqual(['Book venue', 'Pay deposit', 'Venue signed']);
+  });
+
+  it('does not load open items of a thread the owner does not own', async () => {
+    const s = await getThreadApprovalSummary(approval('thread_close', { thread_id: 'foreign', retrospective: 'r', decisions: [] }));
+    expect(s.threadTitle).toBeNull();
+    expect(s.undecidedItems).toBeNull();
+    expect(execCalls().some((c) => /FROM thread_items WHERE thread_id/.test(c.sql))).toBe(false);
   });
 
   it('describes the watcher for add_watcher with the value quoted', async () => {

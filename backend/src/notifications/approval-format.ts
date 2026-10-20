@@ -920,6 +920,11 @@ export interface ThreadApprovalSummary {
   watcherDescriptions: string[];
   /** thread_close only: each decision with its item and successor titles resolved. */
   decisions: Array<{ itemTitle: string | null; action: 'cancel' | 'carry'; successorTitle: string | null }>;
+  /**
+   * thread_close only: titles of the open items the agent gave no decision for,
+   * which the close cancels. Null when they could not be loaded.
+   */
+  undecidedItems: string[] | null;
 }
 
 export const THREAD_SOFT_CAP = 5;
@@ -1015,6 +1020,8 @@ export function formatThreadApprovalMessage(
       `<b>Thread:</b> ${summary?.threadTitle ? e(summary.threadTitle) : `<code>${e(str(args.thread_id) ?? '?')}</code>`}`,
       retroPreview ? `\n<b>Retrospective:</b>\n<blockquote>${retroPreview}</blockquote>` : null,
       ...closeDecisionLines(args.decisions, summary?.decisions ?? []).map(e),
+      ...(summary?.undecidedItems ?? []).map((t) => `cancel: ${e(t)}`),
+      summary?.undecidedItems ? null : '⚠️ Any open item without a decision will be cancelled.',
     ];
   } else {
     body = [
