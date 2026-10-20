@@ -246,13 +246,17 @@ export async function handleUpdateItem(
   return run(async () => {
     const id = requireString(args, 'thread_id');
     const itemId = requireString(args, 'item_id');
-    return request(context, 'PATCH', `/api/threads/${enc(id)}/items/${enc(itemId)}`, defined({
+    const patch = defined({
       title: args.title,
       body: args.body,
       dueAt: args.due_at,
       remindAt: args.remind_at,
       status: args.status,
-    }));
+    });
+    if (Object.keys(patch).length === 0) {
+      throw new Error('Provide at least one of title, body, due_at, remind_at or status');
+    }
+    return request(context, 'PATCH', `/api/threads/${enc(id)}/items/${enc(itemId)}`, patch);
   });
 }
 

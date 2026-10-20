@@ -96,6 +96,43 @@ describe('thread routes', () => {
     expect(svc.listThreads).toHaveBeenCalledWith(['s1'], 'paused');
   });
 
+  describe('GET /api/threads scope filter', () => {
+    const multi = {
+      ...sessionCtx,
+      scopes: [{ id: 's1', slug: 'home' }, { id: 's2', slug: 'work' }],
+      scopeIds: ['s1', 's2'],
+    };
+
+    beforeEach(() => {
+      ctx = multi as never;
+      svc.listThreads.mockResolvedValue([thread]);
+    });
+
+    it('narrows to the scope named by slug', async () => {
+      const res = await app.inject({ method: 'GET', url: '/api/threads?scope=work&status=active' });
+      expect(res.statusCode).toBe(200);
+      expect(svc.listThreads).toHaveBeenCalledWith(['s2'], 'active');
+    });
+
+    it('narrows to the scope named by id', async () => {
+      await app.inject({ method: 'GET', url: '/api/threads?scope=s1' });
+      expect(svc.listThreads).toHaveBeenCalledWith(['s1'], undefined);
+    });
+
+    it('lists every granted scope when scope is absent', async () => {
+      await app.inject({ method: 'GET', url: '/api/threads' });
+      expect(svc.listThreads).toHaveBeenCalledWith(['s1', 's2'], undefined);
+    });
+
+    it('rejects an ungranted scope like the memory routes, listing the valid ones', async () => {
+      const res = await app.inject({ method: 'GET', url: '/api/threads?scope=secret' });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().code).toBe('SCOPE_NOT_GRANTED');
+      expect(res.json().available_scopes).toEqual(['home', 'work']);
+      expect(svc.listThreads).not.toHaveBeenCalled();
+    });
+  });
+
   it('GET /api/threads rejects an unknown status filter', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/threads?status=bogus' });
     expect(res.statusCode).toBe(400);

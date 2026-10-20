@@ -69,6 +69,12 @@ describe('threads handlers', () => {
       expect(result.success).toBe(true);
     });
 
+    it('sends no scope param when none is given', async () => {
+      mockFetch.mockResolvedValueOnce(ok([]));
+      await handleList({}, mockContext);
+      expect(lastCall().url).toBe('https://test.helm.mom/api/threads');
+    });
+
     it('surfaces the server error message', async () => {
       mockFetch.mockResolvedValueOnce(fail(403, { error: 'The threads service is not enabled for this agent.' }));
       const result = await handleList({}, mockContext);
@@ -194,6 +200,14 @@ describe('threads handlers', () => {
       expect(call.url).toBe('https://test.helm.mom/api/threads/t1/items/i1');
       expect(call.init.method).toBe('PATCH');
       expect(call.body).toEqual({ status: 'done', dueAt: '2026-10-30T00:00:00Z' });
+    });
+  });
+
+  describe('thread_update_item with nothing to change', () => {
+    it('refuses locally', async () => {
+      const result = await handleUpdateItem({ thread_id: 't1', item_id: 'i1' }, mockContext);
+      expect(result.success).toBe(false);
+      expect(mockFetch).not.toHaveBeenCalled();
     });
   });
 

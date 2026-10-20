@@ -1408,6 +1408,24 @@ describe('Permission Service', () => {
       expect(types).toContain('threads');
     });
 
+    it.each([['full', 'require_approval'], ['read', 'block']] as const)(
+      'setPermissionLevel %s sets thread_propose to %s and ordinary writes accordingly',
+      async (level, proposePermission) => {
+        vi.mocked(db.select).mockReturnValue({
+          from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+        } as never);
+        const values = vi.fn().mockResolvedValue(undefined);
+        vi.mocked(db.insert).mockReturnValue({ values } as never);
+
+        await setPermissionLevel('agent-1', 'threads', level);
+
+        const rows = values.mock.calls.map((c) => c[0] as { toolName?: string; permission?: string });
+        const perm = (tool: string) => rows.find((r) => r.toolName === tool)?.permission;
+        expect(perm('thread_propose')).toBe(proposePermission);
+        expect(perm('thread_log_event')).toBe(level === 'full' ? 'allow' : 'block');
+      }
+    );
+
     it('threads is not in ADMIN_COMPATIBLE_SERVICES', () => {
       expect(ADMIN_COMPATIBLE_SERVICES.has('threads')).toBe(false);
     });

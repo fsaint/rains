@@ -7,6 +7,7 @@
 
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { MemoryContext } from '../services/memory-scopes.js';
+import { pickScope, isRejection } from '../services/memory-scopes.js';
 import { isServiceEnabledForAgent } from '../services/permissions.js';
 import {
   ThreadError,
@@ -128,7 +129,11 @@ export function registerThreadRoutes(app: FastifyInstance, deps: ThreadRouteDeps
     if (!memCtx) return;
     const status = (request.query as Record<string, string>).status;
     if (status !== undefined && !LIST_STATUSES.includes(status)) return invalid(reply, 'Unknown status');
-    return reply.send({ data: await listThreads(memCtx.scopeIds, status as ThreadStatus | undefined) });
+    // Same resolution as the memory routes: slug or id, 403 with the valid slugs
+    // for a scope the caller cannot reach, every granted scope when omitted.
+    const picked = pickScope(memCtx, (request.query as Record<string, string>).scope, 'read');
+    if (isRejection(picked)) return reply.status(picked.status).send(picked.body);
+    return reply.send({ data: await listThreads(picked.scopeIds, status as ThreadStatus | undefined) });
   });
 
   // Session only: the badge is a dashboard affordance, not something an agent reads.

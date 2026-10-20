@@ -41,7 +41,7 @@ const THREAD_ID_ARG = {
 
 const DATE_NOTE = 'ISO 8601 date or datetime (e.g. "2026-11-01" or "2026-11-01T09:00:00Z").';
 
-const WATCHER_KINDS = {
+const WATCHER_FIELDS = {
   kind: {
     type: 'string' as const,
     description: 'What to watch, e.g. a Gmail label, sender or search query.',
@@ -265,7 +265,7 @@ export const threadProposeTool: ToolDefinition = {
         description: 'Sources to scan in the background for things that belong to this thread.',
         items: {
           type: 'object',
-          properties: WATCHER_KINDS,
+          properties: WATCHER_FIELDS,
           required: ['kind', 'value'],
         },
       },
@@ -313,7 +313,7 @@ export const threadAddWatcherTool: ToolDefinition = {
     type: 'object',
     properties: {
       thread_id: THREAD_ID_ARG,
-      ...WATCHER_KINDS,
+      ...WATCHER_FIELDS,
     },
     required: ['thread_id', 'kind', 'value'],
   },
