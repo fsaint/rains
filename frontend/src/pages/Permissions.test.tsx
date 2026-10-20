@@ -145,6 +145,21 @@ describe('Permissions page', () => {
     }) as any);
   });
 
+  it('shows the Route icon for the threads service, not the Globe fallback', async () => {
+    const threadsInstance = {
+      ...instanceBase, id: 'i-threads', serviceType: 'threads', serviceName: 'Threads',
+      credentialStatus: 'not_linked' as const, permissionLevel: 'read' as const,
+    };
+    vi.mocked(permissions.getAgentPermissions).mockResolvedValue({
+      ...agentPerms,
+      agents: [{ id: 'a1', name: 'Agent One', status: 'active', instances: [threadsInstance] }],
+    } as any);
+    const { container } = render(<Permissions />, { wrapper: createWrapper() });
+    await screen.findByRole('button', { name: /Agent One/ });
+    expect(container.querySelector('svg.lucide-route')).not.toBeNull();
+    expect(container.querySelector('svg.lucide-globe')).toBeNull();
+  });
+
   /**
    * Hermeneutix can be pinned to one project. "All projects" is the default
    * and means unscoped, so it sends no config at all rather than an empty one.

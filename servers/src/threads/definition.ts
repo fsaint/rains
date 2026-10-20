@@ -5,7 +5,7 @@ export const definition: ServiceDefinitionWithTools = {
   type: 'threads',
   name: 'Threads',
   description: 'Time-bound focus topics — keep a thread\'s goal, Now/Next, todos, deadlines and reminders current',
-  icon: 'Spool',
+  icon: 'Route',
   category: 'productivity',
   toolPrefix: 'thread_',
   auth: {
