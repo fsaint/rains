@@ -390,7 +390,11 @@ export async function updateItem(
   // Moving a date re-arms its notification and un-acknowledges the old one.
   if (patch.remindAt !== undefined) {
     set('remind_at', patch.remindAt);
-    if (patch.remindAt !== current.remindAt) sets.push('nudge_fired_at = NULL', 'acknowledged_at = NULL');
+    if (patch.remindAt !== current.remindAt) {
+      sets.push('nudge_fired_at = NULL', 'acknowledged_at = NULL');
+      // A reminder's nudge is its only firing, so it stamps fired_at too.
+      if (current.kind === 'reminder') sets.push('fired_at = NULL');
+    }
   }
   if (patch.dueAt !== undefined) {
     set('due_at', patch.dueAt);
@@ -480,6 +484,13 @@ export async function acceptCandidate(thread: Thread, candidateId: string): Prom
   // Written directly, not through resolveOrCreate: its fuzzy title match could
   // attach the candidate to an unrelated existing note.
   await sql.begin(async (tx) => {
+    // Claim first: a second accept of the same candidate gets no row back.
+    const claimed = await tx.unsafe(
+      `UPDATE thread_candidates SET status = 'accepted'
+       WHERE id = $1 AND thread_id = $2 AND status = 'pending' RETURNING id`,
+      [candidateId, thread.id],
+    );
+    if (!claimed || claimed.length === 0) throw new ThreadError('INVALID', 'Candidate already handled');
     await tx.unsafe(
       `INSERT INTO memory_entries (id, user_id, scope_id, type, title, content, is_deleted, created_at, updated_at)
        VALUES ($1, $2, $3, 'note', $4, $4, false, $5, $5)`,
@@ -495,7 +506,7 @@ export async function acceptCandidate(thread: Thread, candidateId: string): Prom
       await tx.unsafe(
         `INSERT INTO memory_attributes (id, entry_id, type, name, value, position, is_deleted, created_at)
          VALUES ($1, $2, 'label', $3, $4, 0, false, $5)`,
-        [nanoid(), entryId, label.name, cand.sourceRef.replace(label.prefix, ''), now],
+        [nanoid(), entryId, label.name, cand.sourceRef.startsWith(label.prefix) ? cand.sourceRef.slice(label.prefix.length) : cand.sourceRef, now],
       );
     }
     await tx.unsafe(
@@ -504,8 +515,9 @@ export async function acceptCandidate(thread: Thread, candidateId: string): Prom
        VALUES ($1, $2, 'event', $3, $4, 'open', $5, $6, $7, $4)`,
       [itemId, thread.id, cand.summary, now, entryId, cand.sourceType, cand.sourceRef],
     );
-    await tx.unsafe(`UPDATE thread_candidates SET status = 'accepted' WHERE id = $1`, [candidateId]);
   });
+  await updateLinkIndex(entryId, thread.scopeId, cand.summary);
+  await updateTagIndex(entryId, cand.summary);
 
   return {
     id: itemId, threadId: thread.id, kind: 'event', title: cand.summary, body: null, occurredAt: now,
@@ -517,10 +529,12 @@ export async function acceptCandidate(thread: Thread, candidateId: string): Prom
 export async function dismissCandidate(thread: Thread, candidateId: string): Promise<void> {
   assertWritable(thread);
   await getPendingCandidate(thread, candidateId);
-  await client.execute({
-    sql: `UPDATE thread_candidates SET status = 'dismissed' WHERE id = ?`,
-    args: [candidateId],
+  const r = await client.execute({
+    sql: `UPDATE thread_candidates SET status = 'dismissed'
+          WHERE id = ? AND thread_id = ? AND status = 'pending' RETURNING id`,
+    args: [candidateId, thread.id],
   });
+  if (r.rows.length === 0) throw new ThreadError('INVALID', 'Candidate already handled');
 }
 
 export async function closeThread(thread: Thread, input: CloseInput): Promise<Thread> {
@@ -533,6 +547,9 @@ export async function closeThread(thread: Thread, input: CloseInput): Promise<Th
   });
   const openItems = open.rows.map((r) => mapItem(r as Row));
   const byId = new Map(openItems.map((i) => [i.id, i]));
+  if (new Set(input.decisions.map((d) => d.itemId)).size !== input.decisions.length) {
+    throw new ThreadError('INVALID', 'Duplicate decisions for the same item');
+  }
   for (const d of input.decisions) {
     if (!byId.has(d.itemId)) throw new ThreadError('NOT_FOUND', `Open item ${d.itemId} not found in this thread`);
   }
@@ -557,10 +574,24 @@ export async function closeThread(thread: Thread, input: CloseInput): Promise<Th
   }
   let retro = input.retrospective.replace(/\s+$/, '');
   if (loops.length) retro += `${retro ? '\n\n' : ''}### Open loops\n\n${loops.join('\n')}`;
-  const content = applySection(await readRootContent(thread), 'Retrospective', retro, 'replace');
 
   const now = new Date().toISOString();
+  let content = '';
   await sql.begin(async (tx) => {
+    // Transition first: a stale or repeated close gets no row and writes nothing.
+    const closing = await tx.unsafe(
+      `UPDATE threads SET status = 'closed', closed_at = $1, updated_at = $1
+       WHERE id = $2 AND status <> 'closed' RETURNING id`,
+      [now, thread.id],
+    );
+    if (!closing || closing.length === 0) throw new ThreadError('THREAD_CLOSED', 'This thread is closed');
+    // Read inside the transaction so a concurrent section edit is not overwritten.
+    const root = await tx.unsafe(
+      `SELECT content FROM memory_entries WHERE id = $1 AND is_deleted = false LIMIT 1`,
+      [thread.rootEntryId],
+    );
+    if (!root || root.length === 0) throw new ThreadError('NOT_FOUND', 'Thread root entry not found');
+    content = applySection((root[0].content as string | null) ?? '', 'Retrospective', retro, 'replace');
     await tx.unsafe(
       `UPDATE memory_entries SET content = $1, version = version + 1, updated_at = $2 WHERE id = $3`,
       [content, now, thread.rootEntryId],
@@ -582,10 +613,6 @@ export async function closeThread(thread: Thread, input: CloseInput): Promise<Th
         await tx.unsafe(`UPDATE thread_items SET status = 'cancelled' WHERE id = $1`, [item.id]);
       }
     }
-    await tx.unsafe(
-      `UPDATE threads SET status = 'closed', closed_at = $1, updated_at = $1 WHERE id = $2`,
-      [now, thread.id],
-    );
   });
 
   await updateLinkIndex(thread.rootEntryId, thread.scopeId, content);

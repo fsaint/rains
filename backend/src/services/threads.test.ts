@@ -58,6 +58,7 @@ beforeEach(() => {
   vi.mocked(client.execute).mockReset();
   vi.mocked(client.execute).mockResolvedValue({ rows: [], rowsAffected: 0, lastInsertRowid: 0n, columns: [] });
   txUnsafe.mockReset();
+  txUnsafe.mockResolvedValue([{ id: 'x', content: renderRootContent({}) }]);
   vi.mocked(ensureMemoryRoot).mockReset();
 });
 
@@ -194,6 +195,12 @@ describe('updateItem', () => {
     expect(updateCall().sql).not.toContain('nudge_fired_at = NULL');
     expect(updateCall().sql).toContain('acknowledged_at = NULL');
   });
+  it('also clears fired_at when a reminder-kind item is snoozed', async () => {
+    vi.mocked(client.execute).mockImplementation(async (stmt) =>
+      (stmt as { sql: string }).sql.startsWith('SELECT * FROM thread_items') ? res([itemRow({ kind: 'reminder' })]) : res([]));
+    await updateItem(thread, 'i1', { remindAt: 'R2' });
+    expect(updateCall().sql).toContain(', fired_at = NULL');
+  });
   it('leaves stamps alone when only the title changes', async () => {
     await updateItem(thread, 'i1', { title: 'New' });
     expect(updateCall().sql).not.toContain('= NULL');
@@ -231,13 +238,24 @@ describe('acceptCandidate', () => {
     }]));
     const item = await acceptCandidate(thread, 'c1');
     const calls = txUnsafe.mock.calls as Array<[string, unknown[]]>;
-    expect(calls[0][0]).toContain('INSERT INTO memory_entries');
-    expect(calls[1][0]).toContain('INSERT INTO memory_branches');
-    expect(calls[1][1]).toContain('root-1');
-    expect(calls[2][0]).toContain('INSERT INTO memory_attributes');
-    expect(calls[2][1]).toEqual(expect.arrayContaining(['gmail_message_id', 'abc']));
-    expect(calls[4][0]).toContain("status = 'accepted'");
+    const find = (frag: string) => calls.find((c) => c[0].includes(frag))!;
+    expect(calls[0][0]).toContain("status = 'accepted'");
+    expect(find('INSERT INTO memory_entries')).toBeDefined();
+    expect(find('INSERT INTO memory_branches')[1]).toContain('root-1');
+    expect(find('INSERT INTO memory_attributes')[1]).toEqual(expect.arrayContaining(['gmail_message_id', 'abc']));
     expect(item).toMatchObject({ kind: 'event', memoryEntryId: 'test-id', sourceRef: 'gmail:abc' });
+  });
+});
+
+describe('acceptCandidate claim', () => {
+  it('throws INVALID and creates nothing when the candidate was already claimed', async () => {
+    vi.mocked(client.execute).mockResolvedValue(res([{
+      id: 'c1', thread_id: 't1', watcher_id: null, source_type: 'manual', source_ref: 'r',
+      summary: 'S', found_at: 'f', status: 'pending',
+    }]));
+    txUnsafe.mockResolvedValue([]);
+    await expect(acceptCandidate(thread, 'c1')).rejects.toMatchObject({ code: 'INVALID' });
+    expect(txUnsafe).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -271,6 +289,22 @@ describe('closeThread', () => {
     expect(calls.some((c) => c[0].includes("status = 'cancelled', body") && String(c[1][0]).includes('(carried to Next round)'))).toBe(true);
     expect(calls.filter((c) => c[0].includes("'cancelled'"))).toHaveLength(2);
     expect(calls.some((c) => c[0].includes("status = 'closed'"))).toBe(true);
+  });
+
+  it('throws THREAD_CLOSED and writes nothing else when the transition matches no row', async () => {
+    closeMocks([]);
+    txUnsafe.mockResolvedValue([]);
+    await expect(closeThread(thread, { retrospective: 'r', decisions: [] })).rejects.toMatchObject({ code: 'THREAD_CLOSED' });
+    expect(txUnsafe).toHaveBeenCalledTimes(1);
+    expect(txUnsafe.mock.calls[0][0]).toContain("status <> 'closed'");
+  });
+
+  it('rejects duplicate decisions for one item', async () => {
+    closeMocks([]);
+    await expect(closeThread(thread, {
+      retrospective: 'r', decisions: [{ itemId: 'i1', action: 'cancel' }, { itemId: 'i1', action: 'carry' }],
+    })).rejects.toMatchObject({ code: 'INVALID' });
+    expect(txUnsafe).not.toHaveBeenCalled();
   });
 
   it('throws SUCCESSOR_INVALID and writes nothing for a closed or other-user successor', async () => {
