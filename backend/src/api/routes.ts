@@ -91,6 +91,7 @@ import {
   replaceSection,
 } from '../services/memory.js';
 import { threadForEntry, scopeHasOpenThreads } from '../services/threads.js';
+import { registerThreadRoutes } from './thread-routes.js';
 import {
   resolveMemoryContext,
   listUserScopes,
@@ -7014,6 +7015,8 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     return reply.send({ data: { moved: true, scope: targetScopeId } });
   });
+
+  registerThreadRoutes(app, { resolveMemoryScopeContext, getSession });
 
   // -------------------------------------------------------------------------
   // Per-agent scope grants

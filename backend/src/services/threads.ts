@@ -295,6 +295,59 @@ export async function countActiveThreads(userId: string): Promise<number> {
   return Number(result.rows[0]?.n ?? 0);
 }
 
+export async function listPendingCandidates(threadId: string): Promise<ThreadCandidate[]> {
+  const result = await client.execute({
+    sql: `SELECT * FROM thread_candidates WHERE thread_id = ? AND status = 'pending' ORDER BY found_at ASC`,
+    args: [threadId],
+  });
+  return result.rows.map((r) => mapCandidate(r as Row));
+}
+
+export interface ThreadWatcher {
+  id: string;
+  threadId: string;
+  kind: string;
+  value: string;
+  account: string | null;
+  agentId: string;
+  status: string;
+  lastCheckedAt: string | null;
+  createdAt: string;
+}
+
+export async function listWatchers(threadId: string): Promise<ThreadWatcher[]> {
+  const result = await client.execute({
+    sql: `SELECT * FROM thread_watchers WHERE thread_id = ? ORDER BY created_at ASC`,
+    args: [threadId],
+  });
+  return result.rows.map((r) => ({
+    id: r.id as string,
+    threadId: r.thread_id as string,
+    kind: r.kind as string,
+    value: r.value as string,
+    account: str(r.account),
+    agentId: r.agent_id as string,
+    status: r.status as string,
+    lastCheckedAt: str(r.last_checked_at),
+    createdAt: r.created_at as string,
+  }));
+}
+
+/** Fired-but-unacknowledged items plus pending candidates across the user's non-closed threads. */
+export async function countBadge(userId: string): Promise<number> {
+  const result = await client.execute({
+    sql: `SELECT
+            (SELECT COUNT(*) FROM thread_items i JOIN threads t ON t.id = i.thread_id
+              WHERE t.user_id = ? AND t.status != 'closed'
+                AND (i.fired_at IS NOT NULL OR i.nudge_fired_at IS NOT NULL)
+                AND i.acknowledged_at IS NULL) AS items,
+            (SELECT COUNT(*) FROM thread_candidates c JOIN threads t ON t.id = c.thread_id
+              WHERE t.user_id = ? AND t.status != 'closed' AND c.status = 'pending') AS candidates`,
+    args: [userId, userId],
+  });
+  return Number(result.rows[0]?.items ?? 0) + Number(result.rows[0]?.candidates ?? 0);
+}
+
 export async function getThreadBrief(id: string, scopeIds: string[]): Promise<ThreadBrief | null> {
   const thread = await getThread(id, scopeIds);
   if (!thread) return null;
