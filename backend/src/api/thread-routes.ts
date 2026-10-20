@@ -49,8 +49,37 @@ const EDITABLE_SECTIONS = ['Goal', 'Past', 'Now', 'Next'];
 const invalid = (reply: FastifyReply, error: string) =>
   reply.status(400).send({ error, code: 'INVALID' });
 
-const optString = (v: unknown): string | null | undefined =>
-  v === undefined ? undefined : v === null ? null : typeof v === 'string' ? v : undefined;
+type Parsed = { value: string | null | undefined } | { error: string };
+
+/** undefined -> left out, null -> null, string -> itself; anything else is a 400. */
+const parseText = (v: unknown, field: string): Parsed =>
+  v === undefined || v === null || typeof v === 'string'
+    ? { value: v }
+    : { error: `${field} must be a string or null` };
+
+/**
+ * Timestamps are compared as ISO text by the scheduler, so a free-form string
+ * would sort wrongly and never fire. Normalise to toISOString() or refuse.
+ */
+const parseDate = (v: unknown, field: string): Parsed => {
+  if (v === undefined || v === null) return { value: v };
+  const t = typeof v === 'string' ? new Date(v).getTime() : NaN;
+  return Number.isNaN(t) ? { error: `${field} must be a valid date` } : { value: new Date(t).toISOString() };
+};
+
+/** Parse several fields at once; the first failure wins. */
+function parseFields(
+  b: Record<string, unknown>,
+  spec: Record<string, (v: unknown, field: string) => Parsed>
+): { values: Record<string, string | null | undefined> } | { error: string } {
+  const values: Record<string, string | null | undefined> = {};
+  for (const [field, parse] of Object.entries(spec)) {
+    const r = parse(b[field], field);
+    if ('error' in r) return r;
+    values[field] = r.value;
+  }
+  return { values };
+}
 
 export function registerThreadRoutes(app: FastifyInstance, deps: ThreadRouteDeps): void {
   /** Authenticate, and require the threads service when the caller is an agent. */
@@ -132,20 +161,14 @@ export function registerThreadRoutes(app: FastifyInstance, deps: ThreadRouteDeps
     if (b.sourceType != null && !SOURCE_TYPES.includes(b.sourceType as string)) {
       return invalid(reply, 'sourceType is invalid');
     }
+    const parsed = parseFields(b, {
+      body: parseText, sourceRef: parseText, memoryEntryId: parseText,
+      occurredAt: parseDate, dueAt: parseDate, remindAt: parseDate,
+    });
+    if ('error' in parsed) return invalid(reply, parsed.error);
     return guarded(
       reply,
-      () =>
-        addItem(loaded.thread, {
-          kind: b.kind as never,
-          title: b.title as string,
-          body: optString(b.body),
-          occurredAt: optString(b.occurredAt),
-          dueAt: optString(b.dueAt),
-          remindAt: optString(b.remindAt),
-          memoryEntryId: optString(b.memoryEntryId),
-          sourceType: b.sourceType as never,
-          sourceRef: optString(b.sourceRef),
-        }),
+      () => addItem(loaded.thread, { kind: b.kind as never, title: b.title as string, sourceType: b.sourceType as never, ...parsed.values }),
       201
     );
   });
@@ -162,9 +185,13 @@ export function registerThreadRoutes(app: FastifyInstance, deps: ThreadRouteDeps
       if (b.title !== undefined && (typeof b.title !== 'string' || b.title.trim() === '')) {
         return invalid(reply, 'title must be a non-empty string');
       }
+      const parsed = parseFields(b, { body: parseText, dueAt: parseDate, remindAt: parseDate });
+      if ('error' in parsed) return invalid(reply, parsed.error);
       const patch: Record<string, unknown> = {};
-      for (const key of ['title', 'body', 'dueAt', 'remindAt', 'status']) {
-        if (b[key] !== undefined) patch[key] = b[key];
+      if (b.title !== undefined) patch.title = b.title;
+      if (b.status !== undefined) patch.status = b.status;
+      for (const [key, v] of Object.entries(parsed.values)) {
+        if (v !== undefined) patch[key] = v;
       }
       return guarded(reply, () => updateItem(loaded.thread, request.params.itemId, patch as never));
     }

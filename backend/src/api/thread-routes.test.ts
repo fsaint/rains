@@ -133,7 +133,7 @@ describe('thread routes', () => {
     expect(res.json().code).toBe(code);
   });
 
-  it('GET /api/threads/badge requires a session (agent secret -> 401)', async () => {
+  it('GET /api/threads/badge requires a session (agent token -> 401)', async () => {
     ctx = agentCtx as never;
     session = null;
     const res = await app.inject({ method: 'GET', url: '/api/threads/badge' });
@@ -153,7 +153,11 @@ describe('thread routes', () => {
     const body = { kind: 'deadline', title: 'File', body: 'b', dueAt: '2026-11-01', remindAt: '2026-10-30' };
     const res = await app.inject({ method: 'POST', url: '/api/threads/t1/items', payload: body });
     expect(res.statusCode).toBe(201);
-    expect(svc.addItem).toHaveBeenCalledWith(thread, expect.objectContaining(body));
+    expect(svc.addItem).toHaveBeenCalledWith(thread, expect.objectContaining({
+      ...body,
+      dueAt: new Date(body.dueAt).toISOString(),
+      remindAt: new Date(body.remindAt).toISOString(),
+    }));
   });
 
   it('POST /api/threads/:id/items rejects a missing title or bad kind', async () => {
@@ -162,6 +166,62 @@ describe('thread routes', () => {
     expect(a.statusCode).toBe(400);
     expect(b.statusCode).toBe(400);
     expect(svc.addItem).not.toHaveBeenCalled();
+  });
+
+  it('POST items normalises a non-ISO date to an ISO string', async () => {
+    svc.addItem.mockResolvedValue({ id: 'i1' });
+    const res = await app.inject({
+      method: 'POST', url: '/api/threads/t1/items',
+      payload: { kind: 'todo', title: 'x', dueAt: '2026-10-20 10:00', remindAt: null },
+    });
+    expect(res.statusCode).toBe(201);
+    const input = svc.addItem.mock.calls[0][1];
+    expect(input.dueAt).toBe(new Date('2026-10-20 10:00').toISOString());
+    expect(input.remindAt).toBeNull();
+  });
+
+  it.each([
+    ['unparseable dueAt', { dueAt: 'tomorrow' }],
+    ['numeric dueAt', { dueAt: 1730000000 }],
+    ['unparseable remindAt', { remindAt: 'next friday' }],
+    ['unparseable occurredAt', { occurredAt: 'soon' }],
+    ['numeric title', { title: 42 }],
+    ['numeric body', { body: 5 }],
+    ['object sourceRef', { sourceRef: {} }],
+    ['numeric memoryEntryId', { memoryEntryId: 7 }],
+  ])('POST items rejects %s with 400 INVALID', async (_n, extra) => {
+    const res = await app.inject({
+      method: 'POST', url: '/api/threads/t1/items', payload: { kind: 'todo', title: 'x', ...extra },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('INVALID');
+    expect(svc.addItem).not.toHaveBeenCalled();
+  });
+
+  it('PATCH item normalises dates and lets null clear them', async () => {
+    svc.updateItem.mockResolvedValue({ id: 'i1' });
+    const res = await app.inject({
+      method: 'PATCH', url: '/api/threads/t1/items/i1',
+      payload: { remindAt: '2026-10-20 10:00', dueAt: null },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(svc.updateItem).toHaveBeenCalledWith(thread, 'i1', {
+      remindAt: new Date('2026-10-20 10:00').toISOString(),
+      dueAt: null,
+    });
+  });
+
+  it.each([
+    ['unparseable remindAt', { remindAt: 'tomorrow' }],
+    ['numeric dueAt', { dueAt: 123 }],
+    ['numeric body', { body: 123 }],
+    ['numeric title', { title: 123 }],
+    ['null title', { title: null }],
+  ])('PATCH item rejects %s with 400 INVALID', async (_n, payload) => {
+    const res = await app.inject({ method: 'PATCH', url: '/api/threads/t1/items/i1', payload });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('INVALID');
+    expect(svc.updateItem).not.toHaveBeenCalled();
   });
 
   it('PATCH item forwards only the patchable fields', async () => {
