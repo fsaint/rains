@@ -922,7 +922,7 @@ export interface ThreadApprovalSummary {
   decisions: Array<{ itemTitle: string | null; action: 'cancel' | 'carry'; successorTitle: string | null }>;
 }
 
-const THREAD_SOFT_CAP = 5;
+export const THREAD_SOFT_CAP = 5;
 const AGENT_TEXT_LIMIT = 200;
 
 /** Agent-supplied text on one line, cut at 200 characters, in curly quotes. Not HTML-escaped. */
@@ -950,6 +950,32 @@ export function describeWatcherForApproval(w: { kind?: unknown; value?: unknown;
     default:
       return `watch ${quoteAgentText(w.kind)} ${value}`;
   }
+}
+
+/**
+ * One line per close decision. Built from the agent's own decisions so a failed
+ * summary lookup cannot hide what is being approved; resolved titles replace
+ * the quoted ids when the summary has them. Not HTML-escaped.
+ */
+function closeDecisionLines(raw: unknown, resolved: ThreadApprovalSummary['decisions']): string[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return resolved.map((d) =>
+      d.action === 'carry'
+        ? `carry → ${d.successorTitle ?? '(unknown thread)'}: ${d.itemTitle ?? '(unknown item)'}`
+        : `cancel: ${d.itemTitle ?? '(unknown item)'}`
+    );
+  }
+  return raw.map((r, i) => {
+    const d = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>;
+    const item = resolved[i]?.itemTitle ?? `item ${quoteAgentText(d.item_id)}`;
+    if (d.action !== 'carry') return `cancel: ${item}`;
+    const to =
+      resolved[i]?.successorTitle ??
+      (typeof d.successor_thread_id === 'string' && d.successor_thread_id !== ''
+        ? `thread ${quoteAgentText(d.successor_thread_id)}`
+        : 'retrospective note');
+    return `carry → ${to}: ${item}`;
+  });
 }
 
 export function formatThreadApprovalMessage(
@@ -988,11 +1014,7 @@ export function formatThreadApprovalMessage(
       '🏁 <b>Close a thread</b>',
       `<b>Thread:</b> ${summary?.threadTitle ? e(summary.threadTitle) : `<code>${e(str(args.thread_id) ?? '?')}</code>`}`,
       retroPreview ? `\n<b>Retrospective:</b>\n<blockquote>${retroPreview}</blockquote>` : null,
-      ...(summary?.decisions ?? []).map((d) =>
-        d.action === 'carry'
-          ? `carry → ${e(d.successorTitle ?? '(unknown thread)')}: ${e(d.itemTitle ?? '(unknown item)')}`
-          : `cancel: ${e(d.itemTitle ?? '(unknown item)')}`
-      ),
+      ...closeDecisionLines(args.decisions, summary?.decisions ?? []).map(e),
     ];
   } else {
     body = [

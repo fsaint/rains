@@ -19,7 +19,7 @@ export type ThreadItemKind = 'event' | 'todo' | 'deadline' | 'reminder' | 'miles
 export type ThreadItemStatus = 'open' | 'done' | 'cancelled';
 export type SourceType = 'gmail' | 'hermeneutix' | 'memory' | 'manual';
 
-export const THREAD_SOFT_CAP = 5;
+export { THREAD_SOFT_CAP } from '../notifications/approval-format.js';
 export const BRIEF_EVENT_LIMIT = 20;
 export const THREAD_SECTIONS = ['Goal', 'Past', 'Now', 'Next', 'Retrospective'] as const;
 
@@ -717,8 +717,8 @@ export async function closeThread(thread: Thread, input: CloseInput): Promise<Th
  * What the owner needs to see to decide on a thread_propose, thread_close or
  * thread_add_watcher, resolved from the live rows rather than the agent's
  * arguments: the scope's name, the thread's real title, and the titles of the
- * items and successor threads a close touches. Never throws on a bad reference
- * — an unresolved title is null and the message says so.
+ * items and successor threads a close touches. An unresolved reference gives a null
+ * title, not a throw; a database error does throw, and the caller handles it.
  */
 export async function getThreadApprovalSummary(approval: ApprovalRequest): Promise<ThreadApprovalSummary> {
   const args = (approval.arguments ?? {}) as Record<string, unknown>;
@@ -748,13 +748,18 @@ export async function getThreadApprovalSummary(approval: ApprovalRequest): Promi
     return summary;
   }
 
-  const titleOf = async (table: 'threads' | 'thread_items', id: unknown, extra = ''): Promise<string | null> => {
-    if (typeof id !== 'string' || id === '') return null;
-    const r = await client.execute({ sql: `SELECT title FROM ${table} WHERE id = ? ${extra} LIMIT 1`, args: [id] });
+  // Scoped to the owner (and, for items, to the thread) so a foreign id shows nothing.
+  const titleOf = async (sqlText: string, ...params: unknown[]): Promise<string | null> => {
+    if (params.some((p) => typeof p !== 'string' || p === '')) return null;
+    const r = await client.execute({ sql: sqlText, args: params as never[] });
     return (r.rows[0]?.title as string | undefined) ?? null;
   };
+  const threadTitle = (id: unknown) =>
+    userId ? titleOf(`SELECT title FROM threads WHERE id = ? AND user_id = ? LIMIT 1`, id, userId) : Promise.resolve(null);
+  const itemTitle = (id: unknown) =>
+    titleOf(`SELECT title FROM thread_items WHERE id = ? AND thread_id = ? LIMIT 1`, id, args.thread_id);
 
-  summary.threadTitle = await titleOf('threads', args.thread_id);
+  summary.threadTitle = await threadTitle(args.thread_id);
 
   if (approval.tool === 'thread_add_watcher') {
     summary.watcherDescriptions = [describeWatcherForApproval(args)];
@@ -763,8 +768,8 @@ export async function getThreadApprovalSummary(approval: ApprovalRequest): Promi
       const d = asWatcher(raw);
       summary.decisions.push({
         action: d.action === 'carry' ? 'carry' : 'cancel',
-        itemTitle: await titleOf('thread_items', d.item_id),
-        successorTitle: await titleOf('threads', d.successor_thread_id),
+        itemTitle: await itemTitle(d.item_id),
+        successorTitle: await threadTitle(d.successor_thread_id),
       });
     }
   }

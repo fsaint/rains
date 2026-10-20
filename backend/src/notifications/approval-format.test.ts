@@ -173,4 +173,37 @@ describe('formatThreadApprovalMessage', () => {
     expect(long).toContain('q'.repeat(200) + '…');
     expect(long).not.toContain('q'.repeat(201));
   });
+
+  it('still lists every close decision when the summary is null', () => {
+    const { text } = formatThreadApprovalMessage(
+      approval('thread_close', {
+        thread_id: 't1',
+        retrospective: 'done',
+        decisions: [
+          { item_id: 'i1', action: 'cancel' },
+          { item_id: 'i2', action: 'carry', successor_thread_id: 't<2>' },
+          { item_id: 'i3', action: 'carry' },
+        ],
+      }),
+      null
+    );
+    expect(text).toContain('cancel: item “i1”');
+    expect(text).toContain('carry → thread “t&lt;2&gt;”: item “i2”');
+    expect(text).toContain('carry → retrospective note: item “i3”');
+  });
+
+  it('still lists every propose watcher when the summary is null', () => {
+    const { text } = formatThreadApprovalMessage(
+      approval('thread_propose', {
+        title: 'T',
+        watchers: [
+          { kind: 'gmail_sender', value: 'a@x.com' },
+          { kind: 'hx_project', value: 'p9' },
+        ],
+      }),
+      null
+    );
+    expect(text).toContain('mail from “a@x.com”');
+    expect(text).toContain('Hermeneutix project “p9”');
+  });
 });
