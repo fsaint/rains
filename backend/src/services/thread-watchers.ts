@@ -134,3 +134,143 @@ export function describeWatcher(w: WatcherInput): string {
       return `watch ${String(w.kind)} ${w.value}`;
   }
 }
+
+interface SweepWatcher {
+  id: string;
+  thread_id: string;
+  agent_id: string;
+  kind: WatcherKind;
+  value: string;
+  account: string | null;
+  last_checked_at: string | null;
+  created_at: string;
+}
+
+interface Candidate {
+  sourceType: 'gmail' | 'hermeneutix';
+  sourceRef: string;
+  summary: string;
+}
+
+const asRecords = (v: unknown): Record<string, unknown>[] =>
+  Array.isArray(v) ? v.filter((x): x is Record<string, unknown> => !!x && typeof x === 'object') : [];
+
+/** What a watcher's read returned that is new since `since`, as candidates. */
+function toCandidates(w: SweepWatcher, data: unknown, since: Date): Candidate[] {
+  const body = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>;
+
+  if (w.kind.startsWith('gmail_')) {
+    let messages = asRecords(body.results);
+    if (w.kind === 'gmail_thread') messages = messages.filter((m) => m.threadId === w.value);
+    return messages
+      .filter((m) => typeof m.id === 'string' && m.id)
+      .map((m) => ({
+        sourceType: 'gmail' as const,
+        sourceRef: `gmail:${m.id}`,
+        summary: `${m.from ?? 'Unknown sender'} — ${m.subject || '(no subject)'}`,
+      }));
+  }
+
+  // A session with no start time cannot be placed after `since`, so it is skipped.
+  return asRecords(body.sessions)
+    .filter((s) => typeof s.id === 'string' && s.id)
+    .filter((s) => {
+      const started = typeof s.started_at === 'string' ? new Date(s.started_at).getTime() : NaN;
+      return started > since.getTime();
+    })
+    .map((s) => ({
+      sourceType: 'hermeneutix' as const,
+      sourceRef: `hx:${s.id}`,
+      summary: (typeof s.title === 'string' && s.title) || String(s.id),
+    }));
+}
+
+function readCall(w: SweepWatcher, since: Date): { tool: string; args: Record<string, unknown> } {
+  const afterSeconds = Math.floor(since.getTime() / 1000);
+  const account = w.account ? { account: w.account } : {};
+  switch (w.kind) {
+    case 'gmail_sender':
+      return { tool: GMAIL_READ_TOOL, args: { query: `from:${w.value} after:${afterSeconds}`, maxResults: 50, ...account } };
+    case 'gmail_query':
+      return { tool: GMAIL_READ_TOOL, args: { query: `${w.value} after:${afterSeconds}`, maxResults: 50, ...account } };
+    case 'gmail_thread':
+      return { tool: GMAIL_READ_TOOL, args: { query: `after:${afterSeconds}`, maxResults: 50, ...account } };
+    case 'hx_project':
+      return { tool: HX_READ_TOOL, args: { project_id: w.value } };
+    case 'hx_meeting':
+      return { tool: HX_READ_TOOL, args: { instance_id: w.value } };
+  }
+}
+
+async function suspendWatcher(id: string): Promise<void> {
+  await client.execute({ sql: `UPDATE thread_watchers SET status = 'suspended' WHERE id = ?`, args: [id] });
+}
+
+/**
+ * Run every active watcher on an active thread as its agent and file what is
+ * new as candidates. A watcher whose agent can no longer read its source is
+ * suspended; a transient failure (inactive agent, lapsed billing, tool or
+ * transport error) skips the watcher for this sweep and leaves
+ * last_checked_at where it was, so nothing in the gap is missed. One watcher
+ * failing never stops the others.
+ */
+export async function runWatcherSweep(
+  now: Date = new Date(),
+): Promise<{ checked: number; found: number; suspended: number }> {
+  const { runAgentReadTool } = await import('../mcp/agent-endpoint.js');
+
+  const result = await client.execute({
+    sql: `SELECT w.id, w.thread_id, w.agent_id, w.kind, w.value, w.account, w.last_checked_at, w.created_at
+          FROM thread_watchers w
+          JOIN threads t ON t.id = w.thread_id
+          WHERE w.status = 'active' AND t.status = 'active'`,
+    args: [],
+  });
+
+  let checked = 0;
+  let found = 0;
+  let suspended = 0;
+
+  for (const w of result.rows as unknown as SweepWatcher[]) {
+    try {
+      const access = await checkWatcherAccess(w.agent_id, w);
+      if (!access.ok) {
+        await suspendWatcher(w.id);
+        suspended++;
+        continue;
+      }
+
+      checked++;
+      const since = new Date(w.last_checked_at ?? w.created_at);
+      const { tool, args } = readCall(w, since);
+      const read = await runAgentReadTool(w.agent_id, tool, args);
+
+      if (!read.ok) {
+        if (read.reason !== 'error') {
+          await suspendWatcher(w.id);
+          suspended++;
+        }
+        continue;
+      }
+
+      for (const c of toCandidates(w, read.data, since)) {
+        const inserted = await client.execute({
+          sql: `INSERT INTO thread_candidates (id, thread_id, watcher_id, source_type, source_ref, summary, found_at, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
+                ON CONFLICT (thread_id, source_ref) DO NOTHING`,
+          args: [nanoid(), w.thread_id, w.id, c.sourceType, c.sourceRef, c.summary, now.toISOString()],
+        });
+        found += inserted.rowsAffected;
+      }
+
+      await client.execute({
+        sql: `UPDATE thread_watchers SET last_checked_at = ? WHERE id = ?`,
+        args: [now.toISOString(), w.id],
+      });
+    } catch (err) {
+      console.warn(`[thread-watchers] watcher ${w.id} failed:`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  return { checked, found, suspended };
+}

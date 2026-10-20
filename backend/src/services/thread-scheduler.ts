@@ -13,8 +13,10 @@ import { client } from '../db/index.js';
 import { config } from '../config/index.js';
 import { telegramNotifier } from '../notifications/telegram.js';
 import { apnsService } from '../notifications/apns.js';
+import { runWatcherSweep } from './thread-watchers.js';
 
 const TICK_INTERVAL_MS = 60_000;
+const WATCHER_SWEEP_INTERVAL_MS = 15 * 60_000;
 
 interface ClaimedItem {
   id: string;
@@ -99,11 +101,17 @@ export async function runReminderTick(now: Date = new Date()): Promise<{ deliver
   return { delivered };
 }
 
-/** Start the per-minute tick. Call once at server startup. */
+/** Start the per-minute reminder tick and the 15-minute watcher sweep. Call once at server startup. */
 export function startThreadScheduler(): void {
   setInterval(() => {
     runReminderTick().catch((err) =>
       console.warn('[thread-scheduler] tick failed:', err instanceof Error ? err.message : err)
     );
   }, TICK_INTERVAL_MS).unref();
+
+  setInterval(() => {
+    runWatcherSweep().catch((err) =>
+      console.warn('[thread-scheduler] watcher sweep failed:', err instanceof Error ? err.message : err)
+    );
+  }, WATCHER_SWEEP_INTERVAL_MS).unref();
 }

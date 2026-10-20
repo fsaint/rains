@@ -21,6 +21,7 @@ vi.mock('nanoid', () => ({
 
 vi.mock('../mcp/agent-endpoint.js', () => ({
   resolveToolPolicy: vi.fn(),
+  runAgentReadTool: vi.fn(),
 }));
 
 vi.mock('./permissions.js', () => ({
@@ -28,9 +29,9 @@ vi.mock('./permissions.js', () => ({
 }));
 
 import { client } from '../db/index.js';
-import { resolveToolPolicy } from '../mcp/agent-endpoint.js';
+import { resolveToolPolicy, runAgentReadTool } from '../mcp/agent-endpoint.js';
 import { getInstanceConfig } from './permissions.js';
-import { checkWatcherAccess, addWatcher, removeWatcher, describeWatcher } from './thread-watchers.js';
+import { checkWatcherAccess, addWatcher, removeWatcher, describeWatcher, runWatcherSweep } from './thread-watchers.js';
 
 const gmailInst = { id: 'inst-g', agentId: 'a1', serviceType: 'gmail', enabled: true, isDefault: true, credentialId: 'cred-g' };
 const hxInst = { id: 'inst-h', agentId: 'a1', serviceType: 'hermeneutix', enabled: true, isDefault: true, credentialId: 'cred-h' };
@@ -252,5 +253,195 @@ describe('describeWatcher', () => {
       .toBe('scan Hermeneutix project p-1 for new sessions every 15 minutes');
     expect(describeWatcher({ kind: 'hx_meeting', value: 'm-1' }))
       .toBe('scan Hermeneutix meeting m-1 for new sessions every 15 minutes');
+  });
+});
+
+describe('runWatcherSweep', () => {
+  const NOW = new Date('2026-10-19T12:00:00.000Z');
+  const CREATED = '2026-10-19T10:00:00.000Z';
+  const watcherRow = (over: Record<string, unknown> = {}) => ({
+    id: 'w1', thread_id: 't1', agent_id: 'a1', kind: 'gmail_sender', value: 'bob@x.com',
+    account: null, last_checked_at: null, created_at: CREATED, ...over,
+  });
+  const sqlOf = (q: any): string => (typeof q === 'string' ? q : q.sql);
+  const callsMatching = (frag: string) =>
+    vi.mocked(client.execute).mock.calls.map((c: any) => c[0]).filter((q: any) => sqlOf(q).includes(frag));
+
+  function wire(watchers: unknown[]) {
+    vi.mocked(client.execute).mockImplementation((async (q: any) => {
+      if (sqlOf(q).includes('FROM thread_watchers')) {
+        return { rows: watchers, rowsAffected: watchers.length, columns: [] };
+      }
+      return { rows: [], rowsAffected: 1, columns: [] };
+    }) as never);
+  }
+
+  const grantAccess = () =>
+    vi.mocked(resolveToolPolicy).mockResolvedValue(policy() as never);
+  const grantHxAccess = (projectId = 'p1') => {
+    vi.mocked(resolveToolPolicy).mockResolvedValue(
+      policy({ serviceInstances: [hxInst], policyInstance: hxInst }) as never
+    );
+    vi.mocked(getInstanceConfig).mockResolvedValue({ config: { projectId } } as never);
+  };
+
+  const msg = (id: string, threadId = 'gt1') => ({ id, threadId, from: 'Bob <bob@x.com>', subject: `Subject ${id}` });
+
+  it('selects only active watchers on active threads', async () => {
+    wire([]);
+    await runWatcherSweep(NOW);
+    const sel = sqlOf(callsMatching('FROM thread_watchers')[0]);
+    expect(sel).toContain("w.status = 'active'");
+    expect(sel).toContain("t.status = 'active'");
+  });
+
+  it('inserts a candidate per new gmail match with source_ref gmail:<id>', async () => {
+    wire([watcherRow()]);
+    grantAccess();
+    vi.mocked(runAgentReadTool).mockResolvedValue({ ok: true, data: { results: [msg('m1'), msg('m2')] } });
+
+    const res = await runWatcherSweep(NOW);
+
+    const since = Math.floor(new Date(CREATED).getTime() / 1000);
+    expect(runAgentReadTool).toHaveBeenCalledWith('a1', 'gmail_search', {
+      query: `from:bob@x.com after:${since}`,
+      maxResults: 50,
+    });
+    const inserts = callsMatching('INSERT INTO thread_candidates');
+    expect(inserts).toHaveLength(2);
+    expect(sqlOf(inserts[0])).toContain('ON CONFLICT (thread_id, source_ref) DO NOTHING');
+    expect(inserts[0].args).toContain('gmail:m1');
+    expect(inserts[0].args).toContain('gmail');
+    expect(inserts[0].args).toContain('Bob <bob@x.com> — Subject m1');
+    expect(res).toEqual({ checked: 1, found: 2, suspended: 0 });
+  });
+
+  it('passes the account and uses last_checked_at as since for a gmail_query', async () => {
+    wire([watcherRow({ kind: 'gmail_query', value: 'invoice', account: 'me@y.com', last_checked_at: '2026-10-19T11:00:00.000Z' })]);
+    grantAccess();
+    vi.mocked(runAgentReadTool).mockResolvedValue({ ok: true, data: { results: [] } });
+
+    await runWatcherSweep(NOW);
+
+    expect(runAgentReadTool).toHaveBeenCalledWith('a1', 'gmail_search', {
+      query: `invoice after:${Math.floor(new Date('2026-10-19T11:00:00.000Z').getTime() / 1000)}`,
+      maxResults: 50,
+      account: 'me@y.com',
+    });
+  });
+
+  it('gmail_thread keeps only messages in the watched thread', async () => {
+    wire([watcherRow({ kind: 'gmail_thread', value: 'gt1' })]);
+    grantAccess();
+    vi.mocked(runAgentReadTool).mockResolvedValue({
+      ok: true,
+      data: { results: [msg('m1', 'gt1'), msg('m2', 'other')] },
+    });
+
+    const res = await runWatcherSweep(NOW);
+
+    const inserts = callsMatching('INSERT INTO thread_candidates');
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0].args).toContain('gmail:m1');
+    expect(res.found).toBe(1);
+  });
+
+  it('hx_project keeps sessions started after since and files them as hx:<id>', async () => {
+    wire([watcherRow({ kind: 'hx_project', value: 'p1', last_checked_at: '2026-10-19T11:00:00.000Z' })]);
+    grantHxAccess();
+    vi.mocked(runAgentReadTool).mockResolvedValue({
+      ok: true,
+      data: {
+        sessions: [
+          { id: 's-new', title: 'Kickoff', started_at: '2026-10-19T11:30:00+00:00' },
+          { id: 's-old', title: 'Old', started_at: '2026-10-19T09:00:00+00:00' },
+          { id: 's-untitled', title: '', started_at: '2026-10-19T11:45:00+00:00' },
+        ],
+      },
+    });
+
+    await runWatcherSweep(NOW);
+
+    expect(runAgentReadTool).toHaveBeenCalledWith('a1', 'hermeneutix_list_sessions', { project_id: 'p1' });
+    const inserts = callsMatching('INSERT INTO thread_candidates');
+    expect(inserts).toHaveLength(2);
+    expect(inserts[0].args).toContain('hx:s-new');
+    expect(inserts[0].args).toContain('hermeneutix');
+    expect(inserts[0].args).toContain('Kickoff');
+    expect(inserts[1].args).toContain('s-untitled');
+  });
+
+  it('hx_meeting lists by instance_id', async () => {
+    wire([watcherRow({ kind: 'hx_meeting', value: 'i1' })]);
+    grantHxAccess();
+    vi.mocked(runAgentReadTool).mockResolvedValue({ ok: true, data: { sessions: [] } });
+
+    await runWatcherSweep(NOW);
+
+    expect(runAgentReadTool).toHaveBeenCalledWith('a1', 'hermeneutix_list_sessions', { instance_id: 'i1' });
+  });
+
+  it.each(['not_enabled', 'blocked', 'needs_approval'] as const)(
+    'suspends a watcher when the read comes back %s',
+    async (reason) => {
+      wire([watcherRow()]);
+      grantAccess();
+      vi.mocked(runAgentReadTool).mockResolvedValue({ ok: false, reason });
+
+      const res = await runWatcherSweep(NOW);
+
+      expect(callsMatching("SET status = 'suspended'")).toHaveLength(1);
+      expect(callsMatching('last_checked_at = ?')).toHaveLength(0);
+      expect(res).toEqual({ checked: 1, found: 0, suspended: 1 });
+    }
+  );
+
+  it('suspends a watcher whose agent lost the source service, without reading', async () => {
+    wire([watcherRow()]);
+    vi.mocked(resolveToolPolicy).mockResolvedValue(notEnabled as never);
+
+    const res = await runWatcherSweep(NOW);
+
+    expect(runAgentReadTool).not.toHaveBeenCalled();
+    expect(callsMatching("SET status = 'suspended'")).toHaveLength(1);
+    expect(res.suspended).toBe(1);
+  });
+
+  it('treats a read error as transient: no suspend, last_checked_at not advanced', async () => {
+    wire([watcherRow()]);
+    grantAccess();
+    vi.mocked(runAgentReadTool).mockResolvedValue({ ok: false, reason: 'error', message: 'boom' });
+
+    const res = await runWatcherSweep(NOW);
+
+    expect(callsMatching("SET status = 'suspended'")).toHaveLength(0);
+    expect(callsMatching('last_checked_at = ?')).toHaveLength(0);
+    expect(res).toEqual({ checked: 1, found: 0, suspended: 0 });
+  });
+
+  it('advances last_checked_at to now only on a successful read', async () => {
+    wire([watcherRow()]);
+    grantAccess();
+    vi.mocked(runAgentReadTool).mockResolvedValue({ ok: true, data: { results: [] } });
+
+    await runWatcherSweep(NOW);
+
+    const upd = callsMatching('last_checked_at = ?');
+    expect(upd).toHaveLength(1);
+    expect(upd[0].args).toEqual([NOW.toISOString(), 'w1']);
+  });
+
+  it('one failing watcher does not abort the sweep', async () => {
+    wire([watcherRow({ id: 'w1' }), watcherRow({ id: 'w2' })]);
+    grantAccess();
+    vi.mocked(runAgentReadTool)
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValueOnce({ ok: true, data: { results: [msg('m1')] } });
+
+    const res = await runWatcherSweep(NOW);
+
+    expect(runAgentReadTool).toHaveBeenCalledTimes(2);
+    expect(res.found).toBe(1);
+    expect(callsMatching('last_checked_at = ?')[0].args).toEqual([NOW.toISOString(), 'w2']);
   });
 });

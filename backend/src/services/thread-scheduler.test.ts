@@ -16,6 +16,9 @@ vi.mock('../notifications/telegram.js', () => ({ telegramNotifier: mockTelegram 
 vi.mock('../notifications/apns.js', () => ({ apnsService: mockApns }));
 vi.mock('../config/index.js', () => ({ config: { dashboardUrl: 'https://app.helm.mom' } }));
 
+vi.mock('./thread-watchers.js', () => ({ runWatcherSweep: vi.fn().mockResolvedValue({ checked: 0, found: 0, suspended: 0 }) }));
+
+import { runWatcherSweep } from './thread-watchers.js';
 import { runReminderTick, startThreadScheduler } from './thread-scheduler.js';
 
 const NOW = new Date('2026-10-19T12:00:00.000Z');
@@ -124,12 +127,17 @@ describe('runReminderTick', () => {
 });
 
 describe('startThreadScheduler', () => {
-  it('schedules the tick every 60 seconds on an unref\'d interval', () => {
+  it('schedules the tick every 60 seconds and the watcher sweep every 15 minutes, both unref\'d', () => {
     const unref = vi.fn();
     const spy = vi.spyOn(globalThis, 'setInterval').mockReturnValue({ unref } as any);
     startThreadScheduler();
     expect(spy).toHaveBeenCalledWith(expect.any(Function), 60_000);
-    expect(unref).toHaveBeenCalled();
+    expect(spy).toHaveBeenCalledWith(expect.any(Function), 15 * 60_000);
+    expect(unref).toHaveBeenCalledTimes(2);
+
+    const sweep = spy.mock.calls.find((c) => c[1] === 15 * 60_000)![0] as () => void;
+    sweep();
+    expect(runWatcherSweep).toHaveBeenCalledTimes(1);
     spy.mockRestore();
   });
 });
