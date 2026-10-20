@@ -36,6 +36,7 @@ import {
 
 import { checkAccess } from '../services/billing.js';
 import { checkWatcherAccess, type WatcherInput } from '../services/thread-watchers.js';
+import { IN_PROCESS_THREAD_TOOLS, runApprovedThreadTool } from '../services/thread-approved.js';
 import { buildAttachmentLink } from '../services/attachment-links.js';
 import { getAgentLimits, renderAgentLimits, describeToolLimit, type AgentLimits } from '../services/agent-limits.js';
 import {
@@ -115,6 +116,15 @@ interface ToolExecutionResult {
 
 let _registryLoaded = false;
 let _serviceTypes: string[] = [];
+
+/**
+ * Tools that require approval whatever a per-agent override says: every
+ * definition's `permissions.alwaysApprove`, filled when the registry loads.
+ * An override of `allow` is raised to approval; `block` stays `block`.
+ */
+const _alwaysApprove = new Set<string>();
+const ALWAYS_APPROVE_TOOLS: ReadonlySet<string> = _alwaysApprove;
+
 /**
  * The owner-set limits to announce, or null. Never throws: announcing limits
  * is a courtesy to the model, and a failure here must not take initialize or
@@ -136,6 +146,9 @@ async function ensureRegistry() {
   try {
     const { serviceDefinitions, getServiceTypeFromToolName } = await import('@reins/servers');
     _serviceTypes = serviceDefinitions.map((d) => d.type);
+    for (const d of serviceDefinitions) {
+      for (const tool of d.permissions?.alwaysApprove ?? []) _alwaysApprove.add(tool);
+    }
     _getServiceType = getServiceTypeFromToolName;
   } catch {
     // Registry not available, use empty
@@ -1097,6 +1110,10 @@ export async function resolveToolPolicy(
   toolName: string,
   args: Record<string, unknown>,
 ): Promise<ToolPolicy | ToolPolicyError> {
+  // ALWAYS_APPROVE_TOOLS is filled from the registry; load it here so the lock
+  // does not depend on the caller having done so.
+  await ensureRegistry();
+
   // Find instances for this agent+service
   const serviceInstances = await db
     .select()
@@ -1175,6 +1192,9 @@ export async function resolveToolPolicy(
     allowed = result.allowed;
     requiresApproval = result.requiresApproval;
   }
+
+  // The hard lock: no stored override can take these out of approval.
+  if (allowed && ALWAYS_APPROVE_TOOLS.has(toolName)) requiresApproval = true;
 
   return { allowed, requiresApproval, hasInstances, serviceInstances, policyInstance };
 }
@@ -1508,8 +1528,12 @@ async function handleCallTool(
     const capturedInstances = [...serviceInstances];
     const capturedHasInstances = hasInstances;
 
+    // The locked thread tools have no server path: once approved they run
+    // in-process as this agent.
     approvalQueue.registerExecutor(approvalId, () =>
-      executeTool(agentId, serviceType, toolName, capturedArgs, capturedHasInstances, capturedInstances)
+      IN_PROCESS_THREAD_TOOLS.has(toolName)
+        ? runApprovedThreadTool(agentId, toolName, capturedArgs, approvalId)
+        : executeTool(agentId, serviceType, toolName, capturedArgs, capturedHasInstances, capturedInstances)
     );
 
     await auditLogger.logToolCall(agentId, toolName, args, 'pending', Date.now() - startTime, {

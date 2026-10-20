@@ -35,6 +35,11 @@ vi.mock('../services/thread-watchers.js', () => ({
   checkWatcherAccess: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
+vi.mock('../services/thread-approved.js', () => ({
+  IN_PROCESS_THREAD_TOOLS: new Set(['thread_propose', 'thread_close', 'thread_add_watcher']),
+  runApprovedThreadTool: vi.fn().mockResolvedValue({ success: true, data: { id: 't-new' } }),
+}));
+
 vi.mock('../services/email.js', () => ({
   sendReauthEmail: vi.fn().mockResolvedValue(undefined),
 }));
@@ -120,6 +125,11 @@ vi.mock('@reins/servers', () => ({
     { type: 'calendar', name: 'Google Calendar', auth: { required: true, credentialServiceIds: ['calendar'] } },
     { type: 'web-search', name: 'Web Search' },
     { type: 'browser', name: 'Browser' },
+    {
+      type: 'threads',
+      name: 'Threads',
+      permissions: { alwaysApprove: ['thread_propose', 'thread_close', 'thread_add_watcher'] },
+    },
   ],
   serviceRegistry: new Map([
     ['gmail', { type: 'gmail', auth: { required: false } }],
@@ -1462,7 +1472,8 @@ describe('watcher pre-approval check', () => {
     const { client } = await import('../db/index.js');
     vi.mocked(client.execute).mockReset();
     vi.mocked(client.execute).mockResolvedValue({ rows: [] } as never);
-    // Until the hard lock lands, the locked tools reach approval through policy.
+    // Policy alone puts these behind approval here; 'locked thread tools'
+    // covers an agent whose override says allow.
     const { canAccessTool } = await import('../services/permissions.js');
     vi.mocked(canAccessTool).mockResolvedValue({ allowed: true, requiresApproval: true });
   });
@@ -1584,6 +1595,125 @@ describe('watcher pre-approval check', () => {
 
     expect(checkWatcherAccess).not.toHaveBeenCalled();
     expect(approvalQueue.submit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('locked thread tools', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    dbWhereMock.mockReset();
+    dbWhereMock.mockResolvedValue([{ id: 'agent-1', name: 'Test Agent', status: 'active' }]);
+    const { client } = await import('../db/index.js');
+    vi.mocked(client.execute).mockReset();
+    vi.mocked(client.execute).mockResolvedValue({ rows: [] } as never);
+    // The agent's override says allow for every threads tool.
+    const { canAccessTool } = await import('../services/permissions.js');
+    vi.mocked(canAccessTool).mockResolvedValue({ allowed: true, requiresApproval: false });
+  });
+
+  const call = (name: string, args: Record<string, unknown>) => {
+    dbWhereMock.mockResolvedValueOnce([{ id: 'agent-1', name: 'Test Agent', status: 'active' }]); // agent status check
+    dbWhereMock.mockResolvedValueOnce([]); // no threads instances → legacy canAccessTool
+    return handleMCPRequest('agent-1', { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name, arguments: args } });
+  };
+  const text = (res: Awaited<ReturnType<typeof handleMCPRequest>>) =>
+    (res.result as { content: Array<{ text: string }> }).content[0].text;
+
+  it('thread_propose requires approval even when the agent override is allow', async () => {
+    const { serverManager } = await import('./server-manager.js');
+
+    const res = await call('thread_propose', { title: 'Seed round', goal: 'Close it' });
+
+    expect(approvalQueue.submit).toHaveBeenCalledWith('agent-1', 'thread_propose', { title: 'Seed round', goal: 'Close it' }, expect.any(String));
+    expect(text(res).startsWith('APPROVAL_PENDING')).toBe(true);
+    expect(serverManager.getServer).not.toHaveBeenCalled();
+  });
+
+  it.each(['thread_close', 'thread_add_watcher'])('%s requires approval even when the override is allow', async (tool) => {
+    const res = await call(tool, { thread_id: 't1', retrospective: 'r', decisions: [], kind: 'hx_project', value: 'p-1' });
+    expect(approvalQueue.submit).toHaveBeenCalledTimes(1);
+    expect(text(res).startsWith('APPROVAL_PENDING')).toBe(true);
+  });
+
+  it('the lock holds on the instance path too', async () => {
+    const { getEffectiveInstancePermissions } = await import('../services/permissions.js');
+    vi.mocked(getEffectiveInstancePermissions).mockResolvedValueOnce({
+      enabled: true, tools: { thread_close: 'allow' },
+    } as never);
+    const threadsInst = { id: 'inst-t', agentId: 'agent-1', serviceType: 'threads', enabled: true, isDefault: true, credentialId: null };
+    dbWhereMock.mockResolvedValueOnce([{ id: 'agent-1', name: 'Test Agent', status: 'active' }]);
+    dbWhereMock.mockResolvedValueOnce([threadsInst]);
+
+    const res = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 10, method: 'tools/call',
+      params: { name: 'thread_close', arguments: { thread_id: 't1', retrospective: 'r', decisions: [] } },
+    });
+
+    expect(approvalQueue.submit).toHaveBeenCalledTimes(1);
+    expect(text(res).startsWith('APPROVAL_PENDING')).toBe(true);
+  });
+
+  it('a blocked thread_close stays blocked', async () => {
+    const { canAccessTool } = await import('../services/permissions.js');
+    vi.mocked(canAccessTool).mockResolvedValue({ allowed: false, requiresApproval: false });
+
+    const res = await call('thread_close', { thread_id: 't1', retrospective: 'r', decisions: [] });
+
+    expect(res.error?.code).toBe(MCP_ERROR_CODES.TOOL_BLOCKED);
+    expect(approvalQueue.submit).not.toHaveBeenCalled();
+    expect(approvalQueue.registerExecutor).not.toHaveBeenCalled();
+  });
+
+  it('a tool outside the lock still runs at allow', async () => {
+    const res = await call('thread_log_event', { thread_id: 't1', title: 'Met Bob' });
+    expect(approvalQueue.submit).not.toHaveBeenCalled();
+    expect(res.error).toBeUndefined();
+    expect((res.result as { isError?: boolean }).isError).toBeUndefined();
+  });
+
+  it('the registered executor for thread_propose calls runApprovedThreadTool, not executeTool', async () => {
+    const { runApprovedThreadTool } = await import('../services/thread-approved.js');
+    const { serverManager } = await import('./server-manager.js');
+    const args = { title: 'Seed round', goal: 'Close it', scope: 'work' };
+
+    await call('thread_propose', args);
+
+    expect(approvalQueue.registerExecutor).toHaveBeenCalledWith('approval-123', expect.any(Function));
+    const executor = vi.mocked(approvalQueue.registerExecutor).mock.calls[0][1];
+    await expect(executor()).resolves.toEqual({ success: true, data: { id: 't-new' } });
+    expect(runApprovedThreadTool).toHaveBeenCalledWith('agent-1', 'thread_propose', args, 'approval-123');
+    expect(serverManager.getServer).not.toHaveBeenCalled();
+  });
+
+  it('the executor for an ordinary approval still goes through executeTool', async () => {
+    const { runApprovedThreadTool } = await import('../services/thread-approved.js');
+    const { canAccessTool } = await import('../services/permissions.js');
+    vi.mocked(canAccessTool).mockResolvedValue({ allowed: true, requiresApproval: true });
+
+    await call('gmail_create_draft', { to: 'x@y.com' });
+
+    const executor = vi.mocked(approvalQueue.registerExecutor).mock.calls[0][1];
+    await executor();
+    expect(runApprovedThreadTool).not.toHaveBeenCalled();
+  });
+
+  it('an allow-override agent naming an ungranted watcher is refused before any approval', async () => {
+    const { checkWatcherAccess } = await import('../services/thread-watchers.js');
+    vi.mocked(checkWatcherAccess).mockResolvedValueOnce({ ok: false, message: 'WATCHER_SOURCE_NOT_GRANTED: no.' });
+
+    const res = await call('thread_add_watcher', { thread_id: 't1', kind: 'gmail_sender', value: 'bob@x.com' });
+
+    expect(text(res)).toBe('WATCHER_SOURCE_NOT_GRANTED: no.');
+    expect(approvalQueue.submit).not.toHaveBeenCalled();
+  });
+
+  it('runAgentReadTool reports needs_approval for a locked tool at allow', async () => {
+    dbWhereMock.mockResolvedValueOnce([{ id: 'agent-1', name: 'Test Agent', status: 'active' }]);
+    dbWhereMock.mockResolvedValueOnce([]);
+
+    const res = await runAgentReadTool('agent-1', 'thread_propose', { title: 'x', goal: 'g' });
+
+    expect(res).toEqual({ ok: false, reason: 'needs_approval' });
   });
 });
 

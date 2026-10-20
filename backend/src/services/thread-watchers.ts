@@ -105,6 +105,15 @@ export async function addWatcher(threadId: string, agentId: string, w: WatcherIn
   return { id };
 }
 
+/** Delete a watcher of `threadId`; false when that thread has no such watcher. */
+export async function removeWatcher(threadId: string, watcherId: string): Promise<boolean> {
+  const result = await client.execute({
+    sql: `DELETE FROM thread_watchers WHERE id = ? AND thread_id = ? RETURNING id`,
+    args: [watcherId, threadId],
+  });
+  return result.rows.length > 0;
+}
+
 /** What the watcher will scan, in plain words — the approval message shows this. */
 export function describeWatcher(w: WatcherInput): string {
   const inbox = w.account || 'the default Gmail account';

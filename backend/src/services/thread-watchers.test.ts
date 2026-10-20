@@ -30,7 +30,7 @@ vi.mock('./permissions.js', () => ({
 import { client } from '../db/index.js';
 import { resolveToolPolicy } from '../mcp/agent-endpoint.js';
 import { getInstanceConfig } from './permissions.js';
-import { checkWatcherAccess, addWatcher, describeWatcher } from './thread-watchers.js';
+import { checkWatcherAccess, addWatcher, removeWatcher, describeWatcher } from './thread-watchers.js';
 
 const gmailInst = { id: 'inst-g', agentId: 'a1', serviceType: 'gmail', enabled: true, isDefault: true, credentialId: 'cred-g' };
 const hxInst = { id: 'inst-h', agentId: 'a1', serviceType: 'hermeneutix', enabled: true, isDefault: true, credentialId: 'cred-h' };
@@ -213,6 +213,22 @@ describe('addWatcher', () => {
 
     const call = vi.mocked(client.execute).mock.calls[0][0] as { args: unknown[] };
     expect(call.args[5]).toBeNull();
+  });
+});
+
+describe('removeWatcher', () => {
+  it('deletes only a watcher of the given thread', async () => {
+    vi.mocked(client.execute).mockResolvedValueOnce({ rows: [{ id: 'w1' }] } as never);
+
+    expect(await removeWatcher('t1', 'w1')).toBe(true);
+    const call = vi.mocked(client.execute).mock.calls.at(-1)![0] as { sql: string; args: unknown[] };
+    expect(call.sql).toContain('DELETE FROM thread_watchers WHERE id = ? AND thread_id = ?');
+    expect(call.args).toEqual(['w1', 't1']);
+  });
+
+  it('returns false when that thread has no such watcher', async () => {
+    vi.mocked(client.execute).mockResolvedValueOnce({ rows: [] } as never);
+    expect(await removeWatcher('t1', 'w-other')).toBe(false);
   });
 });
 

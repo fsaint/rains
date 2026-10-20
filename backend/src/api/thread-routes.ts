@@ -1,8 +1,10 @@
 /**
- * /api/threads — reads and the writes a dashboard or an agent may make.
+ * /api/threads — reads and the writes a dashboard or an agent may make, plus
+ * the session-only writes (mint, close, watchers).
  *
- * Session-only routes (mint, close, watchers) are not here: they are the
- * writes an agent must never reach without the owner's approval.
+ * The session-only routes are the writes an agent must never reach without
+ * the owner's approval. An agent's approved request runs in-process
+ * (services/thread-approved.ts); no route here accepts agent auth for them.
  */
 
 import type { FastifyInstance, FastifyReply } from 'fastify';
@@ -24,10 +26,20 @@ import {
   listPendingCandidates,
   listWatchers,
   countBadge,
+  mintThread,
+  closeThread,
+  type CloseInput,
   type Thread,
   type ThreadStatus,
 } from '../services/threads.js';
-import { describeWatcher, type WatcherInput } from '../services/thread-watchers.js';
+import {
+  describeWatcher,
+  checkWatcherAccess,
+  addWatcher,
+  removeWatcher,
+  type WatcherInput,
+} from '../services/thread-watchers.js';
+import { resolveAgentContext } from '../services/thread-approved.js';
 
 export interface ThreadRouteDeps {
   resolveMemoryScopeContext(req: any): Promise<MemoryContext | null>;
@@ -98,12 +110,26 @@ export function registerThreadRoutes(app: FastifyInstance, deps: ThreadRouteDeps
     return memCtx;
   }
 
+  /**
+   * A dashboard session only. resolveMemoryScopeContext prefers the session,
+   * so an agent context here means there was none.
+   */
+  async function authenticateSession(request: any, reply: FastifyReply): Promise<MemoryContext | null> {
+    const memCtx = deps.getSession(request) ? await deps.resolveMemoryScopeContext(request) : null;
+    if (!memCtx || !memCtx.isSession) {
+      reply.status(401).send({ error: 'Unauthorized' });
+      return null;
+    }
+    return memCtx;
+  }
+
   /** Authenticate and load the thread, 404 when it is outside the caller's scopes. */
   async function loadThread(
     request: any,
-    reply: FastifyReply
+    reply: FastifyReply,
+    auth: typeof authenticate = authenticate
   ): Promise<{ memCtx: MemoryContext; thread: Thread } | null> {
-    const memCtx = await authenticate(request, reply);
+    const memCtx = await auth(request, reply);
     if (!memCtx) return null;
     const thread = await getThread(request.params.id, memCtx.scopeIds);
     if (!thread) {
@@ -135,6 +161,42 @@ export function registerThreadRoutes(app: FastifyInstance, deps: ThreadRouteDeps
     const picked = pickScope(memCtx, (request.query as Record<string, string>).scope, 'read');
     if (isRejection(picked)) return reply.status(picked.status).send(picked.body);
     return reply.send({ data: await listThreads(picked.scopeIds, status as ThreadStatus | undefined) });
+  });
+
+  // Session only: the user is the actor, so a dashboard mint needs no approval.
+  app.post('/api/threads', async (request, reply) => {
+    const memCtx = await authenticateSession(request, reply);
+    if (!memCtx) return;
+    const b = (request.body ?? {}) as Record<string, unknown>;
+    if (typeof b.title !== 'string' || b.title.trim() === '') return invalid(reply, 'title is required');
+    const parsed = parseFields(b, {
+      goal: parseText, past: parseText, now: parseText, next: parseText, targetDate: parseDate,
+    });
+    if ('error' in parsed) return invalid(reply, parsed.error);
+    const picked = pickScope(memCtx, b.scope as string | undefined, 'write');
+    if (isRejection(picked)) return reply.status(picked.status).send(picked.body);
+    const v = parsed.values;
+    try {
+      const thread = await mintThread({
+        userId: memCtx.userId,
+        scopeId: picked.scopeIds[0],
+        title: b.title,
+        goal: v.goal ?? null,
+        targetDate: v.targetDate ?? null,
+        past: v.past ?? undefined,
+        now: v.now ?? undefined,
+        next: v.next ?? undefined,
+        approvalId: null,
+        createdByAgentId: null,
+      });
+      return reply.status(201).send({ data: thread });
+    } catch (err) {
+      // mintThread's one expected refusal: a live thread of the same name.
+      if (err instanceof Error && err.message.includes('already exists')) {
+        return reply.status(409).send({ error: err.message, code: 'DUPLICATE' });
+      }
+      throw err;
+    }
   });
 
   // Session only: the badge is a dashboard affordance, not something an agent reads.
@@ -277,4 +339,66 @@ export function registerThreadRoutes(app: FastifyInstance, deps: ThreadRouteDeps
     const rows = await listWatchers(loaded.thread.id);
     return reply.send({ data: rows.map((row) => ({ ...row, description: describeWatcher(row as WatcherInput) })) });
   });
+
+  // Session only. An agent closes a thread through an approved thread_close.
+  app.post<{ Params: { id: string } }>('/api/threads/:id/close', async (request, reply) => {
+    const b = (request.body ?? {}) as Record<string, unknown>;
+    const loaded = await loadThread(request, reply, authenticateSession);
+    if (!loaded) return;
+    if (typeof b.retrospective !== 'string') return invalid(reply, 'retrospective must be a string');
+    if (!Array.isArray(b.decisions)) return invalid(reply, 'decisions must be an array');
+    const decisions: CloseInput['decisions'] = [];
+    for (const raw of b.decisions) {
+      const d = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+      if (typeof d.itemId !== 'string' || (d.action !== 'cancel' && d.action !== 'carry')) {
+        return invalid(reply, 'each decision needs an itemId and an action of cancel or carry');
+      }
+      if (d.successorThreadId !== undefined && typeof d.successorThreadId !== 'string') {
+        return invalid(reply, 'successorThreadId must be a string');
+      }
+      decisions.push({
+        itemId: d.itemId,
+        action: d.action,
+        ...(d.successorThreadId ? { successorThreadId: d.successorThreadId } : {}),
+      });
+    }
+    return guarded(reply, () => closeThread(loaded.thread, { retrospective: b.retrospective as string, decisions }));
+  });
+
+  // Session only. The watcher runs as `agentId`, so it is bounded by that
+  // agent's reach exactly as an approved thread_add_watcher would be.
+  app.post<{ Params: { id: string } }>('/api/threads/:id/watchers', async (request, reply) => {
+    const loaded = await loadThread(request, reply, authenticateSession);
+    if (!loaded) return;
+    const { thread, memCtx } = loaded;
+    const b = (request.body ?? {}) as Record<string, unknown>;
+    if (typeof b.agentId !== 'string' || b.agentId === '') return invalid(reply, 'agentId is required');
+    if (thread.status === 'closed') {
+      return reply.status(409).send({ error: 'This thread is closed', code: 'THREAD_CLOSED' });
+    }
+    const agentCtx = await resolveAgentContext(b.agentId, memCtx.userId);
+    if (!agentCtx) return reply.status(404).send({ error: 'Agent not found', code: 'NOT_FOUND' });
+    if (!agentCtx.scopeIds.includes(thread.scopeId)) {
+      return reply.status(403).send({
+        error: 'This agent is not granted the thread\'s scope.',
+        code: 'SCOPE_NOT_GRANTED',
+      });
+    }
+    const w = { kind: b.kind, value: b.value, account: b.account } as WatcherInput;
+    const check = await checkWatcherAccess(b.agentId, w);
+    if (!check.ok) return reply.status(400).send({ error: check.message, code: 'WATCHER_SOURCE_NOT_GRANTED' });
+    return reply.status(201).send({ data: await addWatcher(thread.id, b.agentId, w) });
+  });
+
+  app.delete<{ Params: { id: string; wid: string } }>(
+    '/api/threads/:id/watchers/:wid',
+    async (request, reply) => {
+      const loaded = await loadThread(request, reply, authenticateSession);
+      if (!loaded) return;
+      if (!(await removeWatcher(loaded.thread.id, request.params.wid))) {
+        return reply.status(404).send({ error: 'Watcher not found', code: 'NOT_FOUND' });
+      }
+      return reply.send({ data: { removed: true } });
+    }
+  );
 }

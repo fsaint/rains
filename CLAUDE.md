@@ -444,6 +444,21 @@ a system-scoped write. Do not let these fall back to the generic formatter: it t
 argument JSON at 200 characters, and a real skill body pushes `scope` off the end — the owner
 would approve a platform-wide change without seeing that it was one.
 
+**6. Three thread tools are locked to approval: `thread_propose`, `thread_close`,
+`thread_add_watcher`.** They create or end the user's focus objects and start background scans
+of their mail, so no per-agent setting may run them unattended. `ALWAYS_APPROVE_TOOLS` in
+`backend/src/mcp/agent-endpoint.ts`, built from each definition's `permissions.alwaysApprove`,
+raises an `allow` override to approval after permission resolution in `resolveToolPolicy`;
+`block` stays `block`. Once approved they run in-process through `runApprovedThreadTool`
+(`backend/src/services/thread-approved.ts`), which re-reads the agent's owner, scopes and watcher
+access at execution, because the approval can land long after the call. The threads MCP
+handlers for these tools only refuse, and no route accepts agent auth for mint, close, or watcher
+creation: `POST /api/threads`, `/:id/close` and `/:id/watchers` take a dashboard session only. Do
+not add an agent-auth path to any of them, or route the executor back through REST with the
+agent's gateway token — either is a mint without consent. Unlike the caveat above, the watcher
+source check runs *before* the approval is raised (`refuseUngrantedWatchers`) as well as in the
+executor.
+
 ## Phase 1 Priorities
 
 1. **P0 - MCP proxy core** - Transparent proxy with tool filtering

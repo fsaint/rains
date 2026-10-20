@@ -23,7 +23,15 @@ const svc = vi.hoisted(() => ({
   listPendingCandidates: vi.fn(),
   listWatchers: vi.fn(),
   countBadge: vi.fn(),
+  mintThread: vi.fn(),
+  closeThread: vi.fn(),
 }));
+const watcherSvc = vi.hoisted(() => ({
+  checkWatcherAccess: vi.fn(),
+  addWatcher: vi.fn(),
+  removeWatcher: vi.fn(),
+}));
+const { mockResolveAgentContext } = vi.hoisted(() => ({ mockResolveAgentContext: vi.fn() }));
 const { mockIsServiceEnabled } = vi.hoisted(() => ({ mockIsServiceEnabled: vi.fn() }));
 
 vi.mock('../services/threads.js', () => {
@@ -36,6 +44,11 @@ vi.mock('../services/threads.js', () => {
   return { ...svc, ThreadError };
 });
 vi.mock('../services/permissions.js', () => ({ isServiceEnabledForAgent: mockIsServiceEnabled }));
+vi.mock('../services/thread-watchers.js', async () => {
+  const actual = await vi.importActual<typeof import('../services/thread-watchers.js')>('../services/thread-watchers.js');
+  return { ...actual, ...watcherSvc };
+});
+vi.mock('../services/thread-approved.js', () => ({ resolveAgentContext: mockResolveAgentContext }));
 
 import { registerThreadRoutes } from './thread-routes.js';
 import { ThreadError } from '../services/threads.js';
@@ -337,5 +350,203 @@ describe('thread routes', () => {
     svc.getThreadBrief.mockResolvedValue(null);
     const res = await app.inject({ method: 'GET', url: '/api/threads/t1/brief' });
     expect(res.statusCode).toBe(404);
+  });
+  describe('session-only writes', () => {
+    const multi = {
+      ...sessionCtx,
+      scopes: [{ id: 's1', slug: 'home' }, { id: 's2', slug: 'work' }],
+      scopeIds: ['s1', 's2'],
+    };
+    const asAgent = () => {
+      ctx = agentCtx as never;
+      session = null;
+    };
+    const closeBody = {
+      retrospective: 'It went well.',
+      decisions: [
+        { itemId: 'i1', action: 'cancel' },
+        { itemId: 'i2', action: 'carry', successorThreadId: 't2' },
+      ],
+    };
+    const watcherBody = { agentId: 'a1', kind: 'gmail_sender', value: 'bob@x.com', account: 'ana@y.com' };
+
+    beforeEach(() => {
+      svc.mintThread.mockResolvedValue(thread);
+      svc.closeThread.mockResolvedValue({ ...thread, status: 'closed' });
+      watcherSvc.checkWatcherAccess.mockResolvedValue({ ok: true });
+      watcherSvc.addWatcher.mockResolvedValue({ id: 'w1' });
+      watcherSvc.removeWatcher.mockResolvedValue(true);
+      mockResolveAgentContext.mockResolvedValue({ ...agentCtx, scopeIds: ['s1'] });
+    });
+
+    it('an agent-secret POST /api/threads is refused', async () => {
+      asAgent();
+      const res = await app.inject({ method: 'POST', url: '/api/threads', payload: { title: 'x', goal: 'g' } });
+      expect(res.statusCode).toBe(401);
+      expect(svc.mintThread).not.toHaveBeenCalled();
+    });
+
+    it('an agent-secret POST /api/threads/:id/close is refused', async () => {
+      asAgent();
+      const res = await app.inject({ method: 'POST', url: '/api/threads/t1/close', payload: closeBody });
+      expect(res.statusCode).toBe(401);
+      expect(svc.closeThread).not.toHaveBeenCalled();
+    });
+
+    it('agent-secret watcher creation and removal are refused', async () => {
+      asAgent();
+      const add = await app.inject({ method: 'POST', url: '/api/threads/t1/watchers', payload: watcherBody });
+      expect(add.statusCode).toBe(401);
+      const del = await app.inject({ method: 'DELETE', url: '/api/threads/t1/watchers/w1' });
+      expect(del.statusCode).toBe(401);
+      expect(watcherSvc.addWatcher).not.toHaveBeenCalled();
+      expect(watcherSvc.removeWatcher).not.toHaveBeenCalled();
+    });
+
+    it('a session that resolves to an agent context is still refused', async () => {
+      ctx = agentCtx as never;
+      const res = await app.inject({ method: 'POST', url: '/api/threads', payload: { title: 'x', goal: 'g' } });
+      expect(res.statusCode).toBe(401);
+      expect(svc.mintThread).not.toHaveBeenCalled();
+    });
+
+    it('session POST /api/threads mints with approvalId null', async () => {
+      ctx = multi as never;
+      const res = await app.inject({
+        method: 'POST', url: '/api/threads',
+        payload: { title: 'Seed round', goal: 'Close it', scope: 'work', targetDate: '2026-12-01', now: 'Term sheet' },
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json()).toEqual({ data: thread });
+      expect(svc.mintThread).toHaveBeenCalledWith({
+        userId: 'u1', scopeId: 's2', title: 'Seed round', goal: 'Close it',
+        targetDate: '2026-12-01T00:00:00.000Z', past: undefined, now: 'Term sheet', next: undefined,
+        approvalId: null, createdByAgentId: null,
+      });
+    });
+
+    it('session POST /api/threads defaults to the default scope and resolves an id', async () => {
+      ctx = multi as never;
+      await app.inject({ method: 'POST', url: '/api/threads', payload: { title: 'a' } });
+      expect(svc.mintThread).toHaveBeenLastCalledWith(expect.objectContaining({ scopeId: 's1', goal: null }));
+      await app.inject({ method: 'POST', url: '/api/threads', payload: { title: 'b', scope: 's2' } });
+      expect(svc.mintThread).toHaveBeenLastCalledWith(expect.objectContaining({ scopeId: 's2' }));
+    });
+
+    it('session POST /api/threads rejects an unreachable scope with the valid slugs', async () => {
+      ctx = multi as never;
+      const res = await app.inject({ method: 'POST', url: '/api/threads', payload: { title: 'x', scope: 'secret' } });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().code).toBe('SCOPE_NOT_GRANTED');
+      expect(svc.mintThread).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['missing title', { goal: 'g' }],
+      ['blank title', { title: '  ' }],
+      ['numeric goal', { title: 'x', goal: 3 }],
+      ['bad targetDate', { title: 'x', targetDate: 'someday' }],
+      ['numeric past', { title: 'x', past: 1 }],
+    ])('session POST /api/threads rejects %s with 400 INVALID', async (_n, payload) => {
+      const res = await app.inject({ method: 'POST', url: '/api/threads', payload });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().code).toBe('INVALID');
+      expect(svc.mintThread).not.toHaveBeenCalled();
+    });
+
+    it('a duplicate title is a 409', async () => {
+      svc.mintThread.mockRejectedValue(new Error('A thread named "x" already exists in this scope'));
+      const res = await app.inject({ method: 'POST', url: '/api/threads', payload: { title: 'x' } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().code).toBe('DUPLICATE');
+    });
+
+    it('session close loads the thread in scope and calls closeThread', async () => {
+      const res = await app.inject({ method: 'POST', url: '/api/threads/t1/close', payload: closeBody });
+      expect(res.statusCode).toBe(200);
+      expect(svc.getThread).toHaveBeenCalledWith('t1', ['s1']);
+      expect(svc.closeThread).toHaveBeenCalledWith(thread, closeBody);
+    });
+
+    it('session close 404s outside the scopes and maps ThreadError', async () => {
+      svc.getThread.mockResolvedValueOnce(null);
+      const missing = await app.inject({ method: 'POST', url: '/api/threads/other/close', payload: closeBody });
+      expect(missing.statusCode).toBe(404);
+      svc.closeThread.mockRejectedValue(new ThreadError('SUCCESSOR_INVALID', 'nope'));
+      const bad = await app.inject({ method: 'POST', url: '/api/threads/t1/close', payload: closeBody });
+      expect(bad.statusCode).toBe(400);
+      expect(bad.json().code).toBe('SUCCESSOR_INVALID');
+    });
+
+    it.each([
+      ['missing retrospective', { decisions: [] }],
+      ['decisions not an array', { retrospective: 'r', decisions: 'all' }],
+      ['decision without itemId', { retrospective: 'r', decisions: [{ action: 'cancel' }] }],
+      ['unknown action', { retrospective: 'r', decisions: [{ itemId: 'i1', action: 'keep' }] }],
+      ['numeric successor', { retrospective: 'r', decisions: [{ itemId: 'i1', action: 'carry', successorThreadId: 2 }] }],
+    ])('session close rejects %s with 400 INVALID', async (_n, payload) => {
+      const res = await app.inject({ method: 'POST', url: '/api/threads/t1/close', payload });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().code).toBe('INVALID');
+      expect(svc.closeThread).not.toHaveBeenCalled();
+    });
+
+    it('session watcher creation checks the agent, its scope and its source access, then adds', async () => {
+      const res = await app.inject({ method: 'POST', url: '/api/threads/t1/watchers', payload: watcherBody });
+      expect(res.statusCode).toBe(201);
+      expect(res.json()).toEqual({ data: { id: 'w1' } });
+      expect(mockResolveAgentContext).toHaveBeenCalledWith('a1', 'u1');
+      const w = { kind: 'gmail_sender', value: 'bob@x.com', account: 'ana@y.com' };
+      expect(watcherSvc.checkWatcherAccess).toHaveBeenCalledWith('a1', w);
+      expect(watcherSvc.addWatcher).toHaveBeenCalledWith('t1', 'a1', w);
+    });
+
+    it('session watcher creation needs an agentId the user owns', async () => {
+      const missing = await app.inject({ method: 'POST', url: '/api/threads/t1/watchers', payload: { kind: 'hx_project', value: 'p' } });
+      expect(missing.statusCode).toBe(400);
+      mockResolveAgentContext.mockResolvedValueOnce(null);
+      const foreign = await app.inject({ method: 'POST', url: '/api/threads/t1/watchers', payload: watcherBody });
+      expect(foreign.statusCode).toBe(404);
+      expect(watcherSvc.addWatcher).not.toHaveBeenCalled();
+    });
+
+    it('session watcher creation refuses an agent without the thread\'s scope', async () => {
+      mockResolveAgentContext.mockResolvedValueOnce({ ...agentCtx, scopeIds: ['s9'] });
+      const res = await app.inject({ method: 'POST', url: '/api/threads/t1/watchers', payload: watcherBody });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().code).toBe('SCOPE_NOT_GRANTED');
+      expect(watcherSvc.checkWatcherAccess).not.toHaveBeenCalled();
+      expect(watcherSvc.addWatcher).not.toHaveBeenCalled();
+    });
+
+    it('session watcher creation returns 400 WATCHER_SOURCE_NOT_GRANTED when the agent cannot read the source', async () => {
+      watcherSvc.checkWatcherAccess.mockResolvedValueOnce({ ok: false, message: 'WATCHER_SOURCE_NOT_GRANTED: no Gmail.' });
+      const res = await app.inject({ method: 'POST', url: '/api/threads/t1/watchers', payload: watcherBody });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'WATCHER_SOURCE_NOT_GRANTED: no Gmail.', code: 'WATCHER_SOURCE_NOT_GRANTED' });
+      expect(watcherSvc.addWatcher).not.toHaveBeenCalled();
+    });
+
+    it('session watcher creation on a closed thread is a 409', async () => {
+      svc.getThread.mockResolvedValueOnce({ ...thread, status: 'closed' });
+      const res = await app.inject({ method: 'POST', url: '/api/threads/t1/watchers', payload: watcherBody });
+      expect(res.statusCode).toBe(409);
+      expect(watcherSvc.addWatcher).not.toHaveBeenCalled();
+    });
+
+    it('session DELETE watcher removes only within a visible thread', async () => {
+      const ok = await app.inject({ method: 'DELETE', url: '/api/threads/t1/watchers/w1' });
+      expect(ok.statusCode).toBe(200);
+      expect(watcherSvc.removeWatcher).toHaveBeenCalledWith('t1', 'w1');
+
+      watcherSvc.removeWatcher.mockResolvedValueOnce(false);
+      const gone = await app.inject({ method: 'DELETE', url: '/api/threads/t1/watchers/w9' });
+      expect(gone.statusCode).toBe(404);
+
+      svc.getThread.mockResolvedValueOnce(null);
+      const hidden = await app.inject({ method: 'DELETE', url: '/api/threads/other/watchers/w1' });
+      expect(hidden.statusCode).toBe(404);
+      expect(watcherSvc.removeWatcher).toHaveBeenCalledTimes(2);
+    });
   });
 });

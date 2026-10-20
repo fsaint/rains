@@ -37,7 +37,8 @@ export const definition: ServiceDefinitionWithTools = {
     // These three create or end the user's focus objects and start background
     // scanning of their mail, so they must never run unattended. Like
     // helm-admin's writes, they hold when a permission level would loosen them;
-    // clamping per-agent overrides is enforced in agent-endpoint (Task 7).
+    // ALWAYS_APPROVE_TOOLS in agent-endpoint raises any per-agent allow override
+    // to approval.
     alwaysApprove: ['thread_propose', 'thread_close', 'thread_add_watcher'],
     blocked: [],
   },
