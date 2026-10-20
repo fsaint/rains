@@ -6,9 +6,13 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const txUnsafe = vi.hoisted(() => vi.fn());
 vi.mock('../db/index.js', () => ({
   client: {
     execute: vi.fn().mockResolvedValue({ rows: [], rowsAffected: 0, lastInsertRowid: 0n, columns: [] }),
+  },
+  sql: {
+    begin: vi.fn(async (cb: (tx: { unsafe: typeof txUnsafe }) => Promise<void>) => cb({ unsafe: txUnsafe })),
   },
 }));
 
@@ -19,15 +23,13 @@ vi.mock('nanoid', () => ({
 vi.mock('./memory.js', async () => {
   const actual = await vi.importActual<typeof import('./memory.js')>('./memory.js');
   return {
-    resolveOrCreate: vi.fn(),
-    setEntryParent: vi.fn(),
     ensureMemoryRoot: vi.fn(),
     splitSections: actual.splitSections,
   };
 });
 
-import { client } from '../db/index.js';
-import { resolveOrCreate, setEntryParent, ensureMemoryRoot } from './memory.js';
+import { client, sql } from '../db/index.js';
+import { ensureMemoryRoot } from './memory.js';
 import {
   renderRootContent,
   parseThreadSections,
@@ -46,8 +48,7 @@ const threadRow = {
 beforeEach(() => {
   vi.mocked(client.execute).mockReset();
   vi.mocked(client.execute).mockResolvedValue({ rows: [], rowsAffected: 0, lastInsertRowid: 0n, columns: [] });
-  vi.mocked(resolveOrCreate).mockReset();
-  vi.mocked(setEntryParent).mockReset();
+  txUnsafe.mockReset();
   vi.mocked(ensureMemoryRoot).mockReset();
 });
 
@@ -68,29 +69,44 @@ describe('parseThreadSections', () => {
 });
 
 describe('mintThread', () => {
-  it('creates a thread-type root entry under the scope root and inserts an active row', async () => {
-    vi.mocked(resolveOrCreate).mockResolvedValue({ row: { id: 'root-1' } as never, created: true });
+  it('writes a thread-type root entry, a branch under the scope root, and an active row in one transaction', async () => {
     vi.mocked(ensureMemoryRoot).mockResolvedValue('scope-root');
-    vi.mocked(setEntryParent).mockResolvedValue({ ok: true });
 
     const t = await mintThread({ userId: 'u1', scopeId: 's1', title: 'Seed round', goal: 'Close it' });
 
-    expect(resolveOrCreate).toHaveBeenCalledWith(expect.objectContaining({ type: 'thread', title: 'Seed round', scopeId: 's1' }));
-    expect(setEntryParent).toHaveBeenCalledWith('root-1', ['s1'], 'scope-root');
-    expect(t).toMatchObject({ status: 'active', rootEntryId: 'root-1', scopeId: 's1' });
-
-    const sqls = vi.mocked(client.execute).mock.calls.map((c) => (c[0] as { sql: string }).sql);
-    const branchIdx = sqls.findIndex((s) => s.includes('INSERT INTO memory_branches'));
-    expect(branchIdx).toBeGreaterThanOrEqual(0);
-    expect(sqls.some((s) => s.includes('INSERT INTO threads'))).toBe(true);
-    // the branch row exists before setEntryParent reparents it
-    expect(vi.mocked(client.execute).mock.invocationCallOrder[branchIdx])
-      .toBeLessThan(vi.mocked(setEntryParent).mock.invocationCallOrder[0]);
+    expect(t).toMatchObject({ status: 'active', scopeId: 's1', title: 'Seed round' });
+    expect(t.rootEntryId).toBe('test-id');
+    expect(sql.begin).toHaveBeenCalledTimes(1);
+    const calls = txUnsafe.mock.calls as Array<[string, unknown[]]>;
+    expect(calls).toHaveLength(3);
+    expect(calls[0][0]).toContain('INSERT INTO memory_entries');
+    expect(calls[0][0]).toContain("'thread'");
+    expect(calls[0][1]).toContain(renderRootContent({ goal: 'Close it' }));
+    expect(calls[1][0]).toContain('INSERT INTO memory_branches');
+    expect(calls[1][1]).toContain('scope-root');
+    expect(calls[2][0]).toContain('INSERT INTO threads');
   });
 
-  it('refuses to reuse an existing entry when resolveOrCreate matches one (created=false)', async () => {
-    vi.mocked(resolveOrCreate).mockResolvedValue({ row: { id: 'root-1' } as never, created: false });
-    await expect(mintThread({ userId: 'u1', scopeId: 's1', title: 'Seed round' })).rejects.toThrow(/already exists/);
+  it('refuses when a non-closed thread with the same title exists in the scope', async () => {
+    vi.mocked(ensureMemoryRoot).mockResolvedValue('scope-root');
+    vi.mocked(client.execute).mockResolvedValue({ rows: [{ id: 'other' }], rowsAffected: 0, lastInsertRowid: 0n, columns: [] });
+    await expect(mintThread({ userId: 'u1', scopeId: 's1', title: ' Seed Round ' })).rejects.toThrow(/already exists/);
+    const call = vi.mocked(client.execute).mock.calls[0][0] as { sql: string; args: unknown[] };
+    expect(call.sql).toContain("status <> 'closed'");
+    expect(call.args).toEqual(['s1', 'seed round']);
+    expect(txUnsafe).not.toHaveBeenCalled();
+  });
+
+  it('allows a mint when only a closed thread has the title (the check ignores closed rows)', async () => {
+    vi.mocked(ensureMemoryRoot).mockResolvedValue('scope-root');
+    // the dup query filters closed threads out in SQL, so it returns no rows
+    await expect(mintThread({ userId: 'u1', scopeId: 's1', title: 'Board prep' })).resolves.toMatchObject({ status: 'active' });
+  });
+
+  it('propagates a failure from inside the transaction so nothing is committed', async () => {
+    vi.mocked(ensureMemoryRoot).mockResolvedValue('scope-root');
+    txUnsafe.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('fk violation'));
+    await expect(mintThread({ userId: 'u1', scopeId: 's1', title: 'X' })).rejects.toThrow('fk violation');
   });
 });
 

@@ -7,8 +7,8 @@
  */
 
 import { nanoid } from 'nanoid';
-import { client } from '../db/index.js';
-import { resolveOrCreate, setEntryParent, ensureMemoryRoot, splitSections } from './memory.js';
+import { client, sql } from '../db/index.js';
+import { ensureMemoryRoot, splitSections } from './memory.js';
 
 export type ThreadStatus = 'active' | 'paused' | 'closed';
 export type ThreadItemKind = 'event' | 'todo' | 'deadline' | 'reminder' | 'milestone';
@@ -176,37 +176,48 @@ export async function mintThread(input: MintInput): Promise<Thread> {
   const goal = input.goal ?? null;
   const targetDate = input.targetDate ?? null;
 
-  const { row, created } = await resolveOrCreate({
-    userId,
-    scopeId,
-    type: 'thread',
-    title,
-    content: renderRootContent({ goal, past: input.past, now: input.now, next: input.next }),
+  // Only a live thread of the same name blocks a mint. resolveOrCreate's fuzzy
+  // match would also refuse similar titles and the title of a closed thread.
+  const dup = await client.execute({
+    sql: `SELECT id FROM threads
+          WHERE scope_id = ? AND status <> 'closed' AND lower(trim(title)) = ? LIMIT 1`,
+    args: [scopeId, title.trim().toLowerCase()],
   });
-  if (!created) throw new Error(`A thread named "${title}" already exists in this scope`);
+  if (dup.rows.length > 0) throw new Error(`A thread named "${title}" already exists in this scope`);
 
-  // Same branch row POST /api/memory/entries writes; setEntryParent only
-  // updates an existing one.
-  await client.execute({
-    sql: `INSERT INTO memory_branches (id, entry_id, parent_entry_id, scope_id, position, is_expanded)
-          VALUES (?, ?, NULL, ?, 0, false)`,
-    args: [nanoid(), row.id, scopeId],
-  });
-  const parent = await setEntryParent(row.id, [scopeId], await ensureMemoryRoot(userId, scopeId));
-  if ('error' in parent) throw new Error(parent.error);
-
+  const scopeRootId = await ensureMemoryRoot(userId, scopeId);
+  const entryId = nanoid();
   const id = nanoid();
   const now = new Date().toISOString();
-  await client.execute({
-    sql: `INSERT INTO threads (id, user_id, scope_id, root_entry_id, title, goal, target_date, status,
-                               approval_id, created_by_agent_id, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
-    args: [id, userId, scopeId, row.id, title, goal, targetDate,
-      input.approvalId ?? null, input.createdByAgentId ?? null, now, now],
+  const content = renderRootContent({ goal, past: input.past, now: input.now, next: input.next });
+
+  // Entry, branch and thread row commit together, so a failure cannot leave a
+  // root entry with no thread behind it. The branch is written with its parent
+  // directly (as POST /api/memory/entries does) rather than through
+  // setEntryParent, which reads through the non-transactional client.
+  await sql.begin(async (tx) => {
+    await tx.unsafe(
+      `INSERT INTO memory_entries (id, user_id, scope_id, type, title, content, is_deleted, created_at, updated_at)
+       VALUES ($1, $2, $3, 'thread', $4, $5, false, $6, $6)`,
+      [entryId, userId, scopeId, title, content, now],
+    );
+    await tx.unsafe(
+      `INSERT INTO memory_branches (id, entry_id, parent_entry_id, scope_id, position, is_expanded)
+       VALUES ($1, $2, $3, $4,
+         (SELECT COALESCE(MAX(position), -1) + 1 FROM memory_branches WHERE parent_entry_id = $3), false)`,
+      [nanoid(), entryId, scopeRootId, scopeId],
+    );
+    await tx.unsafe(
+      `INSERT INTO threads (id, user_id, scope_id, root_entry_id, title, goal, target_date, status,
+                            approval_id, created_by_agent_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9, $10, $10)`,
+      [id, userId, scopeId, entryId, title, goal, targetDate,
+        input.approvalId ?? null, input.createdByAgentId ?? null, now],
+    );
   });
 
   return {
-    id, userId, scopeId, rootEntryId: row.id, title, goal, targetDate, status: 'active',
+    id, userId, scopeId, rootEntryId: entryId, title, goal, targetDate, status: 'active',
     approvalId: input.approvalId ?? null, createdByAgentId: input.createdByAgentId ?? null,
     createdAt: now, updatedAt: now, closedAt: null,
   };

@@ -853,7 +853,7 @@ export async function initializeDatabase() {
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
       scope_id TEXT NOT NULL REFERENCES memory_scopes(id) ON DELETE CASCADE,
-      root_entry_id TEXT NOT NULL,
+      root_entry_id TEXT NOT NULL REFERENCES memory_entries(id) ON DELETE CASCADE,
       title TEXT NOT NULL,
       goal TEXT,
       target_date TEXT,
