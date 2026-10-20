@@ -55,7 +55,7 @@ Memory handlers are **native (in-process) servers** — they run inside the back
 | `memory_tags` | `#tag` index, rebuilt from content on every write |
 | `agent_memory_scopes` | Per-agent scope grants. No rows = every scope the owner has |
 
-**Entry types:** `index` · `person` · `company` · `project` · `note`
+**Entry types:** `index` · `person` · `company` · `project` · `note` · `thread` (reserved — see below)
 
 Each **scope** gets one root `index` entry, created on first access (`ensureMemoryRoot(userId, scopeId)`) and recorded on `memory_scopes.root_entry_id`. Other entries nest under it or alongside it in that scope's tree.
 
@@ -76,6 +76,18 @@ The partition is enforced at three levels, deliberately overlapping:
 The composite foreign keys are the load-bearing part: after them, no application-layer mistake can produce a cross-scope tree edge or wikilink. The exception is relations, whose target lives in `memory_attributes.value` — polymorphic text that also holds label values, so no foreign key can be declared on it. That one rule is code-enforced only.
 
 Constraints are applied individually at boot and **logged rather than swallowed** if they fail (`[memory-scopes] could not apply …`). Boot must survive a straggler row, but a half-enforced partition nobody knows about is the worse outcome — grep for that prefix after a deploy.
+
+### Thread entries
+
+A `thread` entry is the root of a time-bound focus topic (design: [`docs/superpowers/specs/2026-10-17-threads-design.md`](superpowers/specs/2026-10-17-threads-design.md)). The type is reserved and guarded on the memory routes:
+
+| Rule | Behaviour |
+|------|-----------|
+| Creation | Only `mintThread` (`backend/src/services/threads.ts`) creates one, in a single transaction (entry, branch, thread row) under the scope root. `POST /api/memory/entries` with `type: "thread"` and any type change to or from `thread` return 400 `THREAD_TYPE_RESERVED` |
+| Root protection | A thread root cannot be deleted or re-parented (`PUT /parent`) or moved to another scope — 400 `THREAD_ROOT_PROTECTED` |
+| Closed threads | Once a thread is `closed`, its root and every descendant are read-only on each memory write route: entry update and delete, child create with that `parent_id`, `PUT /parent` (as entry or new parent), and attribute add/remove — 409 `THREAD_CLOSED` |
+| Scope delete | Deleting a scope with active or paused threads returns 409 `SCOPE_HAS_THREADS`. With `reassign_to`, closed threads move to the target scope together with their entries |
+| Dream | `memory_dream` skips `thread` entries; the manifest query excludes them |
 
 ### Migration
 
