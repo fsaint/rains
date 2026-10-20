@@ -65,6 +65,7 @@ import {
   acceptCandidate,
   closeThread,
   getThreadApprovalSummary,
+  countBadge,
   type Thread,
 } from './threads.js';
 
@@ -186,6 +187,24 @@ describe('getThreadBrief', () => {
     expect(eventCall?.sql).toContain('LIMIT ?');
     expect(eventCall?.args).toContain(BRIEF_EVENT_LIMIT);
     expect(BRIEF_EVENT_LIMIT).toBe(20);
+  });
+
+  it('counts only open items as fired and unacknowledged', async () => {
+    vi.mocked(client.execute).mockImplementation(async (stmt) =>
+      res((stmt as { sql: string }).sql.includes('FROM threads WHERE id') ? [threadRow] : []));
+    await getThreadBrief('t1', ['s1']);
+    const fired = execCalls().find((c) => c.sql.includes('fired_at IS NOT NULL'))!;
+    expect(fired.sql).toContain("status = 'open'");
+  });
+});
+
+describe('countBadge', () => {
+  it('counts only open fired items, so marking one done clears it', async () => {
+    vi.mocked(client.execute).mockResolvedValue(res([{ items: 2, candidates: 1 }]));
+    expect(await countBadge('u1')).toBe(3);
+    const q = execCalls()[0].sql;
+    const items = q.slice(0, q.indexOf('AS items'));
+    expect(items).toContain("i.status = 'open'");
   });
 });
 
@@ -325,6 +344,14 @@ describe('closeThread', () => {
     expect(calls.some((c) => c[0].includes("status = 'cancelled', body") && String(c[1][0]).includes('(carried to Next round)'))).toBe(true);
     expect(calls.filter((c) => c[0].includes("'cancelled'"))).toHaveLength(2);
     expect(calls.some((c) => c[0].includes("status = 'closed'"))).toBe(true);
+  });
+
+  it('leaves event rows untouched: only open non-event items are cancelled or carried', async () => {
+    closeMocks([]);
+    await closeThread(thread, { retrospective: 'r', decisions: [] });
+    const open = execCalls().find((c) => c.sql.includes('FROM thread_items'))!;
+    expect(open.sql).toContain("status = 'open'");
+    expect(open.sql).toContain("kind <> 'event'");
   });
 
   it('throws THREAD_CLOSED and writes nothing else when the transition matches no row', async () => {

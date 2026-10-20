@@ -356,12 +356,12 @@ export async function listOpenItems(threadId: string): Promise<ThreadItem[]> {
   return result.rows.map((r) => mapItem(r as Row));
 }
 
-/** Fired-but-unacknowledged items plus pending candidates across the user's non-closed threads. */
+/** Open fired-but-unacknowledged items plus pending candidates across the user's non-closed threads. */
 export async function countBadge(userId: string): Promise<number> {
   const result = await client.execute({
     sql: `SELECT
             (SELECT COUNT(*) FROM thread_items i JOIN threads t ON t.id = i.thread_id
-              WHERE t.user_id = ? AND t.status != 'closed'
+              WHERE t.user_id = ? AND t.status != 'closed' AND i.status = 'open'
                 AND (i.fired_at IS NOT NULL OR i.nudge_fired_at IS NOT NULL)
                 AND i.acknowledged_at IS NULL) AS items,
             (SELECT COUNT(*) FROM thread_candidates c JOIN threads t ON t.id = c.thread_id
@@ -395,7 +395,7 @@ export async function getThreadBrief(id: string, scopeIds: string[]): Promise<Th
     20,
   );
   const firedUnacknowledged = await items(
-    '(fired_at IS NOT NULL OR nudge_fired_at IS NOT NULL) AND acknowledged_at IS NULL',
+    "status = 'open' AND (fired_at IS NOT NULL OR nudge_fired_at IS NOT NULL) AND acknowledged_at IS NULL",
     'COALESCE(fired_at, nudge_fired_at) ASC',
     100,
   );
@@ -653,9 +653,10 @@ export async function dismissCandidate(thread: Thread, candidateId: string): Pro
 export async function closeThread(thread: Thread, input: CloseInput): Promise<Thread> {
   assertWritable(thread);
 
-  // Everything is validated before the first write.
+  // Everything is validated before the first write. Events record what
+  // happened; they are neither cancelled nor carried.
   const open = await client.execute({
-    sql: `SELECT * FROM thread_items WHERE thread_id = ? AND status = 'open'`,
+    sql: `SELECT * FROM thread_items WHERE thread_id = ? AND status = 'open' AND kind <> 'event'`,
     args: [thread.id],
   });
   const openItems = open.rows.map((r) => mapItem(r as Row));
