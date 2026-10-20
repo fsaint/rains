@@ -1207,11 +1207,15 @@ export type AgentReadResult =
  * Run a tool as the agent only if its effective permission is 'allow'. Never
  * submits an approval; never audits as pending. For background reads (watcher
  * sweeps) that must stay inside what the agent can already do unprompted.
+ * Every read it runs is audited like a tools/call, marked
+ * source: 'thread_watcher' with the caller's context so the activity feed
+ * can tell it from a call the agent made.
  */
 export async function runAgentReadTool(
   agentId: string,
   rawToolName: string,
   args: Record<string, unknown>,
+  auditContext: Record<string, unknown> = {},
 ): Promise<AgentReadResult> {
   await ensureRegistry();
   const toolName = canonicalToolName(rawToolName);
@@ -1241,13 +1245,18 @@ export async function runAgentReadTool(
   if (!policy.allowed) return { ok: false, reason: 'blocked' };
   if (policy.requiresApproval) return { ok: false, reason: 'needs_approval' };
 
+  const metadata = { serviceType, source: 'thread_watcher', ...auditContext };
+  const startTime = Date.now();
+  let read: AgentReadResult;
   try {
     const result = await executeTool(agentId, serviceType, toolName, args, policy.hasInstances, policy.serviceInstances);
-    if (result.success) return { ok: true, data: result.data };
-    return { ok: false, reason: 'error', message: result.errorMessage };
+    read = result.success ? { ok: true, data: result.data } : { ok: false, reason: 'error', message: result.errorMessage };
   } catch (error) {
-    return { ok: false, reason: 'error', message: error instanceof Error ? error.message : 'Unknown error' };
+    read = { ok: false, reason: 'error', message: error instanceof Error ? error.message : 'Unknown error' };
   }
+  await auditLogger.logToolCall(agentId, toolName, args, read.ok ? 'success' : 'error', Date.now() - startTime,
+    read.ok ? metadata : { ...metadata, error: read.message });
+  return read;
 }
 
 /**

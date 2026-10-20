@@ -272,7 +272,8 @@ export async function runWatcherSweep(
       // Only the project listing pages. Gmail search and the instance listing
       // return one capped page, so a full page is warned about and accepted.
       const pages: unknown[] = [];
-      let read = await runAgentReadTool(w.agent_id, tool, args);
+      const auditContext = { watcherId: w.id, threadId: w.thread_id };
+      let read = await runAgentReadTool(w.agent_id, tool, args, auditContext);
       let failed = false;
       for (let page = 1; ; page++) {
         if (!read.ok) {
@@ -291,7 +292,7 @@ export async function runWatcherSweep(
           console.warn(`[thread-watchers] watcher ${w.id} has more than ${MAX_PAGES} pages; later sessions skipped`);
           break;
         }
-        read = await runAgentReadTool(w.agent_id, tool, { ...args, page: page + 1 });
+        read = await runAgentReadTool(w.agent_id, tool, { ...args, page: page + 1 }, auditContext);
       }
       if (failed) continue;
 

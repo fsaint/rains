@@ -306,7 +306,7 @@ describe('runWatcherSweep', () => {
     expect(runAgentReadTool).toHaveBeenCalledWith('a1', 'gmail_search', {
       query: `from:"bob@x.com" after:${since}`,
       maxResults: 50,
-    });
+    }, { watcherId: 'w1', threadId: 't1' });
     const inserts = callsMatching('INSERT INTO thread_candidates');
     expect(inserts).toHaveLength(2);
     expect(sqlOf(inserts[0])).toContain('ON CONFLICT (thread_id, source_ref) DO NOTHING');
@@ -327,7 +327,7 @@ describe('runWatcherSweep', () => {
       query: `(invoice) after:${Math.floor(new Date('2026-10-19T11:00:00.000Z').getTime() / 1000)}`,
       maxResults: 50,
       account: 'me@y.com',
-    });
+    }, { watcherId: 'w1', threadId: 't1' });
   });
 
   it('gmail_thread keeps only messages in the watched thread', async () => {
@@ -364,7 +364,7 @@ describe('runWatcherSweep', () => {
 
     await runWatcherSweep(NOW);
 
-    expect(runAgentReadTool).toHaveBeenCalledWith('a1', 'hermeneutix_list_sessions', { project_id: 'p1' });
+    expect(runAgentReadTool).toHaveBeenCalledWith('a1', 'hermeneutix_list_sessions', { project_id: 'p1' }, { watcherId: 'w1', threadId: 't1' });
     const inserts = callsMatching('INSERT INTO thread_candidates');
     expect(inserts).toHaveLength(3);
     expect(inserts.map((q: any) => q.args[4])).toContain('hx:s-late');
@@ -381,7 +381,7 @@ describe('runWatcherSweep', () => {
 
     await runWatcherSweep(NOW);
 
-    expect(runAgentReadTool).toHaveBeenCalledWith('a1', 'hermeneutix_list_sessions', { instance_id: 'i1' });
+    expect(runAgentReadTool).toHaveBeenCalledWith('a1', 'hermeneutix_list_sessions', { instance_id: 'i1' }, { watcherId: 'w1', threadId: 't1' });
   });
 
   it.each(['not_enabled', 'blocked', 'needs_approval'] as const)(

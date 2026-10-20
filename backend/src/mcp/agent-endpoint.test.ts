@@ -1430,6 +1430,38 @@ describe('runAgentReadTool', () => {
     expect(approvalQueue.submit).not.toHaveBeenCalled();
   });
 
+  it('audits each read it runs as a background watcher read', async () => {
+    const { auditLogger } = await import('../audit/logger.js');
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([]);
+
+    await runAgentReadTool('agent-1', 'gmail_list_messages', { q: 'x' }, { watcherId: 'w1', threadId: 't1' });
+
+    expect(auditLogger.logToolCall).toHaveBeenCalledTimes(1);
+    expect(auditLogger.logToolCall).toHaveBeenCalledWith('agent-1', 'gmail_list_messages', { q: 'x' }, 'success', expect.any(Number), {
+      serviceType: 'gmail', source: 'thread_watcher', watcherId: 'w1', threadId: 't1',
+    });
+  });
+
+  it('audits a failed read as an error', async () => {
+    const { auditLogger } = await import('../audit/logger.js');
+    const { serverManager } = await import('./server-manager.js');
+    vi.mocked(serverManager.getServer).mockReturnValue({
+      serverType: 'gmail',
+      name: 'Gmail',
+      getToolDefinitions: () => [],
+      callTool: vi.fn().mockResolvedValue({ success: false, error: 'quota' }),
+    } as never);
+    dbWhereMock.mockResolvedValueOnce(agentRow);
+    dbWhereMock.mockResolvedValueOnce([]);
+
+    const res = await runAgentReadTool('agent-1', 'gmail_list_messages', {}, { watcherId: 'w1' });
+
+    expect(res.ok).toBe(false);
+    expect(auditLogger.logToolCall).toHaveBeenCalledWith('agent-1', 'gmail_list_messages', {}, 'error', expect.any(Number),
+      expect.objectContaining({ serviceType: 'gmail', source: 'thread_watcher', watcherId: 'w1' }));
+  });
+
   it('runs nothing for an agent that is not active', async () => {
     const { serverManager } = await import('./server-manager.js');
     dbWhereMock.mockResolvedValueOnce([{ id: 'agent-1', name: 'Test Agent', status: 'suspended' }]);
