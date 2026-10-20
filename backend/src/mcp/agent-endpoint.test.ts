@@ -1431,6 +1431,19 @@ describe('runAgentReadTool', () => {
     expect(serverManager.getServer).not.toHaveBeenCalled();
   });
 
+  it('runs nothing for an agent whose owner\'s billing has lapsed', async () => {
+    const { serverManager } = await import('./server-manager.js');
+    const { checkAccess } = await import('../services/billing.js');
+    vi.mocked(checkAccess).mockResolvedValueOnce({ allowed: false, reason: 'trial_ended' });
+    dbWhereMock.mockResolvedValueOnce([{ id: 'agent-1', name: 'Test Agent', status: 'active', userId: 'owner-1' }]);
+
+    const res = await runAgentReadTool('agent-1', 'gmail_list_messages', {});
+
+    expect(checkAccess).toHaveBeenCalledWith('owner-1');
+    expect(res).toEqual({ ok: false, reason: 'error', message: 'trial_ended' });
+    expect(serverManager.getServer).not.toHaveBeenCalled();
+  });
+
   it('returns error for an unknown tool', async () => {
     const res = await runAgentReadTool('agent-1', 'unknown_tool', {});
 
@@ -1514,6 +1527,54 @@ describe('watcher pre-approval check', () => {
     expect(checkWatcherAccess).toHaveBeenCalledTimes(1);
     expect(approvalQueue.submit).toHaveBeenCalledTimes(1);
     expect((res.result as { content: Array<{ text: string }> }).content[0].text).toContain('APPROVAL_PENDING');
+  });
+
+  describe('with a threads instance and a Gmail account', () => {
+    // Every agent has a credential-less threads instance (enableDefaultServices),
+    // so a watcher's `account` must not be read as the threads routing account.
+    const threadsInst = { id: 'inst-t', agentId: 'agent-1', serviceType: 'threads', enabled: true, isDefault: true, credentialId: null };
+
+    beforeEach(async () => {
+      const { getEffectiveInstancePermissions } = await import('../services/permissions.js');
+      vi.mocked(getEffectiveInstancePermissions).mockResolvedValue({
+        enabled: true,
+        tools: { thread_add_watcher: 'require_approval', thread_propose: 'require_approval' },
+      } as never);
+    });
+
+    const callWithInstance = (args: Record<string, unknown>) => {
+      dbWhereMock.mockResolvedValueOnce([{ id: 'agent-1', name: 'Test Agent', status: 'active' }]);
+      dbWhereMock.mockResolvedValueOnce([threadsInst]);
+      return handleMCPRequest('agent-1', {
+        jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 'thread_add_watcher', arguments: args },
+      });
+    };
+
+    it('thread_add_watcher with a held account reaches the watcher check and the approval', async () => {
+      const { checkWatcherAccess } = await import('../services/thread-watchers.js');
+
+      const res = await callWithInstance({ thread_id: 't1', kind: 'gmail_sender', value: 'bob@x.com', account: 'ana@y.com' });
+
+      expect(res.error).toBeUndefined();
+      expect(checkWatcherAccess).toHaveBeenCalledWith('agent-1', { kind: 'gmail_sender', value: 'bob@x.com', account: 'ana@y.com' });
+      expect(approvalQueue.submit).toHaveBeenCalledTimes(1);
+      expect((res.result as { content: Array<{ text: string }> }).content[0].text).toContain('APPROVAL_PENDING');
+    });
+
+    it('thread_add_watcher with an account the agent does not hold gets the watcher refusal, no approval', async () => {
+      const { checkWatcherAccess } = await import('../services/thread-watchers.js');
+      vi.mocked(checkWatcherAccess).mockResolvedValueOnce({
+        ok: false, message: 'WATCHER_SOURCE_NOT_GRANTED: this agent does not hold the Gmail account other@z.com.',
+      });
+
+      const res = await callWithInstance({ thread_id: 't1', kind: 'gmail_sender', value: 'bob@x.com', account: 'other@z.com' });
+
+      expect(res.error).toBeUndefined();
+      const result = res.result as { isError?: boolean; content: Array<{ text: string }> };
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toMatch(/^WATCHER_SOURCE_NOT_GRANTED/);
+      expect(approvalQueue.submit).not.toHaveBeenCalled();
+    });
   });
 
   it('thread_propose without watchers checks nothing and raises the approval', async () => {

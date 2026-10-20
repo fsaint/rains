@@ -645,6 +645,20 @@ async function credentialCoversService(credentialId: string, serviceType: string
   return scopes.includes(serviceType);
 }
 
+/**
+ * Services whose tools take an `account` argument that is not an instance
+ * selector. A threads watcher's `account` names the Gmail inbox to watch;
+ * read as routing it would match no credential on the credential-less threads
+ * instance and fail every account-scoped watcher. The watcher's account is
+ * checked by checkWatcherAccess instead.
+ */
+const NON_ROUTING_ACCOUNT_SERVICES = new Set(['threads']);
+
+/** The `account` that selects this call's instance, if any. */
+function routingAccount(serviceType: string, args: Record<string, unknown>): string | undefined {
+  return NON_ROUTING_ACCOUNT_SERVICES.has(serviceType) ? undefined : (args.account as string | undefined);
+}
+
 // ============================================================================
 // executeTool — credential resolution + tool invocation
 // ============================================================================
@@ -751,7 +765,7 @@ async function executeTool(
       context.linkedAccounts = accounts;
     } else {
       // Resolve instance credential based on args.account or default
-      const requestedAccount = args.account as string | undefined;
+      const requestedAccount = routingAccount(serviceType, args);
       let targetInstance = serviceInstances.find((i) => i.isDefault) ?? serviceInstances[0];
 
       if (requestedAccount) {
@@ -776,9 +790,11 @@ async function executeTool(
         }
       }
 
-      // Strip `account` from args before passing to handler
-      const { account: _account, ...cleanArgs } = args;
-      args = cleanArgs;
+      // Strip a routing `account` from args before passing to handler
+      if (!NON_ROUTING_ACCOUNT_SERVICES.has(serviceType)) {
+        const { account: _account, ...cleanArgs } = args;
+        args = cleanArgs;
+      }
 
       // The instance's own settings travel with the call. This is the only
       // place a handler learns them, so a hermeneutix instance scoped to one
@@ -1120,7 +1136,7 @@ export async function resolveToolPolicy(
   if (hasInstances) {
     // Resolve which instance to use based on `account` arg — same rule as
     // executeTool: the named account, else the default, else the first.
-    const requestedAccount = args.account as string | undefined;
+    const requestedAccount = routingAccount(serviceType, args);
     let targetInstance = serviceInstances.find((i) => i.isDefault) ?? serviceInstances[0];
 
     if (requestedAccount) {
@@ -1184,6 +1200,13 @@ export async function runAgentReadTool(
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId));
   if (!agent || agent.status !== 'active') {
     return { ok: false, reason: 'error', message: 'Agent not found or not active' };
+  }
+
+  // Same billing gate as tools/call: a lapsed account makes no tool calls,
+  // background ones included.
+  if (agent.userId) {
+    const gate = await checkAccess(agent.userId);
+    if (!gate.allowed) return { ok: false, reason: 'error', message: gate.reason ?? 'access_denied' };
   }
 
   const serviceType = getServiceTypeFromTool(toolName);

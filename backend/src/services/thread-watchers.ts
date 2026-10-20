@@ -60,6 +60,8 @@ export async function checkWatcherAccess(
   const serviceName = isGmail ? 'Gmail' : 'Hermeneutix';
   const toolName = isGmail ? GMAIL_READ_TOOL : HX_READ_TOOL;
 
+  // With no account this resolves the default instance. An agent with several
+  // hermeneutix instances can only watch the default one's pinned project.
   const policy = await resolveToolPolicy(agentId, serviceType, toolName, account ? { account } : {});
   if ('error' in policy) {
     return refuse(
@@ -118,7 +120,8 @@ export function describeWatcher(w: WatcherInput): string {
     case 'hx_meeting':
       return `scan Hermeneutix meeting ${w.value} for new sessions every 15 minutes`;
     default:
-      // A stored row from before the kind set settled; never render it as blank.
+      // Unreachable under WatcherKind; guards a stored row whose kind is not
+      // one of the five, so it never renders as blank.
       return `watch ${String(w.kind)} ${w.value}`;
   }
 }
