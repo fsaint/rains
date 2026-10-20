@@ -25,11 +25,14 @@ vi.mock('./memory.js', async () => {
   return {
     ensureMemoryRoot: vi.fn(),
     splitSections: actual.splitSections,
+    replaceSection: actual.replaceSection,
+    updateLinkIndex: vi.fn(),
+    updateTagIndex: vi.fn(),
   };
 });
 
 import { client, sql } from '../db/index.js';
-import { ensureMemoryRoot } from './memory.js';
+import { ensureMemoryRoot, updateLinkIndex, updateTagIndex } from './memory.js';
 import {
   renderRootContent,
   parseThreadSections,
@@ -37,6 +40,12 @@ import {
   getThread,
   getThreadBrief,
   BRIEF_EVENT_LIMIT,
+  addItem,
+  updateItem,
+  updateSections,
+  acceptCandidate,
+  closeThread,
+  type Thread,
 } from './threads.js';
 
 const threadRow = {
@@ -140,5 +149,138 @@ describe('getThreadBrief', () => {
     expect(eventCall?.sql).toContain('LIMIT ?');
     expect(eventCall?.args).toContain(BRIEF_EVENT_LIMIT);
     expect(BRIEF_EVENT_LIMIT).toBe(20);
+  });
+});
+
+const thread: Thread = {
+  id: 't1', userId: 'u1', scopeId: 's1', rootEntryId: 'root-1', title: 'Seed round', goal: null,
+  targetDate: null, status: 'active', approvalId: null, createdByAgentId: null,
+  createdAt: 'now', updatedAt: 'now', closedAt: null,
+};
+const res = (rows: Record<string, unknown>[]) => ({ rows, rowsAffected: 0, lastInsertRowid: 0n, columns: [] });
+const itemRow = (o: Record<string, unknown> = {}) => ({
+  id: 'i1', thread_id: 't1', kind: 'todo', title: 'Send deck', body: null, occurred_at: null,
+  due_at: 'D1', remind_at: 'R1', status: 'open', nudge_fired_at: 'N', fired_at: 'F',
+  acknowledged_at: 'A', memory_entry_id: null, source_type: null, source_ref: null, created_at: 'c', ...o,
+});
+const execCalls = () => vi.mocked(client.execute).mock.calls.map((c) => c[0] as { sql: string; args: unknown[] });
+const updateCall = () => execCalls().find((c) => c.sql.startsWith('UPDATE thread_items'))!;
+
+describe('addItem', () => {
+  it('throws THREAD_CLOSED on a closed thread', async () => {
+    await expect(addItem({ ...thread, status: 'closed' }, { kind: 'todo', title: 'x' })).rejects.toMatchObject({ code: 'THREAD_CLOSED' });
+  });
+  it('defaults occurredAt to now for events only', async () => {
+    const ev = await addItem(thread, { kind: 'event', title: 'Met Ana' });
+    const todo = await addItem(thread, { kind: 'todo', title: 'Send deck' });
+    expect(ev.occurredAt).not.toBeNull();
+    expect(todo.occurredAt).toBeNull();
+  });
+});
+
+describe('updateItem', () => {
+  beforeEach(() => {
+    vi.mocked(client.execute).mockImplementation(async (stmt) =>
+      (stmt as { sql: string }).sql.startsWith('SELECT * FROM thread_items') ? res([itemRow()]) : res([]));
+  });
+  it('clears nudge_fired_at and acknowledged_at when remindAt changes', async () => {
+    await updateItem(thread, 'i1', { remindAt: 'R2' });
+    expect(updateCall().sql).toContain('nudge_fired_at = NULL');
+    expect(updateCall().sql).toContain('acknowledged_at = NULL');
+  });
+  it('clears fired_at and acknowledged_at when dueAt changes', async () => {
+    await updateItem(thread, 'i1', { dueAt: 'D2' });
+    expect(updateCall().sql).toContain('fired_at = NULL');
+    expect(updateCall().sql).not.toContain('nudge_fired_at = NULL');
+    expect(updateCall().sql).toContain('acknowledged_at = NULL');
+  });
+  it('leaves stamps alone when only the title changes', async () => {
+    await updateItem(thread, 'i1', { title: 'New' });
+    expect(updateCall().sql).not.toContain('= NULL');
+  });
+});
+
+describe('updateSections', () => {
+  const rootContent = (c: string) =>
+    vi.mocked(client.execute).mockImplementation(async (stmt) =>
+      (stmt as { sql: string }).sql.includes('SELECT content') ? res([{ content: c }]) : res([]));
+
+  it('replaces ## Now, bumps the version and reindexes', async () => {
+    rootContent(renderRootContent({ now: 'old' }));
+    await updateSections(thread, { Now: { text: 'fresh', mode: 'replace' } });
+    const upd = execCalls().find((c) => c.sql.includes('UPDATE memory_entries'))!;
+    expect(upd.sql).toContain('version = version + 1');
+    expect(upd.args[0]).toContain('## Now\n\nfresh');
+    expect(upd.args[0]).not.toContain('old');
+    expect(updateLinkIndex).toHaveBeenCalledWith('root-1', 's1', upd.args[0]);
+    expect(updateTagIndex).toHaveBeenCalledWith('root-1', upd.args[0]);
+  });
+  it('re-adds a missing heading when a replace finds none', async () => {
+    rootContent('## Goal\n\nG\n');
+    await updateSections(thread, { Now: { text: 'fresh', mode: 'replace' } });
+    const upd = execCalls().find((c) => c.sql.includes('UPDATE memory_entries'))!;
+    expect(upd.args[0]).toContain('## Now\n\nfresh');
+  });
+});
+
+describe('acceptCandidate', () => {
+  it('creates a child note under the root, labels it with the source id and logs a linked event', async () => {
+    vi.mocked(client.execute).mockResolvedValue(res([{
+      id: 'c1', thread_id: 't1', watcher_id: null, source_type: 'gmail', source_ref: 'gmail:abc',
+      summary: 'Term sheet', found_at: 'f', status: 'pending',
+    }]));
+    const item = await acceptCandidate(thread, 'c1');
+    const calls = txUnsafe.mock.calls as Array<[string, unknown[]]>;
+    expect(calls[0][0]).toContain('INSERT INTO memory_entries');
+    expect(calls[1][0]).toContain('INSERT INTO memory_branches');
+    expect(calls[1][1]).toContain('root-1');
+    expect(calls[2][0]).toContain('INSERT INTO memory_attributes');
+    expect(calls[2][1]).toEqual(expect.arrayContaining(['gmail_message_id', 'abc']));
+    expect(calls[4][0]).toContain("status = 'accepted'");
+    expect(item).toMatchObject({ kind: 'event', memoryEntryId: 'test-id', sourceRef: 'gmail:abc' });
+  });
+});
+
+describe('closeThread', () => {
+  const closeMocks = (successor: Record<string, unknown>[]) =>
+    vi.mocked(client.execute).mockImplementation(async (stmt) => {
+      const { sql: q } = stmt as { sql: string };
+      if (q.includes("FROM thread_items")) return res([itemRow({ id: 'i1' }), itemRow({ id: 'i2', title: 'Call Bo' })]);
+      if (q.includes('SELECT content')) return res([{ content: renderRootContent({}) }]);
+      if (q.includes('FROM threads')) return res(successor);
+      return res([]);
+    });
+  const succRow = { ...threadRow, id: 't2', title: 'Next round' };
+
+  it('writes the retrospective, cancels and carries items, sets closed_at', async () => {
+    closeMocks([succRow]);
+    const closed = await closeThread(thread, {
+      retrospective: 'Went well',
+      decisions: [
+        { itemId: 'i1', action: 'carry', successorThreadId: 't2' },
+        { itemId: 'i2', action: 'carry' },
+      ],
+    });
+    expect(closed.status).toBe('closed');
+    const calls = txUnsafe.mock.calls as Array<[string, unknown[]]>;
+    const root = calls.find((c) => c[0].includes('UPDATE memory_entries'))!;
+    expect(root[1][0]).toContain('Went well');
+    expect(root[1][0]).toContain('### Open loops\n\n- [ ] Call Bo');
+    const copy = calls.find((c) => c[0].includes('INSERT INTO thread_items'))!;
+    expect(copy[1][1]).toBe('t2');
+    expect(calls.some((c) => c[0].includes("status = 'cancelled', body") && String(c[1][0]).includes('(carried to Next round)'))).toBe(true);
+    expect(calls.filter((c) => c[0].includes("'cancelled'"))).toHaveLength(2);
+    expect(calls.some((c) => c[0].includes("status = 'closed'"))).toBe(true);
+  });
+
+  it('throws SUCCESSOR_INVALID and writes nothing for a closed or other-user successor', async () => {
+    closeMocks([]);
+    await expect(closeThread(thread, {
+      retrospective: 'r', decisions: [{ itemId: 'i1', action: 'carry', successorThreadId: 'bad' }],
+    })).rejects.toMatchObject({ code: 'SUCCESSOR_INVALID' });
+    expect(txUnsafe).not.toHaveBeenCalled();
+    const q = execCalls().find((c) => c.args[0] === 'bad')!;
+    expect(q.sql).toContain("status = 'active'");
+    expect(q.args).toContain('u1');
   });
 });

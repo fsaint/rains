@@ -3,12 +3,13 @@
  *
  * A thread is a time-bound focus topic. Its narrative is an ordinary memory
  * entry (the root); the tables in db/index.ts hold the timeline, watchers and
- * candidates around it. This module covers minting and reading.
+ * candidates around it. This module covers minting, reading, items, section
+ * edits, candidates and closing.
  */
 
 import { nanoid } from 'nanoid';
 import { client, sql } from '../db/index.js';
-import { ensureMemoryRoot, splitSections } from './memory.js';
+import { ensureMemoryRoot, splitSections, replaceSection, updateLinkIndex, updateTagIndex } from './memory.js';
 
 export type ThreadStatus = 'active' | 'paused' | 'closed';
 export type ThreadItemKind = 'event' | 'todo' | 'deadline' | 'reminder' | 'milestone';
@@ -300,4 +301,294 @@ export async function getThreadBrief(id: string, scopeIds: string[]): Promise<Th
     pendingCandidates: candidates.rows.map((r) => mapCandidate(r as Row)),
     activeCount: await countActiveThreads(thread.userId),
   };
+}
+
+export class ThreadError extends Error {
+  constructor(
+    public code: 'THREAD_CLOSED' | 'SUCCESSOR_INVALID' | 'NOT_FOUND' | 'INVALID',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ThreadError';
+  }
+}
+
+export interface ItemInput {
+  kind: ThreadItemKind;
+  title: string;
+  body?: string | null;
+  occurredAt?: string | null;
+  dueAt?: string | null;
+  remindAt?: string | null;
+  memoryEntryId?: string | null;
+  sourceType?: SourceType | null;
+  sourceRef?: string | null;
+}
+
+export interface CloseInput {
+  retrospective: string;
+  decisions: Array<{ itemId: string; action: 'cancel' | 'carry'; successorThreadId?: string }>;
+}
+
+const SOURCE_LABELS: Partial<Record<SourceType, { name: string; prefix: string }>> = {
+  gmail: { name: 'gmail_message_id', prefix: 'gmail:' },
+  hermeneutix: { name: 'hx_session_id', prefix: 'hx:' },
+};
+
+function assertWritable(thread: Thread): void {
+  if (thread.status === 'closed') throw new ThreadError('THREAD_CLOSED', 'This thread is closed');
+}
+
+async function getItem(thread: Thread, itemId: string): Promise<ThreadItem> {
+  const r = await client.execute({
+    sql: `SELECT * FROM thread_items WHERE id = ? AND thread_id = ? LIMIT 1`,
+    args: [itemId, thread.id],
+  });
+  if (r.rows.length === 0) throw new ThreadError('NOT_FOUND', 'Item not found in this thread');
+  return mapItem(r.rows[0] as Row);
+}
+
+const touch = (thread: Thread, now: string) =>
+  client.execute({ sql: `UPDATE threads SET updated_at = ? WHERE id = ?`, args: [now, thread.id] });
+
+export async function addItem(thread: Thread, input: ItemInput): Promise<ThreadItem> {
+  assertWritable(thread);
+  const id = nanoid();
+  const now = new Date().toISOString();
+  const occurredAt = input.occurredAt ?? (input.kind === 'event' ? now : null);
+  await client.execute({
+    sql: `INSERT INTO thread_items (id, thread_id, kind, title, body, occurred_at, due_at, remind_at, status,
+                                    memory_entry_id, source_type, source_ref, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)`,
+    args: [id, thread.id, input.kind, input.title, input.body ?? null, occurredAt,
+      input.dueAt ?? null, input.remindAt ?? null, input.memoryEntryId ?? null,
+      input.sourceType ?? null, input.sourceRef ?? null, now],
+  });
+  await touch(thread, now);
+  return {
+    id, threadId: thread.id, kind: input.kind, title: input.title, body: input.body ?? null,
+    occurredAt, dueAt: input.dueAt ?? null, remindAt: input.remindAt ?? null, status: 'open',
+    nudgeFiredAt: null, firedAt: null, acknowledgedAt: null, memoryEntryId: input.memoryEntryId ?? null,
+    sourceType: input.sourceType ?? null, sourceRef: input.sourceRef ?? null, createdAt: now,
+  };
+}
+
+export async function updateItem(
+  thread: Thread,
+  itemId: string,
+  patch: Partial<Pick<ThreadItem, 'title' | 'body' | 'dueAt' | 'remindAt' | 'status'>>,
+): Promise<ThreadItem> {
+  assertWritable(thread);
+  const current = await getItem(thread, itemId);
+
+  const sets: string[] = [];
+  const args: unknown[] = [];
+  const set = (col: string, v: unknown) => { sets.push(`${col} = ?`); args.push(v); };
+  if (patch.title !== undefined) set('title', patch.title);
+  if (patch.body !== undefined) set('body', patch.body);
+  if (patch.status !== undefined) set('status', patch.status);
+  // Moving a date re-arms its notification and un-acknowledges the old one.
+  if (patch.remindAt !== undefined) {
+    set('remind_at', patch.remindAt);
+    if (patch.remindAt !== current.remindAt) sets.push('nudge_fired_at = NULL', 'acknowledged_at = NULL');
+  }
+  if (patch.dueAt !== undefined) {
+    set('due_at', patch.dueAt);
+    if (patch.dueAt !== current.dueAt) sets.push('fired_at = NULL', 'acknowledged_at = NULL');
+  }
+  if (sets.length === 0) return current;
+
+  await client.execute({
+    sql: `UPDATE thread_items SET ${sets.join(', ')} WHERE id = ? AND thread_id = ?`,
+    args: [...args, itemId, thread.id] as never[],
+  });
+  await touch(thread, new Date().toISOString());
+  return getItem(thread, itemId);
+}
+
+export async function acknowledgeItem(thread: Thread, itemId: string): Promise<void> {
+  assertWritable(thread);
+  await getItem(thread, itemId);
+  await client.execute({
+    sql: `UPDATE thread_items SET acknowledged_at = ? WHERE id = ? AND thread_id = ?`,
+    args: [new Date().toISOString(), itemId, thread.id],
+  });
+}
+
+/** Replace a section, or append when the heading is missing (replace reports not_found). */
+function applySection(content: string, heading: string, text: string, mode: 'replace' | 'append'): string {
+  let edit = replaceSection(content, heading, text, mode);
+  if ('error' in edit) edit = replaceSection(content, heading, text, 'append');
+  return (edit as { content: string }).content;
+}
+
+async function readRootContent(thread: Thread): Promise<string> {
+  const r = await client.execute({
+    sql: `SELECT content FROM memory_entries WHERE id = ? AND is_deleted = false LIMIT 1`,
+    args: [thread.rootEntryId],
+  });
+  if (r.rows.length === 0) throw new ThreadError('NOT_FOUND', 'Thread root entry not found');
+  return (r.rows[0].content as string | null) ?? '';
+}
+
+export async function updateSections(
+  thread: Thread,
+  edits: Partial<Record<'Now' | 'Next' | 'Past' | 'Goal', { text: string; mode: 'replace' | 'append' }>>,
+): Promise<void> {
+  assertWritable(thread);
+  let content = await readRootContent(thread);
+  for (const [heading, e] of Object.entries(edits)) {
+    if (e) content = applySection(content, heading, e.text, e.mode);
+  }
+  const now = new Date().toISOString();
+  await client.execute({
+    sql: `UPDATE memory_entries SET content = ?, version = version + 1, updated_at = ? WHERE id = ?`,
+    args: [content, now, thread.rootEntryId],
+  });
+  await updateLinkIndex(thread.rootEntryId, thread.scopeId, content);
+  await updateTagIndex(thread.rootEntryId, content);
+  await touch(thread, now);
+}
+
+export async function setThreadStatus(thread: Thread, status: 'active' | 'paused'): Promise<Thread> {
+  assertWritable(thread);
+  const now = new Date().toISOString();
+  await client.execute({
+    sql: `UPDATE threads SET status = ?, updated_at = ? WHERE id = ?`,
+    args: [status, now, thread.id],
+  });
+  return { ...thread, status, updatedAt: now };
+}
+
+async function getPendingCandidate(thread: Thread, candidateId: string): Promise<ThreadCandidate> {
+  const r = await client.execute({
+    sql: `SELECT * FROM thread_candidates WHERE id = ? AND thread_id = ? AND status = 'pending' LIMIT 1`,
+    args: [candidateId, thread.id],
+  });
+  if (r.rows.length === 0) throw new ThreadError('NOT_FOUND', 'Pending candidate not found');
+  return mapCandidate(r.rows[0] as Row);
+}
+
+export async function acceptCandidate(thread: Thread, candidateId: string): Promise<ThreadItem> {
+  assertWritable(thread);
+  const cand = await getPendingCandidate(thread, candidateId);
+  const entryId = nanoid();
+  const itemId = nanoid();
+  const now = new Date().toISOString();
+  const label = SOURCE_LABELS[cand.sourceType];
+
+  // Written directly, not through resolveOrCreate: its fuzzy title match could
+  // attach the candidate to an unrelated existing note.
+  await sql.begin(async (tx) => {
+    await tx.unsafe(
+      `INSERT INTO memory_entries (id, user_id, scope_id, type, title, content, is_deleted, created_at, updated_at)
+       VALUES ($1, $2, $3, 'note', $4, $4, false, $5, $5)`,
+      [entryId, thread.userId, thread.scopeId, cand.summary, now],
+    );
+    await tx.unsafe(
+      `INSERT INTO memory_branches (id, entry_id, parent_entry_id, scope_id, position, is_expanded)
+       VALUES ($1, $2, $3, $4,
+         (SELECT COALESCE(MAX(position), -1) + 1 FROM memory_branches WHERE parent_entry_id = $3), false)`,
+      [nanoid(), entryId, thread.rootEntryId, thread.scopeId],
+    );
+    if (label) {
+      await tx.unsafe(
+        `INSERT INTO memory_attributes (id, entry_id, type, name, value, position, is_deleted, created_at)
+         VALUES ($1, $2, 'label', $3, $4, 0, false, $5)`,
+        [nanoid(), entryId, label.name, cand.sourceRef.replace(label.prefix, ''), now],
+      );
+    }
+    await tx.unsafe(
+      `INSERT INTO thread_items (id, thread_id, kind, title, occurred_at, status, memory_entry_id,
+                                 source_type, source_ref, created_at)
+       VALUES ($1, $2, 'event', $3, $4, 'open', $5, $6, $7, $4)`,
+      [itemId, thread.id, cand.summary, now, entryId, cand.sourceType, cand.sourceRef],
+    );
+    await tx.unsafe(`UPDATE thread_candidates SET status = 'accepted' WHERE id = $1`, [candidateId]);
+  });
+
+  return {
+    id: itemId, threadId: thread.id, kind: 'event', title: cand.summary, body: null, occurredAt: now,
+    dueAt: null, remindAt: null, status: 'open', nudgeFiredAt: null, firedAt: null, acknowledgedAt: null,
+    memoryEntryId: entryId, sourceType: cand.sourceType, sourceRef: cand.sourceRef, createdAt: now,
+  };
+}
+
+export async function dismissCandidate(thread: Thread, candidateId: string): Promise<void> {
+  assertWritable(thread);
+  await getPendingCandidate(thread, candidateId);
+  await client.execute({
+    sql: `UPDATE thread_candidates SET status = 'dismissed' WHERE id = ?`,
+    args: [candidateId],
+  });
+}
+
+export async function closeThread(thread: Thread, input: CloseInput): Promise<Thread> {
+  assertWritable(thread);
+
+  // Everything is validated before the first write.
+  const open = await client.execute({
+    sql: `SELECT * FROM thread_items WHERE thread_id = ? AND status = 'open'`,
+    args: [thread.id],
+  });
+  const openItems = open.rows.map((r) => mapItem(r as Row));
+  const byId = new Map(openItems.map((i) => [i.id, i]));
+  for (const d of input.decisions) {
+    if (!byId.has(d.itemId)) throw new ThreadError('NOT_FOUND', `Open item ${d.itemId} not found in this thread`);
+  }
+
+  const successors = new Map<string, Thread>();
+  for (const d of input.decisions) {
+    if (d.action !== 'carry' || !d.successorThreadId || successors.has(d.successorThreadId)) continue;
+    const r = await client.execute({
+      sql: `SELECT * FROM threads WHERE id = ? AND user_id = ? AND status = 'active' LIMIT 1`,
+      args: [d.successorThreadId, thread.userId],
+    });
+    if (r.rows.length === 0 || d.successorThreadId === thread.id) {
+      throw new ThreadError('SUCCESSOR_INVALID', `Successor thread ${d.successorThreadId} is not an active thread of this user`);
+    }
+    successors.set(d.successorThreadId, mapThread(r.rows[0] as Row));
+  }
+
+  const loops: string[] = [];
+  const decisionFor = new Map(input.decisions.map((d) => [d.itemId, d]));
+  for (const d of input.decisions) {
+    if (d.action === 'carry' && !d.successorThreadId) loops.push(`- [ ] ${byId.get(d.itemId)!.title}`);
+  }
+  let retro = input.retrospective.replace(/\s+$/, '');
+  if (loops.length) retro += `${retro ? '\n\n' : ''}### Open loops\n\n${loops.join('\n')}`;
+  const content = applySection(await readRootContent(thread), 'Retrospective', retro, 'replace');
+
+  const now = new Date().toISOString();
+  await sql.begin(async (tx) => {
+    await tx.unsafe(
+      `UPDATE memory_entries SET content = $1, version = version + 1, updated_at = $2 WHERE id = $3`,
+      [content, now, thread.rootEntryId],
+    );
+    for (const item of openItems) {
+      const d = decisionFor.get(item.id);
+      const successor = d?.action === 'carry' && d.successorThreadId ? successors.get(d.successorThreadId) : undefined;
+      if (successor) {
+        await tx.unsafe(
+          `INSERT INTO thread_items (id, thread_id, kind, title, body, occurred_at, due_at, remind_at, status,
+                                     memory_entry_id, source_type, source_ref, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'open', $9, $10, $11, $12)`,
+          [nanoid(), successor.id, item.kind, item.title, item.body, item.occurredAt, item.dueAt,
+            item.remindAt, item.memoryEntryId, item.sourceType, item.sourceRef, now],
+        );
+        const body = `${item.body ? item.body + ' ' : ''}(carried to ${successor.title})`;
+        await tx.unsafe(`UPDATE thread_items SET status = 'cancelled', body = $1 WHERE id = $2`, [body, item.id]);
+      } else {
+        await tx.unsafe(`UPDATE thread_items SET status = 'cancelled' WHERE id = $1`, [item.id]);
+      }
+    }
+    await tx.unsafe(
+      `UPDATE threads SET status = 'closed', closed_at = $1, updated_at = $1 WHERE id = $2`,
+      [now, thread.id],
+    );
+  });
+
+  await updateLinkIndex(thread.rootEntryId, thread.scopeId, content);
+  await updateTagIndex(thread.rootEntryId, content);
+  return { ...thread, status: 'closed', closedAt: now, updatedAt: now };
 }
