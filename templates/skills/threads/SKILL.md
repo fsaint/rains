@@ -25,9 +25,14 @@ them, and help close them.
 ## Approval-locked tools
 
 `{{tool:thread_propose}}`, `{{tool:thread_close}}` and `{{tool:thread_add_watcher}}` always go
-to the user's phone for approval. You will get back `APPROVAL_PENDING`. That is not a failure:
-nothing has happened yet. Stop, tell the user it is waiting for their approval, and do not
-retry, rephrase or work around it. Carry on only once the user says it was approved.
+to the user's phone for approval. You will get back `APPROVAL_PENDING` with a `jobId`. That is
+not a failure: nothing has happened yet. Follow its instructions:
+
+- Call `{{tool:get_result}}` with that `jobId` straight away, and poll every 3 to 5 seconds until the
+  status is `completed`, `rejected` or `changes_requested`.
+- Tell the user the request is waiting for their approval, then report the outcome. On
+  `rejected` or `changes_requested`, say so and do not retry unchanged.
+- Never call the locked tool again while it is pending. A second call raises a second approval.
 
 ## 1. When to propose a thread
 
@@ -95,7 +100,7 @@ When the goal is met or the user wants it ended:
 1. Call `{{tool:thread_get_brief}}` to see every open item.
 2. Draft a retrospective: what happened, what worked, what to remember. Show it to the user.
 3. For each open item, propose a decision: `cancel` it, or `carry` it to a successor thread
-   (`successor_thread_id` is required for `carry`). Every open item needs one.
+   (`successor_thread_id` is required for `carry`, and that thread must already exist). Every open item needs one.
 4. Once the user agrees, call `{{tool:thread_close}}` with `thread_id`, `retrospective` and
    `decisions`. It goes to the user for approval (see above) and the thread closes only when
    they approve.
