@@ -250,6 +250,43 @@ export async function listThreads(scopeIds: string[], status?: ThreadStatus): Pr
   return result.rows.map((r) => mapThread(r as Row));
 }
 
+/** The thread an entry belongs to — as its root, or as a descendant of the root. null if none. */
+export async function threadForEntry(
+  entryId: string,
+): Promise<{ threadId: string; status: ThreadStatus; isRoot: boolean } | null> {
+  let current: string | null = entryId;
+  const visited = new Set<string>();
+  while (current !== null && !visited.has(current)) {
+    visited.add(current);
+    const thread = await client.execute({
+      sql: `SELECT id, status FROM threads WHERE root_entry_id = ? LIMIT 1`,
+      args: [current],
+    });
+    if (thread.rows.length > 0) {
+      return {
+        threadId: thread.rows[0].id as string,
+        status: thread.rows[0].status as ThreadStatus,
+        isRoot: current === entryId,
+      };
+    }
+    const parent = await client.execute({
+      sql: `SELECT parent_entry_id FROM memory_branches WHERE entry_id = ? LIMIT 1`,
+      args: [current],
+    });
+    current = (parent.rows[0]?.parent_entry_id as string | null | undefined) ?? null;
+  }
+  return null;
+}
+
+/** True while any thread in the scope is not closed — closed ones may go with the scope. */
+export async function scopeHasOpenThreads(scopeId: string): Promise<boolean> {
+  const result = await client.execute({
+    sql: `SELECT 1 FROM threads WHERE scope_id = ? AND status <> 'closed' LIMIT 1`,
+    args: [scopeId],
+  });
+  return result.rows.length > 0;
+}
+
 export async function countActiveThreads(userId: string): Promise<number> {
   const result = await client.execute({
     sql: `SELECT COUNT(*) AS n FROM threads WHERE user_id = ? AND status = 'active'`,

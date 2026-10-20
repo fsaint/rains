@@ -90,6 +90,7 @@ import {
   lookupEntryByTitleOrAlias,
   replaceSection,
 } from '../services/memory.js';
+import { threadForEntry, scopeHasOpenThreads } from '../services/threads.js';
 import {
   resolveMemoryContext,
   listUserScopes,
@@ -5824,6 +5825,13 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (!title) return reply.status(400).send({ error: 'title is required' });
 
     const type = (body.type as string | undefined) ?? 'note';
+    // Thread roots are minted by the threads service, which owns their lifecycle.
+    if (type === 'thread') {
+      return reply.status(400).send({
+        error: 'The "thread" type is reserved. Threads are created with thread_create.',
+        code: 'THREAD_TYPE_RESERVED',
+      });
+    }
     const content = (body.content as string | undefined) ?? null;
     const parentId = (body.parent_id as string | undefined) ?? null;
     const requestedScope = (body.scope as string | undefined) ?? null;
@@ -6119,6 +6127,27 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       });
     }
 
+    // `thread` is reserved in both directions: no entry becomes a thread root,
+    // and a root cannot be retyped into an ordinary note.
+    if (
+      body.type !== undefined &&
+      (body.type === 'thread' || (existing.rows[0].type === 'thread' && body.type !== 'thread'))
+    ) {
+      return reply.status(400).send({
+        error: 'The "thread" type is reserved and cannot be set or removed through memory updates.',
+        code: 'THREAD_TYPE_RESERVED',
+      });
+    }
+
+    // A closed thread is a record; its root and notes are no longer editable.
+    const owningThread = await threadForEntry(id);
+    if (owningThread?.status === 'closed') {
+      return reply.status(409).send({
+        error: 'This entry belongs to a closed thread and can no longer be edited.',
+        code: 'THREAD_CLOSED',
+      });
+    }
+
     // Root index is read-only from dashboard sessions — only the agent (gateway token) may update it
     if (existing.rows[0].type === 'index' && getSession(request)) {
       return reply.status(403).send({ error: 'Root index can only be updated by the agent' });
@@ -6280,6 +6309,18 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.status(400).send({
         error: "A scope's index entry cannot be deleted. Delete or archive the scope instead.",
         code: 'CANNOT_DELETE_ROOT',
+      });
+    }
+
+    // Only for an entry the caller can reach, so an unreachable root still reads as 404.
+    const reachable = await client.execute({
+      sql: `SELECT id FROM memory_entries WHERE id = ? AND scope_id IN (${scopeIn}) AND is_deleted = false`,
+      args: [id, ...memCtx.scopeIds],
+    });
+    if (reachable.rows.length > 0 && (await threadForEntry(id))?.isRoot) {
+      return reply.status(400).send({
+        error: "A thread's root entry cannot be deleted. Close the thread instead.",
+        code: 'THREAD_ROOT_PROTECTED',
       });
     }
 
@@ -6748,6 +6789,15 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.send({ data: { archived: true } });
     }
 
+    // Closed threads go with the scope by FK cascade; live ones would be destroyed
+    // silently, and reassign_to does not carry threads across.
+    if (await scopeHasOpenThreads(request.params.id)) {
+      return reply.status(409).send({
+        error: 'This scope has active or paused threads. Close them first.',
+        code: 'SCOPE_HAS_THREADS',
+      });
+    }
+
     // Agents granted this scope. One whose ONLY grant is this scope would be
     // left restricted-to-nothing by the delete, and resolveMemoryContext would
     // silently hand it the owner's default — so that case is refused unless
@@ -6863,6 +6913,13 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     });
     if (isRoot.rows.length > 0) {
       return reply.status(400).send({ error: "A scope's index entry cannot be moved" });
+    }
+
+    if ((await threadForEntry(id))?.isRoot) {
+      return reply.status(400).send({
+        error: "A thread's root entry cannot be moved to another scope.",
+        code: 'THREAD_ROOT_PROTECTED',
+      });
     }
 
     const oldScopeId = entry.rows[0].scope_id as string;

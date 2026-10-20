@@ -227,7 +227,7 @@ export const memoryGetTool: ToolDefinition = {
       title: { type: 'string', description: 'Exact entry title (used if id is not provided)' },
       type: {
         type: 'string',
-        enum: ['note', 'person', 'company', 'project', 'index'],
+        enum: ['note', 'person', 'company', 'project', 'index', 'thread'],
         description: 'Narrow a title lookup by type (optional; ignored when id is given)',
       },
       scope: {
