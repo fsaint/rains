@@ -1302,6 +1302,7 @@ export async function createServiceInstance(
  */
 export async function enableDefaultServices(agentId: string): Promise<void> {
   const defaults = ['memory', 'skills', 'threads'];
+  const enabled = new Set<string>();
   for (const serviceType of defaults) {
     try {
       const existing = await db
@@ -1309,10 +1310,39 @@ export async function enableDefaultServices(agentId: string): Promise<void> {
         .from(agentServiceInstances)
         .where(and(eq(agentServiceInstances.agentId, agentId), eq(agentServiceInstances.serviceType, serviceType)))
         .limit(1);
-      if (existing.length > 0) continue;
-      await createServiceInstance(agentId, serviceType);
+      if (existing.length === 0) await createServiceInstance(agentId, serviceType);
+      enabled.add(serviceType);
     } catch (err) {
       console.warn(`[enableDefaultServices] failed to enable ${serviceType} for agent ${agentId}:`, err instanceof Error ? err.message : err);
+    }
+  }
+  await assignDefaultSkills(agentId, enabled);
+}
+
+/**
+ * System skills a new agent gets alongside a default service, keyed by service.
+ *
+ * autoAssign on a skill row is inert, so without this an agent would hold the
+ * threads tools with nothing telling it how to hold, work and close a thread.
+ * Only skills whose service actually came up are assigned: a skill whose
+ * required service is missing would sit on the agent as unavailable.
+ */
+export const DEFAULT_SERVICE_SKILLS: Record<string, string> = { threads: 'threads' };
+
+async function assignDefaultSkills(agentId: string, enabled: Set<string>): Promise<void> {
+  for (const [serviceType, skillId] of Object.entries(DEFAULT_SERVICE_SKILLS)) {
+    if (!enabled.has(serviceType)) continue;
+    try {
+      // INSERT ... SELECT so a skill that was never seeded (or was deleted) is a
+      // no-op rather than a foreign-key error.
+      await client.execute({
+        sql: `INSERT INTO agent_skills (agent_id, skill_id, created_at)
+              SELECT ?, id, now() FROM skills WHERE id = ? AND user_id IS NULL
+              ON CONFLICT DO NOTHING`,
+        args: [agentId, skillId],
+      });
+    } catch (err) {
+      console.warn(`[enableDefaultServices] failed to assign skill ${skillId} to agent ${agentId}:`, err instanceof Error ? err.message : err);
     }
   }
 }

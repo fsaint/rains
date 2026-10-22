@@ -312,7 +312,7 @@ export const threadCloseTool: ToolDefinition = {
 export const threadAddWatcherTool: ToolDefinition = {
   name: 'thread_add_watcher',
   description:
-    'Start watching a source for things that belong to a thread, such as a Gmail label or sender. ' +
+    'Start watching a source for things that belong to a thread, such as a Gmail thread, search or sender, or a Hermeneutix project or meeting. ' +
     'The user is asked to approve it on their phone, because it scans their mail in the background.',
   inputSchema: {
     type: 'object',

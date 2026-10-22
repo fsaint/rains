@@ -289,7 +289,7 @@ describe('threads platform skill template', () => {
     expect(meta.name).toBe('Threads');
     expect(meta.requires).toEqual(['memory', 'threads']);
     expect(meta.autoAssign).toBe('false');
-    expect(meta.version).toBe('1.0.0');
+    expect(meta.version).toBe('1.1.0');
     expect(body).toContain('Helm thread held: ');
     expect(body).toContain('Helm thread released');
   });

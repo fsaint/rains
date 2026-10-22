@@ -1227,6 +1227,27 @@ export async function initializeDatabase() {
   } catch (err) {
     console.warn('[db] Could not seed system skills:', err);
   }
+
+  // One-time backfill: agents that got the threads service before
+  // enableDefaultServices started assigning the Threads skill alongside it.
+  // There is no migrations table, so the guard is "no agent holds the skill
+  // yet". Once any assignment exists this never runs again, which is what keeps
+  // an owner's later unassignment from being undone on the next deploy.
+  try {
+    const backfilled = await sql`
+      INSERT INTO agent_skills (agent_id, skill_id, created_at)
+      SELECT DISTINCT i.agent_id, s.id, now()
+      FROM agent_service_instances i
+      JOIN skills s ON s.id = 'threads' AND s.user_id IS NULL
+      WHERE i.service_type = 'threads'
+        AND NOT EXISTS (SELECT 1 FROM agent_skills WHERE skill_id = 'threads')
+      ON CONFLICT DO NOTHING
+      RETURNING agent_id
+    `;
+    if (backfilled.length > 0) console.log(`[skills] Assigned Threads to ${backfilled.length} agent(s) holding the threads service`);
+  } catch (err) {
+    console.warn('[db] Could not backfill Threads skill assignments:', err);
+  }
 }
 
 /**

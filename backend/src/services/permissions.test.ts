@@ -1408,6 +1408,32 @@ describe('Permission Service', () => {
       expect(types).toContain('threads');
     });
 
+    it('enableDefaultServices assigns the Threads skill once threads is enabled', async () => {
+      const none = () => Object.assign(Promise.resolve([]), { limit: () => Promise.resolve([]) });
+      mockTables(new Map());
+      vi.mocked(db.select).mockReturnValue({
+        from: vi.fn().mockReturnValue({ where: vi.fn().mockImplementation(none) }),
+      } as never);
+
+      await enableDefaultServices('agent-1');
+
+      const assignment = vi.mocked(client.execute).mock.calls
+        .map((c) => c[0] as { sql: string; args: unknown[] })
+        .find((q) => q.sql.includes('INSERT INTO agent_skills'));
+      expect(assignment?.args).toEqual(['agent-1', 'threads']);
+    });
+
+    it('enableDefaultServices skips the Threads skill when threads could not be enabled', async () => {
+      // Every lookup throws, so no service comes up.
+      vi.mocked(db.select).mockImplementation(() => { throw new Error('db down'); });
+
+      await enableDefaultServices('agent-1');
+      vi.mocked(db.select).mockReset();
+
+      const sqls = vi.mocked(client.execute).mock.calls.map((c) => (c[0] as { sql: string }).sql);
+      expect(sqls.some((s) => s.includes('INSERT INTO agent_skills'))).toBe(false);
+    });
+
     it.each([['full', 'require_approval'], ['read', 'block']] as const)(
       'setPermissionLevel %s sets thread_propose to %s and ordinary writes accordingly',
       async (level, proposePermission) => {

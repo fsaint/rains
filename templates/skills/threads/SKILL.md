@@ -3,7 +3,7 @@ name: Threads
 description: Use when the user asks you to pick up, continue, work on, or release a thread, or when a recurring topic with a goal and a deadline deserves one. Explains how to propose, hold, work and close a thread.
 requires: [memory, threads]
 autoAssign: false
-version: 1.0.0
+version: 1.1.0
 ---
 
 <!--
@@ -12,8 +12,11 @@ version: 1.0.0
   assignment the exposure boundary. Setting it true here would claim a behaviour
   that does not happen.
 
-  Assign this to any agent with memory and threads enabled.
+  enableDefaultServices() assigns this to every new agent alongside the threads
+  service (DEFAULT_SERVICE_SKILLS in backend/src/services/permissions.ts).
 -->
+
+<!-- 1.1.0: threads vs projects, choosing a watcher, threads and scopes. -->
 
 # Threads
 
@@ -21,6 +24,26 @@ A **thread** is a time-bound focus topic: a launch, a move, a hiring round. It h
 a Past / Now / Next narrative, todos and deadlines, reminders, and watchers that look for
 mail and meetings that belong to it. The user owns threads; you propose them, work inside
 them, and help close them.
+
+## Threads and projects
+
+A **project** is a durable entry in memory: a client, a product, an area of work. It lasts as
+long as the work does and holds the people, facts and history around it.
+
+A **thread** is a push with a goal and a date, usually inside a project: "ship the v2 launch
+by 1 December" inside the product's project. When the goal is met, the thread closes; the
+project goes on.
+
+- Progress, decisions and todos for the push go into the thread, not into the project's notes.
+- When the thread closes, record the outcome on the project in one or two lines, with a
+  `[[wikilink]]` to the thread's entry if both are in the same scope.
+- Do not create a project to track a deadline, and do not open a thread for something
+  with no end.
+
+A thread lives in exactly one memory scope. Its root entry can turn up in
+`{{tool:memory_search}}` with type `thread`; when it does, switch to `{{tool:thread_get_brief}}`
+for the full picture, and change the thread only through the thread tools, never with
+`{{tool:memory_update}}`.
 
 ## Approval-locked tools
 
@@ -48,6 +71,19 @@ specific scope (see `{{tool:memory_list_scopes}}`).
 You may include `watchers`, or add one later with `{{tool:thread_add_watcher}}`. A watcher may
 only point at a source you can already read without approval. If you cannot read that mailbox
 or project yourself, do not propose a watcher on it.
+
+Choose the narrowest watcher that catches what matters, because the user sees exactly what will
+be scanned and every match becomes a candidate they have to review:
+
+| `kind` | Use when |
+|---|---|
+| `gmail_thread` | One email conversation carries the topic. Best signal, least noise. |
+| `gmail_sender` | A specific person or vendor drives the topic. |
+| `gmail_query` | Neither of the above fits. Keep the query tight (`from:`, `subject:`, a distinctive phrase); never a bare common word. |
+| `hx_meeting` | A recurring meeting is about this topic. |
+| `hx_project` | The whole pinned Hermeneutix project is the topic. Rarely right for a thread inside a bigger project. |
+
+Prefer one or two precise watchers over several broad ones.
 
 ## 2. Picking a thread up
 
