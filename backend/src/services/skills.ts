@@ -157,10 +157,11 @@ export async function loadSkillVersionManifest(): Promise<SkillVersionManifest> 
   if (_manifest) return _manifest;
   try {
     const { readFile } = await import('fs/promises');
-    const { join, dirname } = await import('path');
-    const { fileURLToPath } = await import('url');
-    const here = dirname(fileURLToPath(import.meta.url));
-    const raw = await readFile(join(here, '..', '..', '..', 'templates', 'skill-versions.json'), 'utf-8');
+    const { join } = await import('path');
+    const { findTemplatesDir } = await import('../config/templates.js');
+    const templatesDir = findTemplatesDir();
+    if (!templatesDir) throw new Error('templates/ not found');
+    const raw = await readFile(join(templatesDir, 'skill-versions.json'), 'utf-8');
     const parsed = JSON.parse(raw) as unknown;
     _manifest =
       parsed && typeof parsed === 'object' && !Array.isArray(parsed)

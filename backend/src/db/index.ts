@@ -3,14 +3,12 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import bcrypt from 'bcryptjs';
 import { nanoid } from 'nanoid';
 import { readdir, readFile } from 'fs/promises';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { config } from '../config/index.js';
+import { findTemplatesDir } from '../config/templates.js';
 import * as schema from './schema.js';
 import { migrateDeployedAgents } from './migrate-deployed-agents.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const SKILLS_TEMPLATES_DIR = join(__dirname, '..', '..', '..', 'templates', 'skills');
 
 const DATABASE_URL = config.databaseUrl;
 
@@ -1303,20 +1301,22 @@ export function parseSkillFrontmatter(raw: string): { meta: Record<string, strin
  * place rather than duplicating.
  */
 async function seedSystemSkills() {
-  let entries: string[];
-  try {
-    entries = await readdir(SKILLS_TEMPLATES_DIR);
-  } catch {
-    // Templates directory not present (e.g. stripped Docker build)
+  const templatesDir = findTemplatesDir();
+  if (!templatesDir) {
+    // Loud on purpose: a silent return here once hid that production was
+    // seeding nothing at all.
+    console.warn('[skills] templates/skills not found; no system skills seeded');
     return;
   }
+  const skillsDir = join(templatesDir, 'skills');
+  const entries = await readdir(skillsDir);
 
   let seeded = 0;
   const skipped: string[] = [];
   for (const slug of entries) {
     let raw: string;
     try {
-      raw = await readFile(join(SKILLS_TEMPLATES_DIR, slug, 'SKILL.md'), 'utf-8');
+      raw = await readFile(join(skillsDir, slug, 'SKILL.md'), 'utf-8');
     } catch {
       continue; // not a skill directory
     }
