@@ -721,8 +721,8 @@ describe('the plugin downloads', () => {
     await screen.findByText('Desktop plugins');
 
     const link = screen.getAllByRole('link', { name: /download/i })[0];
-    expect(link).toHaveAttribute('href', '/downloads/helm-claude-0.3.0.zip');
-    expect(link).toHaveAttribute('download', 'helm-claude-0.3.0.zip');
+    expect(link).toHaveAttribute('href', '/downloads/helm-claude-0.3.0.plugin');
+    expect(link).toHaveAttribute('download', 'helm-claude-0.3.0.plugin');
   });
 
   it('names the client and the version it is shipping', async () => {

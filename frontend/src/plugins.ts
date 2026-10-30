@@ -16,7 +16,7 @@ export interface PluginDownload {
   /** The client this plugin is for, as its users name it. */
   client: string;
   version: string;
-  /** Filename inside `frontend/public/downloads/`. */
+  /** Filename inside `frontend/public/downloads/`: a zip, or a .plugin (also a zip). */
   file: string;
   /** Exact byte count, so the UI never has to guess at a size. */
   bytes: number;
@@ -34,13 +34,13 @@ export const PLUGIN_DOWNLOADS: PluginDownload[] = [
     id: 'claude',
     client: 'Claude',
     version: '0.3.0',
-    file: 'helm-claude-0.3.0.zip',
+    file: 'helm-claude-0.3.0.plugin',
     bytes: 43714,
     summary:
       'Locks each Claude project to one agent, with its live skills, threads, memory and skill authoring.',
     install: [
-      'Claude desktop or Cowork: upload the zip as a custom plugin, then sign in to helm-root when Claude asks.',
-      'Claude Code: unzip it and start Claude with `claude --plugin-dir <folder>`.',
+      'Claude desktop or Cowork: upload the .plugin file as a custom plugin, then sign in to helm-root when Claude asks.',
+      'Claude Code: unzip the .plugin file (it is a zip) into a folder and start Claude with `claude --plugin-dir <folder>`.',
       'Add each agent you work in as a custom connector, using its MCP URL from the list above, and sign in to it.',
       'In each project, ask Claude to "lock this project to <agent>". In Claude Code, restart in that folder and sign in to the helm server with /mcp.',
       'In a claude.ai Project, paste `Helm scope: <agent> — <MCP URL>` into the project instructions instead.',
