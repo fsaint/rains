@@ -10,9 +10,25 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { inflateRawSync } from 'node:zlib';
 import { PLUGIN_DOWNLOADS, pluginUrl, formatBytes } from './plugins';
 
 const DOWNLOADS = join(__dirname, '..', 'public', 'downloads');
+
+/** Every entry's text, read from the zip's local headers (stored or deflated). */
+function zipText(buf: Buffer): string {
+  const parts: string[] = [];
+  let at = 0;
+  while (buf.readUInt32LE(at) === 0x04034b50) {
+    const method = buf.readUInt16LE(at + 8);
+    const size = buf.readUInt32LE(at + 18);
+    const start = at + 30 + buf.readUInt16LE(at + 26) + buf.readUInt16LE(at + 28);
+    const data = buf.subarray(start, start + size);
+    parts.push((method === 8 ? inflateRawSync(data) : data).toString('utf8'));
+    at = start + size;
+  }
+  return parts.join('\n');
+}
 
 describe('every listed plugin is actually shipped', () => {
   it.each(PLUGIN_DOWNLOADS.map((p) => [p.client, p] as const))(
@@ -45,6 +61,24 @@ describe('every listed plugin is actually shipped', () => {
     }
   });
 
+  it('tells people how to install every plugin', () => {
+    for (const plugin of PLUGIN_DOWNLOADS) {
+      expect(plugin.install.length, `${plugin.client} has no install steps`).toBeGreaterThan(0);
+    }
+  });
+
+  /**
+   * A shipped plugin is the same file for every user, so it may only point at
+   * the discovery endpoint. An agent URL in it would hand everyone one person's agent.
+   */
+  it('carries no agent endpoint, only the discovery endpoint', () => {
+    for (const plugin of PLUGIN_DOWNLOADS) {
+      const text = zipText(readFileSync(join(DOWNLOADS, plugin.file)));
+      expect(text).toContain('https://app.helm.mom/mcp');
+      expect(text, `${plugin.file} names an agent endpoint`).not.toMatch(/helm\.mom\/mcp\/[A-Za-z0-9]/);
+    }
+  });
+
   it('gives every plugin a distinct id and file', () => {
     const ids = PLUGIN_DOWNLOADS.map((p) => p.id);
     const files = PLUGIN_DOWNLOADS.map((p) => p.file);
@@ -55,7 +89,7 @@ describe('every listed plugin is actually shipped', () => {
 
 describe('pluginUrl', () => {
   it('serves from the dashboard\'s own origin', () => {
-    expect(pluginUrl(PLUGIN_DOWNLOADS[0])).toBe('/downloads/helm-chatgpt-0.2.0.zip');
+    expect(pluginUrl(PLUGIN_DOWNLOADS[0])).toBe(`/downloads/${PLUGIN_DOWNLOADS[0].file}`);
   });
 });
 

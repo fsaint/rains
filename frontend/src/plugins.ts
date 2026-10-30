@@ -22,16 +22,44 @@ export interface PluginDownload {
   bytes: number;
   /** One line on what installing it does. */
   summary: string;
+  /**
+   * Install steps, in order, as plain sentences. Shown under the download so a
+   * person can finish setup without leaving the page.
+   */
+  install: string[];
 }
 
 export const PLUGIN_DOWNLOADS: PluginDownload[] = [
   {
+    id: 'claude',
+    client: 'Claude',
+    version: '0.3.0',
+    file: 'helm-claude-0.3.0.zip',
+    bytes: 43714,
+    summary:
+      'Locks each Claude project to one agent, with its live skills, threads, memory and skill authoring.',
+    install: [
+      'Claude desktop or Cowork: upload the zip as a custom plugin, then sign in to helm-root when Claude asks.',
+      'Claude Code: unzip it and start Claude with `claude --plugin-dir <folder>`.',
+      'Add each agent you work in as a custom connector, using its MCP URL from the list above, and sign in to it.',
+      'In each project, ask Claude to "lock this project to <agent>". In Claude Code, restart in that folder and sign in to the helm server with /mcp.',
+      'In a claude.ai Project, paste `Helm scope: <agent> — <MCP URL>` into the project instructions instead.',
+    ],
+  },
+  {
     id: 'chatgpt',
     client: 'ChatGPT',
-    version: '0.2.0',
-    file: 'helm-chatgpt-0.2.0.zip',
-    bytes: 9470,
-    summary: 'Connects ChatGPT to the discovery endpoint and adds the Helm session skills.',
+    version: '0.3.0',
+    file: 'helm-chatgpt-0.3.0.zip',
+    bytes: 16309,
+    summary:
+      'Adds Helm sessions, memory, threads and skills to ChatGPT through the discovery endpoint.',
+    install: [
+      'Unzip it into its own folder.',
+      'In ChatGPT desktop, open Plugin Creator, add the folder to a personal marketplace and install Helm. Sign in to helm-directory when asked.',
+      'For each agent you work in: Plugins → Add custom MCP server, paste its MCP URL from the list above, choose OAuth and sign in.',
+      'To lock a ChatGPT project to one agent, add `Helm scope: <agent> — <MCP URL>` to the project instructions.',
+    ],
   },
 ];
 

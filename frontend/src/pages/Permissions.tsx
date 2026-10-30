@@ -142,6 +142,16 @@ function PluginDownloads() {
                     <span className="text-xs text-gray-400">{formatBytes(plugin.bytes)}</span>
                   </div>
                   <p className="text-xs text-gray-400 mt-0.5">{plugin.summary}</p>
+                  <details className="mt-2">
+                    <summary className="text-xs font-medium text-reins-navy cursor-pointer select-none">
+                      How to install
+                    </summary>
+                    <ol className="mt-1.5 ml-4 list-decimal space-y-1 text-xs text-gray-500">
+                      {plugin.install.map((step) => (
+                        <li key={step}>{step}</li>
+                      ))}
+                    </ol>
+                  </details>
                 </div>
                 <a
                   href={pluginUrl(plugin)}
