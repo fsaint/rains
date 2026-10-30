@@ -33,9 +33,9 @@ export const PLUGIN_DOWNLOADS: PluginDownload[] = [
   {
     id: 'claude',
     client: 'Claude',
-    version: '0.3.0',
-    file: 'helm-claude-0.3.0.plugin',
-    bytes: 43714,
+    version: '0.3.1',
+    file: 'helm-claude-0.3.1.plugin',
+    bytes: 43805,
     summary:
       'Locks each Claude project to one agent, with its live skills, threads, memory and skill authoring.',
     install: [

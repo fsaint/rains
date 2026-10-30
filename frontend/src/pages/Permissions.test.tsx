@@ -721,8 +721,8 @@ describe('the plugin downloads', () => {
     await screen.findByText('Desktop plugins');
 
     const link = screen.getAllByRole('link', { name: /download/i })[0];
-    expect(link).toHaveAttribute('href', '/downloads/helm-claude-0.3.0.plugin');
-    expect(link).toHaveAttribute('download', 'helm-claude-0.3.0.plugin');
+    expect(link).toHaveAttribute('href', '/downloads/helm-claude-0.3.1.plugin');
+    expect(link).toHaveAttribute('download', 'helm-claude-0.3.1.plugin');
   });
 
   it('names the client and the version it is shipping', async () => {
@@ -730,7 +730,8 @@ describe('the plugin downloads', () => {
 
     expect(await screen.findByText('ChatGPT')).toBeInTheDocument();
     expect(screen.getByText('Claude')).toBeInTheDocument();
-    expect(screen.getAllByText('v0.3.0')).toHaveLength(2);
+    expect(screen.getByText('v0.3.1')).toBeInTheDocument();
+    expect(screen.getByText('v0.3.0')).toBeInTheDocument();
     expect(screen.getByText('43 KB')).toBeInTheDocument();
     expect(screen.getAllByText('How to install')).toHaveLength(2);
   });
