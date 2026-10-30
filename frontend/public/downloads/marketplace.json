@@ -1,0 +1,17 @@
+{
+  "name": "helm",
+  "description": "Helm plugins for Claude Code.",
+  "owner": { "name": "Helm" },
+  "plugins": [
+    {
+      "name": "helm",
+      "description": "Locks each project to one Helm agent, with its live skills, threads, memory and skill authoring.",
+      "version": "0.4.0",
+      "source": {
+        "source": "archive",
+        "url": "https://app.helm.mom/downloads/helm-claude-0.4.0.plugin",
+        "sha256": "a66c24afe43bb88368157a1e30bfa6cf8a94e384e3fcf5c7e0eeb50dbf9c6223"
+      }
+    }
+  ]
+}

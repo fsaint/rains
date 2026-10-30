@@ -7,7 +7,8 @@
  * be a dead button, and plugins.test.ts fails on exactly that.
  *
  * Adding a version means dropping the new zip in that folder, updating the
- * entry below, and deploying. There is no registry to fall out of step with.
+ * entry below (and, for Claude, the url and sha256 in `marketplace.json`, which
+ * Claude Code installs from), and deploying. There is no registry to fall out of step with.
  */
 
 export interface PluginDownload {
@@ -33,25 +34,26 @@ export const PLUGIN_DOWNLOADS: PluginDownload[] = [
   {
     id: 'claude',
     client: 'Claude',
-    version: '0.3.1',
-    file: 'helm-claude-0.3.1.plugin',
-    bytes: 43805,
+    version: '0.4.0',
+    file: 'helm-claude-0.4.0.plugin',
+    bytes: 48647,
     summary:
       'Locks each Claude project to one agent, with its live skills, threads, memory and skill authoring.',
     install: [
       'Claude desktop or Cowork: upload the .plugin file as a custom plugin, then sign in to helm-root when Claude asks.',
-      'Claude Code: unzip the .plugin file (it is a zip) into a folder and start Claude with `claude --plugin-dir <folder>`.',
+      'Claude Code: run `claude plugin install helm --marketplace https://app.helm.mom/downloads/marketplace.json`. If you also uploaded it in Claude desktop, it syncs to Claude Code already; install it only once.',
       'Add each agent you work in as a custom connector, using its MCP URL from the list above, and sign in to it.',
-      'In each project, ask Claude to "lock this project to <agent>". In Claude Code, restart in that folder and sign in to the helm server with /mcp.',
+      'In each project, ask Claude to "lock this project to <agent>" (Claude asks on the first prompt of an unlocked project). In Claude Code, restart in that folder and sign in to the helm server with /mcp.',
+      'Every session in a locked project checks its agent before doing anything else. If Helm is down, say "skip helm" to work without it for that session.',
       'In a claude.ai Project, paste `Helm scope: <agent> — <MCP URL>` into the project instructions instead.',
     ],
   },
   {
     id: 'chatgpt',
     client: 'ChatGPT',
-    version: '0.3.0',
-    file: 'helm-chatgpt-0.3.0.zip',
-    bytes: 16309,
+    version: '0.3.1',
+    file: 'helm-chatgpt-0.3.1.zip',
+    bytes: 16519,
     summary:
       'Adds Helm sessions, memory, threads and skills to ChatGPT through the discovery endpoint.',
     install: [

@@ -11,6 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { inflateRawSync } from 'node:zlib';
+import { createHash } from 'node:crypto';
 import { PLUGIN_DOWNLOADS, pluginUrl, formatBytes } from './plugins';
 
 const DOWNLOADS = join(__dirname, '..', 'public', 'downloads');
@@ -84,6 +85,27 @@ describe('every listed plugin is actually shipped', () => {
     const files = PLUGIN_DOWNLOADS.map((p) => p.file);
     expect(new Set(ids).size).toBe(ids.length);
     expect(new Set(files).size).toBe(files.length);
+  });
+});
+
+/**
+ * Claude Code installs from marketplace.json, which pins the archive by URL and
+ * sha256. A stale pin makes every install fail, so it must match the file shipped.
+ */
+describe('the Claude Code marketplace', () => {
+  const market = JSON.parse(readFileSync(join(DOWNLOADS, 'marketplace.json'), 'utf8'));
+  const claude = PLUGIN_DOWNLOADS.find((p) => p.id === 'claude')!;
+  const entry = market.plugins.find((p: { name: string }) => p.name === 'helm');
+
+  it('points at the listed Claude plugin', () => {
+    expect(entry.version).toBe(claude.version);
+    expect(entry.source.source).toBe('archive');
+    expect(entry.source.url).toBe(`https://app.helm.mom/downloads/${claude.file}`);
+  });
+
+  it('pins the sha256 of the shipped file', () => {
+    const digest = createHash('sha256').update(readFileSync(join(DOWNLOADS, claude.file))).digest('hex');
+    expect(entry.source.sha256).toBe(digest);
   });
 });
 
