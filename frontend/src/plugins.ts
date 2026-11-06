@@ -51,16 +51,17 @@ export const PLUGIN_DOWNLOADS: PluginDownload[] = [
   {
     id: 'chatgpt',
     client: 'ChatGPT',
-    version: '0.3.1',
-    file: 'helm-chatgpt-0.3.1.zip',
-    bytes: 16519,
+    version: '0.4.0',
+    file: 'helm-chatgpt-0.4.0.zip',
+    bytes: 20179,
     summary:
-      'Adds Helm sessions, memory, threads and skills to ChatGPT through the discovery endpoint.',
+      'Locks each ChatGPT project to one agent and boots it first, with its live skills, threads, memory checkpoints and skill authoring.',
     install: [
       'Unzip it into its own folder.',
       'In ChatGPT desktop, open Plugin Creator, add the folder to a personal marketplace and install Helm. Sign in to helm-directory when asked.',
       'For each agent you work in: Plugins → Add custom MCP server, paste its MCP URL from the list above, choose OAuth and sign in.',
-      'To lock a ChatGPT project to one agent, add `Helm scope: <agent> — <MCP URL>` to the project instructions.',
+      'To lock a ChatGPT project to one agent, add `Helm scope: <agent> — <MCP URL>` to the project instructions (ChatGPT asks on the first chat of an unlocked project; `Helm scope: none` opts out).',
+      'Every chat in a locked project checks its agent before doing anything else. If Helm is down, say "skip helm" to work without it for that chat.',
     ],
   },
 ];

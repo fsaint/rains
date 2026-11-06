@@ -730,8 +730,7 @@ describe('the plugin downloads', () => {
 
     expect(await screen.findByText('ChatGPT')).toBeInTheDocument();
     expect(screen.getByText('Claude')).toBeInTheDocument();
-    expect(screen.getByText('v0.4.0')).toBeInTheDocument();
-    expect(screen.getByText('v0.3.1')).toBeInTheDocument();
+    expect(screen.getAllByText('v0.4.0')).toHaveLength(2);
     expect(screen.getByText('48 KB')).toBeInTheDocument();
     expect(screen.getAllByText('How to install')).toHaveLength(2);
   });
