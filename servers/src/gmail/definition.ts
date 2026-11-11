@@ -28,8 +28,11 @@ export const definition: ServiceDefinitionWithTools = {
     // to add bytes to this agent's own 24-hour staging area, which the agent
     // could already fill with source="base64". What the file is then used
     // for — drafting, sending — is gated as it always was.
-    read: ['gmail_create_upload_link', 'gmail_list_accounts', 'gmail_list_messages', 'gmail_get_message', 'gmail_get_attachment', 'gmail_search', 'gmail_list_labels', 'gmail_create_label', 'gmail_delete_label'],
-    write: ['gmail_create_draft', 'gmail_send_draft', 'gmail_mark_read', 'gmail_archive', 'gmail_modify_labels', 'gmail_label_message'],
+    read: ['gmail_create_upload_link', 'gmail_list_accounts', 'gmail_list_messages', 'gmail_get_message', 'gmail_get_attachment', 'gmail_search', 'gmail_list_drafts', 'gmail_list_labels', 'gmail_create_label', 'gmail_delete_label'],
+    // gmail_delete_draft is write, not blocked like gmail_delete_message: it
+    // goes through the drafts endpoint, which refuses anything but a draft, so
+    // the most it can destroy is unsent text — and each call is approved.
+    write: ['gmail_create_draft', 'gmail_update_draft', 'gmail_delete_draft', 'gmail_send_draft', 'gmail_mark_read', 'gmail_archive', 'gmail_modify_labels', 'gmail_label_message'],
     blocked: ['gmail_send_message', 'gmail_delete_message'],
   },
   permissionDescriptions: {
@@ -37,6 +40,6 @@ export const definition: ServiceDefinitionWithTools = {
     // Every tool in the write list is gated, not just drafting and sending —
     // labelling, archiving, and marking read are too. Batch with messageIds so
     // one approval covers a whole set instead of one per message.
-    full: 'Read emails freely. Drafting, sending, labelling, archiving, and marking read require your approval. Sending directly and deleting are blocked.',
+    full: 'Read emails freely. Drafting, editing and deleting drafts, sending, labelling, archiving, and marking read require your approval. Sending directly and deleting are blocked.',
   },
 };

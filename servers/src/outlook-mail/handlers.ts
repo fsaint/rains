@@ -5,6 +5,14 @@
  */
 
 import type { ServerContext, ToolResult } from '../common/types.js';
+import { AttachmentError } from '../gmail/attachments.js';
+import type { ResolvedAttachment } from '../gmail/mime.js';
+import {
+  addAttachmentToDraft,
+  listMessageAttachments,
+  resolveOutlookAttachments,
+  type OutlookAttachmentInfo,
+} from './attachments.js';
 
 const GRAPH_API = 'https://graph.microsoft.com/v1.0';
 
@@ -99,6 +107,18 @@ export async function handleGetMessage(
   if (!response.ok) return handleError(response);
 
   const m = await response.json();
+
+  // Name the files, not just flag that some exist: source="outlook" forwards
+  // one by filename, and the agent has nowhere else to learn the names.
+  let attachments: OutlookAttachmentInfo[] = [];
+  if (m.hasAttachments) {
+    try {
+      attachments = await listMessageAttachments((path, options) => graphRequest(context, path, options), messageId);
+    } catch {
+      // The message itself was read; a failed listing must not hide it.
+    }
+  }
+
   return {
     success: true,
     data: {
@@ -112,6 +132,7 @@ export async function handleGetMessage(
       body: m.body?.content,
       bodyContentType: m.body?.contentType,
       hasAttachments: m.hasAttachments,
+      attachments,
     },
   };
 }
@@ -149,38 +170,122 @@ export async function handleSearchMessages(
 // Draft / Send tools
 // ============================================================================
 
-export async function handleCreateDraft(
-  args: Record<string, unknown>,
-  context: ServerContext
-): Promise<ToolResult> {
-  const toRecipients = (args.to as string[]).map((email) => ({
-    emailAddress: { address: email },
-  }));
+/** The Graph message resource for a new email, built from tool arguments. */
+function buildMessage(args: Record<string, unknown>): Record<string, unknown> {
+  const recipients = (emails: string[]) =>
+    emails.map((email) => ({ emailAddress: { address: email } }));
 
-  const body: any = {
+  const message: Record<string, unknown> = {
     subject: args.subject,
     body: {
       contentType: args.htmlBody ? 'HTML' : 'Text',
       content: args.htmlBody || args.body || '',
     },
-    toRecipients,
+    toRecipients: recipients(args.to as string[]),
   };
+  if (args.cc) message.ccRecipients = recipients(args.cc as string[]);
+  if (args.bcc) message.bccRecipients = recipients(args.bcc as string[]);
+  return message;
+}
 
-  if (args.cc) {
-    body.ccRecipients = (args.cc as string[]).map((email) => ({ emailAddress: { address: email } }));
+/**
+ * Resolve the raw `attachments` argument, converting an AttachmentError into a
+ * failed ToolResult so the model sees an actionable message.
+ */
+async function resolveAttachmentsOrFail(
+  raw: unknown,
+  context: ServerContext
+): Promise<{ attachments: ResolvedAttachment[] } | { error: ToolResult }> {
+  try {
+    return {
+      attachments: await resolveOutlookAttachments(
+        raw,
+        (path, options) => graphRequest(context, path, options),
+        context.gatewayToken
+      ),
+    };
+  } catch (error) {
+    if (error instanceof AttachmentError) {
+      return { error: { success: false, error: error.message } };
+    }
+    throw error;
   }
-  if (args.bcc) {
-    body.bccRecipients = (args.bcc as string[]).map((email) => ({ emailAddress: { address: email } }));
-  }
+}
 
+/**
+ * Create a draft and put the resolved files on it.
+ *
+ * Graph has no single call for a draft with large attachments, so this is
+ * create-then-attach. If any file fails the draft is deleted: a draft missing
+ * an attachment looks finished and would be sent that way.
+ */
+async function createDraftWithAttachments(
+  args: Record<string, unknown>,
+  attachments: ResolvedAttachment[],
+  context: ServerContext
+): Promise<{ draft: { id: string; subject?: string } } | { error: ToolResult }> {
   const response = await graphRequest(context, '/me/messages', {
     method: 'POST',
-    body: JSON.stringify(body),
+    body: JSON.stringify(buildMessage(args)),
   });
-  if (!response.ok) return handleError(response);
+  if (!response.ok) return { error: await handleError(response) };
 
-  const data = await response.json();
-  return { success: true, data: { id: data.id, subject: data.subject } };
+  const draft = (await response.json()) as { id: string; subject?: string };
+
+  for (const attachment of attachments) {
+    try {
+      await addAttachmentToDraft(
+        (path, options) => graphRequest(context, path, options),
+        draft.id,
+        attachment
+      );
+    } catch (error) {
+      const removed = await graphRequest(context, `/me/messages/${encodeURIComponent(draft.id)}`, {
+        method: 'DELETE',
+      }).catch(() => null);
+      const cleanedUp = removed !== null && (removed.ok || removed.status === 204);
+      return {
+        error: {
+          success: false,
+          error:
+            `Could not attach "${attachment.filename}": ${(error as Error).message}. ` +
+            (cleanedUp
+              ? 'No draft was left behind.'
+              : `The incomplete draft "${draft.id}" could not be removed — tell the user to delete it.`),
+        },
+      };
+    }
+  }
+
+  return { draft };
+}
+
+export async function handleCreateDraft(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  // Resolved before the draft exists, so a bad attachment creates nothing.
+  const outcome = await resolveAttachmentsOrFail(args.attachments, context);
+  if ('error' in outcome) return outcome.error;
+
+  const created = await createDraftWithAttachments(args, outcome.attachments, context);
+  if ('error' in created) return created.error;
+
+  return {
+    success: true,
+    data: {
+      id: created.draft.id,
+      subject: created.draft.subject,
+      ...(outcome.attachments.length > 0
+        ? {
+            attachments: outcome.attachments.map((attachment) => ({
+              filename: attachment.filename,
+              size: attachment.bytes.length,
+            })),
+          }
+        : {}),
+    },
+  };
 }
 
 export async function handleSendDraft(
@@ -203,34 +308,42 @@ export async function handleSendMessage(
   args: Record<string, unknown>,
   context: ServerContext
 ): Promise<ToolResult> {
-  const toRecipients = (args.to as string[]).map((email) => ({
-    emailAddress: { address: email },
-  }));
+  const outcome = await resolveAttachmentsOrFail(args.attachments, context);
+  if ('error' in outcome) return outcome.error;
 
-  const message: any = {
-    subject: args.subject,
-    body: {
-      contentType: args.htmlBody ? 'HTML' : 'Text',
-      content: args.htmlBody || args.body || '',
-    },
-    toRecipients,
-  };
+  if (outcome.attachments.length === 0) {
+    const response = await graphRequest(context, '/me/sendMail', {
+      method: 'POST',
+      body: JSON.stringify({ message: buildMessage(args), saveToSentItems: true }),
+    });
 
-  if (args.cc) {
-    message.ccRecipients = (args.cc as string[]).map((email) => ({ emailAddress: { address: email } }));
-  }
-  if (args.bcc) {
-    message.bccRecipients = (args.bcc as string[]).map((email) => ({ emailAddress: { address: email } }));
+    if (!response.ok && response.status !== 202) return handleError(response);
+
+    return { success: true, data: { sent: true } };
   }
 
-  const response = await graphRequest(context, '/me/sendMail', {
-    method: 'POST',
-    body: JSON.stringify({ message, saveToSentItems: true }),
-  });
+  // sendMail carries attachments inline and so caps the whole request near
+  // 4 MB. Building a draft first lifts that to the same limits as a draft.
+  const created = await createDraftWithAttachments(args, outcome.attachments, context);
+  if ('error' in created) return created.error;
 
+  const response = await graphRequest(
+    context,
+    `/me/messages/${encodeURIComponent(created.draft.id)}/send`,
+    { method: 'POST', body: JSON.stringify({}) }
+  );
   if (!response.ok && response.status !== 202) return handleError(response);
 
-  return { success: true, data: { sent: true } };
+  return {
+    success: true,
+    data: {
+      sent: true,
+      attachments: outcome.attachments.map((attachment) => ({
+        filename: attachment.filename,
+        size: attachment.bytes.length,
+      })),
+    },
+  };
 }
 
 export async function handleReplyToMessage(

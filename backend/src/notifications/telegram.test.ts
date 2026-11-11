@@ -2,7 +2,7 @@
  * Tests for the rich email and calendar previews in Telegram approval messages.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 // Mock the DB so importing telegram.ts (which pulls in config/db at module load)
 // does not require a live database connection.
@@ -11,7 +11,7 @@ vi.mock('../db/index.js', () => ({
 }));
 
 import { formatCalendarApprovalMessage, formatEmailApprovalMessage } from './telegram.js';
-import { escapeMarkdown, withCorrectionAffordance, formatBatchScope, formatAdminApprovalMessage, formatSkillApprovalMessage, formatDraftSendApprovalMessage, type DraftSendSummary } from './approval-format.js';
+import { escapeMarkdown, withCorrectionAffordance, formatBatchScope, formatAdminApprovalMessage, formatSkillApprovalMessage, formatDraftSendApprovalMessage, formatDraftDeleteApprovalMessage, DRAFT_DELETE_TOOLS, type DraftSendSummary } from './approval-format.js';
 import { MAX_REVISIONS } from '../approvals/queue.js';
 import type { ApprovalRequest } from '@reins/shared';
 
@@ -779,5 +779,176 @@ describe('telegram dispatch for thread tools', () => {
     expect(out.text).toContain('Start a thread');
     expect(out.text).toContain('g'.repeat(400));
     expect(out.text).not.toContain('*Args:*');
+  });
+});
+
+describe('draft editing and deleting approvals', () => {
+  it('previews a draft update as an email, labelled as a replacement', () => {
+    const approval = makeApproval({
+      tool: 'gmail_update_draft',
+      arguments: {
+        draftId: 'r-1',
+        to: ['ana@example.com'],
+        subject: 'Quote v3',
+        body: 'Revised numbers below.',
+      },
+    });
+
+    const { text, parseMode } = formatEmailApprovalMessage(approval);
+
+    expect(parseMode).toBe('HTML');
+    expect(text).toContain('<b>Update draft</b>');
+    expect(text).toContain('<b>To:</b> ana@example.com');
+    expect(text).toContain('<b>Subject:</b> Quote v3');
+    expect(text).toContain('Revised numbers below.');
+    expect(text).toContain('r-1');
+    expect(text).not.toContain('Send email');
+  });
+
+  it('says when an update will strip the files already attached', () => {
+    const approval = makeApproval({
+      tool: 'gmail_update_draft',
+      arguments: { draftId: 'r-1', to: ['a@x.com'], subject: 's', body: 'b', keepAttachments: false },
+    });
+
+    expect(formatEmailApprovalMessage(approval).text).toContain('Existing attachments will be removed');
+  });
+
+  it('labels a file forwarded from an Outlook email', () => {
+    const approval = makeApproval({
+      tool: 'outlook_mail_create_draft',
+      arguments: {
+        to: ['a@x.com'],
+        subject: 's',
+        body: 'b',
+        attachments: [{ source: 'outlook', messageId: 'M1', filename: 'contract.pdf' }],
+      },
+    });
+
+    expect(formatEmailApprovalMessage(approval).text).toContain(
+      '📎 contract.pdf · forwarded from an email'
+    );
+  });
+
+  it('names each draft a delete would remove, not just its id', () => {
+    const approval = makeApproval({
+      tool: 'gmail_delete_draft',
+      arguments: { account: 'me@gmail.com', draftIds: ['r-1', 'r-2'] },
+    });
+
+    const { text, keyboard, parseMode } = formatDraftDeleteApprovalMessage(approval, [
+      { draftId: 'r-1', draft: { to: 'ana@example.com', subject: 'Quote v1', resolvedFrom: 'gmail' } },
+      { draftId: 'r-2', draft: null },
+    ]);
+
+    expect(parseMode).toBe('HTML');
+    expect(text).toContain('<b>Delete 2 drafts</b>');
+    expect(text).toContain('cannot be undone');
+    expect(text).toContain('<b>From account:</b> me@gmail.com');
+    expect(text).toContain('Quote v1');
+    expect(text).toContain('ana@example.com');
+    // An unresolved draft is still listed, flagged, with its id.
+    expect(text).toContain('r-2');
+    expect(text).toContain('could not load');
+    expect(text).not.toContain('{"account"');
+    expect(actionsOf(keyboard)).toContain('ap:appr-1:approve');
+  });
+
+  it('escapes HTML in a deleted draft subject', () => {
+    const approval = makeApproval({ tool: 'gmail_delete_draft', arguments: { draftIds: ['r-1'] } });
+
+    const { text } = formatDraftDeleteApprovalMessage(approval, [
+      { draftId: 'r-1', draft: { subject: '<b>x</b>', resolvedFrom: 'gmail' } },
+    ]);
+
+    expect(text).toContain('<b>Delete 1 draft</b>');
+    expect(text).toContain('&lt;b&gt;x&lt;/b&gt;');
+  });
+
+  it('routes gmail_delete_draft to that formatter rather than the generic JSON dump', async () => {
+    const { telegramNotifier } = await import('./telegram.js');
+    const approval = makeApproval({ tool: 'gmail_delete_draft', arguments: { draftIds: ['r-1'] } });
+
+    expect(DRAFT_DELETE_TOOLS.has('gmail_delete_draft')).toBe(true);
+    const out = (telegramNotifier as any).formatApprovalMessage(approval, null, null, null, null, [
+      { draftId: 'r-1', draft: { subject: 'Old quote', resolvedFrom: 'gmail' } },
+    ]);
+    expect(out.parseMode).toBe('HTML');
+    expect(out.text).toContain('Old quote');
+    expect(out.text).not.toContain('*Args:*');
+  });
+});
+
+/**
+ * The send-draft preview replays the arguments of the approval that created
+ * the draft. Once a draft can be edited, those arguments describe a version
+ * that no longer exists — and the owner would approve a send while reading
+ * the old text.
+ */
+describe('send-draft preview after the draft was edited', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function resolveWith(rowsFor: (sql: string) => unknown[]) {
+    const { client } = await import('../db/index.js');
+    vi.mocked(client.execute).mockImplementation(async (q: unknown) => {
+      const sql = typeof q === 'string' ? q : (q as { sql: string }).sql;
+      return { rows: rowsFor(sql) } as never;
+    });
+    const { telegramNotifier } = await import('./telegram.js');
+    (telegramNotifier as any).gmailAccessTokenFor = vi.fn().mockResolvedValue('g-token');
+    return (telegramNotifier as any).resolveDraftSendSummary(
+      makeApproval({ tool: 'gmail_send_draft', arguments: { draftId: 'r-1' } })
+    ) as Promise<DraftSendSummary | null>;
+  }
+
+  const CREATED = {
+    id: 'job-1',
+    tool: 'gmail_create_draft',
+    agent_id: 'agent-abc',
+    arguments_json: JSON.stringify({ to: ['ana@example.com'], subject: 'Quote v1', body: 'Old text' }),
+    result_json: JSON.stringify({ data: { draftId: 'r-1' } }),
+  };
+
+  function stubGmailDraft() {
+    const fetchMock = vi.fn(async (_url: string) =>
+      new Response(
+        JSON.stringify({
+          message: {
+            snippet: 'New text',
+            payload: { headers: [{ name: 'Subject', value: 'Quote v3' }] },
+          },
+        }),
+        { status: 200 }
+      )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  it('still replays the creating approval for a draft that was never edited', async () => {
+    const fetchMock = stubGmailDraft();
+
+    const summary = await resolveWith((sql) =>
+      sql.includes('gmail_update_draft') ? [] : sql.includes('result_json LIKE') ? [CREATED] : []
+    );
+
+    expect(summary?.subject).toBe('Quote v1');
+    expect(summary?.resolvedFrom).toBe('creation-approval');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('reads the draft live from Gmail once it has been edited', async () => {
+    const fetchMock = stubGmailDraft();
+
+    const summary = await resolveWith((sql) =>
+      sql.includes('gmail_update_draft') ? [{ edited: 1 }] : sql.includes('result_json LIKE') ? [CREATED] : []
+    );
+
+    expect(summary?.subject).toBe('Quote v3');
+    expect(summary?.bodyPreview).toBe('New text');
+    expect(summary?.resolvedFrom).toBe('gmail');
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/drafts/r-1');
   });
 });

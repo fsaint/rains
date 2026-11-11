@@ -6,6 +6,9 @@
  * - gmail_get_message: Get full message content
  * - gmail_search: Advanced search with Gmail operators
  * - gmail_create_draft: Create a draft email
+ * - gmail_list_drafts: List drafts
+ * - gmail_update_draft: Revise a draft in place
+ * - gmail_delete_draft: Delete drafts (never other mail)
  * - gmail_send_draft: Send an existing draft
  * - gmail_send_message: Send email directly (blocked by default)
  * - gmail_delete_message: Delete a message (blocked by default)

@@ -4,8 +4,19 @@
 
 import { google, type drive_v3, type gmail_v1 } from 'googleapis';
 import type { ServerContext, ToolResult } from '../common/types.js';
-import { buildMimeMessage, toRawBase64Url, type ResolvedAttachment } from './mime.js';
-import { MAX_INLINE_DOWNLOAD_BYTES, formatBytes } from './limits.js';
+import {
+  buildMimeMessage,
+  sanitizeFilename,
+  toRawBase64Url,
+  validateAttachmentLimits,
+  type ResolvedAttachment,
+} from './mime.js';
+import {
+  DEFAULT_MIME_TYPE,
+  MAX_INLINE_DOWNLOAD_BYTES,
+  MIME_TYPE_PATTERN,
+  formatBytes,
+} from './limits.js';
 import {
   AttachmentError,
   collectAttachmentParts,
@@ -464,6 +475,221 @@ export async function handleSendDraft(
       threadId: response.data.threadId,
       labelIds: response.data.labelIds,
       message: 'Draft sent successfully',
+    },
+  };
+}
+
+/** Most drafts one gmail_delete_draft call may name. */
+export const GMAIL_DELETE_DRAFTS_MAX = 50;
+
+/**
+ * List drafts handler
+ */
+export async function handleListDrafts(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const gmail = getGmailClient(context);
+
+  const maxResults = Math.min((args.maxResults as number) ?? 20, 100);
+  const response = await gmail.users.drafts.list({
+    userId: 'me',
+    maxResults,
+    q: args.query as string | undefined,
+    pageToken: args.pageToken as string | undefined,
+  });
+
+  // drafts.list answers ids only; a list of bare ids cannot tell the agent
+  // which draft is the stale one, so read the headers of each.
+  const drafts = await Promise.all(
+    (response.data.drafts ?? []).map(async (entry) => {
+      if (!entry.id) return null;
+      const detail = await gmail.users.drafts.get({
+        userId: 'me',
+        id: entry.id,
+        format: 'metadata',
+      });
+      const message = detail.data.message;
+      const headers = message?.payload?.headers ?? [];
+      return {
+        draftId: entry.id,
+        messageId: message?.id ?? entry.message?.id,
+        threadId: message?.threadId ?? entry.message?.threadId,
+        to: parseEmailHeader(headers, 'To'),
+        subject: parseEmailHeader(headers, 'Subject'),
+        date: parseEmailHeader(headers, 'Date'),
+        snippet: message?.snippet,
+      };
+    })
+  );
+
+  return {
+    success: true,
+    data: {
+      drafts: drafts.filter(Boolean),
+      nextPageToken: response.data.nextPageToken,
+    },
+  };
+}
+
+/**
+ * Update draft handler: rewrite an existing draft in place.
+ *
+ * The draft id survives the rewrite, so a revision does not leave the previous
+ * version behind in the Drafts folder. Recipients, subject and body are
+ * replaced with what the caller passes; the files already attached are carried
+ * over unless keepAttachments is false, because re-attaching would mean
+ * re-uploading a local file whose staged copy may have expired.
+ */
+export async function handleUpdateDraft(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const draftId = typeof args.draftId === 'string' ? args.draftId.trim() : '';
+  if (draftId === '') {
+    return {
+      success: false,
+      error: 'draftId is required — the id gmail_create_draft or gmail_list_drafts returned.',
+    };
+  }
+
+  const gmail = getGmailClient(context);
+
+  let existing: gmail_v1.Schema$Message;
+  try {
+    const current = await gmail.users.drafts.get({ userId: 'me', id: draftId, format: 'full' });
+    existing = current.data.message ?? {};
+  } catch {
+    return {
+      success: false,
+      error:
+        `Could not read draft "${draftId}". It may already have been sent or deleted — ` +
+        'use gmail_list_drafts to see the drafts that exist. Nothing was changed.',
+    };
+  }
+
+  const outcome = await resolveAttachmentsOrFail(args.attachments, gmail, context);
+  if ('error' in outcome) return outcome.error;
+
+  const kept: ResolvedAttachment[] = [];
+  if (args.keepAttachments !== false && existing.payload && existing.id) {
+    for (const part of collectAttachmentParts(existing.payload)) {
+      // The ids come from the read a few lines above, so they are still valid.
+      const response = await gmail.users.messages.attachments.get({
+        userId: 'me',
+        messageId: existing.id,
+        id: part.attachmentId,
+      });
+      kept.push({
+        filename: sanitizeFilename(part.filename),
+        mimeType: MIME_TYPE_PATTERN.test(part.mimeType) ? part.mimeType : DEFAULT_MIME_TYPE,
+        bytes: Buffer.from(response.data.data ?? '', 'base64url'),
+      });
+    }
+  }
+
+  const attachments = [...kept, ...outcome.attachments];
+  const limitError = validateAttachmentLimits(attachments);
+  if (limitError) return { success: false, error: limitError };
+
+  // A reply draft stays a reply: without these the rewrite would detach it
+  // from its conversation.
+  const threadId = (args.threadId as string | undefined) ?? existing.threadId ?? undefined;
+  const replyTo =
+    (args.replyTo as string | undefined) ??
+    parseEmailHeader(existing.payload?.headers ?? [], 'In-Reply-To');
+
+  const raw = toRawBase64Url(
+    buildMimeMessage({
+      to: args.to as string[],
+      cc: args.cc as string[] | undefined,
+      bcc: args.bcc as string[] | undefined,
+      subject: args.subject as string,
+      body: args.body as string | undefined,
+      htmlBody: args.htmlBody as string | undefined,
+      replyTo,
+      attachments,
+    })
+  );
+
+  const response = await gmail.users.drafts.update({
+    userId: 'me',
+    id: draftId,
+    requestBody: { message: { raw, threadId } },
+  });
+
+  return {
+    success: true,
+    data: {
+      draftId: response.data.id ?? draftId,
+      messageId: response.data.message?.id,
+      threadId: response.data.message?.threadId,
+      attachments: attachments.map((attachment) => attachment.filename),
+      message: 'Draft updated in place. It is still a draft and has NOT been sent.',
+    },
+  };
+}
+
+/**
+ * Delete draft(s) handler.
+ *
+ * Goes through users.drafts.delete, which accepts draft ids only — a message
+ * id is refused by Gmail — so this cannot remove received or sent mail.
+ */
+export async function handleDeleteDraft(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const requested = Array.isArray(args.draftIds)
+    ? args.draftIds
+    : typeof args.draftId === 'string'
+      ? [args.draftId]
+      : [];
+  const ids = [
+    ...new Set(requested.filter((id): id is string => typeof id === 'string' && id.length > 0)),
+  ];
+
+  if (ids.length === 0) {
+    return { success: false, error: 'Provide draftIds (one or more draft ids) to delete.' };
+  }
+  if (ids.length > GMAIL_DELETE_DRAFTS_MAX) {
+    return {
+      success: false,
+      error: `Too many drafts: ${ids.length}. Delete at most ${GMAIL_DELETE_DRAFTS_MAX} per call.`,
+    };
+  }
+
+  const gmail = getGmailClient(context);
+
+  const deleted: string[] = [];
+  const failed: Array<{ draftId: string; error: string }> = [];
+  for (const id of ids) {
+    try {
+      await gmail.users.drafts.delete({ userId: 'me', id });
+      deleted.push(id);
+    } catch (error) {
+      failed.push({ draftId: id, error: (error as Error).message });
+    }
+  }
+
+  if (deleted.length === 0) {
+    return {
+      success: false,
+      error:
+        'No drafts were deleted. ' +
+        failed.map((failure) => `"${failure.draftId}": ${failure.error}`).join('; ') +
+        '. Use gmail_list_drafts to see the drafts that exist.',
+    };
+  }
+
+  return {
+    success: true,
+    data: {
+      deleted,
+      ...(failed.length > 0 ? { failed } : {}),
+      message:
+        `${deleted.length} draft${deleted.length === 1 ? '' : 's'} deleted permanently` +
+        (failed.length > 0 ? `; ${failed.length} could not be deleted` : ''),
     },
   };
 }

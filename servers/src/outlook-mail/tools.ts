@@ -3,6 +3,8 @@
  */
 
 import type { ToolDefinition } from '../common/base-server.js';
+import { createUploadLinkTool } from '../common/upload-link.js';
+import { outlookAttachmentsSchema } from './attachment-schema.js';
 import {
   handleGetProfile,
   handleListMessages,
@@ -64,7 +66,11 @@ export const listMessagesTool: ToolDefinition = {
 
 export const getMessageTool: ToolDefinition = {
   name: 'outlook_mail_get_message',
-  description: 'Get the full content of an email message including headers, body, and attachment info.',
+  description:
+    'Get the full content of an email message including headers, body, and the name, type and ' +
+    'size of each attachment. To forward an attachment, pass ' +
+    '{"source":"outlook","messageId":"…","filename":"…"} in the attachments parameter of ' +
+    'outlook_mail_create_draft — the bytes never pass through your context.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -116,7 +122,10 @@ export const listFoldersTool: ToolDefinition = {
 
 export const createDraftTool: ToolDefinition = {
   name: 'outlook_mail_create_draft',
-  description: 'Create a draft email. The draft will be saved but not sent. Use outlook_mail_send_draft to send it.',
+  description:
+    'Create a draft email, optionally with attachments. The draft will be saved but not sent. ' +
+    'Use outlook_mail_send_draft to send it. To attach a file from your machine, call ' +
+    'outlook_mail_create_upload_link first and pass the upload id in "attachments".',
   inputSchema: {
     type: 'object',
     properties: {
@@ -148,6 +157,7 @@ export const createDraftTool: ToolDefinition = {
         type: 'string',
         description: 'Email body (HTML)',
       },
+      attachments: outlookAttachmentsSchema,
     },
     required: ['to', 'subject'],
   },
@@ -205,6 +215,7 @@ export const sendMessageTool: ToolDefinition = {
         type: 'string',
         description: 'Email body (HTML)',
       },
+      attachments: outlookAttachmentsSchema,
     },
     required: ['to', 'subject'],
   },
@@ -280,6 +291,7 @@ export const deleteMessageTool: ToolDefinition = {
 
 export const outlookMailTools: ToolDefinition[] = [
   // Read
+  createUploadLinkTool('outlook_mail_'),
   getProfileTool,
   listMessagesTool,
   getMessageTool,

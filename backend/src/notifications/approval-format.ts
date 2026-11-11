@@ -25,6 +25,7 @@ export interface FormattedApproval {
 export const EMAIL_TOOLS = new Set([
   'gmail_send_message',
   'gmail_create_draft',
+  'gmail_update_draft',
   'outlook_mail_send_message',
   'outlook_mail_create_draft',
   'outlook_mail_reply',
@@ -51,6 +52,23 @@ export const CALENDAR_TOOLS = new Set([
  * DraftSendSummary in; the formatter stays pure, like the admin tools below.
  */
 export const DRAFT_SEND_TOOLS = new Set(['gmail_send_draft']);
+
+/**
+ * Draft-delete tools. Their arguments are a list of opaque draft ids, and
+ * deletion is permanent, so the notifier resolves each id to its recipients
+ * and subject — the same reasoning as the admin tools below: approving the
+ * destruction of something you cannot identify is not consent.
+ */
+export const DRAFT_DELETE_TOOLS = new Set(['gmail_delete_draft']);
+
+/** One draft a delete approval names, with whatever could be resolved about it. */
+export interface DraftDeleteEntry {
+  draftId: string;
+  draft: DraftSendSummary | null;
+}
+
+/** At most this many drafts are resolved and listed individually. */
+export const DRAFT_DELETE_PREVIEW_LIMIT = 10;
 
 /**
  * Hermeneutix writes land on a real person's record, so the owner is shown
@@ -257,6 +275,7 @@ function formatByteSize(bytes: number): string {
 
 const ATTACHMENT_SOURCE_LABELS: Record<string, string> = {
   gmail: 'forwarded from an email',
+  outlook: 'forwarded from an email',
   drive: 'from Google Drive',
   url: 'downloaded from a link',
   upload: 'uploaded by the agent',
@@ -299,7 +318,7 @@ export function summarizeAttachments(raw: unknown): string[] | null {
     const name =
       typeof item.filename === 'string' && item.filename.trim() !== ''
         ? item.filename
-        : source === 'gmail'
+        : source === 'gmail' || source === 'outlook'
         ? '(original filename)'
         : `attachment-${index + 1}`;
 
@@ -394,8 +413,12 @@ export function formatEmailApprovalMessage(approval: ApprovalRequest): Formatted
     threadId?: string;
     replyTo?: string;
     messageId?: string;
+    draftId?: string;
+    keepAttachments?: unknown;
     attachments?: unknown;
   };
+
+  const isDraftUpdate = approval.tool === 'gmail_update_draft';
 
   const isReply =
     approval.tool === 'outlook_mail_reply' ||
@@ -403,7 +426,9 @@ export function formatEmailApprovalMessage(approval: ApprovalRequest): Formatted
     Boolean(args.replyTo);
 
   let heading: string;
-  if (approval.tool === 'gmail_create_draft' || approval.tool === 'outlook_mail_create_draft') {
+  if (isDraftUpdate) {
+    heading = '📧 <b>Update draft</b> — replaces the saved draft, does not send';
+  } else if (approval.tool === 'gmail_create_draft' || approval.tool === 'outlook_mail_create_draft') {
     heading = '📧 <b>Save draft</b>';
   } else if (isReply) {
     heading = '📧 <b>Reply to email</b>';
@@ -431,6 +456,14 @@ export function formatEmailApprovalMessage(approval: ApprovalRequest): Formatted
     args.subject ? `<b>Subject:</b> ${escapeHtml(args.subject)}` : null,
     isReply ? `↩︎ <i>Reply</i>` : null,
     `<b>Agent:</b> <code>${escapeHtml(approval.agentId)}</code>`,
+    isDraftUpdate && typeof args.draftId === 'string'
+      ? `<b>Draft:</b> <code>${escapeHtml(args.draftId)}</code>`
+      : null,
+    // Files already on the draft are kept by default and are not in the
+    // arguments, so the only case worth a line is the one that removes them.
+    isDraftUpdate && args.keepAttachments === false
+      ? '\u26a0\ufe0f Existing attachments will be removed'
+      : null,
     // Before the body: the body preview is length-capped, and what is being
     // attached must never be the thing that gets truncated away.
     ...(summarizeAttachments(args.attachments) ?? []),
@@ -438,6 +471,54 @@ export function formatEmailApprovalMessage(approval: ApprovalRequest): Formatted
     ``,
     expiresLine(approval),
   ].filter(Boolean);
+
+  return {
+    text: lines.join('\n'),
+    keyboard: approveDenyKeyboard(approval.id),
+    parseMode: 'HTML',
+  };
+}
+
+/**
+ * Preview for a delete-drafts approval: one line per draft, naming it.
+ *
+ * `drafts` is what the notifier could resolve, in argument order. A draft it
+ * could not resolve is still listed, flagged, with its id — silently dropping
+ * it would understate what the approval deletes.
+ */
+export function formatDraftDeleteApprovalMessage(
+  approval: ApprovalRequest,
+  drafts: DraftDeleteEntry[]
+): FormattedApproval {
+  const args = approval.arguments as
+    | { draftIds?: unknown; draftId?: unknown; account?: string }
+    | undefined;
+  const requested = Array.isArray(args?.draftIds)
+    ? args.draftIds.filter((id): id is string => typeof id === 'string')
+    : typeof args?.draftId === 'string'
+    ? [args.draftId]
+    : [];
+  const total = Math.max(requested.length, drafts.length);
+
+  const entries = drafts.map(({ draftId, draft }) => {
+    const id = `<code>${escapeHtml(draftId)}</code>`;
+    if (!draft) return `• \u26a0\ufe0f could not load this draft — ${id}`;
+    const subject = draft.subject ? escapeHtml(draft.subject) : '(no subject)';
+    const to = draft.to ? ` → ${escapeHtml(draft.to)}` : '';
+    return `• <b>${subject}</b>${to} — ${id}`;
+  });
+  const unlisted = total - drafts.length;
+
+  const lines = [
+    `🗑 <b>Delete ${total} draft${total === 1 ? '' : 's'}</b> — permanent, cannot be undone`,
+    args?.account ? `<b>From account:</b> ${escapeHtml(args.account)}` : null,
+    `<b>Agent:</b> <code>${escapeHtml(approval.agentId)}</code>`,
+    ...entries,
+    unlisted > 0 ? `…and ${unlisted} more not shown` : null,
+    'Only drafts are affected; received and sent mail is untouched.',
+    ``,
+    expiresLine(approval),
+  ].filter((line) => line !== null);
 
   return {
     text: lines.join('\n'),

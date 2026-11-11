@@ -12,6 +12,9 @@ import {
   handleSearch,
   handleCreateDraft,
   handleSendDraft,
+  handleListDrafts,
+  handleUpdateDraft,
+  handleDeleteDraft,
   handleSendMessage,
   handleDeleteMessage,
   handleListLabels,
@@ -197,7 +200,9 @@ export const createDraftTool: ToolDefinition = {
     'If the user asked for the email to be sent, this call does not finish the job: ' +
     'follow it with gmail_send_draft, passing the draftId this returns. ' +
     'Stop at the draft only when the user actually asked for a draft. ' +
-    'Never report an email as sent when only this call was made.',
+    'Never report an email as sent when only this call was made. ' +
+    'To revise a draft you already created, call gmail_update_draft with its draftId — ' +
+    'do NOT create a second draft, which leaves the old one behind for the user to clean up.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -242,6 +247,141 @@ export const createDraftTool: ToolDefinition = {
     required: ['to', 'subject'],
   },
   handler: handleCreateDraft,
+};
+
+/**
+ * List drafts.
+ *
+ * Read-only. Exists so an agent can find drafts left over from earlier
+ * sessions — the ids it would otherwise need for gmail_update_draft and
+ * gmail_delete_draft are known only to the session that created them.
+ */
+export const listDraftsTool: ToolDefinition = {
+  name: 'gmail_list_drafts',
+  description:
+    'List the drafts in the mailbox, newest first, with each draft\'s draftId, recipients, ' +
+    'subject and a snippet. Use it to find a draft to revise with gmail_update_draft, send ' +
+    'with gmail_send_draft, or clean up with gmail_delete_draft.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      ...accountProperty,
+      query: {
+        type: 'string',
+        description: 'Optional Gmail search query to narrow the list, e.g. "subject:quote" or "to:ana@example.com".',
+      },
+      maxResults: {
+        type: 'number',
+        description: 'Maximum number of drafts to return (default: 20, max: 100)',
+      },
+      pageToken: {
+        type: 'string',
+        description: 'Token for pagination',
+      },
+    },
+  },
+  handler: handleListDrafts,
+};
+
+/**
+ * Update a draft in place.
+ *
+ * The reason this exists: without it every revision was a new draft, and the
+ * owner deleted the superseded ones by hand.
+ */
+export const updateDraftTool: ToolDefinition = {
+  name: 'gmail_update_draft',
+  description:
+    'Revise an existing draft in place, keeping its draftId. Use this whenever the user asks ' +
+    'for changes to a draft — never create a replacement draft. ' +
+    'Recipients, subject and body are REPLACED by what you pass, so pass the complete new ' +
+    'version, not just the part that changed. Files already attached to the draft are kept ' +
+    'unless you set keepAttachments to false; anything in "attachments" is added to them. ' +
+    'The result is still a draft and is NOT sent — follow with gmail_send_draft if the user ' +
+    'asked for it to go out.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      ...accountProperty,
+      draftId: {
+        type: 'string',
+        description: 'The ID of the draft to revise, from gmail_create_draft or gmail_list_drafts',
+      },
+      to: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Recipient email addresses (replaces the current list)',
+      },
+      cc: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'CC email addresses (replaces the current list; omit for none)',
+      },
+      bcc: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'BCC email addresses (replaces the current list; omit for none)',
+      },
+      subject: {
+        type: 'string',
+        description: 'Email subject',
+      },
+      body: {
+        type: 'string',
+        description: 'Email body (plain text)',
+      },
+      htmlBody: {
+        type: 'string',
+        description: 'Email body (HTML)',
+      },
+      replyTo: {
+        type: 'string',
+        description: 'Message ID to reply to. Omit to keep the draft\'s current reply target.',
+      },
+      threadId: {
+        type: 'string',
+        description: 'Thread ID. Omit to keep the draft in its current thread.',
+      },
+      keepAttachments: {
+        type: 'boolean',
+        description:
+          'Keep the files already attached to the draft (default: true). Set false to remove ' +
+          'them all — to replace one file, set false and pass the full new set in "attachments".',
+      },
+      attachments: attachmentsSchema,
+    },
+    required: ['draftId', 'to', 'subject'],
+  },
+  handler: handleUpdateDraft,
+};
+
+/**
+ * Delete drafts.
+ *
+ * Takes a list so that clearing several leftovers is one approval rather than
+ * one per draft.
+ */
+export const deleteDraftTool: ToolDefinition = {
+  name: 'gmail_delete_draft',
+  description:
+    'Permanently delete one or more DRAFTS. Only drafts can be deleted this way — it cannot ' +
+    'remove received or sent mail. Deletion is immediate and cannot be undone (drafts do not ' +
+    'go to Trash). Pass every draft you want removed in one call so a single approval covers ' +
+    'them all. Use it to clear superseded or abandoned drafts instead of asking the user to ' +
+    'delete them by hand.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      ...accountProperty,
+      draftIds: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'IDs of the drafts to delete, from gmail_create_draft or gmail_list_drafts (max 50)',
+      },
+    },
+    required: ['draftIds'],
+  },
+  handler: handleDeleteDraft,
 };
 
 /**
@@ -564,6 +704,9 @@ export const gmailTools: ToolDefinition[] = [
   getAttachmentTool,
   searchTool,
   createDraftTool,
+  listDraftsTool,
+  updateDraftTool,
+  deleteDraftTool,
   sendDraftTool,
   sendMessageTool,
   deleteMessageTool,

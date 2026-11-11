@@ -12,8 +12,8 @@
  *
  * This tool closes that gap. It asks Helm for a short-lived capability and
  * returns a ready-to-run command. The agent runs the command against its own
- * file, gets back an uploadId, and passes that id to gmail_create_draft or
- * drive_create_file.
+ * file, gets back an uploadId, and passes that id to gmail_create_draft,
+ * outlook_mail_create_draft or drive_create_file.
  *
  * One implementation, registered under each service's own prefix, because the
  * registry requires every tool name to carry the prefix of the service that
@@ -97,14 +97,25 @@ export async function handleCreateUploadLink(
   };
 }
 
-const DESCRIPTION =
+const DESCRIPTION_HEAD =
   'Get a short-lived link for uploading a file that is on YOUR machine, so it can be ' +
   'attached to an email or saved to Drive without its bytes passing through your context. ' +
   'Use this for any local file above a few KB — it is the right tool whenever you would ' +
   'otherwise reach for source="base64". Returns a ready-to-run curl command: run it, read ' +
   'the upload id from data.id in its output, then pass {"source":"upload","uploadId":"<id>"} ' +
-  'as the attachment or file. Does NOT apply to files already in Gmail or Drive — forward ' +
+  'as the attachment or file. ';
+
+const DESCRIPTION =
+  DESCRIPTION_HEAD +
+  'Does NOT apply to files already in Gmail or Drive — forward ' +
   'those with source="gmail" or source="drive", which never leave the server.';
+
+// A Microsoft token cannot read Gmail or Drive, so the Outlook tools offer
+// neither source; pointing at them would send the model down a dead end.
+const OUTLOOK_DESCRIPTION =
+  DESCRIPTION_HEAD +
+  'Does NOT apply to a file already attached to an Outlook email — forward ' +
+  'that with source="outlook", which never leaves the server.';
 
 const INPUT_SCHEMA = {
   type: 'object' as const,
@@ -132,10 +143,12 @@ const INPUT_SCHEMA = {
 };
 
 /** Build the tool under one service's prefix. */
-export function createUploadLinkTool(prefix: 'gmail_' | 'drive_'): ToolDefinition {
+export function createUploadLinkTool(
+  prefix: 'gmail_' | 'drive_' | 'outlook_mail_'
+): ToolDefinition {
   return {
     name: `${prefix}create_upload_link`,
-    description: DESCRIPTION,
+    description: prefix === 'outlook_mail_' ? OUTLOOK_DESCRIPTION : DESCRIPTION,
     inputSchema: INPUT_SCHEMA,
     handler: handleCreateUploadLink,
   };

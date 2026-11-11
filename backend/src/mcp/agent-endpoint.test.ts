@@ -143,6 +143,7 @@ vi.mock('@reins/servers', () => ({
     // these prefixes do not overlap, but the ordering is the property.
     if (name.startsWith('helm_admin_')) return 'helm-admin';
     if (name.startsWith('gmail_')) return 'gmail';
+    if (name.startsWith('outlook_mail_')) return 'outlook_mail';
     if (name.startsWith('thread_')) return 'threads';
     if (name.startsWith('drive_')) return 'drive';
     if (name.startsWith('calendar_')) return 'calendar';
@@ -1194,6 +1195,105 @@ describe('gateway token injection', () => {
 
     return { callTool, response };
   }
+
+  /** Run one allowed tool call against a stub server and capture what it received. */
+  async function callServiceTool(
+    serverType: string,
+    toolName: string,
+    args: Record<string, unknown>
+  ) {
+    const callTool = vi.fn().mockResolvedValue({ success: true, data: {} });
+    const { serverManager } = await import('./server-manager.js');
+    vi.mocked(serverManager.getServer).mockReturnValue({
+      serverType,
+      name: serverType,
+      getToolDefinitions: () => [
+        { name: toolName, description: 'x', inputSchema: { type: 'object', properties: {} } },
+      ],
+      callTool,
+    } as never);
+
+    const { getEffectivePermissions } = await import('../services/permissions.js');
+    vi.mocked(getEffectivePermissions).mockResolvedValue({
+      enabled: true,
+      tools: { [toolName]: 'allow' },
+    } as never);
+
+    vi.mocked(client.execute).mockResolvedValue({
+      rows: [{ gateway_token: 'gw-secret', id: 'dep-1', mcp_server_name: 'helm' }],
+    } as never);
+
+    const response = await handleMCPRequest('agent-1', {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: toolName, arguments: args },
+    });
+
+    return { callTool, response };
+  }
+
+  it('gives outlook mail tools the gateway token, so source:"upload" files resolve', async () => {
+    // Without it an Outlook draft with a local file 401s at /api/agent-uploads.
+    const { callTool, response } = await callServiceTool(
+      'outlook_mail',
+      'outlook_mail_create_draft',
+      { to: ['a@example.com'], subject: 's' }
+    );
+
+    expect(response.error).toBeUndefined();
+    expect(callTool).toHaveBeenCalledWith(
+      'outlook_mail_create_draft',
+      expect.anything(),
+      expect.objectContaining({ gatewayToken: 'gw-secret' })
+    );
+  });
+
+  describe('a draft named by the jobId of the approval that created it', () => {
+    /**
+     * gmail_create_draft under approval answers with a jobId before the Gmail
+     * draft exists, and models go on to use that jobId as the draftId. Sending
+     * already resolves it; editing and deleting must too, or the agent is told
+     * the draft it just made does not exist.
+     */
+    function createdBy(jobId: string, gmailDraftId: string) {
+      vi.mocked(approvalQueue.get).mockImplementation(async (id: string) =>
+        id === jobId
+          ? ({
+              id: jobId,
+              tool: 'gmail_create_draft',
+              resultJson: JSON.stringify({ success: true, data: { draftId: gmailDraftId } }),
+            } as never)
+          : (null as never)
+      );
+    }
+
+    it('edits the real Gmail draft', async () => {
+      createdBy('job-1', 'r-1');
+
+      const { callTool } = await callServiceTool('gmail', 'gmail_update_draft', {
+        draftId: 'job-1', to: ['a@example.com'], subject: 's',
+      });
+
+      expect(callTool).toHaveBeenCalledWith(
+        'gmail_update_draft',
+        expect.objectContaining({ draftId: 'r-1' }),
+        expect.anything()
+      );
+    });
+
+    it('deletes the real Gmail drafts, leaving ordinary ids as they are', async () => {
+      createdBy('job-1', 'r-1');
+
+      const { callTool } = await callServiceTool('gmail', 'gmail_delete_draft', {
+        draftIds: ['job-1', 'r-9'],
+      });
+
+      expect(callTool).toHaveBeenCalledWith(
+        'gmail_delete_draft',
+        expect.objectContaining({ draftIds: ['r-1', 'r-9'] }),
+        expect.anything()
+      );
+    });
+  });
 
   it('gives helm-admin tools the gateway token they authenticate with', async () => {
     const { callTool, response } = await callAdminTool();

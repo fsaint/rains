@@ -7,7 +7,8 @@
  * - outlook_mail_get_message: Get full message content
  * - outlook_mail_search: Search emails
  * - outlook_mail_list_folders: List mail folders
- * - outlook_mail_create_draft: Create a draft email
+ * - outlook_mail_create_upload_link: Stage a local file for attaching
+ * - outlook_mail_create_draft: Create a draft email, optionally with attachments
  * - outlook_mail_send_draft: Send an existing draft
  * - outlook_mail_send_message: Send email directly (blocked by default)
  * - outlook_mail_reply: Reply to a message

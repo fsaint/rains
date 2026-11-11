@@ -676,6 +676,27 @@ function routingAccount(serviceType: string, args: Record<string, unknown>): str
 // executeTool — credential resolution + tool invocation
 // ============================================================================
 
+/** Gmail tools whose arguments name an existing draft. */
+const DRAFT_ID_TOOLS = new Set(['gmail_send_draft', 'gmail_update_draft', 'gmail_delete_draft']);
+
+/**
+ * The real Gmail draft id for `id`, when `id` is the jobId of an executed
+ * gmail_create_draft approval. Anything else is returned unchanged.
+ */
+async function resolveGmailDraftId(id: string): Promise<string> {
+  const relatedApproval = await approvalQueue.get(id);
+  if (relatedApproval?.tool !== 'gmail_create_draft' || !relatedApproval.resultJson) return id;
+  try {
+    const createResult = JSON.parse(relatedApproval.resultJson) as { data?: { draftId?: string } };
+    const realDraftId = createResult.data?.draftId;
+    if (realDraftId) {
+      console.log(`[executeTool] Resolved draftId jobId=${id} → gmail_id=${realDraftId}`);
+      return realDraftId;
+    }
+  } catch { /* ignore parse errors */ }
+  return id;
+}
+
 /**
  * Resolve credentials and call the tool on the downstream MCP server.
  * Returns a ToolExecutionResult so the caller can map it to either a
@@ -691,20 +712,21 @@ async function executeTool(
 ): Promise<ToolExecutionResult> {
   let args = { ...argsIn };
 
-  // If gmail_send_draft is called with a draftId that is actually an approval jobId
-  // (the model used the jobId from gmail_create_draft's APPROVAL_PENDING response instead
-  // of waiting for the real Gmail draft ID), resolve the real draftId from the stored result.
-  if (toolName === 'gmail_send_draft' && typeof args.draftId === 'string') {
-    const relatedApproval = await approvalQueue.get(args.draftId);
-    if (relatedApproval?.tool === 'gmail_create_draft' && relatedApproval.resultJson) {
-      try {
-        const createResult = JSON.parse(relatedApproval.resultJson) as { data?: { draftId?: string } };
-        const realDraftId = createResult.data?.draftId;
-        if (realDraftId) {
-          console.log(`[executeTool] Resolved draftId jobId=${args.draftId} → gmail_id=${realDraftId}`);
-          args = { ...args, draftId: realDraftId };
-        }
-      } catch { /* ignore parse errors */ }
+  // A draft may be named by the jobId of the approval that created it: the
+  // model used the jobId from gmail_create_draft's APPROVAL_PENDING response
+  // instead of waiting for the real Gmail draft id. Swap in the real id for
+  // every tool that takes one — sending, editing and deleting alike.
+  if (DRAFT_ID_TOOLS.has(toolName)) {
+    if (typeof args.draftId === 'string') {
+      args = { ...args, draftId: await resolveGmailDraftId(args.draftId) };
+    }
+    if (Array.isArray(args.draftIds)) {
+      args = {
+        ...args,
+        draftIds: await Promise.all(
+          args.draftIds.map((id) => (typeof id === 'string' ? resolveGmailDraftId(id) : id))
+        ),
+      };
     }
   }
   const context: ToolContext = {
@@ -731,7 +753,7 @@ async function executeTool(
   }
 
   // Inject gateway token for services that call back into the Reins API.
-  // memory reads/writes memory entries; gmail and drive resolve
+  // memory reads/writes memory entries; gmail, outlook_mail and drive resolve
   // source="upload" files via /api/agent-uploads; skills reads
   // /api/agent-skills; helm-admin reads and writes /api/agent-admin; threads
   // calls /api/threads.
@@ -742,6 +764,7 @@ async function executeTool(
   if (
     serviceType === 'memory' ||
     serviceType === 'gmail' ||
+    serviceType === 'outlook_mail' ||
     serviceType === 'drive' ||
     serviceType === 'skills' ||
     serviceType === 'skill-authoring' ||

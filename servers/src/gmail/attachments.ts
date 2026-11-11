@@ -30,7 +30,24 @@ import {
 } from './mime.js';
 import { SafeFetchError, safeFetchAttachment, type SafeFetchResult } from './safe-fetch.js';
 
-export type AttachmentSource = 'text' | 'gmail' | 'base64' | 'url' | 'drive' | 'upload';
+export type AttachmentSource =
+  | 'text'
+  | 'gmail'
+  | 'base64'
+  | 'url'
+  | 'drive'
+  | 'upload'
+  | 'outlook';
+
+/** The sources a Gmail tool accepts. Also the default for parseAttachments. */
+export const GMAIL_ATTACHMENT_SOURCES: readonly AttachmentSource[] = [
+  'text',
+  'gmail',
+  'drive',
+  'url',
+  'upload',
+  'base64',
+];
 
 export interface AttachmentSpec {
   source: AttachmentSource;
@@ -94,10 +111,14 @@ export function collectAttachmentParts(
  * agents deployed before the union existed still have it in their cached tool
  * schema, and their calls must not start failing.
  */
-function inferSource(item: Record<string, unknown>, index: number): AttachmentSource {
+function inferSource(
+  item: Record<string, unknown>,
+  index: number,
+  allowed: readonly AttachmentSource[]
+): AttachmentSource {
   if (typeof item.data === 'string') return 'base64';
   if (typeof item.content === 'string') return 'text';
-  if (typeof item.attachmentId === 'string') return 'gmail';
+  if (typeof item.attachmentId === 'string' && allowed.includes('gmail')) return 'gmail';
   throw new AttachmentError(
     `Attachment ${index + 1} has no "source" and no recognisable content. Use one of: ` +
       '{"source":"text",filename,content}, {"source":"gmail",messageId,attachmentId}, ' +
@@ -120,8 +141,17 @@ function requireString(
   return value;
 }
 
-/** Validate the raw argument into typed specs. Throws AttachmentError. */
-export function parseAttachments(raw: unknown): AttachmentSpec[] {
+/**
+ * Validate the raw argument into typed specs. Throws AttachmentError.
+ *
+ * `allowed` is the set of sources the calling service can actually resolve.
+ * It defaults to Gmail's; Outlook passes its own, so a source that needs a
+ * Google token is refused here rather than failing halfway through.
+ */
+export function parseAttachments(
+  raw: unknown,
+  allowed: readonly AttachmentSource[] = GMAIL_ATTACHMENT_SOURCES
+): AttachmentSpec[] {
   if (raw === undefined || raw === null) return [];
   if (!Array.isArray(raw)) {
     throw new AttachmentError('"attachments" must be an array.');
@@ -137,7 +167,17 @@ export function parseAttachments(raw: unknown): AttachmentSpec[] {
     if (declared !== undefined && typeof declared !== 'string') {
       throw new AttachmentError(`Attachment ${index + 1}: "source" must be a string.`);
     }
-    const source = (declared as AttachmentSource | undefined) ?? inferSource(item, index);
+    const source =
+      (declared as AttachmentSource | undefined) ?? inferSource(item, index, allowed);
+
+    // Refused as unknown rather than "not allowed": to this caller the source
+    // does not exist, and the supported list is what it needs to see.
+    if (!allowed.includes(source)) {
+      throw new AttachmentError(
+        `Attachment ${index + 1}: unknown source "${String(source)}". ` +
+          `Supported sources are ${allowed.map((name) => `"${name}"`).join(', ')}.`
+      );
+    }
 
     switch (source) {
       case 'text':
@@ -152,6 +192,14 @@ export function parseAttachments(raw: unknown): AttachmentSpec[] {
         // attachmentId is optional now: Gmail rotates it per read, so it is a
         // hint rather than a key. Either it or filename is enough to identify
         // the attachment, and a message with one attachment needs neither.
+        return {
+          source,
+          messageId: requireString(item, 'messageId', source, index),
+          attachmentId: typeof item.attachmentId === 'string' ? item.attachmentId : undefined,
+          filename: typeof item.filename === 'string' ? item.filename : undefined,
+        };
+
+      case 'outlook':
         return {
           source,
           messageId: requireString(item, 'messageId', source, index),
@@ -206,7 +254,13 @@ export function parseAttachments(raw: unknown): AttachmentSpec[] {
 // ---------------------------------------------------------------------------
 
 export interface AttachmentResolverContext {
-  gmail: gmail_v1.Gmail;
+  /** Absent for a non-Google caller, which never advertises source="gmail". */
+  gmail?: gmail_v1.Gmail;
+  /**
+   * Resolves source="outlook". Supplied by the Outlook server, which owns the
+   * Microsoft Graph calls; this module stays free of them.
+   */
+  outlook?: (spec: AttachmentSpec, index: number) => Promise<ResolvedAttachment>;
   /**
    * Lazily builds a Drive client. A factory rather than an instance so an
    * ordinary email send never constructs one — source="drive" is the only
@@ -327,12 +381,18 @@ async function resolveGmailAttachment(
 ): Promise<ResolvedAttachment> {
   const messageId = spec.messageId as string;
   const attachmentId = spec.attachmentId as string | undefined;
+  const gmail = ctx.gmail;
+  if (!gmail) {
+    throw new AttachmentError(
+      `Attachment ${index + 1}: source="gmail" is only available on Gmail tools.`
+    );
+  }
 
   // Filename and MIME type live on the message structure, not on the
   // attachment endpoint, so the message has to be fetched either way.
   let parts: AttachmentPartInfo[];
   try {
-    const message = await ctx.gmail.users.messages.get({
+    const message = await gmail.users.messages.get({
       userId: 'me',
       id: messageId,
       format: 'full',
@@ -373,7 +433,7 @@ async function resolveGmailAttachment(
 
   let base64url: string;
   try {
-    const response = await ctx.gmail.users.messages.attachments.get({
+    const response = await gmail.users.messages.attachments.get({
       userId: 'me',
       messageId,
       // meta.attachmentId, not the caller's: this one came from the fetch a few
@@ -631,6 +691,14 @@ export async function resolveAttachments(
         break;
       case 'upload':
         resolved.push(await resolveUploadAttachment(spec, index, ctx));
+        break;
+      case 'outlook':
+        if (!ctx.outlook) {
+          throw new AttachmentError(
+            `Attachment ${index + 1}: source="outlook" is only available on Outlook tools.`
+          );
+        }
+        resolved.push(await ctx.outlook(spec, index));
         break;
       default:
         throw new AttachmentError(

@@ -21,6 +21,10 @@ export const definition: ServiceDefinitionWithTools = {
   tools: outlookMailTools,
   permissions: {
     read: [
+      // Read for the same reason as gmail_create_upload_link: it touches no
+      // mail, only the agent's own 24-hour staging area. Attaching the staged
+      // file is gated by outlook_mail_create_draft.
+      'outlook_mail_create_upload_link',
       'outlook_mail_get_profile',
       'outlook_mail_list_messages',
       'outlook_mail_get_message',
