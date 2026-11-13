@@ -185,3 +185,21 @@ describe('safeAttachmentFilename', () => {
     expect(link.curl).toContain('-o "término.xlsx"'.normalize('NFC'));
   });
 });
+
+describe('Outlook attachment links', () => {
+  it('point at the Outlook route and carry their own token type', () => {
+    const link = buildAttachmentLink(CLAIMS, 'outlook');
+
+    expect(link.url).toBe('https://app.helm.mom/api/outlook/attachments/download');
+    expect(verifyAttachmentToken(link.token, 'outlook')).toMatchObject({
+      ...CLAIMS,
+      type: 'outlook_attachment',
+    });
+  });
+
+  /** Each route verifies only its own provider's tokens. */
+  it('cannot be replayed against the other provider', () => {
+    expect(verifyAttachmentToken(mintAttachmentToken(CLAIMS, 'outlook'))).toBeNull();
+    expect(verifyAttachmentToken(mintAttachmentToken(CLAIMS), 'outlook')).toBeNull();
+  });
+});

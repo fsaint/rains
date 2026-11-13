@@ -6,6 +6,7 @@
 
 import type { ServerContext, ToolResult } from '../common/types.js';
 import { AttachmentError } from '../gmail/attachments.js';
+import { MAX_INLINE_DOWNLOAD_BYTES, formatBytes } from '../gmail/limits.js';
 import type { ResolvedAttachment } from '../gmail/mime.js';
 import {
   addAttachmentToDraft,
@@ -133,6 +134,106 @@ export async function handleGetMessage(
       bodyContentType: m.body?.contentType,
       hasAttachments: m.hasAttachments,
       attachments,
+    },
+  };
+}
+
+/**
+ * Download one attachment from a message.
+ *
+ * Returns a signed download link rather than the bytes, so a large file never
+ * enters the model's context; files at or under MAX_INLINE_DOWNLOAD_BYTES are
+ * also inlined as base64. Without a link signer (no backend), base64 is the
+ * only way to deliver the file, so it is inlined whatever the size.
+ */
+export async function handleGetAttachment(
+  args: Record<string, unknown>,
+  context: ServerContext
+): Promise<ToolResult> {
+  const messageId = typeof args.messageId === 'string' ? args.messageId.trim() : '';
+  if (!messageId) return { success: false, error: 'messageId is required.' };
+  const filename = typeof args.filename === 'string' ? args.filename.trim() : '';
+  const attachmentId = typeof args.attachmentId === 'string' ? args.attachmentId.trim() : '';
+
+  const graph = (path: string, options?: RequestInit) => graphRequest(context, path, options);
+
+  let available: OutlookAttachmentInfo[];
+  try {
+    available = await listMessageAttachments(graph, messageId);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return {
+      success: false,
+      error:
+        `Could not read the attachments of message "${messageId}": ${reason}. ` +
+        'Check the messageId from outlook_mail_get_message or outlook_mail_search.',
+    };
+  }
+
+  if (available.length === 0) {
+    return { success: false, error: `Message "${messageId}" has no downloadable attachments.` };
+  }
+
+  const meta =
+    (attachmentId ? available.find((entry) => entry.attachmentId === attachmentId) : undefined) ??
+    (filename
+      ? available.find((entry) => entry.filename === filename) ??
+        available.find((entry) => entry.filename.toLowerCase() === filename.toLowerCase())
+      : undefined) ??
+    // Fall back to a lone attachment only when nothing was named: handing back
+    // a different file than the one asked for is worse than refusing.
+    (!filename && !attachmentId && available.length === 1 ? available[0] : undefined);
+
+  if (!meta) {
+    const listing = available
+      .map((entry) => `"${entry.filename}" (${formatBytes(entry.size)})`)
+      .join(', ');
+    return {
+      success: false,
+      error:
+        filename || attachmentId
+          ? `Message "${messageId}" has no attachment ${filename ? `named "${filename}"` : `with id "${attachmentId}"`}. It has: ${listing}.`
+          : `Message "${messageId}" has ${available.length} attachments: ${listing}. Pass "filename" to say which one you want.`,
+    };
+  }
+
+  const link = context.signAttachmentUrl?.({
+    messageId,
+    attachmentId: meta.attachmentId,
+    filename: meta.filename,
+    mimeType: meta.mimeType,
+    size: meta.size,
+  });
+
+  let data: string | undefined;
+  if (!link || meta.size <= MAX_INLINE_DOWNLOAD_BYTES) {
+    const response = await graph(
+      `/me/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(meta.attachmentId)}/$value`
+    );
+    if (!response.ok) return handleError(response);
+    data = Buffer.from(await response.arrayBuffer()).toString('base64');
+  }
+
+  return {
+    success: true,
+    data: {
+      messageId,
+      attachmentId: meta.attachmentId,
+      filename: meta.filename,
+      mimeType: meta.mimeType,
+      size: meta.size,
+      ...(link
+        ? {
+            url: link.url,
+            token: link.token,
+            expiresAt: link.expiresAt,
+            curl: link.curl,
+            note:
+              'Run `curl` to download the file. The bytes do not pass through this conversation. ' +
+              'The token authorises this one attachment and expires shortly.',
+          }
+        : {}),
+      ...(data === undefined ? {} : { encoding: 'base64', data }),
     },
   };
 }

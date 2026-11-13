@@ -28,6 +28,7 @@ export const definition: ServiceDefinitionWithTools = {
       'outlook_mail_get_profile',
       'outlook_mail_list_messages',
       'outlook_mail_get_message',
+      'outlook_mail_get_attachment',
       'outlook_mail_search',
       'outlook_mail_list_folders',
     ],

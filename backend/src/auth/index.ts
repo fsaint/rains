@@ -645,6 +645,7 @@ export async function registerAuth(app: FastifyInstance) {
       path === '/api/config/public' || // Public config (no secrets)
       path === '/api/oauth/google/callback' || // Google OAuth callback — state token validated inside handler
       path === '/api/gmail/attachments/download' || // Attachment download — capability token validated inside handler
+      path === '/api/outlook/attachments/download' || // Attachment download — capability token validated inside handler
       // Agent upload — capability token validated inside the handler. Only
       // with a Bearer token present, so a bodyless probe is still refused
       // here rather than after the route has buffered up to 25 MB.

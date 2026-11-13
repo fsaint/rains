@@ -1,5 +1,5 @@
 /**
- * Short-lived download links for Gmail attachments.
+ * Short-lived download links for Gmail and Outlook attachments.
  *
  * Gmail's attachments endpoint is not a media download: it answers with
  * base64url inside JSON. Returning that from a tool call puts the whole file
@@ -20,8 +20,24 @@
 import jwt from 'jsonwebtoken';
 import { config } from '../config/index.js';
 
+/** Mail providers whose attachments are delivered through these links. */
+export type AttachmentProvider = 'gmail' | 'outlook';
+
 /** Distinguishes this token from a session or a magic link. */
 export const ATTACHMENT_TOKEN_TYPE = 'gmail_attachment' as const;
+
+/**
+ * Outlook links carry their own type, so a Gmail token cannot be replayed
+ * against the Outlook route (or the reverse). Each route verifies only its own.
+ */
+export const OUTLOOK_ATTACHMENT_TOKEN_TYPE = 'outlook_attachment' as const;
+
+export type AttachmentTokenType = typeof ATTACHMENT_TOKEN_TYPE | typeof OUTLOOK_ATTACHMENT_TOKEN_TYPE;
+
+const TOKEN_TYPES: Record<AttachmentProvider, AttachmentTokenType> = {
+  gmail: ATTACHMENT_TOKEN_TYPE,
+  outlook: OUTLOOK_ATTACHMENT_TOKEN_TYPE,
+};
 
 /** Long enough for an agent to run the curl, short enough to limit a leak. */
 export const ATTACHMENT_LINK_TTL_SECONDS = 10 * 60;
@@ -35,6 +51,14 @@ export const INLINE_ATTACHMENT_MAX_BYTES = 256 * 1024;
 /** Path the download is served from. Must stay in the auth-guard allowlist. */
 export const ATTACHMENT_DOWNLOAD_PATH = '/api/gmail/attachments/download';
 
+/** Outlook's download path. Must stay in the auth-guard allowlist. */
+export const OUTLOOK_ATTACHMENT_DOWNLOAD_PATH = '/api/outlook/attachments/download';
+
+const DOWNLOAD_PATHS: Record<AttachmentProvider, string> = {
+  gmail: ATTACHMENT_DOWNLOAD_PATH,
+  outlook: OUTLOOK_ATTACHMENT_DOWNLOAD_PATH,
+};
+
 export interface AttachmentTokenClaims {
   agentId: string;
   /** The account the attachment was read from; the download uses the same one. */
@@ -47,7 +71,7 @@ export interface AttachmentTokenClaims {
 }
 
 export interface AttachmentTokenPayload extends AttachmentTokenClaims {
-  type: typeof ATTACHMENT_TOKEN_TYPE;
+  type: AttachmentTokenType;
 }
 
 export interface AttachmentLink {
@@ -58,17 +82,24 @@ export interface AttachmentLink {
   curl: string;
 }
 
-export function mintAttachmentToken(claims: AttachmentTokenClaims): string {
-  return jwt.sign({ ...claims, type: ATTACHMENT_TOKEN_TYPE }, config.sessionSecret, {
+export function mintAttachmentToken(
+  claims: AttachmentTokenClaims,
+  provider: AttachmentProvider = 'gmail'
+): string {
+  return jwt.sign({ ...claims, type: TOKEN_TYPES[provider] }, config.sessionSecret, {
     expiresIn: ATTACHMENT_LINK_TTL_SECONDS,
   });
 }
 
 /**
  * Verify a download token. Returns null for anything that is not a live,
- * correctly typed, fully populated attachment token — never throws.
+ * fully populated attachment token of this provider's type — never throws.
  */
-export function verifyAttachmentToken(token: string): AttachmentTokenPayload | null {
+export function verifyAttachmentToken(
+  token: string,
+  provider: AttachmentProvider = 'gmail'
+): AttachmentTokenPayload | null {
+  const expectedType = TOKEN_TYPES[provider];
   if (!token) return null;
   let decoded: unknown;
   try {
@@ -79,7 +110,7 @@ export function verifyAttachmentToken(token: string): AttachmentTokenPayload | n
   if (typeof decoded !== 'object' || decoded === null) return null;
 
   const payload = decoded as Record<string, unknown>;
-  if (payload.type !== ATTACHMENT_TOKEN_TYPE) return null;
+  if (payload.type !== expectedType) return null;
 
   const required = ['agentId', 'credentialId', 'messageId', 'attachmentId'] as const;
   for (const key of required) {
@@ -87,7 +118,7 @@ export function verifyAttachmentToken(token: string): AttachmentTokenPayload | n
   }
 
   return {
-    type: ATTACHMENT_TOKEN_TYPE,
+    type: expectedType,
     agentId: payload.agentId as string,
     credentialId: payload.credentialId as string,
     messageId: payload.messageId as string,
@@ -169,10 +200,13 @@ export function contentDispositionFor(filename: string | undefined): string {
   return `${plain}; filename*=UTF-8''${encodeExtendedFilename(name)}`;
 }
 
-export function buildAttachmentLink(claims: AttachmentTokenClaims): AttachmentLink {
-  const token = mintAttachmentToken(claims);
+export function buildAttachmentLink(
+  claims: AttachmentTokenClaims,
+  provider: AttachmentProvider = 'gmail'
+): AttachmentLink {
+  const token = mintAttachmentToken(claims, provider);
   const base = (config.publicUrl || config.dashboardUrl).replace(/\/+$/, '');
-  const url = `${base}${ATTACHMENT_DOWNLOAD_PATH}`;
+  const url = `${base}${DOWNLOAD_PATHS[provider]}`;
   const filename = safeAttachmentFilename(claims.filename);
 
   return {

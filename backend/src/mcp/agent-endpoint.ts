@@ -1066,13 +1066,17 @@ async function executeTool(
   // does not catch), so the GaxiosError passes through this frame.
   const credentialId = resolvedCredentialId;
 
-  // Gmail attachments are delivered as a signed download link rather than
+  // Gmail and Outlook attachments are delivered as a signed download link rather than
   // base64 in the tool result. Injected here, after credential resolution,
   // because the link is bound to the account this call actually resolved to
   // — an agent with two mailboxes must not get a link that reads the other.
   if (serviceType === 'gmail' && credentialId) {
     context.signAttachmentUrl = (params) =>
       buildAttachmentLink({ agentId, credentialId, ...params });
+  }
+  if (serviceType === 'outlook_mail' && credentialId) {
+    context.signAttachmentUrl = (params) =>
+      buildAttachmentLink({ agentId, credentialId, ...params }, 'outlook');
   }
 
   let toolResult: Awaited<ReturnType<typeof server.callTool>>;

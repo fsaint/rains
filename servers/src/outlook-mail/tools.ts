@@ -9,6 +9,7 @@ import {
   handleGetProfile,
   handleListMessages,
   handleGetMessage,
+  handleGetAttachment,
   handleSearchMessages,
   handleCreateDraft,
   handleSendDraft,
@@ -68,7 +69,7 @@ export const getMessageTool: ToolDefinition = {
   name: 'outlook_mail_get_message',
   description:
     'Get the full content of an email message including headers, body, and the name, type and ' +
-    'size of each attachment. To forward an attachment, pass ' +
+    'size of each attachment. To download one, use outlook_mail_get_attachment. To forward an attachment, pass ' +
     '{"source":"outlook","messageId":"…","filename":"…"} in the attachments parameter of ' +
     'outlook_mail_create_draft — the bytes never pass through your context.',
   inputSchema: {
@@ -83,6 +84,58 @@ export const getMessageTool: ToolDefinition = {
     required: ['messageId'],
   },
   handler: handleGetMessage,
+};
+
+export const getAttachmentTool: ToolDefinition = {
+  name: 'outlook_mail_get_attachment',
+  description:
+    'Download an attachment from an Outlook email. Use outlook_mail_get_message first to see ' +
+    'what a message carries.\n' +
+    '\n' +
+    'Name the attachment with "filename" (or "attachmentId" from outlook_mail_get_message). ' +
+    'If the message has exactly one attachment you may omit both and it is used.\n' +
+    '\n' +
+    'Returns an authenticated download link, NOT the file bytes, so a large attachment never ' +
+    'enters your context. The response gives you: filename, mimeType, size, url, token, ' +
+    'expiresAt, and curl — where curl is the complete command, already filled in:\n' +
+    '\n' +
+    '  curl -fsSL -H "Authorization: Bearer <token>" -o "<filename>" "<url>"\n' +
+    '\n' +
+    'Run that command to write the file to disk. The token authorises this one attachment on ' +
+    'this one account, expires about 10 minutes after the call, and stops working if the owner ' +
+    'detaches the account — so download promptly and call this tool again if it expires. If you ' +
+    'cannot run shell commands, give the user the curl command or the url and token.\n' +
+    '\n' +
+    'Attachments under 256 KB also include the bytes inline as base64 in `data`, so small ' +
+    'text files and thumbnails need no download step. Forwarded emails and calendar items ' +
+    'attached to a message are not files and cannot be downloaded.\n' +
+    '\n' +
+    'DO NOT call this to forward or re-send a file. To attach a file from an existing email, ' +
+    'pass {"source":"outlook","messageId":"…","filename":"…"} in the attachments parameter of ' +
+    'outlook_mail_create_draft — Helm fetches the bytes server-side, so they never pass through ' +
+    'your context.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      ...accountProperty,
+      messageId: {
+        type: 'string',
+        description: 'The ID of the message containing the attachment',
+      },
+      filename: {
+        type: 'string',
+        description:
+          'Name of the attachment, as shown by outlook_mail_get_message. Optional when the ' +
+          'message has exactly one attachment.',
+      },
+      attachmentId: {
+        type: 'string',
+        description: 'Optional. The attachmentId shown by outlook_mail_get_message.',
+      },
+    },
+    required: ['messageId'],
+  },
+  handler: handleGetAttachment,
 };
 
 export const searchMessagesTool: ToolDefinition = {
@@ -295,6 +348,7 @@ export const outlookMailTools: ToolDefinition[] = [
   getProfileTool,
   listMessagesTool,
   getMessageTool,
+  getAttachmentTool,
   searchMessagesTool,
   listFoldersTool,
   // Write

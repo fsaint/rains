@@ -69,7 +69,7 @@ export interface ServerContext {
    */
   instanceConfig?: Record<string, unknown>;
   /**
-   * Mints a short-lived authenticated download URL for one Gmail attachment.
+   * Mints a short-lived authenticated download URL for one Gmail or Outlook attachment.
    *
    * Injected by the backend, which holds the signing secret and knows which
    * credential this call resolved to. Absent when the backend did not supply

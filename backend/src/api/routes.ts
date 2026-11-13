@@ -74,6 +74,7 @@ import { getPostHog } from '../analytics/posthog.js';
 import { createUpload, getUpload, MAX_UPLOAD_BYTES } from '../services/agent-uploads.js';
 import {
   ATTACHMENT_DOWNLOAD_PATH,
+  OUTLOOK_ATTACHMENT_DOWNLOAD_PATH,
   contentDispositionFor,
   verifyAttachmentToken,
 } from '../services/attachment-links.js';
@@ -4009,6 +4010,91 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
 
     const bytes = Buffer.from(encoded, 'base64url');
+    // Sender-controlled bytes served from the dashboard origin: always a
+    // download, never inline, and never sniffed into HTML or SVG.
+    const declared = claims.mimeType ?? '';
+    const mimeType = /^[\w.+-]+\/[\w.+-]+$/.test(declared) ? declared : 'application/octet-stream';
+
+    return reply
+      .header('content-type', mimeType)
+      .header('content-length', String(bytes.length))
+      .header('content-disposition', contentDispositionFor(claims.filename))
+      .header('x-content-type-options', 'nosniff')
+      .send(bytes);
+  });
+
+  /**
+   * GET /api/outlook/attachments/download
+   *
+   * The Outlook twin of the Gmail route above, authorized the same way: the
+   * bearer token minted by outlook_mail_get_attachment, re-checked against
+   * the agent's live access on every request. Only an `outlook_attachment`
+   * token is accepted here, so a Gmail link cannot be replayed against it.
+   *
+   * Graph's `$value` endpoint answers with the raw file, so there is no JSON
+   * envelope to unwrap. Outlook attachment ids are stable, unlike Gmail's.
+   */
+  app.get(OUTLOOK_ATTACHMENT_DOWNLOAD_PATH, async (request, reply) => {
+    const bearer = (request.headers.authorization ?? '').match(/^Bearer\s+(.+)$/i)?.[1];
+    const claims = bearer ? verifyAttachmentToken(bearer, 'outlook') : null;
+    if (!claims) {
+      return reply
+        .code(401)
+        .send({ error: { code: 'UNAUTHORIZED', message: 'Missing, expired, or invalid download token' } });
+    }
+
+    const instance = await client.execute({
+      sql: `SELECT id FROM agent_service_instances
+            WHERE agent_id = ? AND service_type = 'outlook_mail' AND enabled = true AND credential_id = ?
+            LIMIT 1`,
+      args: [claims.agentId, claims.credentialId],
+    });
+    if (instance.rows.length === 0) {
+      return reply.code(403).send({
+        error: { code: 'FORBIDDEN', message: 'This agent no longer has access to that Outlook account' },
+      });
+    }
+
+    const accessToken = await credentialVault.getValidAccessToken(claims.credentialId);
+    if (!accessToken) {
+      return reply
+        .code(401)
+        .send({ error: { code: 'INVALID_TOKEN', message: 'Microsoft token is missing or expired' } });
+    }
+
+    let res: Response;
+    try {
+      res = await fetch(
+        `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(claims.messageId)}` +
+          `/attachments/${encodeURIComponent(claims.attachmentId)}/$value`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+    } catch {
+      return reply.code(502).send({ error: { code: 'SERVER_ERROR', message: 'Could not reach Microsoft Graph' } });
+    }
+    if (res.status === 401 || res.status === 403) {
+      return reply
+        .code(401)
+        .send({ error: { code: 'INVALID_TOKEN', message: 'Microsoft Graph rejected the token' } });
+    }
+    if (res.status === 404) {
+      return reply
+        .code(404)
+        .send({ error: { code: 'NOT_FOUND', message: 'That attachment no longer exists' } });
+    }
+    if (!res.ok) {
+      return reply
+        .code(502)
+        .send({ error: { code: 'SERVER_ERROR', message: `Microsoft Graph returned ${res.status}` } });
+    }
+
+    let bytes: Buffer;
+    try {
+      bytes = Buffer.from(await res.arrayBuffer());
+    } catch {
+      return reply.code(502).send({ error: { code: 'SERVER_ERROR', message: 'Download from Microsoft Graph failed' } });
+    }
+
     // Sender-controlled bytes served from the dashboard origin: always a
     // download, never inline, and never sniffed into HTML or SVG.
     const declared = claims.mimeType ?? '';

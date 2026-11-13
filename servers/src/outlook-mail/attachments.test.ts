@@ -9,7 +9,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { data } from '../common/test-helpers.js';
 import type { ServerContext } from '../common/types.js';
-import { handleCreateDraft, handleGetMessage, handleSendMessage } from './handlers.js';
+import {
+  handleCreateDraft,
+  handleGetAttachment,
+  handleGetMessage,
+  handleSendMessage,
+} from './handlers.js';
 import { outlookMailTools } from './tools.js';
 import { definition } from './definition.js';
 import { parseAttachments } from '../gmail/attachments.js';
@@ -355,6 +360,135 @@ describe('outlook_mail_get_message — attachment listing', () => {
 
     expect(data(result).attachments).toEqual([]);
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe('outlook_mail_get_attachment', () => {
+  const FILE = (id: string, name: string, size: number, contentType = 'application/pdf') => ({
+    '@odata.type': '#microsoft.graph.fileAttachment',
+    id,
+    name,
+    contentType,
+    size,
+  });
+  const BYTES = Buffer.from('%PDF-1.4 hello');
+
+  const signer = vi.fn((params: { attachmentId: string; filename?: string }) => ({
+    url: 'https://app.helm.mom/api/outlook/attachments/download',
+    token: `tok-${params.attachmentId}`,
+    expiresAt: '2026-11-13T00:10:00.000Z',
+    curl: `curl -fsSL -H "Authorization: Bearer tok" -o "${params.filename}" "https://app.helm.mom/api/outlook/attachments/download"`,
+  }));
+  const withSigner: ServerContext = { ...context, signAttachmentUrl: signer };
+
+  function listing(...entries: unknown[]): void {
+    on('GET', `${GRAPH}/me/messages/m1/attachments?`, () => json({ value: entries }));
+  }
+  function bytesFor(id: string): void {
+    on('GET', `${GRAPH}/me/messages/m1/attachments/${id}/$value`, () => new Response(BYTES));
+  }
+
+  beforeEach(() => {
+    signer.mockClear();
+  });
+
+  it('returns a signed link and skips the download for a large file', async () => {
+    listing(FILE('a1', 'deck.pdf', 5 * 1024 * 1024));
+
+    const result = await handleGetAttachment({ messageId: 'm1', filename: 'deck.pdf' }, withSigner);
+
+    expect(result.success).toBe(true);
+    expect(data(result)).toMatchObject({
+      attachmentId: 'a1',
+      filename: 'deck.pdf',
+      mimeType: 'application/pdf',
+      token: 'tok-a1',
+      url: 'https://app.helm.mom/api/outlook/attachments/download',
+    });
+    expect(data(result).data).toBeUndefined();
+    expect(signer).toHaveBeenCalledWith({
+      messageId: 'm1',
+      attachmentId: 'a1',
+      filename: 'deck.pdf',
+      mimeType: 'application/pdf',
+      size: 5 * 1024 * 1024,
+    });
+    expect(callsTo('GET', '/$value')).toHaveLength(0);
+  });
+
+  it('also inlines a small file as base64', async () => {
+    listing(FILE('a1', 'note.pdf', BYTES.length));
+    bytesFor('a1');
+
+    const result = await handleGetAttachment({ messageId: 'm1' }, withSigner);
+
+    expect(data(result)).toMatchObject({ token: 'tok-a1', encoding: 'base64', data: BYTES.toString('base64') });
+  });
+
+  it('inlines whatever the size when there is no link signer', async () => {
+    listing(FILE('a1', 'deck.pdf', 5 * 1024 * 1024));
+    bytesFor('a1');
+
+    const result = await handleGetAttachment({ messageId: 'm1' }, context);
+
+    expect(data(result).data).toBe(BYTES.toString('base64'));
+    expect(data(result).url).toBeUndefined();
+  });
+
+  it('picks by filename case-insensitively, and by attachmentId', async () => {
+    listing(FILE('a1', 'One.pdf', 10), FILE('a2', 'Two.xlsx', 10, 'application/vnd.ms-excel'));
+    bytesFor('a1');
+    bytesFor('a2');
+
+    const byName = await handleGetAttachment({ messageId: 'm1', filename: 'two.XLSX' }, withSigner);
+    const byId = await handleGetAttachment({ messageId: 'm1', attachmentId: 'a1' }, withSigner);
+
+    expect(data(byName).attachmentId).toBe('a2');
+    expect(data(byId).filename).toBe('One.pdf');
+  });
+
+  it('asks which one when several are attached and none is named', async () => {
+    listing(FILE('a1', 'One.pdf', 10), FILE('a2', 'Two.pdf', 10));
+
+    const result = await handleGetAttachment({ messageId: 'm1' }, withSigner);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/2 attachments: "One.pdf".*"Two.pdf".*Pass "filename"/);
+    expect(signer).not.toHaveBeenCalled();
+  });
+
+  it('refuses rather than substitute a lone attachment for a wrong name', async () => {
+    listing(FILE('a1', 'One.pdf', 10));
+
+    const result = await handleGetAttachment({ messageId: 'm1', filename: 'other.pdf' }, withSigner);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/no attachment named "other.pdf". It has: "One.pdf"/);
+  });
+
+  it('does not offer forwarded emails or calendar items', async () => {
+    listing({ '@odata.type': '#microsoft.graph.itemAttachment', id: 'i1', name: 'Fwd', size: 10 });
+
+    const result = await handleGetAttachment({ messageId: 'm1' }, withSigner);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/no downloadable attachments/);
+  });
+
+  it('reports an unreadable message', async () => {
+    on('GET', `${GRAPH}/me/messages/m1/attachments?`, () =>
+      json({ error: { message: 'The specified object was not found in the store.' } }, 404)
+    );
+
+    const result = await handleGetAttachment({ messageId: 'm1' }, withSigner);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/not found in the store/);
+  });
+
+  it('is registered as a read tool', () => {
+    expect(outlookMailTools.map((tool) => tool.name)).toContain('outlook_mail_get_attachment');
+    expect(definition.permissions.read).toContain('outlook_mail_get_attachment');
   });
 });
 
