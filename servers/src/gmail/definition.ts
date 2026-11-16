@@ -34,12 +34,16 @@ export const definition: ServiceDefinitionWithTools = {
     // the most it can destroy is unsent text — and each call is approved.
     write: ['gmail_create_draft', 'gmail_update_draft', 'gmail_delete_draft', 'gmail_send_draft', 'gmail_mark_read', 'gmail_archive', 'gmail_modify_labels', 'gmail_label_message'],
     blocked: ['gmail_send_message', 'gmail_delete_message'],
+    // A draft sends nothing: it sits in the owner's Drafts folder until
+    // gmail_send_draft, which stays behind approval. So creating one runs
+    // unattended by default; the owner can tighten it per agent.
+    allowByDefault: ['gmail_create_draft'],
   },
   permissionDescriptions: {
     read: 'List, read, and search emails',
     // Every tool in the write list is gated, not just drafting and sending —
     // labelling, archiving, and marking read are too. Batch with messageIds so
     // one approval covers a whole set instead of one per message.
-    full: 'Read emails freely. Drafting, editing and deleting drafts, sending, labelling, archiving, and marking read require your approval. Sending directly and deleting are blocked.',
+    full: 'Read emails and create drafts freely. Editing and deleting drafts, sending, labelling, archiving, and marking read require your approval. Sending directly and deleting are blocked.',
   },
 };

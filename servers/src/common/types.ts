@@ -184,6 +184,8 @@ export interface ServiceDefinition {
     blocked: string[];
     /** Default permission for write tools. Services with no external API risk can set this to 'allow'. Defaults to 'require_approval'. */
     defaultWritePermission?: 'allow' | 'require_approval';
+    /** Write tools that default to 'allow' even when the service's defaultWritePermission is require_approval. The owner can still tighten them per agent. Ignored for tools in alwaysApprove. */
+    allowByDefault?: string[];
     /** Write tools that require approval regardless of defaultWritePermission or any per-agent override; enforced by ALWAYS_APPROVE_TOOLS in agent-endpoint. */
     alwaysApprove?: string[];
   };

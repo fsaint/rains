@@ -42,9 +42,12 @@ export const definition: ServiceDefinitionWithTools = {
       'outlook_mail_send_message',
       'outlook_mail_delete_message',
     ],
+    // Same reasoning as gmail_create_draft: a draft sends nothing until
+    // outlook_mail_send_draft, which stays behind approval.
+    allowByDefault: ['outlook_mail_create_draft'],
   },
   permissionDescriptions: {
     read: 'List, read, and search emails',
-    full: 'Read emails freely. Creating drafts, replying, and sending require your approval.',
+    full: 'Read emails and create drafts freely. Replying, sending, and moving messages require your approval.',
   },
 };

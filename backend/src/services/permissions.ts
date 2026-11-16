@@ -80,12 +80,30 @@ export interface PermissionMatrix {
 /**
  * Get default permissions for a service from the registry
  */
-function getDefaultPermsFromDef(def: { permissions: { read: string[]; write: string[]; blocked: string[]; defaultWritePermission?: 'allow' | 'require_approval'; alwaysApprove?: string[] } }): Record<string, ToolPermission> {
+type PermissionPreset = {
+  read: string[];
+  write: string[];
+  blocked: string[];
+  defaultWritePermission?: 'allow' | 'require_approval';
+  allowByDefault?: string[];
+  alwaysApprove?: string[];
+};
+
+/**
+ * The permission a write tool takes when the service is enabled at Full:
+ * alwaysApprove wins, then the per-tool allowByDefault, then the service's
+ * defaultWritePermission (require_approval when unset).
+ */
+function defaultWritePermission(preset: PermissionPreset, tool: string): 'allow' | 'require_approval' {
+  if (preset.alwaysApprove?.includes(tool)) return 'require_approval';
+  if (preset.allowByDefault?.includes(tool)) return 'allow';
+  return preset.defaultWritePermission ?? 'require_approval';
+}
+
+function getDefaultPermsFromDef(def: { permissions: PermissionPreset }): Record<string, ToolPermission> {
   const result: Record<string, ToolPermission> = {};
-  const defaultWrite = def.permissions.defaultWritePermission ?? 'require_approval';
   for (const tool of def.permissions.read) result[tool] = 'allow';
-  for (const tool of def.permissions.write) result[tool] = defaultWrite;
-  for (const tool of def.permissions.alwaysApprove ?? []) result[tool] = 'require_approval';
+  for (const tool of def.permissions.write) result[tool] = defaultWritePermission(def.permissions, tool);
   for (const tool of def.permissions.blocked) result[tool] = 'block';
   return result;
 }
@@ -94,7 +112,7 @@ function getDefaultPermsFromDef(def: { permissions: { read: string[]; write: str
  * Calculate permission level from tool permissions
  */
 function calculatePermissionLevelFromTools(
-  preset: { read: string[]; write: string[]; blocked: string[] },
+  preset: PermissionPreset,
   tools: Record<string, ToolPermission>
 ): PermissionLevel {
   const readToolsAllowed = preset.read.every((tool) => tools[tool] === 'allow');
@@ -102,11 +120,14 @@ function calculatePermissionLevelFromTools(
   const writeToolsBlocked = preset.write.length === 0 || preset.write.every((tool) => tools[tool] === 'block');
   const writeToolsApproval = preset.write.length === 0 || preset.write.every((tool) => tools[tool] === 'require_approval');
   const writeToolsAllowed = preset.write.length === 0 || preset.write.every((tool) => tools[tool] === 'allow');
+  // Exactly what picking Full writes, which mixes allow and approval when
+  // the service has allowByDefault tools.
+  const writeToolsAtDefault = preset.write.every((tool) => tools[tool] === defaultWritePermission(preset, tool));
 
   if (!blockedToolsBlocked) return 'custom';
   if (!readToolsAllowed) return 'custom';
   if (writeToolsBlocked) return 'read';
-  if (writeToolsApproval || writeToolsAllowed) return 'full';
+  if (writeToolsApproval || writeToolsAllowed || writeToolsAtDefault) return 'full';
   return 'custom';
 }
 
@@ -905,13 +926,10 @@ export async function setPermissionLevel(
     permissions[tool] = 'allow';
   }
 
+  // Picking Full must not loosen the tools that never run unattended:
+  // defaultWritePermission puts alwaysApprove ahead of everything else.
   for (const tool of preset.write) {
-    permissions[tool] = level === 'read' ? 'block' : (def.permissions.defaultWritePermission ?? 'require_approval');
-  }
-
-  // Picking Full must not loosen the tools that never run unattended.
-  if (level !== 'read') {
-    for (const tool of preset.alwaysApprove ?? []) permissions[tool] = 'require_approval';
+    permissions[tool] = level === 'read' ? 'block' : defaultWritePermission(preset, tool);
   }
 
   for (const tool of preset.blocked) {
@@ -1623,7 +1641,7 @@ export async function setInstancePermissionLevel(
   const perms: Record<string, ToolPermission> = {};
 
   for (const tool of preset.read) perms[tool] = 'allow';
-  for (const tool of preset.write) perms[tool] = level === 'read' ? 'block' : 'require_approval';
+  for (const tool of preset.write) perms[tool] = level === 'read' ? 'block' : defaultWritePermission(preset, tool);
   for (const tool of preset.blocked) perms[tool] = 'block';
 
   // Apply tool permissions scoped to this instance

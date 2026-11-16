@@ -73,7 +73,8 @@ export function getServiceTypeFromToolName(toolName: string): string | null {
 /**
  * Build default permission map for a service (read→allow, blocked→block).
  * Write tools take the service's defaultWritePermission (require_approval when
- * unset), except alwaysApprove tools, which are require_approval regardless.
+ * unset); allowByDefault tools default to allow; alwaysApprove tools are
+ * require_approval regardless.
  */
 export function getDefaultPermissions(serviceType: string): Record<string, 'allow' | 'require_approval' | 'block'> {
   const def = serviceRegistry.get(serviceType);
@@ -82,6 +83,7 @@ export function getDefaultPermissions(serviceType: string): Record<string, 'allo
   for (const tool of def.permissions.read) result[tool] = 'allow';
   const defaultWrite = def.permissions.defaultWritePermission ?? 'require_approval';
   for (const tool of def.permissions.write) result[tool] = defaultWrite;
+  for (const tool of def.permissions.allowByDefault ?? []) result[tool] = 'allow';
   for (const tool of def.permissions.alwaysApprove ?? []) result[tool] = 'require_approval';
   for (const tool of def.permissions.blocked) result[tool] = 'block';
   return result;

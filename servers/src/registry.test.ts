@@ -93,3 +93,29 @@ describe('service registry — threads', () => {
     expect(getServiceTypeFromToolName('thread_propose')).toBe('threads');
   });
 });
+
+describe('service registry — drafts run unattended by default', () => {
+  it('allows creating a Gmail draft but keeps sending and editing behind approval', () => {
+    const p = getDefaultPermissions('gmail');
+    expect(p.gmail_create_draft).toBe('allow');
+    expect(p.gmail_send_draft).toBe('require_approval');
+    expect(p.gmail_update_draft).toBe('require_approval');
+    expect(p.gmail_send_message).toBe('block');
+  });
+
+  it('allows creating an Outlook draft but keeps sending and replying behind approval', () => {
+    const p = getDefaultPermissions('outlook_mail');
+    expect(p.outlook_mail_create_draft).toBe('allow');
+    expect(p.outlook_mail_send_draft).toBe('require_approval');
+    expect(p.outlook_mail_reply).toBe('require_approval');
+    expect(p.outlook_mail_send_message).toBe('block');
+  });
+
+  it('only lists write tools in allowByDefault', () => {
+    for (const def of serviceDefinitions) {
+      for (const tool of def.permissions.allowByDefault ?? []) {
+        expect(def.permissions.write, `${def.type}: ${tool}`).toContain(tool);
+      }
+    }
+  });
+});
