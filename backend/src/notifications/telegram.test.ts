@@ -778,7 +778,7 @@ describe('telegram dispatch for thread tools', () => {
     expect(out.parseMode).toBe('HTML');
     expect(out.text).toContain('Start a thread');
     expect(out.text).toContain('g'.repeat(400));
-    expect(out.text).not.toContain('*Args:*');
+    expect(out.text).not.toContain('Args:');
   });
 });
 
@@ -875,6 +875,34 @@ describe('draft editing and deleting approvals', () => {
     ]);
     expect(out.parseMode).toBe('HTML');
     expect(out.text).toContain('Old quote');
-    expect(out.text).not.toContain('*Args:*');
+    expect(out.text).not.toContain('Args:');
+  });
+});
+
+/**
+ * The generic message used to be legacy Markdown with the context line
+ * unescaped. "MCP endpoint call for outlook_mail_move_message" has three
+ * underscores, which left an italic entity open; Telegram rejected the whole
+ * message and the owner never saw the approval.
+ */
+describe('generic approval message', () => {
+  it('is HTML with tool names, context and args escaped', async () => {
+    const { telegramNotifier } = await import('./telegram.js');
+    const out = (telegramNotifier as any).formatApprovalMessage(
+      makeApproval({
+        tool: 'outlook_mail_move_message',
+        arguments: { messageId: 'AAMk_a<b>`x`', destinationFolder: 'Archive & Old' },
+        context: 'MCP endpoint call for outlook_mail_move_message',
+      }),
+      null
+    );
+    expect(out.parseMode).toBe('HTML');
+    expect(out.text).toContain('<code>outlook_mail_move_message</code>');
+    expect(out.text).toContain('MCP endpoint call for outlook_mail_move_message');
+    expect(out.text).toContain('a&lt;b&gt;');
+    expect(out.text).toContain('Archive &amp; Old');
+    // Only the tags the formatter writes itself.
+    const tags = out.text.match(/<\/?[a-z]+>/g) ?? [];
+    expect(new Set(tags)).toEqual(new Set(['<b>', '</b>', '<code>', '</code>']));
   });
 });

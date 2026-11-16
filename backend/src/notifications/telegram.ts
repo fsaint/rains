@@ -22,6 +22,7 @@ import {
   THREAD_TOOLS,
   type ThreadApprovalSummary,
   formatBatchScope,
+  escapeHtml,
   formatCalendarApprovalMessage,
   formatDraftSendApprovalMessage,
   formatEmailApprovalMessage,
@@ -712,21 +713,25 @@ export class TelegramNotifier {
     // Batch calls truncate mid-id-list below, so state the blast radius up front.
     const batchScope = formatBatchScope(approval.arguments as Record<string, unknown> | undefined);
 
+    // HTML, with every interpolated value escaped. This used legacy Markdown,
+    // where `_` opens italics: a context line naming a tool with an odd number
+    // of underscores (outlook_mail_move_message) left one unclosed, Telegram
+    // refused to parse the message, and the approval never reached the owner.
     const text = [
-      `*Approval Required*`,
+      `<b>Approval Required</b>`,
       ``,
-      `*Tool:* \`${approval.tool}\``,
-      `*Agent:* \`${approval.agentId}\``,
-      batchScope ? `*Affects:* ${batchScope}` : null,
-      `*Args:* \`${truncated}\``,
-      approval.context ? `*Context:* ${approval.context}` : null,
+      `<b>Tool:</b> <code>${escapeHtml(approval.tool)}</code>`,
+      `<b>Agent:</b> <code>${escapeHtml(approval.agentId)}</code>`,
+      batchScope ? `<b>Affects:</b> ${escapeHtml(batchScope)}` : null,
+      `<b>Args:</b> <code>${escapeHtml(truncated)}</code>`,
+      approval.context ? `<b>Context:</b> ${escapeHtml(approval.context)}` : null,
       ``,
       `Expires in ~${expiresIn} min`,
     ]
       .filter(Boolean)
       .join('\n');
 
-    return { text, keyboard: approveDenyKeyboard(approval.id) };
+    return { text, keyboard: approveDenyKeyboard(approval.id), parseMode: 'HTML' };
   }
 
   private formatGroupApprovalMessage(approval: ApprovalRequest): {
@@ -820,7 +825,7 @@ export class TelegramNotifier {
 
     if (approval.tool === 'reauth') {
       if (approval.status === 'approved') {
-        return `🔑 *Re-authenticated* — ${approval.resolvedBy ?? 'user'} connected the service at ${time}`;
+        return `🔑 *Re-authenticated* — ${escapeMarkdown(approval.resolvedBy ?? 'user')} connected the service at ${time}`;
       } else if (approval.status === 'rejected') {
         return `❌ *Re-authentication skipped* at ${time}`;
       } else {
@@ -846,12 +851,12 @@ export class TelegramNotifier {
     }
 
     if (approval.status === 'approved') {
-      return `✅ *Approved* by ${approval.resolvedBy ?? 'unknown'} at ${time}`;
+      return `✅ *Approved* by ${escapeMarkdown(approval.resolvedBy ?? 'unknown')} at ${time}`;
     } else if (approval.status === 'rejected') {
       const reason = approval.resolutionComment
         ? `: ${escapeMarkdown(approval.resolutionComment)}`
         : '';
-      return `❌ *Denied* by ${approval.resolvedBy ?? 'unknown'} at ${time}${reason}`;
+      return `❌ *Denied* by ${escapeMarkdown(approval.resolvedBy ?? 'unknown')} at ${time}${reason}`;
     } else if (approval.status === 'changes_requested') {
       // resolutionComment here is free text the user typed into Telegram.
       const feedback = approval.resolutionComment
