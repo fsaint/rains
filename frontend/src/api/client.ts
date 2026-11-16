@@ -209,7 +209,29 @@ export const approvals = {
       method: 'POST',
       body: JSON.stringify({ feedback }),
     }),
+  /** The email an approval would send; null for a tool that is not an email. */
+  emailSummary: async (id: string): Promise<EmailApprovalSummary | null> => {
+    // request() unwraps `data`, but `data: null` falls through to the envelope.
+    const res = await request<EmailApprovalSummary | { data: null }>(`/approvals/${id}/email-summary`);
+    return res && 'action' in res ? res : null;
+  },
 };
+
+/** Mirrors EmailApprovalSummary in backend/src/notifications/email-summary.ts. */
+export interface EmailApprovalSummary {
+  action: 'send' | 'send_draft' | 'save_draft' | 'update_draft' | 'reply';
+  account?: string;
+  to?: string;
+  cc?: string;
+  bcc?: string;
+  subject?: string;
+  body?: string;
+  inReplyTo?: { subject?: string; from?: string };
+  draftId?: string;
+  resolved: boolean;
+  source?: 'creation-approval' | 'gmail' | 'outlook';
+  removesAttachments?: boolean;
+}
 
 // Audit
 export const audit = {

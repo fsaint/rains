@@ -10,6 +10,7 @@ vi.mock('../api/client', () => ({
     approve: vi.fn(),
     reject: vi.fn(),
     requestChanges: vi.fn(),
+    emailSummary: vi.fn(),
   },
 }));
 
@@ -46,6 +47,7 @@ const mockApproval = {
 describe('Approvals page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(approvals.emailSummary).mockResolvedValue(null);
   });
 
   it('shows loading spinner while fetching', () => {
@@ -301,5 +303,59 @@ describe('Approvals page', () => {
       });
       expect(screen.queryByText(/Revision \d+ of/)).not.toBeInTheDocument();
     });
+  });
+});
+
+describe('Approvals page — email summary', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows who an Outlook draft goes to, its subject and body, instead of a bare message id', async () => {
+    vi.mocked(approvals.list).mockResolvedValue([
+      { ...mockApproval, tool: 'outlook_mail_send_draft', arguments: { messageId: 'AAMkADZ-opaque' } },
+    ]);
+    vi.mocked(approvals.emailSummary).mockResolvedValue({
+      action: 'send_draft',
+      to: 'Ana Pérez <ana@example.com>',
+      subject: 'Quote for Q4',
+      body: 'Hi Ana, attached is the quote.',
+      resolved: true,
+      source: 'outlook',
+    });
+    render(<Approvals />, { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(screen.getByText('Send draft')).toBeInTheDocument();
+    });
+    expect(approvals.emailSummary).toHaveBeenCalledWith('appr-1');
+    expect(screen.getByText('Ana Pérez <ana@example.com>')).toBeInTheDocument();
+    expect(screen.getByText('Quote for Q4')).toBeInTheDocument();
+    expect(screen.getByText('Hi Ana, attached is the quote.')).toBeInTheDocument();
+    expect(screen.getByText('Read live from Outlook')).toBeInTheDocument();
+    expect(screen.getByText('Raw arguments')).toBeInTheDocument();
+  });
+
+  it('warns when a draft could not be loaded', async () => {
+    vi.mocked(approvals.list).mockResolvedValue([
+      { ...mockApproval, tool: 'gmail_send_draft', arguments: { draftId: 'r-1' } },
+    ]);
+    vi.mocked(approvals.emailSummary).mockResolvedValue({ action: 'send_draft', resolved: false });
+    render(<Approvals />, { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Could not load this draft's content/)).toBeInTheDocument();
+    });
+  });
+
+  it('does not ask for a summary for tools that are not email', async () => {
+    vi.mocked(approvals.list).mockResolvedValue([{ ...mockApproval, tool: 'drive_delete_file' }]);
+    render(<Approvals />, { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(screen.getByText('drive_delete_file')).toBeInTheDocument();
+    });
+    expect(approvals.emailSummary).not.toHaveBeenCalled();
+    expect(screen.getByText('Arguments')).toBeInTheDocument();
   });
 });

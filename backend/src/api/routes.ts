@@ -4,6 +4,7 @@ import { client } from '../db/index.js';
 import { policyEngine } from '../policy/engine.js';
 import { credentialVault } from '../credentials/vault.js';
 import { approvalQueue } from '../approvals/queue.js';
+import { buildEmailApprovalSummary, isEmailApprovalTool } from '../notifications/email-summary.js';
 import { auditLogger } from '../audit/logger.js';
 import { mcpProxy } from '../mcp/proxy.js';
 import { serverManager } from '../mcp/server-manager.js';
@@ -2946,6 +2947,25 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
 
     return { data: approval };
+  });
+
+  /**
+   * The email an approval would send, for the approvals page. Separate from
+   * GET /api/approvals because a send-draft summary may call Gmail or Outlook,
+   * and the list is polled every few seconds; the page fetches this once per
+   * card. `data` is null for a tool that is not an email.
+   */
+  app.get<{ Params: { id: string } }>('/api/approvals/:id/email-summary', async (request, reply) => {
+    const { id } = request.params;
+    if (!(await ownsApproval(request, id))) {
+      return reply.code(404).send(notFound);
+    }
+    const approval = await approvalQueue.get(id);
+    if (!approval) {
+      return reply.code(404).send(notFound);
+    }
+    if (!isEmailApprovalTool(approval.tool)) return { data: null };
+    return { data: await buildEmailApprovalSummary(approval) };
   });
 
   app.post<{ Params: { id: string } }>('/api/approvals/:id/approve', async (request, reply) => {

@@ -2,7 +2,7 @@
  * Tests for the rich email and calendar previews in Telegram approval messages.
  */
 
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 // Mock the DB so importing telegram.ts (which pulls in config/db at module load)
 // does not require a live database connection.
@@ -876,79 +876,5 @@ describe('draft editing and deleting approvals', () => {
     expect(out.parseMode).toBe('HTML');
     expect(out.text).toContain('Old quote');
     expect(out.text).not.toContain('*Args:*');
-  });
-});
-
-/**
- * The send-draft preview replays the arguments of the approval that created
- * the draft. Once a draft can be edited, those arguments describe a version
- * that no longer exists — and the owner would approve a send while reading
- * the old text.
- */
-describe('send-draft preview after the draft was edited', () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  async function resolveWith(rowsFor: (sql: string) => unknown[]) {
-    const { client } = await import('../db/index.js');
-    vi.mocked(client.execute).mockImplementation(async (q: unknown) => {
-      const sql = typeof q === 'string' ? q : (q as { sql: string }).sql;
-      return { rows: rowsFor(sql) } as never;
-    });
-    const { telegramNotifier } = await import('./telegram.js');
-    (telegramNotifier as any).gmailAccessTokenFor = vi.fn().mockResolvedValue('g-token');
-    return (telegramNotifier as any).resolveDraftSendSummary(
-      makeApproval({ tool: 'gmail_send_draft', arguments: { draftId: 'r-1' } })
-    ) as Promise<DraftSendSummary | null>;
-  }
-
-  const CREATED = {
-    id: 'job-1',
-    tool: 'gmail_create_draft',
-    agent_id: 'agent-abc',
-    arguments_json: JSON.stringify({ to: ['ana@example.com'], subject: 'Quote v1', body: 'Old text' }),
-    result_json: JSON.stringify({ data: { draftId: 'r-1' } }),
-  };
-
-  function stubGmailDraft() {
-    const fetchMock = vi.fn(async (_url: string) =>
-      new Response(
-        JSON.stringify({
-          message: {
-            snippet: 'New text',
-            payload: { headers: [{ name: 'Subject', value: 'Quote v3' }] },
-          },
-        }),
-        { status: 200 }
-      )
-    );
-    vi.stubGlobal('fetch', fetchMock);
-    return fetchMock;
-  }
-
-  it('still replays the creating approval for a draft that was never edited', async () => {
-    const fetchMock = stubGmailDraft();
-
-    const summary = await resolveWith((sql) =>
-      sql.includes('gmail_update_draft') ? [] : sql.includes('result_json LIKE') ? [CREATED] : []
-    );
-
-    expect(summary?.subject).toBe('Quote v1');
-    expect(summary?.resolvedFrom).toBe('creation-approval');
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it('reads the draft live from Gmail once it has been edited', async () => {
-    const fetchMock = stubGmailDraft();
-
-    const summary = await resolveWith((sql) =>
-      sql.includes('gmail_update_draft') ? [{ edited: 1 }] : sql.includes('result_json LIKE') ? [CREATED] : []
-    );
-
-    expect(summary?.subject).toBe('Quote v3');
-    expect(summary?.bodyPreview).toBe('New text');
-    expect(summary?.resolvedFrom).toBe('gmail');
-    expect(String(fetchMock.mock.calls[0][0])).toContain('/drafts/r-1');
   });
 });

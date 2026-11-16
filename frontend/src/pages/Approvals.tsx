@@ -5,6 +5,7 @@ import { CheckCircle, XCircle, Clock, AlertTriangle, MessageCircle, Loader, User
 import { approvals, telegram, auth } from '../api/client';
 import { ReauthApprovalCard } from '../components/ReauthApprovalCard';
 import { ReauthModal } from '../components/ReauthModal';
+import { EmailApprovalSummary, EMAIL_APPROVAL_TOOLS } from '../components/EmailApprovalSummary';
 import { formatBytes } from '../utils/format';
 
 const ATTACHMENT_SOURCE_LABELS: Record<string, string> = {
@@ -322,6 +323,10 @@ export default function Approvals() {
                       </div>
                     </div>
 
+                    {EMAIL_APPROVAL_TOOLS.has(approval.tool) && (
+                      <EmailApprovalSummary approvalId={approval.id} />
+                    )}
+
                     {approval.context && (
                       <div className="mt-4">
                         <p className="text-xs text-gray-500 uppercase tracking-wider">Context</p>
@@ -360,12 +365,25 @@ export default function Approvals() {
                         </div>
                       )}
 
-                    <div className="mt-4">
-                      <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Arguments</p>
-                      <pre className="text-xs bg-gray-50 p-3 rounded-lg overflow-auto max-h-32 font-mono">
-                        {JSON.stringify(displayableArgs(approval.arguments), null, 2)}
-                      </pre>
-                    </div>
+                    {EMAIL_APPROVAL_TOOLS.has(approval.tool) ? (
+                      // The summary above is what the owner reads; the raw
+                      // arguments stay one click away for checking ids.
+                      <details className="mt-4">
+                        <summary className="cursor-pointer text-xs text-gray-500 uppercase tracking-wider">
+                          Raw arguments
+                        </summary>
+                        <pre className="mt-1 text-xs bg-gray-50 p-3 rounded-lg overflow-auto max-h-32 font-mono">
+                          {JSON.stringify(displayableArgs(approval.arguments), null, 2)}
+                        </pre>
+                      </details>
+                    ) : (
+                      <div className="mt-4">
+                        <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Arguments</p>
+                        <pre className="text-xs bg-gray-50 p-3 rounded-lg overflow-auto max-h-32 font-mono">
+                          {JSON.stringify(displayableArgs(approval.arguments), null, 2)}
+                        </pre>
+                      </div>
+                    )}
 
                     {correctingId === approval.id && (
                       <div className="mt-4">

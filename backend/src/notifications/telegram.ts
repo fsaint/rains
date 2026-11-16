@@ -25,8 +25,6 @@ import {
   formatCalendarApprovalMessage,
   formatDraftSendApprovalMessage,
   formatEmailApprovalMessage,
-  htmlToText,
-  joinRecipients,
   withCorrectionAffordance,
   DRAFT_SEND_TOOLS,
   DRAFT_DELETE_TOOLS,
@@ -40,7 +38,7 @@ import {
 } from './approval-format.js';
 import { MAX_REVISIONS } from '../approvals/queue.js';
 import { getThreadApprovalSummary } from '../services/threads.js';
-import { credentialVault } from '../credentials/vault.js';
+import { resolveDraftSendSummary, resolveGmailDraftSummary } from './email-summary.js';
 
 // Re-exported so existing callers and tests can keep importing from the
 // transport module; the formatters themselves live in ./approval-format.ts.
@@ -588,22 +586,9 @@ export class TelegramNotifier {
    * that resolves to no agent of yours is the single most useful thing the
    * message can tell you.
    */
-  /**
-   * What a send-draft approval would actually deliver.
-   *
-   * The draftId in the arguments is either the jobId of the create_draft
-   * approval (executeTool resolves it at execution), or the real Gmail draft
-   * id that approval's result returned — in both cases the creating approval's
-   * stored arguments carry the full email, so no Gmail call is needed. Only a
-   * draft Reins never created falls through to a live metadata fetch. Any
-   * failure returns null: the formatter then says the content could not be
-   * loaded, and the approval still goes out — the agent is already waiting.
-   */
+  /** What a send-draft approval would deliver; see email-summary.ts. */
   private async resolveDraftSendSummary(approval: ApprovalRequest): Promise<DraftSendSummary | null> {
-    const args = approval.arguments as { draftId?: string; account?: string } | undefined;
-    const draftId = args?.draftId;
-    if (typeof draftId !== 'string' || draftId === '') return null;
-    return this.resolveDraftSummary(approval.agentId, draftId, args?.account);
+    return resolveDraftSendSummary(approval);
   }
 
   /** The drafts a delete approval names, each resolved as far as possible. */
@@ -620,170 +605,9 @@ export class TelegramNotifier {
     return Promise.all(
       ids.slice(0, DRAFT_DELETE_PREVIEW_LIMIT).map(async (draftId) => ({
         draftId,
-        draft: await this.resolveDraftSummary(approval.agentId, draftId, args?.account),
+        draft: await resolveGmailDraftSummary(approval.agentId, draftId, args?.account),
       }))
     );
-  }
-
-  /**
-   * What one draft currently contains, by draft id (or by the jobId of the
-   * approval that created it).
-   */
-  private async resolveDraftSummary(
-    agentId: string,
-    draftId: string,
-    account?: string
-  ): Promise<DraftSendSummary | null> {
-    try {
-      // 1. draftId is the create_draft approval's own jobId.
-      const byId = await client.execute({
-        sql: `SELECT id, tool, agent_id, arguments_json, result_json FROM approvals WHERE id = ?`,
-        args: [draftId],
-      });
-      type CreatingRow = {
-        id?: string;
-        tool?: string;
-        agent_id?: string;
-        arguments_json?: string | null;
-        result_json?: string | null;
-      };
-      let creating: CreatingRow | undefined;
-      const row = byId.rows[0] as CreatingRow | undefined;
-      if (row && row.tool === 'gmail_create_draft' && row.agent_id === agentId) {
-        creating = row;
-      }
-
-      // 2. Or the real Gmail id an executed create_draft returned.
-      if (!creating) {
-        const byResult = await client.execute({
-          sql: `SELECT id, arguments_json, result_json FROM approvals
-                WHERE agent_id = ? AND tool = 'gmail_create_draft' AND result_json LIKE ?
-                ORDER BY requested_at DESC LIMIT 1`,
-          args: [agentId, `%${draftId}%`],
-        });
-        creating = byResult.rows[0] as CreatingRow | undefined;
-      }
-
-      // The id Gmail knows the draft by. `draftId` may be a jobId instead.
-      let gmailDraftId = draftId;
-      if (creating?.result_json) {
-        try {
-          const created = JSON.parse(creating.result_json) as { data?: { draftId?: string } };
-          if (typeof created.data?.draftId === 'string') gmailDraftId = created.data.draftId;
-        } catch { /* fall back to the id as given */ }
-      }
-
-      // The creating approval's arguments describe the draft as it was first
-      // written. If gmail_update_draft has touched it since, they describe a
-      // version that no longer exists, and replaying them would have the
-      // owner approve a send while reading the old text. Read it live instead.
-      const argsJson = creating?.arguments_json ?? null;
-      const edited =
-        argsJson !== null &&
-        (await this.draftWasEdited(agentId, [draftId, gmailDraftId, creating?.id]));
-
-      if (argsJson && !edited) {
-        const created = JSON.parse(argsJson) as Record<string, unknown>;
-        const bodyText =
-          typeof created.body === 'string' && created.body.length > 0
-            ? created.body
-            : typeof created.htmlBody === 'string'
-            ? htmlToText(created.htmlBody)
-            : undefined;
-        return {
-          to: joinRecipients(created.to) || undefined,
-          cc: joinRecipients(created.cc) || undefined,
-          bcc: joinRecipients(created.bcc) || undefined,
-          subject: typeof created.subject === 'string' ? created.subject : undefined,
-          bodyPreview: bodyText,
-          account: (typeof created.account === 'string' ? created.account : undefined) ?? account,
-          resolvedFrom: 'creation-approval',
-        };
-      }
-
-      // 3. A draft Reins did not create, or one edited since — read headers +
-      //    snippet from Gmail.
-      const token = await this.gmailAccessTokenFor(agentId, account);
-      if (!token) return null;
-      const url =
-        `https://gmail.googleapis.com/gmail/v1/users/me/drafts/${encodeURIComponent(gmailDraftId)}` +
-        `?format=metadata&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Bcc&metadataHeaders=Subject`;
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(5000),
-      });
-      if (!res.ok) return null;
-      const draft = (await res.json()) as {
-        message?: { snippet?: string; payload?: { headers?: Array<{ name?: string; value?: string }> } };
-      };
-      const headers = draft.message?.payload?.headers ?? [];
-      const header = (name: string) =>
-        headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value || undefined;
-      return {
-        to: header('To'),
-        cc: header('Cc'),
-        bcc: header('Bcc'),
-        subject: header('Subject'),
-        bodyPreview: draft.message?.snippet || undefined,
-        account,
-        resolvedFrom: 'gmail',
-      };
-    } catch (err) {
-      console.warn('[telegram] could not resolve draft preview:', err);
-      return null;
-    }
-  }
-
-  /**
-   * Whether gmail_update_draft has run against this draft.
-   *
-   * Checked in the audit log as well as the approvals table: an owner can set
-   * the tool to run without approval, and those calls leave no approval row.
-   * `ids` are the ways the draft may have been named — its Gmail id, and the
-   * jobId of the approval that created it.
-   */
-  private async draftWasEdited(agentId: string, ids: Array<string | undefined>): Promise<boolean> {
-    const known = [...new Set(ids.filter((id): id is string => typeof id === 'string' && id !== ''))];
-    for (const id of known) {
-      // The id is matched inside its JSON quotes so one id cannot match as a
-      // substring of another.
-      const pattern = `%"${id}"%`;
-      const hit = await client.execute({
-        sql: `SELECT 1 AS edited FROM approvals
-              WHERE agent_id = ? AND tool = 'gmail_update_draft'
-                AND result_json IS NOT NULL AND arguments_json LIKE ?
-              UNION ALL
-              SELECT 1 AS edited FROM audit_log
-              WHERE agent_id = ? AND tool = 'gmail_update_draft'
-                AND result = 'success' AND arguments_json LIKE ?
-              LIMIT 1`,
-        args: [agentId, pattern, agentId, pattern],
-      });
-      if (hit.rows.length > 0) return true;
-    }
-    return false;
-  }
-
-  /** Access token for the agent's Gmail credential matching `account`, else its default. */
-  private async gmailAccessTokenFor(agentId: string, account?: string): Promise<string | null> {
-    const rows = await client.execute({
-      sql: `SELECT asi.credential_id, asi.is_default, c.account_email
-            FROM agent_service_instances asi
-            JOIN credentials c ON c.id = asi.credential_id
-            WHERE asi.agent_id = ? AND asi.service_type = 'gmail' AND asi.enabled = true`,
-      args: [agentId],
-    });
-    const instances = rows.rows as Array<{
-      credential_id: string;
-      is_default: boolean | number;
-      account_email: string | null;
-    }>;
-    if (instances.length === 0) return null;
-    const match = account
-      ? instances.find((i) => i.account_email === account)
-      : instances.find((i) => i.is_default === true || i.is_default === 1) ?? instances[0];
-    if (!match) return null;
-    return credentialVault.getValidAccessToken(match.credential_id);
   }
 
   private async resolveThreadSummary(approval: ApprovalRequest): Promise<ThreadApprovalSummary | null> {

@@ -51,7 +51,7 @@ export const CALENDAR_TOOLS = new Set([
  * approval's stored arguments, or live from Gmail) and passes a
  * DraftSendSummary in; the formatter stays pure, like the admin tools below.
  */
-export const DRAFT_SEND_TOOLS = new Set(['gmail_send_draft']);
+export const DRAFT_SEND_TOOLS = new Set(['gmail_send_draft', 'outlook_mail_send_draft']);
 
 /**
  * Draft-delete tools. Their arguments are a list of opaque draft ids, and
@@ -95,8 +95,8 @@ export interface DraftSendSummary {
   subject?: string;
   bodyPreview?: string;
   account?: string;
-  /** 'creation-approval' = replayed from the create_draft approval; 'gmail' = fetched live. */
-  resolvedFrom: 'creation-approval' | 'gmail';
+  /** 'creation-approval' = replayed from the create_draft approval; 'gmail' / 'outlook' = fetched live. */
+  resolvedFrom: 'creation-approval' | 'gmail' | 'outlook';
 }
 
 /**
@@ -367,8 +367,10 @@ export function formatDraftSendApprovalMessage(
   approval: ApprovalRequest,
   draft: DraftSendSummary | null
 ): FormattedApproval {
-  const args = approval.arguments as { draftId?: string; account?: string } | undefined;
-  const draftId = typeof args?.draftId === 'string' ? args.draftId : '';
+  // Gmail names the draft draftId; Outlook names it messageId.
+  const args = approval.arguments as { draftId?: string; messageId?: string; account?: string } | undefined;
+  const draftId =
+    typeof args?.draftId === 'string' ? args.draftId : typeof args?.messageId === 'string' ? args.messageId : '';
   const account = draft?.account ?? args?.account;
 
   const lines = [
@@ -388,7 +390,11 @@ export function formatDraftSendApprovalMessage(
     draftId ? `<b>Draft:</b> <code>${escapeHtml(draftId)}</code>` : null,
     draft?.bodyPreview
       ? `<blockquote>${truncateBody(draft.bodyPreview)}</blockquote>` +
-        (draft.resolvedFrom === 'gmail' ? '\n<i>(preview from Gmail)</i>' : '')
+        (draft.resolvedFrom === 'gmail'
+          ? '\n<i>(preview from Gmail)</i>'
+          : draft.resolvedFrom === 'outlook'
+          ? '\n<i>(preview from Outlook)</i>'
+          : '')
       : null,
     ``,
     expiresLine(approval),
