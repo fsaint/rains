@@ -231,6 +231,10 @@ export interface EmailApprovalSummary {
   resolved: boolean;
   source?: 'creation-approval' | 'gmail' | 'outlook';
   removesAttachments?: boolean;
+  /** outlook_mail_reply only. */
+  replyAll?: boolean;
+  /** outlook_mail_reply only: to/cc list just the added addresses. */
+  recipientsUnresolved?: boolean;
 }
 
 // Audit

@@ -277,7 +277,11 @@ export const sendMessageTool: ToolDefinition = {
 
 export const replyToMessageTool: ToolDefinition = {
   name: 'outlook_mail_reply',
-  description: 'Reply to an email message.',
+  description:
+    'Reply to an email message. Replies to everyone on the message by default (the sender plus its To and Cc ' +
+    'recipients); pass replyAll: false to answer the sender only. to, cc and bcc add recipients to the reply — ' +
+    'they never replace the ones already on the thread. Line breaks in body are kept. The result lists the ' +
+    'to and cc addresses the reply was sent to.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -288,10 +292,34 @@ export const replyToMessageTool: ToolDefinition = {
       },
       body: {
         type: 'string',
-        description: 'Reply body text',
+        description: 'Reply body (plain text; line breaks are kept). Required unless htmlBody is given.',
+      },
+      htmlBody: {
+        type: 'string',
+        description: 'Reply body (HTML). Used instead of body when both are given.',
+      },
+      replyAll: {
+        type: 'boolean',
+        description:
+          'true (default): reply to the sender and everyone in To and Cc. false: reply to the sender only.',
+      },
+      to: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Extra To addresses, added to the recipients of the reply',
+      },
+      cc: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Extra Cc addresses, added to the recipients of the reply',
+      },
+      bcc: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Bcc addresses for the reply',
       },
     },
-    required: ['messageId', 'body'],
+    required: ['messageId'],
   },
   handler: handleReplyToMessage,
 };

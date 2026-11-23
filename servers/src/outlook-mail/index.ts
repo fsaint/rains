@@ -11,7 +11,7 @@
  * - outlook_mail_create_draft: Create a draft email, optionally with attachments
  * - outlook_mail_send_draft: Send an existing draft
  * - outlook_mail_send_message: Send email directly (blocked by default)
- * - outlook_mail_reply: Reply to a message
+ * - outlook_mail_reply: Reply to a message (reply-all by default; can add recipients)
  * - outlook_mail_move_message: Move message to another folder
  * - outlook_mail_delete_message: Delete a message (blocked by default)
  */

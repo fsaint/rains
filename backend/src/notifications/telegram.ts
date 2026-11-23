@@ -34,12 +34,13 @@ import {
   type DraftDeleteEntry,
   type AdminTargetSummary,
   type DraftSendSummary,
+  type ReplySummary,
   HERMENEUTIX_PEOPLE_TOOLS,
   formatHermeneutixApprovalMessage,
 } from './approval-format.js';
 import { MAX_REVISIONS } from '../approvals/queue.js';
 import { getThreadApprovalSummary } from '../services/threads.js';
-import { resolveDraftSendSummary, resolveGmailDraftSummary } from './email-summary.js';
+import { resolveDraftSendSummary, resolveGmailDraftSummary, resolveOutlookReplySummary } from './email-summary.js';
 
 // Re-exported so existing callers and tests can keep importing from the
 // transport module; the formatters themselves live in ./approval-format.ts.
@@ -174,7 +175,11 @@ export class TelegramNotifier {
       const draftDeletes = DRAFT_DELETE_TOOLS.has(approval.tool)
         ? await this.resolveDraftDeleteEntries(approval)
         : null;
-      const { text, keyboard, parseMode } = this.formatApprovalMessage(approval, magicLinkUrl, adminTarget, draftSummary, threadSummary, draftDeletes);
+      // A reply is addressed by the message it answers; its arguments name no one.
+      const replySummary = approval.tool === 'outlook_mail_reply'
+        ? await resolveOutlookReplySummary(approval)
+        : null;
+      const { text, keyboard, parseMode } = this.formatApprovalMessage(approval, magicLinkUrl, adminTarget, draftSummary, threadSummary, draftDeletes, replySummary);
       const sent = await this.sendMessage(owner.chatId, text, {
         parse_mode: parseMode ?? 'Markdown',
         reply_markup: { inline_keyboard: keyboard },
@@ -665,7 +670,8 @@ export class TelegramNotifier {
     adminTarget: AdminTargetSummary | null = null,
     draftSummary: DraftSendSummary | null = null,
     threadSummary: ThreadApprovalSummary | null = null,
-    draftDeletes: DraftDeleteEntry[] | null = null
+    draftDeletes: DraftDeleteEntry[] | null = null,
+    replySummary: ReplySummary | null = null
   ): {
     text: string;
     keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>>;
@@ -686,7 +692,7 @@ export class TelegramNotifier {
       : DRAFT_DELETE_TOOLS.has(approval.tool)
       ? formatDraftDeleteApprovalMessage(approval, draftDeletes ?? [])
       : EMAIL_TOOLS.has(approval.tool)
-      ? formatEmailApprovalMessage(approval)
+      ? formatEmailApprovalMessage(approval, replySummary)
       : CALENDAR_TOOLS.has(approval.tool)
       ? formatCalendarApprovalMessage(approval)
       : ADMIN_TOOLS.has(approval.tool)

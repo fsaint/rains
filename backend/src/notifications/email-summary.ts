@@ -19,6 +19,7 @@ import {
   htmlToText,
   joinRecipients,
   type DraftSendSummary,
+  type ReplySummary,
 } from './approval-format.js';
 
 const GRAPH_API = 'https://graph.microsoft.com/v1.0';
@@ -49,6 +50,13 @@ export interface EmailApprovalSummary {
   source?: DraftSendSummary['resolvedFrom'];
   /** gmail_update_draft with keepAttachments: false. */
   removesAttachments?: boolean;
+  /** outlook_mail_reply only: whether the reply goes to everyone on the message. */
+  replyAll?: boolean;
+  /**
+   * outlook_mail_reply only: the message could not be read, so `to` and `cc`
+   * hold just the addresses the agent added — the thread's own are missing.
+   */
+  recipientsUnresolved?: boolean;
 }
 
 type Args = Record<string, unknown>;
@@ -108,18 +116,89 @@ export async function buildEmailApprovalSummary(
     removesAttachments: approval.tool === 'gmail_update_draft' && args.keepAttachments === false,
   };
 
-  // An Outlook reply names only the message it answers; who and what it is
-  // answering is the context the owner needs to judge the body.
-  if (approval.tool === 'outlook_mail_reply' && str(args.messageId)) {
-    const original = await fetchOutlookMessage(approval.agentId, str(args.messageId)!, str(args.account));
-    if (original) {
-      summary.inReplyTo = { subject: original.subject, from: original.from };
-      summary.to ??= original.from;
-      summary.subject ??= original.subject ? `Re: ${original.subject}` : undefined;
-    }
+  // An Outlook reply names only the message it answers. Who it reaches is
+  // decided by that message, not by the arguments, so it is worked out here.
+  if (approval.tool === 'outlook_mail_reply') {
+    const reply = await resolveOutlookReplySummary(approval);
+    summary.to = reply.to;
+    summary.cc = reply.cc;
+    summary.bcc = reply.bcc;
+    summary.subject ??= reply.subject;
+    summary.replyAll = reply.replyAll;
+    summary.recipientsUnresolved = !reply.resolved || undefined;
+    if (reply.resolved) summary.inReplyTo = { subject: reply.inReplyToSubject, from: reply.from };
   }
 
   return summary;
+}
+
+/**
+ * Who an outlook_mail_reply approval would deliver to.
+ *
+ * Mirrors handleReplyToMessage in servers/src/outlook-mail/handlers.ts: the
+ * sender (or the message's Reply-To), plus its To and Cc unless replyAll is
+ * false, plus whatever the agent added, each address once and the owner's own
+ * left out. It is a prediction made before Graph builds the reply; the tool
+ * result reports the recipients actually used.
+ */
+export async function resolveOutlookReplySummary(approval: ApprovalRequest): Promise<ReplySummary> {
+  const args = (approval.arguments ?? {}) as Args;
+  const replyAll = args.replyAll !== false;
+  const added = (value: unknown): GraphRecipient[] =>
+    (Array.isArray(value) ? value : typeof value === 'string' ? [value] : [])
+      .filter((v): v is string => typeof v === 'string' && v.trim() !== '')
+      .map((address) => ({ emailAddress: { address: address.trim() } }));
+
+  const messageId = str(args.messageId);
+  const original = messageId
+    ? await fetchOutlookThreadMessage(approval.agentId, messageId, str(args.account))
+    : null;
+
+  const seen = new Set<string>();
+  const unique = (list: GraphRecipient[]): string | undefined =>
+    graphRecipients(
+      list.filter((r) => {
+        const key = r.emailAddress?.address?.trim().toLowerCase();
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+    );
+
+  if (!original) {
+    return {
+      replyAll,
+      resolved: false,
+      to: unique(added(args.to)),
+      cc: unique(added(args.cc)),
+      bcc: unique(added(args.bcc)),
+    };
+  }
+
+  const own = original.ownEmail?.toLowerCase();
+  const notOwn = (r: GraphRecipient) => !own || r.emailAddress?.address?.trim().toLowerCase() !== own;
+  const answered = original.replyTo.length > 0 ? original.replyTo : original.from ? [original.from] : [];
+
+  const to = unique([...answered, ...(replyAll ? original.to.filter(notOwn) : []), ...added(args.to)]);
+  const cc = unique([...(replyAll ? original.cc.filter(notOwn) : []), ...added(args.cc)]);
+  const bcc = unique(added(args.bcc));
+
+  const subject = original.subject
+    ? /^re:/i.test(original.subject)
+      ? original.subject
+      : `Re: ${original.subject}`
+    : undefined;
+
+  return {
+    replyAll,
+    resolved: true,
+    to,
+    cc,
+    bcc,
+    subject,
+    from: original.from ? graphRecipients([original.from]) : undefined,
+    inReplyToSubject: original.subject,
+  };
 }
 
 /**
@@ -330,7 +409,53 @@ function graphRecipients(list: GraphRecipient[] | undefined): string | undefined
   return out || undefined;
 }
 
-/** An Outlook message (a draft, or one being replied to), read live from Graph. */
+/** The message a reply answers, with its recipients kept apart so they can be merged. */
+async function fetchOutlookThreadMessage(
+  agentId: string,
+  messageId: string,
+  account?: string
+): Promise<{
+  subject?: string;
+  from?: GraphRecipient;
+  replyTo: GraphRecipient[];
+  to: GraphRecipient[];
+  cc: GraphRecipient[];
+  ownEmail?: string;
+} | null> {
+  try {
+    const credential = await credentialFor(agentId, 'outlook_mail', account);
+    if (!credential) return null;
+    const res = await fetch(
+      `${GRAPH_API}/me/messages/${encodeURIComponent(messageId)}` +
+        `?$select=subject,from,replyTo,toRecipients,ccRecipients`,
+      {
+        headers: { Authorization: `Bearer ${credential.token}` },
+        signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS),
+      }
+    );
+    if (!res.ok) return null;
+    const msg = (await res.json()) as {
+      subject?: string;
+      from?: GraphRecipient;
+      replyTo?: GraphRecipient[];
+      toRecipients?: GraphRecipient[];
+      ccRecipients?: GraphRecipient[];
+    };
+    return {
+      subject: msg.subject || undefined,
+      from: msg.from,
+      replyTo: msg.replyTo ?? [],
+      to: msg.toRecipients ?? [],
+      cc: msg.ccRecipients ?? [],
+      ownEmail: credential.email,
+    };
+  } catch (err) {
+    console.warn('[email-summary] could not read the message being replied to:', err);
+    return null;
+  }
+}
+
+/** An Outlook draft, read live from Graph. */
 async function fetchOutlookMessage(
   agentId: string,
   messageId: string,
@@ -383,6 +508,15 @@ async function accessTokenFor(
   serviceType: 'gmail' | 'outlook_mail',
   account?: string
 ): Promise<string | null> {
+  return (await credentialFor(agentId, serviceType, account))?.token ?? null;
+}
+
+/** As accessTokenFor, with the address of the mailbox the token belongs to. */
+async function credentialFor(
+  agentId: string,
+  serviceType: 'gmail' | 'outlook_mail',
+  account?: string
+): Promise<{ token: string; email?: string } | null> {
   const rows = await client.execute({
     sql: `SELECT asi.credential_id, asi.is_default, c.account_email
           FROM agent_service_instances asi
@@ -400,5 +534,6 @@ async function accessTokenFor(
     ? instances.find((i) => i.account_email === account)
     : instances.find((i) => i.is_default === true || i.is_default === 1) ?? instances[0];
   if (!match) return null;
-  return credentialVault.getValidAccessToken(match.credential_id);
+  const token = await credentialVault.getValidAccessToken(match.credential_id);
+  return token ? { token, email: match.account_email ?? undefined } : null;
 }

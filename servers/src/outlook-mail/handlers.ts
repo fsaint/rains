@@ -447,21 +447,159 @@ export async function handleSendMessage(
   };
 }
 
+type GraphRecipient = { emailAddress?: { address?: string; name?: string } };
+
+const addressOf = (recipient: GraphRecipient): string => recipient.emailAddress?.address?.trim() ?? '';
+
+/** A `to` / `cc` / `bcc` argument as a list of addresses, or null when it is not one. */
+function addressList(value: unknown): string[] | null {
+  if (value === undefined || value === null) return [];
+  const list = typeof value === 'string' ? [value] : value;
+  if (!Array.isArray(list) || list.some((entry) => typeof entry !== 'string')) return null;
+  return (list as string[]).map((entry) => entry.trim()).filter(Boolean);
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** Plain text as HTML that renders the same line breaks. */
+function textToHtml(text: string): string {
+  return escapeHtml(text).replace(/\r\n|\r|\n/g, '<br>');
+}
+
+/**
+ * Put the reply above what Graph quoted. The quoted message is a whole HTML
+ * document, so the reply goes inside its <body> rather than in front of it.
+ */
+function prependToQuoted(replyHtml: string, quoted: { contentType?: string; content?: string } | undefined): string {
+  const block = `<div>${replyHtml}</div>`;
+  const content = quoted?.content ?? '';
+  if (!content) return block;
+  if (quoted?.contentType?.toLowerCase() !== 'html') return `${block}<br><div>${textToHtml(content)}</div>`;
+  const body = /<body[^>]*>/i.exec(content);
+  if (!body) return `${block}${content}`;
+  const at = body.index + body[0].length;
+  return `${content.slice(0, at)}${block}${content.slice(at)}`;
+}
+
+/**
+ * Reply to a message.
+ *
+ * Graph's one-call /reply and /replyAll return nothing, so the caller could
+ * not be told who received the reply — and a reply that silently dropped the
+ * thread's Cc is how this tool used to fail. The reply is therefore built as a
+ * draft: Graph addresses it, the extra recipients and the body are set on it,
+ * and it is sent. If any step fails the draft is deleted, because an unsent
+ * reply left in Drafts looks like one that went out.
+ */
 export async function handleReplyToMessage(
   args: Record<string, unknown>,
   context: ServerContext
 ): Promise<ToolResult> {
-  const messageId = args.messageId as string;
-  const comment = args.body as string;
+  const messageId = typeof args.messageId === 'string' ? args.messageId.trim() : '';
+  if (!messageId) return { success: false, error: 'messageId is required.' };
 
-  const response = await graphRequest(context, `/me/messages/${messageId}/reply`, {
-    method: 'POST',
-    body: JSON.stringify({ comment }),
+  const htmlBody = typeof args.htmlBody === 'string' && args.htmlBody.trim() ? args.htmlBody : '';
+  const textBody = typeof args.body === 'string' && args.body.trim() ? args.body : '';
+  if (!htmlBody && !textBody) {
+    return { success: false, error: 'A reply needs a body: pass "body" (plain text) or "htmlBody".' };
+  }
+
+  const extra: Record<'to' | 'cc' | 'bcc', string[]> = { to: [], cc: [], bcc: [] };
+  for (const field of ['to', 'cc', 'bcc'] as const) {
+    const list = addressList(args[field]);
+    if (!list) return { success: false, error: `"${field}" must be a list of email addresses.` };
+    extra[field] = list;
+  }
+
+  const replyAll = args.replyAll !== false;
+
+  const created = await graphRequest(
+    context,
+    `/me/messages/${encodeURIComponent(messageId)}/${replyAll ? 'createReplyAll' : 'createReply'}`,
+    { method: 'POST', body: JSON.stringify({}) }
+  );
+  if (!created.ok) return handleError(created);
+
+  const draft = (await created.json()) as {
+    id: string;
+    from?: GraphRecipient;
+    toRecipients?: GraphRecipient[];
+    ccRecipients?: GraphRecipient[];
+    body?: { contentType?: string; content?: string };
+  };
+
+  // One address appears once: To wins over Cc, and both over Bcc.
+  const seen = new Set<string>();
+  const unique = (list: GraphRecipient[]): GraphRecipient[] =>
+    list.filter((recipient) => {
+      const key = addressOf(recipient).toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  const added = (emails: string[]): GraphRecipient[] => emails.map((address) => ({ emailAddress: { address } }));
+
+  // Graph normally leaves the mailbox owner out of a reply-all; this makes it
+  // certain. A reply whose only recipient is the owner (a note to self) keeps it.
+  const own = draft.from ? addressOf(draft.from).toLowerCase() : '';
+  const notOwn = (recipient: GraphRecipient) => !own || addressOf(recipient).toLowerCase() !== own;
+  const threadTo = draft.toRecipients ?? [];
+  const threadCc = (draft.ccRecipients ?? []).filter(notOwn);
+  const others = [...threadTo.filter(notOwn), ...threadCc, ...added(extra.to), ...added(extra.cc)];
+
+  const to = unique([...(others.length > 0 ? threadTo.filter(notOwn) : threadTo), ...added(extra.to)]);
+  const cc = unique([...threadCc, ...added(extra.cc)]);
+  const bcc = unique(added(extra.bcc));
+
+  const draftPath = `/me/messages/${encodeURIComponent(draft.id)}`;
+  const fail = async (response: Response): Promise<ToolResult> => {
+    const failure = await handleError(response);
+    const removed = await graphRequest(context, draftPath, { method: 'DELETE' }).catch(() => null);
+    const cleanedUp = removed !== null && (removed.ok || removed.status === 204);
+    return {
+      success: false,
+      error:
+        `The reply was not sent. ${failure.error}. ` +
+        (cleanedUp
+          ? 'No draft was left behind.'
+          : `The unsent draft "${draft.id}" could not be removed — tell the user to delete it.`),
+    };
+  };
+
+  const updated = await graphRequest(context, draftPath, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      toRecipients: to,
+      ccRecipients: cc,
+      bccRecipients: bcc,
+      body: {
+        contentType: 'HTML',
+        content: prependToQuoted(htmlBody || textToHtml(textBody), draft.body),
+      },
+    }),
   });
+  if (!updated.ok) return fail(updated);
 
-  if (!response.ok && response.status !== 202) return handleError(response);
+  const sent = await graphRequest(context, `${draftPath}/send`, { method: 'POST', body: JSON.stringify({}) });
+  if (!sent.ok && sent.status !== 202) return fail(sent);
 
-  return { success: true, data: { replied: true, messageId } };
+  return {
+    success: true,
+    data: {
+      replied: true,
+      messageId,
+      replyAll,
+      to: to.map(addressOf),
+      cc: cc.map(addressOf),
+      ...(bcc.length > 0 ? { bcc: bcc.map(addressOf) } : {}),
+    },
+  };
 }
 
 // ============================================================================

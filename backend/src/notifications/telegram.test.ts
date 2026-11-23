@@ -93,6 +93,57 @@ describe('formatEmailApprovalMessage', () => {
     expect(reply.text).toContain('↩︎ <i>Reply</i>');
   });
 
+  describe('outlook_mail_reply', () => {
+    const replyApproval = (args: Record<string, unknown> = {}) =>
+      makeApproval({ tool: 'outlook_mail_reply', arguments: { messageId: 'm-1', body: 'ok', ...args } });
+
+    it('lists every recipient of a reply-all', () => {
+      const { text } = formatEmailApprovalMessage(replyApproval(), {
+        replyAll: true,
+        resolved: true,
+        to: 'Bob <bob@example.com>',
+        cc: 'ana@example.com, carl@example.com',
+        subject: 'Re: Contract',
+      });
+
+      expect(text).toContain('📧 <b>Reply to email</b>');
+      expect(text).toContain('<b>To:</b> Bob &lt;bob@example.com&gt;');
+      expect(text).toContain('<b>Cc:</b> ana@example.com, carl@example.com');
+      expect(text).toContain('<b>Subject:</b> Re: Contract');
+      expect(text).toContain('↩︎ <i>Reply to all</i>');
+      expect(text).not.toContain('Could not load');
+    });
+
+    it('says when the reply goes to the sender only', () => {
+      const { text } = formatEmailApprovalMessage(replyApproval({ replyAll: false }), {
+        replyAll: false,
+        resolved: true,
+        to: 'bob@example.com',
+      });
+
+      expect(text).toContain('↩︎ <i>Reply to sender only</i>');
+      expect(text).not.toContain('<b>Cc:</b>');
+    });
+
+    it('warns that more people will receive it when the thread could not be loaded', () => {
+      const { text } = formatEmailApprovalMessage(replyApproval({ cc: ['x@example.com'] }), {
+        replyAll: true,
+        resolved: false,
+        cc: 'x@example.com',
+      });
+
+      expect(text).toContain('<b>Cc:</b> x@example.com');
+      expect(text).toContain('Could not load who is on this thread');
+      expect(text).toContain('everyone on the original message');
+    });
+
+    it('warns the same way when no lookup was made at all', () => {
+      const { text } = formatEmailApprovalMessage(replyApproval());
+
+      expect(text).toContain('Could not load who is on this thread');
+    });
+  });
+
   it('falls back to stripped HTML body when only htmlBody is present', () => {
     const approval = makeApproval({
       arguments: {

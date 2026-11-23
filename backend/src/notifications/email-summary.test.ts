@@ -12,7 +12,12 @@ vi.mock('../credentials/vault.js', () => ({
 }));
 
 import { client } from '../db/index.js';
-import { buildEmailApprovalSummary, resolveDraftSendSummary, isEmailApprovalTool } from './email-summary.js';
+import {
+  buildEmailApprovalSummary,
+  resolveDraftSendSummary,
+  resolveOutlookReplySummary,
+  isEmailApprovalTool,
+} from './email-summary.js';
 import type { ApprovalRequest } from '@reins/shared';
 
 function makeApproval(overrides: Partial<ApprovalRequest>): ApprovalRequest {
@@ -103,6 +108,97 @@ describe('buildEmailApprovalSummary from arguments', () => {
 
   it('returns null for a tool that is not an email', async () => {
     expect(await buildEmailApprovalSummary(makeApproval({ tool: 'drive_delete_file' }))).toBeNull();
+  });
+});
+
+describe('Outlook reply recipients', () => {
+  /** A message from Bob to me and Dan, Cc Ana and Carl. */
+  const THREAD = {
+    subject: 'Contract',
+    from: { emailAddress: { name: 'Bob', address: 'bob@example.com' } },
+    toRecipients: [
+      { emailAddress: { name: 'Me', address: 'ME@example.com' } },
+      { emailAddress: { address: 'dan@example.com' } },
+    ],
+    ccRecipients: [
+      { emailAddress: { name: 'Ana', address: 'ana@example.com' } },
+      { emailAddress: { address: 'carl@example.com' } },
+    ],
+  };
+
+  const reply = (args: Record<string, unknown>) =>
+    buildEmailApprovalSummary(
+      makeApproval({ tool: 'outlook_mail_reply', arguments: { messageId: 'm-1', body: 'ok', ...args } })
+    );
+
+  it('lists everyone a default reply reaches, without the owner', async () => {
+    dbRows(() => []);
+    stubFetch(THREAD);
+
+    expect(await reply({})).toMatchObject({
+      action: 'reply',
+      replyAll: true,
+      to: 'Bob <bob@example.com>, dan@example.com',
+      cc: 'Ana <ana@example.com>, carl@example.com',
+    });
+  });
+
+  it('lists the sender only when replyAll is false', async () => {
+    dbRows(() => []);
+    stubFetch(THREAD);
+
+    const summary = await reply({ replyAll: false });
+    expect(summary).toMatchObject({ replyAll: false, to: 'Bob <bob@example.com>' });
+    expect(summary?.cc).toBeUndefined();
+  });
+
+  it('adds the extra recipients to the thread, once each', async () => {
+    dbRows(() => []);
+    stubFetch(THREAD);
+
+    expect(
+      await reply({ to: ['eve@example.com'], cc: ['x@example.com', 'ANA@example.com', 'bob@example.com'], bcc: ['boss@example.com'] })
+    ).toMatchObject({
+      to: 'Bob <bob@example.com>, dan@example.com, eve@example.com',
+      cc: 'Ana <ana@example.com>, carl@example.com, x@example.com',
+      bcc: 'boss@example.com',
+    });
+  });
+
+  it('answers the Reply-To address when the message sets one', async () => {
+    dbRows(() => []);
+    stubFetch({ ...THREAD, replyTo: [{ emailAddress: { address: 'list@example.com' } }] });
+
+    expect((await reply({ replyAll: false }))?.to).toBe('list@example.com');
+  });
+
+  it('flags a thread whose recipients could not be loaded', async () => {
+    dbRows(() => []);
+    stubFetch({ error: { message: 'gone' } }, 404);
+
+    expect(await reply({ cc: ['x@example.com'] })).toMatchObject({
+      action: 'reply',
+      replyAll: true,
+      recipientsUnresolved: true,
+      cc: 'x@example.com',
+      body: 'ok',
+    });
+  });
+
+  it('gives Telegram the same recipients', async () => {
+    dbRows(() => []);
+    stubFetch(THREAD);
+
+    const summary = await resolveOutlookReplySummary(
+      makeApproval({ tool: 'outlook_mail_reply', arguments: { messageId: 'm-1', body: 'ok', cc: ['x@example.com'] } })
+    );
+    expect(summary).toMatchObject({
+      replyAll: true,
+      resolved: true,
+      to: 'Bob <bob@example.com>, dan@example.com',
+      cc: 'Ana <ana@example.com>, carl@example.com, x@example.com',
+      subject: 'Re: Contract',
+    });
   });
 });
 

@@ -82,6 +82,18 @@ export function EmailApprovalSummary({ approvalId }: { approvalId: string }) {
             </span>
           </p>
         )}
+        {data.recipientsUnresolved && (
+          <p className="flex items-start gap-2 text-sm text-alert-red mb-2">
+            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+            Could not load who is on this thread. This reply also goes to{' '}
+            {data.replyAll === false ? 'the sender of the original message' : 'everyone on the original message'}.
+          </p>
+        )}
+        {data.replyAll !== undefined && (
+          <p className="text-sm text-gray-600 mb-2" data-testid="reply-scope">
+            {data.replyAll ? 'Reply to all' : 'Reply to sender only'}
+          </p>
+        )}
         <Field label="From" value={data.account} />
         <Field label="To" value={data.to} />
         <Field label="Cc" value={data.cc} />

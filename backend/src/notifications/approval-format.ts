@@ -407,7 +407,29 @@ export function formatDraftSendApprovalMessage(
   };
 }
 
-export function formatEmailApprovalMessage(approval: ApprovalRequest): FormattedApproval {
+/**
+ * Who an outlook_mail_reply would deliver to. The arguments name only the
+ * message being answered, so the notifier resolves its recipients (see
+ * resolveOutlookReplySummary in ./email-summary.ts) and passes them in.
+ */
+export interface ReplySummary {
+  /** False when the reply goes to the sender only. */
+  replyAll: boolean;
+  /** False when the message could not be read: to/cc then hold only what the agent added. */
+  resolved: boolean;
+  to?: string;
+  cc?: string;
+  bcc?: string;
+  subject?: string;
+  /** The sender of the message being answered. */
+  from?: string;
+  inReplyToSubject?: string;
+}
+
+export function formatEmailApprovalMessage(
+  approval: ApprovalRequest,
+  reply: ReplySummary | null = null
+): FormattedApproval {
   const args = approval.arguments as {
     account?: string;
     to?: unknown;
@@ -442,9 +464,14 @@ export function formatEmailApprovalMessage(approval: ApprovalRequest): Formatted
     heading = '📧 <b>Send email</b>';
   }
 
-  const to = joinRecipients(args.to);
-  const cc = joinRecipients(args.cc);
-  const bcc = joinRecipients(args.bcc);
+  // An Outlook reply is addressed by the message it answers, not by its
+  // arguments, which carry only the additions.
+  const isOutlookReply = approval.tool === 'outlook_mail_reply';
+  const outlookReplyAll = reply?.replyAll ?? (args as { replyAll?: unknown }).replyAll !== false;
+  const to = (isOutlookReply && reply ? reply.to : joinRecipients(args.to)) ?? '';
+  const cc = (isOutlookReply && reply ? reply.cc : joinRecipients(args.cc)) ?? '';
+  const bcc = (isOutlookReply && reply ? reply.bcc : joinRecipients(args.bcc)) ?? '';
+  const subject = args.subject ?? (isOutlookReply ? reply?.subject : undefined);
 
   // Prefer plain-text body; fall back to stripping the HTML that would be sent.
   const bodyText = typeof args.body === 'string' && args.body.length > 0
@@ -459,8 +486,19 @@ export function formatEmailApprovalMessage(approval: ApprovalRequest): Formatted
     to ? `<b>To:</b> ${escapeHtml(to)}` : null,
     cc ? `<b>Cc:</b> ${escapeHtml(cc)}` : null,
     bcc ? `<b>Bcc:</b> ${escapeHtml(bcc)}` : null,
-    args.subject ? `<b>Subject:</b> ${escapeHtml(args.subject)}` : null,
-    isReply ? `↩︎ <i>Reply</i>` : null,
+    subject ? `<b>Subject:</b> ${escapeHtml(subject)}` : null,
+    isOutlookReply
+      ? `↩︎ <i>${outlookReplyAll ? 'Reply to all' : 'Reply to sender only'}</i>`
+      : isReply
+      ? `↩︎ <i>Reply</i>`
+      : null,
+    // The list above is then incomplete, and the owner must not read it as whole.
+    isOutlookReply && !reply?.resolved
+      ? '\u26a0\ufe0f <b>Could not load who is on this thread.</b> ' +
+        (outlookReplyAll
+          ? 'This reply also goes to everyone on the original message.'
+          : 'This reply also goes to the sender of the original message.')
+      : null,
     `<b>Agent:</b> <code>${escapeHtml(approval.agentId)}</code>`,
     isDraftUpdate && typeof args.draftId === 'string'
       ? `<b>Draft:</b> <code>${escapeHtml(args.draftId)}</code>`
