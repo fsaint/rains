@@ -7,6 +7,7 @@ import { ReauthApprovalCard } from '../components/ReauthApprovalCard';
 import { ReauthModal } from '../components/ReauthModal';
 import { EmailApprovalSummary, EMAIL_APPROVAL_TOOLS } from '../components/EmailApprovalSummary';
 import { CalendarApprovalSummary, CALENDAR_APPROVAL_TOOLS } from '../components/CalendarApprovalSummary';
+import { ApprovalPreviewCard, NO_PREVIEW_TOOLS } from '../components/ApprovalPreviewCard';
 import { formatBytes } from '../utils/format';
 
 const ATTACHMENT_SOURCE_LABELS: Record<string, string> = {
@@ -331,6 +332,12 @@ export default function Approvals() {
                     {CALENDAR_APPROVAL_TOOLS.has(approval.tool) && (
                       <CalendarApprovalSummary approvalId={approval.id} />
                     )}
+
+                    {!EMAIL_APPROVAL_TOOLS.has(approval.tool) &&
+                      !CALENDAR_APPROVAL_TOOLS.has(approval.tool) &&
+                      !NO_PREVIEW_TOOLS.has(approval.tool) && (
+                        <ApprovalPreviewCard approvalId={approval.id} />
+                      )}
 
                     {approval.context && (
                       <div className="mt-4">

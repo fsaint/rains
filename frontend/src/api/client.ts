@@ -220,7 +220,24 @@ export const approvals = {
     const res = await request<CalendarApprovalSummary | { data: null }>(`/approvals/${id}/calendar-summary`);
     return res && 'action' in res ? res : null;
   },
+  /** A resolved preview of any other approval; null for a tool that has none. */
+  preview: async (id: string): Promise<ApprovalPreview | null> => {
+    const res = await request<ApprovalPreview | { data: null }>(`/approvals/${id}/preview`);
+    return res && 'heading' in res ? res : null;
+  },
 };
+
+/** Mirrors ApprovalPreview in backend/src/notifications/approval-preview.ts. */
+export interface ApprovalPreview {
+  icon: string;
+  heading: string;
+  note?: string;
+  destructive?: boolean;
+  warning?: string;
+  rows: Array<{ label: string; value: string; was?: string }>;
+  items?: { label: string; list: Array<{ title: string; detail?: string }>; more: number };
+  body?: { label?: string; text: string };
+}
 
 /** Mirrors CalendarApprovalView in backend/src/notifications/approval-format.ts. */
 export interface CalendarApprovalSummary {

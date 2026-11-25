@@ -43,6 +43,7 @@ import { MAX_REVISIONS } from '../approvals/queue.js';
 import { getThreadApprovalSummary } from '../services/threads.js';
 import { resolveDraftSendSummary, resolveGmailDraftSummary, resolveOutlookReplySummary } from './email-summary.js';
 import { calendarApprovalNeedsEvent, resolveCalendarEvent } from './calendar-summary.js';
+import { resolveApprovalPreview, formatPreviewApprovalMessage, type ApprovalPreview } from './previews/index.js';
 
 // Re-exported so existing callers and tests can keep importing from the
 // transport module; the formatters themselves live in ./approval-format.ts.
@@ -147,6 +148,48 @@ export class TelegramNotifier {
   // Approval notifications
   // -------------------------------------------------------------------------
 
+  /**
+   * The approval message for a tool call, with everything it names looked up.
+   * Used for the Telegram send, and by the dashboard for the tools whose only
+   * preview is this text (see GET /api/approvals/:id/preview).
+   */
+  async renderApprovalMessage(
+    approval: ApprovalRequest,
+    magicLinkUrl: string | null = null
+  ): Promise<{
+    text: string;
+    keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>>;
+    parseMode?: 'Markdown' | 'HTML';
+  }> {
+    // Resolved here rather than inside the formatter, which stays pure and
+    // synchronous. Only the tools that need a lookup pay for it.
+    const adminTarget = ADMIN_TOOLS.has(approval.tool)
+      ? await this.resolveAdminTargetSummary(approval)
+      : null;
+    const draftSummary = DRAFT_SEND_TOOLS.has(approval.tool)
+      ? await this.resolveDraftSendSummary(approval)
+      : null;
+    const threadSummary = THREAD_TOOLS.has(approval.tool)
+      ? await this.resolveThreadSummary(approval)
+      : null;
+    const draftDeletes = DRAFT_DELETE_TOOLS.has(approval.tool)
+      ? await this.resolveDraftDeleteEntries(approval)
+      : null;
+    // A reply is addressed by the message it answers; its arguments name no one.
+    const replySummary = approval.tool === 'outlook_mail_reply'
+      ? await resolveOutlookReplySummary(approval)
+      : null;
+    // An update, delete or invite response names its event by id alone.
+    // undefined: nothing to look up. null: the lookup failed, and the message says so.
+    const calendarEvent = calendarApprovalNeedsEvent(approval)
+      ? await resolveCalendarEvent(approval)
+      : undefined;
+    // Tools with no formatter of their own: look up what their ids name.
+    // null for a tool with no builder, which then gets the generic message.
+    const preview = await resolveApprovalPreview(approval);
+    return this.formatApprovalMessage(approval, magicLinkUrl, adminTarget, draftSummary, threadSummary, draftDeletes, replySummary, calendarEvent, preview);
+  }
+
   async notifyApprovalRequest(approval: ApprovalRequest): Promise<void> {
     if (!this.isConfigured()) {
       console.warn(`[telegram] notifyApprovalRequest: bot not configured (REINS_TELEGRAM_BOT_TOKEN missing)`);
@@ -163,30 +206,7 @@ export class TelegramNotifier {
       const magicLinkUrl = approval.tool === 'reauth'
         ? this.buildMagicLinkUrl(owner.userId, approval.id)
         : null;
-      // Resolved here rather than inside the formatter, which stays pure and
-      // synchronous. Only the tools that need a lookup pay for it.
-      const adminTarget = ADMIN_TOOLS.has(approval.tool)
-        ? await this.resolveAdminTargetSummary(approval)
-        : null;
-      const draftSummary = DRAFT_SEND_TOOLS.has(approval.tool)
-        ? await this.resolveDraftSendSummary(approval)
-        : null;
-      const threadSummary = THREAD_TOOLS.has(approval.tool)
-        ? await this.resolveThreadSummary(approval)
-        : null;
-      const draftDeletes = DRAFT_DELETE_TOOLS.has(approval.tool)
-        ? await this.resolveDraftDeleteEntries(approval)
-        : null;
-      // A reply is addressed by the message it answers; its arguments name no one.
-      const replySummary = approval.tool === 'outlook_mail_reply'
-        ? await resolveOutlookReplySummary(approval)
-        : null;
-      // An update, delete or invite response names its event by id alone.
-      // undefined: nothing to look up. null: the lookup failed, and the message says so.
-      const calendarEvent = calendarApprovalNeedsEvent(approval)
-        ? await resolveCalendarEvent(approval)
-        : undefined;
-      const { text, keyboard, parseMode } = this.formatApprovalMessage(approval, magicLinkUrl, adminTarget, draftSummary, threadSummary, draftDeletes, replySummary, calendarEvent);
+      const { text, keyboard, parseMode } = await this.renderApprovalMessage(approval, magicLinkUrl);
       const sent = await this.sendMessage(owner.chatId, text, {
         parse_mode: parseMode ?? 'Markdown',
         reply_markup: { inline_keyboard: keyboard },
@@ -679,7 +699,8 @@ export class TelegramNotifier {
     threadSummary: ThreadApprovalSummary | null = null,
     draftDeletes: DraftDeleteEntry[] | null = null,
     replySummary: ReplySummary | null = null,
-    calendarEvent?: CalendarEventSnapshot | null
+    calendarEvent?: CalendarEventSnapshot | null,
+    preview: ApprovalPreview | null = null
   ): {
     text: string;
     keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>>;
@@ -711,6 +732,8 @@ export class TelegramNotifier {
       ? formatThreadApprovalMessage(approval, threadSummary)
       : HERMENEUTIX_PEOPLE_TOOLS.has(approval.tool)
       ? formatHermeneutixApprovalMessage(approval)
+      : preview
+      ? formatPreviewApprovalMessage(approval, preview)
       : this.formatGenericApprovalMessage(approval);
 
     return withCorrectionAffordance(approval, formatted, MAX_REVISIONS);

@@ -514,9 +514,9 @@ async function accessTokenFor(
 /** As accessTokenFor, with the address of the mailbox the token belongs to. */
 export async function credentialFor(
   agentId: string,
-  serviceType: 'gmail' | 'outlook_mail' | 'calendar' | 'outlook_calendar',
+  serviceType: string,
   account?: string
-): Promise<{ token: string; email?: string } | null> {
+): Promise<{ token: string; email?: string; credentialId: string } | null> {
   const rows = await client.execute({
     sql: `SELECT asi.credential_id, asi.is_default, c.account_email
           FROM agent_service_instances asi
@@ -535,5 +535,7 @@ export async function credentialFor(
     : instances.find((i) => i.is_default === true || i.is_default === 1) ?? instances[0];
   if (!match) return null;
   const token = await credentialVault.getValidAccessToken(match.credential_id);
-  return token ? { token, email: match.account_email ?? undefined } : null;
+  return token
+    ? { token, email: match.account_email ?? undefined, credentialId: match.credential_id }
+    : null;
 }

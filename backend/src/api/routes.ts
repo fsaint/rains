@@ -6,6 +6,14 @@ import { credentialVault } from '../credentials/vault.js';
 import { approvalQueue } from '../approvals/queue.js';
 import { buildEmailApprovalSummary, isEmailApprovalTool } from '../notifications/email-summary.js';
 import { buildCalendarApprovalSummary } from '../notifications/calendar-summary.js';
+import { resolveApprovalPreview, previewFromMessageText } from '../notifications/previews/index.js';
+import {
+  ADMIN_TOOLS,
+  SKILL_TOOLS,
+  THREAD_TOOLS,
+  HERMENEUTIX_PEOPLE_TOOLS,
+  DRAFT_DELETE_TOOLS,
+} from '../notifications/approval-format.js';
 import { auditLogger } from '../audit/logger.js';
 import { mcpProxy } from '../mcp/proxy.js';
 import { serverManager } from '../mcp/server-manager.js';
@@ -2985,6 +2993,33 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.code(404).send(notFound);
     }
     return { data: await buildCalendarApprovalSummary(approval) };
+  });
+
+  /**
+   * What any other approval would do, with its ids resolved to names — the
+   * same preview the Telegram message is rendered from. `data` is null for a
+   * tool that has no preview builder.
+   */
+  app.get<{ Params: { id: string } }>('/api/approvals/:id/preview', async (request, reply) => {
+    const { id } = request.params;
+    if (!(await ownsApproval(request, id))) {
+      return reply.code(404).send(notFound);
+    }
+    const approval = await approvalQueue.get(id);
+    if (!approval) {
+      return reply.code(404).send(notFound);
+    }
+    const preview = await resolveApprovalPreview(approval);
+    if (preview) return { data: preview };
+
+    // These have a Telegram formatter of their own and no structured preview;
+    // the dashboard shows the same words rather than the raw arguments.
+    const formattedOnly = [ADMIN_TOOLS, SKILL_TOOLS, THREAD_TOOLS, HERMENEUTIX_PEOPLE_TOOLS, DRAFT_DELETE_TOOLS];
+    if (formattedOnly.some((tools) => tools.has(approval.tool))) {
+      const { text } = await telegramNotifier.renderApprovalMessage(approval);
+      return { data: previewFromMessageText(text) };
+    }
+    return { data: null };
   });
 
   app.post<{ Params: { id: string } }>('/api/approvals/:id/approve', async (request, reply) => {
