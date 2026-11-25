@@ -5,6 +5,7 @@ import { policyEngine } from '../policy/engine.js';
 import { credentialVault } from '../credentials/vault.js';
 import { approvalQueue } from '../approvals/queue.js';
 import { buildEmailApprovalSummary, isEmailApprovalTool } from '../notifications/email-summary.js';
+import { buildCalendarApprovalSummary } from '../notifications/calendar-summary.js';
 import { auditLogger } from '../audit/logger.js';
 import { mcpProxy } from '../mcp/proxy.js';
 import { serverManager } from '../mcp/server-manager.js';
@@ -2966,6 +2967,24 @@ export const apiRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     }
     if (!isEmailApprovalTool(approval.tool)) return { data: null };
     return { data: await buildEmailApprovalSummary(approval) };
+  });
+
+  /**
+   * What a calendar approval would do, for the approvals page. An update,
+   * delete or invite response reads the event from Google Calendar or Outlook,
+   * so this is fetched once per card like the email summary above. `data` is
+   * null for a tool that is not a calendar write.
+   */
+  app.get<{ Params: { id: string } }>('/api/approvals/:id/calendar-summary', async (request, reply) => {
+    const { id } = request.params;
+    if (!(await ownsApproval(request, id))) {
+      return reply.code(404).send(notFound);
+    }
+    const approval = await approvalQueue.get(id);
+    if (!approval) {
+      return reply.code(404).send(notFound);
+    }
+    return { data: await buildCalendarApprovalSummary(approval) };
   });
 
   app.post<{ Params: { id: string } }>('/api/approvals/:id/approve', async (request, reply) => {

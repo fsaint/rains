@@ -215,7 +215,33 @@ export const approvals = {
     const res = await request<EmailApprovalSummary | { data: null }>(`/approvals/${id}/email-summary`);
     return res && 'action' in res ? res : null;
   },
+  /** What a calendar approval would do; null for a tool that is not a calendar write. */
+  calendarSummary: async (id: string): Promise<CalendarApprovalSummary | null> => {
+    const res = await request<CalendarApprovalSummary | { data: null }>(`/approvals/${id}/calendar-summary`);
+    return res && 'action' in res ? res : null;
+  },
 };
+
+/** Mirrors CalendarApprovalView in backend/src/notifications/approval-format.ts. */
+export interface CalendarApprovalSummary {
+  action: 'create' | 'update' | 'delete' | 'respond';
+  unresolved: boolean;
+  response?: string;
+  calendarId?: string;
+  title: { value?: string; was?: string };
+  when: { value?: string; was?: string };
+  where: { value?: string; was?: string };
+  attendees: string[];
+  guestsAdded: string[];
+  guestsRemoved: string[];
+  organizer?: string;
+  recurrence?: string;
+  repeatsNote?: string;
+  sendUpdates?: string;
+  eventId?: string;
+  description?: string;
+  changes: string[];
+}
 
 /** Mirrors EmailApprovalSummary in backend/src/notifications/email-summary.ts. */
 export interface EmailApprovalSummary {

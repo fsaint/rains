@@ -512,9 +512,9 @@ async function accessTokenFor(
 }
 
 /** As accessTokenFor, with the address of the mailbox the token belongs to. */
-async function credentialFor(
+export async function credentialFor(
   agentId: string,
-  serviceType: 'gmail' | 'outlook_mail',
+  serviceType: 'gmail' | 'outlook_mail' | 'calendar' | 'outlook_calendar',
   account?: string
 ): Promise<{ token: string; email?: string } | null> {
   const rows = await client.execute({

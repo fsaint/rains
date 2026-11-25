@@ -35,12 +35,14 @@ import {
   type AdminTargetSummary,
   type DraftSendSummary,
   type ReplySummary,
+  type CalendarEventSnapshot,
   HERMENEUTIX_PEOPLE_TOOLS,
   formatHermeneutixApprovalMessage,
 } from './approval-format.js';
 import { MAX_REVISIONS } from '../approvals/queue.js';
 import { getThreadApprovalSummary } from '../services/threads.js';
 import { resolveDraftSendSummary, resolveGmailDraftSummary, resolveOutlookReplySummary } from './email-summary.js';
+import { calendarApprovalNeedsEvent, resolveCalendarEvent } from './calendar-summary.js';
 
 // Re-exported so existing callers and tests can keep importing from the
 // transport module; the formatters themselves live in ./approval-format.ts.
@@ -179,7 +181,12 @@ export class TelegramNotifier {
       const replySummary = approval.tool === 'outlook_mail_reply'
         ? await resolveOutlookReplySummary(approval)
         : null;
-      const { text, keyboard, parseMode } = this.formatApprovalMessage(approval, magicLinkUrl, adminTarget, draftSummary, threadSummary, draftDeletes, replySummary);
+      // An update, delete or invite response names its event by id alone.
+      // undefined: nothing to look up. null: the lookup failed, and the message says so.
+      const calendarEvent = calendarApprovalNeedsEvent(approval)
+        ? await resolveCalendarEvent(approval)
+        : undefined;
+      const { text, keyboard, parseMode } = this.formatApprovalMessage(approval, magicLinkUrl, adminTarget, draftSummary, threadSummary, draftDeletes, replySummary, calendarEvent);
       const sent = await this.sendMessage(owner.chatId, text, {
         parse_mode: parseMode ?? 'Markdown',
         reply_markup: { inline_keyboard: keyboard },
@@ -671,7 +678,8 @@ export class TelegramNotifier {
     draftSummary: DraftSendSummary | null = null,
     threadSummary: ThreadApprovalSummary | null = null,
     draftDeletes: DraftDeleteEntry[] | null = null,
-    replySummary: ReplySummary | null = null
+    replySummary: ReplySummary | null = null,
+    calendarEvent?: CalendarEventSnapshot | null
   ): {
     text: string;
     keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>>;
@@ -694,7 +702,7 @@ export class TelegramNotifier {
       : EMAIL_TOOLS.has(approval.tool)
       ? formatEmailApprovalMessage(approval, replySummary)
       : CALENDAR_TOOLS.has(approval.tool)
-      ? formatCalendarApprovalMessage(approval)
+      ? formatCalendarApprovalMessage(approval, calendarEvent)
       : ADMIN_TOOLS.has(approval.tool)
       ? formatAdminApprovalMessage(approval, adminTarget)
       : SKILL_TOOLS.has(approval.tool)

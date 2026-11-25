@@ -6,6 +6,7 @@ import { approvals, telegram, auth } from '../api/client';
 import { ReauthApprovalCard } from '../components/ReauthApprovalCard';
 import { ReauthModal } from '../components/ReauthModal';
 import { EmailApprovalSummary, EMAIL_APPROVAL_TOOLS } from '../components/EmailApprovalSummary';
+import { CalendarApprovalSummary, CALENDAR_APPROVAL_TOOLS } from '../components/CalendarApprovalSummary';
 import { formatBytes } from '../utils/format';
 
 const ATTACHMENT_SOURCE_LABELS: Record<string, string> = {
@@ -325,6 +326,10 @@ export default function Approvals() {
 
                     {EMAIL_APPROVAL_TOOLS.has(approval.tool) && (
                       <EmailApprovalSummary approvalId={approval.id} />
+                    )}
+
+                    {CALENDAR_APPROVAL_TOOLS.has(approval.tool) && (
+                      <CalendarApprovalSummary approvalId={approval.id} />
                     )}
 
                     {approval.context && (

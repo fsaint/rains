@@ -377,6 +377,148 @@ describe('formatCalendarApprovalMessage', () => {
     expect(del.text).toContain('This cannot be undone.');
   });
 
+  describe('with the event it acts on', () => {
+    const SYNC = {
+      title: 'Weekly sync with Ana',
+      start: '2026-11-26T10:00:00-03:00',
+      end: '2026-11-26T10:30:00-03:00',
+      location: 'Room 4',
+      online: 'Google Meet',
+      attendees: ['ana@example.com', 'carl@example.com'],
+      organizer: 'Bob <bob@example.com>',
+    };
+
+    it('names the event an update changes and shows old and new time', () => {
+      const { text } = formatCalendarApprovalMessage(
+        makeApproval({
+          tool: 'calendar_update_event',
+          arguments: {
+            eventId: 'AAMkAGI2TG93AAA=',
+            startTime: '2026-11-26T15:00:00-03:00',
+            endTime: '2026-11-26T15:30:00-03:00',
+          },
+        }),
+        SYNC
+      );
+
+      expect(text).toContain('✏️ <b>Update event</b>');
+      expect(text).toContain('<b>Title:</b> Weekly sync with Ana');
+      expect(text).toContain(
+        '<b>When:</b> <s>Thu, Nov 26, 2026 · 10:00 AM – 10:30 AM (UTC-03:00) · 30m</s> → ' +
+          'Thu, Nov 26, 2026 · 3:00 PM – 3:30 PM (UTC-03:00) · 30m'
+      );
+      expect(text).toContain('<b>Where:</b> Room 4 · Google Meet');
+      expect(text).toContain('<b>Guests:</b> ana@example.com, carl@example.com (2)');
+      expect(text).toContain('<i>Changes: time.</i>');
+      // The id is noise once the event is named.
+      expect(text).not.toContain('AAMkAGI2TG93AAA=');
+      expect(text).not.toContain('Fields not listed');
+    });
+
+    it('keeps the end of the event when only the start moves', () => {
+      const { text } = formatCalendarApprovalMessage(
+        makeApproval({
+          tool: 'calendar_update_event',
+          arguments: { eventId: 'e1', startTime: '2026-11-26T10:15:00-03:00' },
+        }),
+        SYNC
+      );
+
+      expect(text).toContain('→ Thu, Nov 26, 2026 · 10:15 AM – 10:30 AM (UTC-03:00) · 15m');
+    });
+
+    it('shows who an update adds and removes', () => {
+      const { text } = formatCalendarApprovalMessage(
+        makeApproval({
+          tool: 'calendar_update_event',
+          arguments: { eventId: 'e1', summary: 'Weekly sync', attendees: ['ANA@example.com', 'dora@example.com'] },
+        }),
+        SYNC
+      );
+
+      expect(text).toContain('<b>Title:</b> <s>Weekly sync with Ana</s> → Weekly sync');
+      expect(text).toContain('<b>Guests:</b> ANA@example.com, dora@example.com (2)');
+      expect(text).toContain('➕ <b>Added:</b> dora@example.com');
+      expect(text).toContain('➖ <b>Removed:</b> carl@example.com');
+      expect(text).toContain('<i>Changes: title, guests.</i>');
+    });
+
+    it('says so when an update repeats what the event already has', () => {
+      const { text } = formatCalendarApprovalMessage(
+        makeApproval({ tool: 'calendar_update_event', arguments: { eventId: 'e1', location: 'Room 4' } }),
+        SYNC
+      );
+
+      expect(text).toContain('<b>Where:</b> Room 4 · Google Meet');
+      expect(text).not.toContain('<s>');
+      expect(text).toContain('<i>Nothing shown above changes.</i>');
+    });
+
+    it('labels an Outlook time sent without a zone as UTC, as the tool sends it', () => {
+      const { text } = formatCalendarApprovalMessage(
+        makeApproval({
+          tool: 'outlook_cal_update_event',
+          arguments: { eventId: 'e1', startDateTime: '2026-11-26T18:00:00', endDateTime: '2026-11-26T18:30:00' },
+        }),
+        { ...SYNC, start: '2026-11-26T10:00:00', end: '2026-11-26T10:30:00', timeZone: 'Pacific SA Standard Time' }
+      );
+
+      expect(text).toContain('10:00 AM – 10:30 AM (Pacific SA Standard Time) · 30m</s>');
+      expect(text).toContain('→ Thu, Nov 26, 2026 · 6:00 PM – 6:30 PM (UTC) · 30m');
+    });
+
+    it('shows the whole event a delete removes', () => {
+      const { text } = formatCalendarApprovalMessage(
+        makeApproval({ tool: 'outlook_cal_delete_event', arguments: { eventId: 'AAMkAGI2TG93AAA=' } }),
+        { ...SYNC, repeats: 'series' }
+      );
+
+      expect(text).toContain('🗑 <b>Delete event</b>');
+      expect(text).toContain('<b>Title:</b> Weekly sync with Ana');
+      expect(text).toContain('<b>When:</b> Thu, Nov 26, 2026 · 10:00 AM – 10:30 AM');
+      expect(text).toContain('<b>Guests:</b> ana@example.com, carl@example.com (2)');
+      expect(text).toContain('<b>Organizer:</b> Bob &lt;bob@example.com&gt;');
+      expect(text).toContain('🔁 Repeating event: this deletes every occurrence');
+      expect(text).toContain('This cannot be undone.');
+      expect(text).not.toContain('AAMkAGI2TG93AAA=');
+    });
+
+    it('shows the invite a response answers', () => {
+      const { text } = formatCalendarApprovalMessage(
+        makeApproval({
+          tool: 'outlook_cal_respond_to_event',
+          arguments: { eventId: 'e1', response: 'decline', comment: 'Out that day' },
+        }),
+        { ...SYNC, repeats: 'occurrence' }
+      );
+
+      expect(text).toContain('<b>Response:</b> ❌ Decline');
+      expect(text).toContain('<b>Title:</b> Weekly sync with Ana');
+      expect(text).toContain('<b>Organizer:</b> Bob &lt;bob@example.com&gt;');
+      expect(text).toContain('🔁 One occurrence of a repeating event');
+      expect(text).toContain('Out that day');
+    });
+
+    it('warns and falls back to the id when the event could not be loaded', () => {
+      const { text } = formatCalendarApprovalMessage(
+        makeApproval({ tool: 'outlook_cal_delete_event', arguments: { eventId: 'AAMkAGI2TG93AAA=' } }),
+        null
+      );
+
+      expect(text).toContain('Could not load this event');
+      expect(text).toContain('<b>Event:</b> <code>AAMkAGI2TG93AAA=</code>');
+    });
+
+    it('escapes what the calendar returned', () => {
+      const { text } = formatCalendarApprovalMessage(
+        makeApproval({ tool: 'calendar_delete_event', arguments: { eventId: 'e1' } }),
+        { ...SYNC, title: 'Q&A <b>live</b>' }
+      );
+
+      expect(text).toContain('<b>Title:</b> Q&amp;A &lt;b&gt;live&lt;/b&gt;');
+    });
+  });
+
   it('renders an invite response with its comment', () => {
     const { text } = formatCalendarApprovalMessage(
       makeApproval({

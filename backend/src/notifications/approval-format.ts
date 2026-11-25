@@ -808,52 +808,226 @@ function attendeesLine(attendees: string[]): string | null {
 }
 
 /**
+ * The event an update, delete or invite response acts on, as the calendar has
+ * it now. Those tools carry only an event id, so the notifier reads the event
+ * (see resolveCalendarEvent in ./calendar-summary.ts) and passes it in.
+ */
+export interface CalendarEventSnapshot {
+  title?: string;
+  /** ISO start and end, in the same shapes the tool arguments use. */
+  start?: string;
+  end?: string;
+  allDay?: boolean;
+  /** Named zone of start/end when they carry no offset (Outlook). */
+  timeZone?: string;
+  location?: string;
+  online?: string;
+  attendees: string[];
+  organizer?: string;
+  /** A repeating event's whole series, or one occurrence of one. */
+  repeats?: 'series' | 'occurrence';
+}
+
+/** A field as it will be, and as it was when the approval changes it. */
+export interface CalendarFieldChange {
+  value?: string;
+  was?: string;
+}
+
+/**
+ * What a calendar approval would do, resolved for display. Shared by the
+ * Telegram message and the dashboard's approvals page.
+ */
+export interface CalendarApprovalView {
+  action: 'create' | 'update' | 'delete' | 'respond';
+  /** The approval names an event that could not be read; only the arguments are shown. */
+  unresolved: boolean;
+  response?: string;
+  calendarId?: string;
+  title: CalendarFieldChange;
+  when: CalendarFieldChange;
+  where: CalendarFieldChange;
+  /** The guest list as it will be after the call. */
+  attendees: string[];
+  guestsAdded: string[];
+  guestsRemoved: string[];
+  organizer?: string;
+  /** A recurrence rule the arguments set. */
+  recurrence?: string;
+  /** What acting on a repeating event reaches. */
+  repeatsNote?: string;
+  sendUpdates?: string;
+  /** Shown only when the event itself could not be: an opaque id is no preview. */
+  eventId?: string;
+  /** The description being written, or the comment sent with a response. */
+  description?: string;
+  /** Update only: which of the fields above differ from the event as it is. */
+  changes: string[];
+}
+
+/**
+ * Work out what a calendar approval would do. `existing` is the event it acts
+ * on: undefined when none was looked up (a new event, or a caller that does no
+ * lookup), null when the lookup failed.
+ */
+export function describeCalendarApproval(
+  approval: ApprovalRequest,
+  existing?: CalendarEventSnapshot | null
+): CalendarApprovalView {
+  const e = normalizeCalendarArgs(approval);
+  const args = (approval.arguments ?? {}) as Record<string, unknown>;
+  const action: CalendarApprovalView['action'] = approval.tool.endsWith('_delete_event')
+    ? 'delete'
+    : approval.tool.endsWith('_update_event')
+    ? 'update'
+    : approval.tool === 'outlook_cal_respond_to_event'
+    ? 'respond'
+    : 'create';
+  const event = action === 'create' ? undefined : existing ?? undefined;
+  const isUpdate = action === 'update';
+
+  const changes: string[] = [];
+  /** The field as proposed, falling back to the event's own; records a difference. */
+  const field = (name: string, proposed: string | undefined, current: string | undefined): CalendarFieldChange => {
+    if (!event) return { value: proposed };
+    if (!isUpdate || !proposed || proposed === current) return { value: current };
+    changes.push(name);
+    return { value: proposed, was: current };
+  };
+
+  const currentWhen =
+    event && formatEventWhen({ start: event.start, end: event.end, allDay: event.allDay, timeZone: event.timeZone });
+  // An update may move one end only; the other stays where the event has it.
+  // outlook_cal_update_event sends a time without a zone as UTC.
+  const proposedWhen =
+    e.start || e.end
+      ? formatEventWhen({
+          start: e.start ?? event?.start,
+          end: e.end ?? event?.end,
+          allDay: e.start ? e.allDay : event?.allDay ?? e.allDay,
+          timeZone: e.timeZone ?? (event && approval.tool === 'outlook_cal_update_event' ? 'UTC' : undefined),
+        })
+      : null;
+
+  const joinWhere = (location?: string, online?: string) => [location, online].filter(Boolean).join(' · ') || undefined;
+  const proposedWhere =
+    e.location || e.online ? joinWhere(e.location ?? event?.location, e.online ?? event?.online) : undefined;
+
+  const title = field('title', e.title, event?.title);
+  const when = field('time', proposedWhen ?? undefined, currentWhen ?? undefined);
+  const where = field('place', proposedWhere, event && joinWhere(event.location, event.online));
+
+  // Both providers replace the guest list with the one given, so an empty
+  // list is a change too: it removes everyone.
+  const guestsGiven = Array.isArray(args.attendees) && (isUpdate || e.attendees.length > 0);
+  let attendees = guestsGiven ? e.attendees : event?.attendees ?? [];
+  let guestsAdded: string[] = [];
+  let guestsRemoved: string[] = [];
+  if (event && isUpdate && guestsGiven) {
+    const lower = (list: string[]) => new Set(list.map((a) => a.toLowerCase()));
+    const before = lower(event.attendees);
+    const after = lower(e.attendees);
+    guestsAdded = e.attendees.filter((a) => !before.has(a.toLowerCase()));
+    guestsRemoved = event.attendees.filter((a) => !after.has(a.toLowerCase()));
+    if (guestsAdded.length > 0 || guestsRemoved.length > 0) changes.push('guests');
+  } else if (event && !isUpdate) {
+    attendees = event.attendees;
+  }
+
+  if (event && isUpdate && e.description) changes.push('description');
+  if (event && isUpdate && e.recurrence) changes.push('recurrence');
+
+  const repeatsNote =
+    event?.repeats === 'occurrence'
+      ? 'One occurrence of a repeating event'
+      : event?.repeats === 'series'
+      ? action === 'delete'
+        ? 'Repeating event: this deletes every occurrence'
+        : action === 'respond'
+        ? 'Repeating event: this answers for the whole series'
+        : 'Repeating event: this changes every occurrence'
+      : undefined;
+
+  return {
+    action,
+    unresolved: action !== 'create' && existing === null,
+    response: action === 'respond' ? e.response : undefined,
+    calendarId: e.calendarId && e.calendarId !== 'primary' ? e.calendarId : undefined,
+    title,
+    when,
+    where,
+    attendees,
+    guestsAdded,
+    guestsRemoved,
+    organizer: action === 'delete' || action === 'respond' ? event?.organizer : undefined,
+    recurrence: e.recurrence,
+    repeatsNote,
+    sendUpdates: e.sendUpdates,
+    eventId: event ? undefined : e.eventId,
+    description: e.description ?? e.comment,
+    changes,
+  };
+}
+
+/**
  * Rich Telegram preview for calendar write approvals
  * (calendar_* / outlook_cal_*). Exported for unit testing without a live bot.
+ *
+ * `existing` is the event an update, delete or response acts on — see
+ * describeCalendarApproval. With it the message names the event and shows what
+ * changes; without it the message can show only the arguments and the event id.
  */
-export function formatCalendarApprovalMessage(approval: ApprovalRequest): FormattedApproval {
-  const e = normalizeCalendarArgs(approval);
-  const isDelete = approval.tool.endsWith('_delete_event');
-  const isUpdate = approval.tool.endsWith('_update_event');
-  const isRespond = approval.tool === 'outlook_cal_respond_to_event';
+export function formatCalendarApprovalMessage(
+  approval: ApprovalRequest,
+  existing?: CalendarEventSnapshot | null
+): FormattedApproval {
+  const v = describeCalendarApproval(approval, existing);
+  const isUpdate = v.action === 'update';
+  const isDelete = v.action === 'delete';
+  const resolved = v.action !== 'create' && Boolean(existing);
 
   let heading: string;
   if (isDelete) heading = '🗑 <b>Delete event</b>';
   else if (isUpdate) heading = '✏️ <b>Update event</b>';
-  else if (isRespond) heading = '📩 <b>Respond to invite</b>';
+  else if (v.action === 'respond') heading = '📩 <b>Respond to invite</b>';
   else heading = '📅 <b>New event</b>';
 
-  const when = formatEventWhen({
-    start: e.start,
-    end: e.end,
-    allDay: e.allDay,
-    timeZone: e.timeZone,
-  });
-
-  const where = [e.location, e.online].filter(Boolean).join(' · ');
+  const line = (label: string, change: CalendarFieldChange): string | null =>
+    change.value
+      ? `<b>${label}:</b> ` +
+        (change.was ? `<s>${escapeHtml(change.was)}</s> → ` : '') +
+        escapeHtml(change.value)
+      : null;
 
   const lines = [
     heading,
-    isRespond && e.response
-      ? `<b>Response:</b> ${RESPONSE_LABELS[e.response] ?? escapeHtml(e.response)}`
+    v.unresolved
+      ? '⚠️ <b>Could not load this event.</b> Approve only if you recognise it.'
       : null,
-    e.calendarId && e.calendarId !== 'primary'
-      ? `<b>Calendar:</b> ${escapeHtml(e.calendarId)}`
+    v.response ? `<b>Response:</b> ${RESPONSE_LABELS[v.response] ?? escapeHtml(v.response)}` : null,
+    v.calendarId ? `<b>Calendar:</b> ${escapeHtml(v.calendarId)}` : null,
+    line('Title', v.title),
+    line('When', v.when),
+    line('Where', v.where),
+    attendeesLine(v.attendees),
+    v.guestsAdded.length > 0 ? `➕ <b>Added:</b> ${escapeHtml(previewList(v.guestsAdded))}` : null,
+    v.guestsRemoved.length > 0 ? `➖ <b>Removed:</b> ${escapeHtml(previewList(v.guestsRemoved))}` : null,
+    v.organizer ? `<b>Organizer:</b> ${escapeHtml(v.organizer)}` : null,
+    v.recurrence ? `🔁 <b>Repeats:</b> ${escapeHtml(v.recurrence)}` : null,
+    v.repeatsNote ? `🔁 ${escapeHtml(v.repeatsNote)}` : null,
+    v.sendUpdates
+      ? `<b>Notify:</b> ${escapeHtml(SEND_UPDATES_LABELS[v.sendUpdates] ?? v.sendUpdates)}`
       : null,
-    e.title ? `<b>Title:</b> ${escapeHtml(e.title)}` : null,
-    when ? `<b>When:</b> ${escapeHtml(when)}` : null,
-    where ? `<b>Where:</b> ${escapeHtml(where)}` : null,
-    attendeesLine(e.attendees),
-    e.recurrence ? `🔁 <b>Repeats:</b> ${escapeHtml(e.recurrence)}` : null,
-    e.sendUpdates
-      ? `<b>Notify:</b> ${escapeHtml(SEND_UPDATES_LABELS[e.sendUpdates] ?? e.sendUpdates)}`
-      : null,
-    e.eventId ? `<b>Event:</b> <code>${escapeHtml(e.eventId)}</code>` : null,
+    v.eventId ? `<b>Event:</b> <code>${escapeHtml(v.eventId)}</code>` : null,
     `<b>Agent:</b> <code>${escapeHtml(approval.agentId)}</code>`,
-    e.description || e.comment
-      ? `<blockquote>${truncateBody((e.description ?? e.comment) as string)}</blockquote>`
+    v.description && isUpdate && resolved ? '<b>New description:</b>' : null,
+    v.description ? `<blockquote>${truncateBody(v.description)}</blockquote>` : null,
+    isUpdate && resolved
+      ? v.changes.length > 0
+        ? `\n<i>Changes: ${v.changes.join(', ')}.</i>`
+        : `\n<i>Nothing shown above changes.</i>`
       : null,
-    isUpdate ? `\n<i>Fields not listed are unchanged.</i>` : null,
+    isUpdate && !resolved ? `\n<i>Fields not listed are unchanged.</i>` : null,
     isDelete ? `\n<i>This cannot be undone.</i>` : null,
     ``,
     expiresLine(approval),
@@ -864,6 +1038,13 @@ export function formatCalendarApprovalMessage(approval: ApprovalRequest): Format
     keyboard: approveDenyKeyboard(approval.id),
     parseMode: 'HTML',
   };
+}
+
+/** A list of addresses, cut to the same length as the guest line. */
+function previewList(list: string[]): string {
+  const shown = list.slice(0, ATTENDEE_PREVIEW_LIMIT);
+  const extra = list.length - shown.length;
+  return shown.join(', ') + (extra > 0 ? ` +${extra} more` : '');
 }
 
 /**
